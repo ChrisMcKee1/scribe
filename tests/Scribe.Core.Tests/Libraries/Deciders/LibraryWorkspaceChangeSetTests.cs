@@ -336,6 +336,159 @@ public sealed class LibraryWorkspaceChangeSetTests
     }
 
     [Fact]
+    public void D4_a_restore_redone_while_its_save_runs_becomes_a_new_library_and_names_no_consumed_entry()
+    {
+        // GPT-6 Astra's A8 sequence: the Save in flight restores the entry as "old"; meanwhile the draft's "old" is
+        // deleted, which offers the entry again, and the entry is restored again, under another id.
+        var entry = Deleted("20260901T100000Z.old.csv", "old", "Old", new TermValues("old term", "Old term"));
+        var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase) { [entry.Entry.EntryName] = entry };
+        var catalog = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId)], [GitHubId], recentlyDeleted: [entry.Entry]);
+        var workspace = Workspace(catalog);
+        Assert.Equal("old", workspace.RestoreDeleted(entry));
+        var changes = Capture(workspace);
+
+        workspace.DeleteLibrary("old");
+        Assert.Single(workspace.Draft.RecentlyDeleted);
+        var again = workspace.RestoreDeleted(entry);
+        Assert.Equal("custom-old", again);
+        workspace.EditTerm(again, RowIdOf(workspace, again, "old term"), new TermValues("old term", "Older term"));
+        var saved = Apply(catalog, changes, store);
+        Assert.Empty(saved.RecentlyDeleted);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        // The entry is spent: "old" is committed and deleted in the draft, and the second restore is a new library with
+        // the content the draft holds, so nothing names an entry the catalog no longer lists.
+        Assert.True(workspace.Draft.Find("old")!.PendingDelete);
+        var kept = workspace.Draft.Find(again)!;
+        Assert.Equal((LibraryOrigin.Created, true, true), (kept.Origin, kept.Unsaved, kept.WritesContent));
+        Assert.Equal([new TermValues("old term", "Older term")], ValuesOf(workspace, again));
+        var next = Capture(workspace);
+        AssertPreImages(saved, next);
+        Assert.Empty(next.RecentlyDeletedActions);
+        Assert.Equal("old", Assert.Single(next.Deletions).LibraryId);
+        Assert.Equal((again, (LibraryContentHash?)null), (Assert.Single(next.Writes).LibraryId, Assert.Single(next.Writes).ExpectedPreImage));
+        var after = Apply(saved, next, store);
+        workspace.MarkSaved(next.DraftRevision, after);
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Equal([new TermValues("old term", "Older term")], after.Find(again)!.Content.Rows.Select(row => row.Values));
+    }
+
+    [Fact]
+    public void D4_a_permanent_deletion_of_an_entry_its_save_consumed_is_dropped()
+    {
+        // The same sequence with Delete permanently instead of the second restore.
+        var entry = Deleted("20260901T100000Z.old.csv", "old", "Old", new TermValues("old term", "Old term"));
+        var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase) { [entry.Entry.EntryName] = entry };
+        var catalog = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId)], [GitHubId], recentlyDeleted: [entry.Entry]);
+        var workspace = Workspace(catalog);
+        workspace.RestoreDeleted(entry);
+        var changes = Capture(workspace);
+
+        workspace.DeleteLibrary("old");
+        workspace.DeletePermanently(entry.Entry);
+        Assert.Empty(workspace.Draft.RecentlyDeleted);
+        var saved = Apply(catalog, changes, store);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        var next = Capture(workspace);
+        AssertPreImages(saved, next);
+        Assert.Empty(next.RecentlyDeletedActions);
+        Assert.Equal("old", Assert.Single(next.Deletions).LibraryId);
+        workspace.MarkSaved(next.DraftRevision, Apply(saved, next, store));
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Theory]
+    [InlineData("created")]
+    [InlineData("imported")]
+    [InlineData("restored")]
+    public void D4_a_library_at_the_id_a_save_kept_another_under_keeps_its_content_and_its_choices(string how)
+    {
+        // Grok 4.7's G1 sequence: the Save in flight creates "custom-new-library"; another app creates that file meanwhile,
+        // so the store keeps Scribe's content as "custom-new-library-2", an id it invents at commit. While the Save ran
+        // the user made another library that holds exactly that id.
+        var gone = Deleted("20260801T100000Z.custom-new-library-2.csv", "custom-new-library-2", "Archived notes", new TermValues("zz", "ZZ"));
+        var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase) { [gone.Entry.EntryName] = gone };
+        var catalog = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId)], [GitHubId], recentlyDeleted: how == "restored" ? [gone.Entry] : []);
+        var workspace = Workspace(catalog);
+        var planned = workspace.CreateLibrary();
+        workspace.AddTerm(planned, new TermValues("ga", "general availability"));
+        workspace.SetAiPermission(planned, false);
+        var changes = Capture(workspace);
+
+        // An edit of the library the Save is writing follows it to the id the store keeps it under.
+        workspace.AddTerm(planned, new TermValues("beta", "Beta"));
+        var occupant = how switch
+        {
+            "created" => workspace.CreateLibrary(),
+            "imported" => ImportNew(workspace, Document("New library 2", new TermValues("rc", "release candidate"))),
+            _ => workspace.RestoreDeleted(gone),
+        };
+        Assert.Equal("custom-new-library-2", occupant);
+        if (how == "created")
+        {
+            workspace.AddTerm(occupant, new TermValues("rc", "release candidate"));
+        }
+
+        workspace.SetEnabled(occupant, true);
+        workspace.SetAiPermission(occupant, true);
+        var occupantRows = ValuesOf(workspace, occupant);
+        var saved = Apply(catalog, changes, store,
+            [new StoreOutcome.SavedUnderNewId(planned, "custom-new-library-2", [new TermValues("theirs", "Theirs")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        // Scribe's library is the kept one, with its rows and choices; the user's other library moved to a fresh id with
+        // its own; the planned id is the other app's library.
+        var draft = workspace.Draft;
+        Assert.Equal(
+            [new TermValues("ga", "general availability"), new TermValues("beta", "Beta")],
+            ValuesOf(workspace, "custom-new-library-2"));
+        Assert.Equal([new TermValues("theirs", "Theirs")], ValuesOf(workspace, planned));
+        Assert.False(draft.LocalState.AiPermissions["custom-new-library-2"]);
+        Assert.Contains("custom-new-library-2", draft.LocalState.EnabledIds);
+        var moved = draft.Libraries.Single(library => library.Content.Rows.Select(row => row.Values).SequenceEqual(occupantRows)).Content.Id;
+        Assert.NotEqual("custom-new-library-2", moved);
+        Assert.True(draft.LocalState.AiPermissions[moved]);
+        Assert.Contains(moved, draft.LocalState.EnabledIds);
+        Assert.Equal("Their notes", draft.Find(planned)!.Content.Name);
+
+        var next = Capture(workspace);
+        AssertPreImages(saved, next);
+        Assert.True(Writes(next, moved));
+        Assert.Equal(saved.Find("custom-new-library-2")!.ContentHash, next.Writes.Single(write => write.LibraryId == "custom-new-library-2").ExpectedPreImage);
+        Assert.False(Writes(next, planned));
+        workspace.MarkSaved(next.DraftRevision, Apply(saved, next, store));
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void D4_a_copy_made_while_its_originals_save_ran_follows_the_original_to_the_id_the_store_kept_it_under()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var planned = workspace.CreateLibrary();
+        workspace.AddTerm(planned, new TermValues("ga", "general availability"));
+        var changes = Capture(workspace);
+        var copy = workspace.Duplicate(planned);
+
+        workspace.MarkSaved(changes.DraftRevision, Apply(catalog, changes, outcomes:
+            [new StoreOutcome.SavedUnderNewId(planned, planned + "-7", [new TermValues("theirs", "Theirs")])]));
+
+        Assert.Equal(planned + "-7", workspace.Draft.Find(copy)!.Content.BasedOn);
+        workspace.UseCopyInstead(copy);
+        Assert.DoesNotContain(planned + "-7", workspace.Draft.LocalState.EnabledIds);
+        Assert.Contains(copy, workspace.Draft.LocalState.EnabledIds);
+    }
+
+    private static string ImportNew(LibraryWorkspace workspace, LibraryCsvDocument document)
+    {
+        var before = workspace.Draft.Libraries.Select(library => library.Content.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.True(workspace.ApplyImport(
+            LibraryImportPlanner.Plan(document, new LibraryImportTarget.NewLibrary(null), workspace.Draft), ImportConflictChoice.KeepMine).Applied);
+        return workspace.Draft.Libraries.Single(library => !before.Contains(library.Content.Id)).Content.Id;
+    }
+
+    [Fact]
     public void Rebase_keeps_a_library_the_user_edited_that_the_newer_catalog_no_longer_has_as_an_unsaved_recreation()
     {
         var catalog = Standard();

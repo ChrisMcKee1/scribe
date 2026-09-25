@@ -6,8 +6,11 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 
 /// <summary>
 /// D-11: any sequence of workspace operations, captured and applied by a fake store to a new catalog, gives a workspace
-/// showing the same content; and the workspace marked saved against that catalog shows it too, with nothing unsaved.
-/// Seeded, so a failure names the sequence that produced it.
+/// showing the same content; and the workspace marked saved against that catalog shows it too, with nothing unsaved. Saves
+/// happen in the middle of sequences, half of them with arbitrary operations while they run and some with the store doing
+/// more than the plan (a library kept under an id it invents, an outside version kept), and after every MarkSaved nothing
+/// the page showed is lost or overwritten, every operation of the next change set names what the committed catalog holds,
+/// and something is unsaved exactly when the next Save would change something. Seeded, so a failure names the sequence.
 /// </summary>
 public sealed class LibraryWorkspacePropertyTests
 {
@@ -21,7 +24,7 @@ public sealed class LibraryWorkspacePropertyTests
         }
 
         // The sequences reach every kind of change a Save carries, and saves in the middle of them, some with the user
-        // working on while they run.
+        // working on while they run and some where the store did more than the plan.
         Assert.True(totals.CustomWrites > 100, $"custom writes {totals.CustomWrites}");
         Assert.True(totals.BuiltInWrites > 50, $"built-in writes {totals.BuiltInWrites}");
         Assert.True(totals.Deletions > 20, $"deletions {totals.Deletions}");
@@ -31,6 +34,12 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.InterleavedSaves > 25, $"saves with work while they ran {totals.InterleavedSaves}");
         Assert.True(totals.DeletedWhileSaving > 5, $"libraries deleted while their save ran {totals.DeletedWhileSaving}");
         Assert.True(totals.KeptWhileSaving > 5, $"deletions taken back while their save ran {totals.KeptWhileSaving}");
+        Assert.True(totals.RestoredAgainWhileSaving > 5, $"entries restored again while their save ran {totals.RestoredAgainWhileSaving}");
+        Assert.True(totals.PurgedWhileSaving > 5, $"entries deleted for good while their save ran {totals.PurgedWhileSaving}");
+        Assert.True(totals.SavedUnderNewIds > 10, $"libraries kept under another id {totals.SavedUnderNewIds}");
+        Assert.True(totals.KeptAtAnOccupiedId > 5, $"kept under an id a library made meanwhile held {totals.KeptAtAnOccupiedId}");
+        Assert.True(totals.OutsideVersions > 10, $"outside versions kept {totals.OutsideVersions}");
+        Assert.True(totals.Probes > 100, $"change sets checked after marking saved {totals.Probes}");
     }
 
     private sealed class Coverage
@@ -44,6 +53,12 @@ public sealed class LibraryWorkspacePropertyTests
         public int InterleavedSaves;
         public int DeletedWhileSaving;
         public int KeptWhileSaving;
+        public int RestoredAgainWhileSaving;
+        public int PurgedWhileSaving;
+        public int SavedUnderNewIds;
+        public int KeptAtAnOccupiedId;
+        public int OutsideVersions;
+        public int Probes;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -202,8 +217,12 @@ public sealed class LibraryWorkspacePropertyTests
     }
 
     // A Save: capture, commit through the fake store, mark saved. Half of them let the user go on working while the Save
-    // runs (review finding A2): deleting a library the Save creates or restores, taking back a deletion it makes, undoing,
-    // or any other operation. Marking saved never changes what the page shows, and what it shows reads back from a Save.
+    // runs (review findings A2 and A8): deleting a library the Save creates or restores, taking back a deletion it makes,
+    // restoring again or deleting for good an entry the Save restores, undoing, or any other operation. And the store may
+    // do more than the plan: keep a new library under an id it invents, often one a library made meanwhile holds (G1), or
+    // keep the outside version of a library it wrote. After every MarkSaved: nothing the page showed is lost or
+    // overwritten, the store's additions are all that is new, every operation of the next change set names what the
+    // committed catalog holds, and something is unsaved exactly when the next Save would change something.
     private static LibraryCatalog Save(
         LibraryWorkspace workspace,
         LibraryCatalog catalog,
@@ -214,19 +233,59 @@ public sealed class LibraryWorkspacePropertyTests
         Coverage totals,
         Func<string, string> fresh)
     {
+        var context = $"seed {seed} step {step}: ";
         var changes = CaptureOrFail(workspace, seed, step);
         totals.Count(changes);
         totals.MidSaves++;
-        var saved = Apply(catalog, changes, store);
         if (random.Next(2) == 0)
         {
-            workspace.MarkSaved(changes.DraftRevision, saved);
-            Assert.False(workspace.HasUnsavedChanges, $"seed {seed} step {step}: unsaved after a save");
-            Assert.Equal(Content(Workspace(saved)), Content(workspace));
-            return saved;
+            totals.InterleavedSaves++;
+            WorkWhileSaving(workspace, changes, store, random, totals, fresh);
         }
 
-        totals.InterleavedSaves++;
+        var outcomes = Outcomes(workspace, catalog, changes, random, totals);
+        var saved = Apply(catalog, changes, store, outcomes);
+        var shown = Kept(workspace.Draft);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        var fromStore = Workspace(saved).Draft;
+        var added = outcomes
+            .Select(outcome => outcome switch
+            {
+                StoreOutcome.SavedUnderNewId kept => kept.PlannedId,
+                StoreOutcome.OutsideVersion kept => kept.KeptAsId,
+                _ => throw new InvalidOperationException(),
+            })
+            .Select(id => Signature(fromStore, fromStore.Find(id)!));
+        Assert.True(
+            shown.Concat(added).Order(StringComparer.Ordinal).SequenceEqual(Kept(workspace.Draft)),
+            $"{context}marking saved lost, overwrote or invented a library\n{string.Join("\n", shown)}\n---\n{string.Join("\n", Kept(workspace.Draft))}");
+
+        var next = workspace.CaptureChangeSet();
+        if (next.ChangeSet is { } probe)
+        {
+            AssertPreImages(saved, probe, context);
+            Assert.True(workspace.HasUnsavedChanges == !probe.IsEmpty, $"{context}unsaved={workspace.HasUnsavedChanges} but the next Save is empty={probe.IsEmpty}");
+            totals.Probes++;
+        }
+
+        if (!workspace.HasUnsavedChanges)
+        {
+            Assert.Equal(Content(Workspace(saved)), Content(workspace));
+        }
+
+        return saved;
+    }
+
+    // What the user does while a Save runs: one to three operations, some aimed at what the Save is doing.
+    private static void WorkWhileSaving(
+        LibraryWorkspace workspace,
+        LibraryChangeSet changes,
+        Dictionary<string, RecentlyDeletedContent> store,
+        Random random,
+        Coverage totals,
+        Func<string, string> fresh)
+    {
         var added = changes.Writes
             .Where(write => !write.BuiltIn && write.Origin != LibraryOrigin.Existing)
             .Select(write => write.LibraryId)
@@ -234,9 +293,17 @@ public sealed class LibraryWorkspacePropertyTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var deleted = changes.Deletions.Select(deletion => deletion.LibraryId).ToList();
+        var restores = changes.RecentlyDeletedActions
+            .Where(action => action.Kind == RecentlyDeletedActionKind.Restore)
+            .Select(action => (Id: action.RestoreAsId!, Entry: action.EntryName))
+            .ToList();
+        var first = true;
         for (var operations = random.Next(1, 4); operations > 0; operations--)
         {
-            switch (random.Next(4))
+            // Half the Saves that restore an entry see it restored again or deleted for good first (A8).
+            var choice = first && restores.Count > 0 && random.Next(2) == 0 ? 2 : random.Next(6);
+            first = false;
+            switch (choice)
             {
                 case 0 when added.Count > 0:
                     var created = added[random.Next(added.Count)];
@@ -258,8 +325,37 @@ public sealed class LibraryWorkspacePropertyTests
 
                     break;
 
-                case 2:
+                case 2 when restores.Count > 0:
+                    // The library the Save restores leaves the draft, which offers its entry again: restored again, under
+                    // another id, or deleted for good (A8).
+                    var (restoredId, entryName) = restores[random.Next(restores.Count)];
+                    if (workspace.Draft.Find(restoredId) is { PendingDelete: false, Origin: LibraryOrigin.Restored })
+                    {
+                        workspace.DeleteLibrary(restoredId);
+                    }
+
+                    if (workspace.Draft.RecentlyDeleted.FirstOrDefault(entry => entry.EntryName == entryName) is { } offered)
+                    {
+                        if (random.Next(2) == 0)
+                        {
+                            workspace.RestoreDeleted(store[entryName]);
+                            totals.RestoredAgainWhileSaving++;
+                        }
+                        else
+                        {
+                            workspace.DeletePermanently(offered);
+                            totals.PurgedWhileSaving++;
+                        }
+                    }
+
+                    break;
+
+                case 3:
                     workspace.Undo();
+                    break;
+
+                case 4:
+                    workspace.Redo();
                     break;
 
                 default:
@@ -267,19 +363,89 @@ public sealed class LibraryWorkspacePropertyTests
                     break;
             }
         }
-
-        var shown = Shown(workspace);
-        workspace.MarkSaved(changes.DraftRevision, saved);
-        Assert.True(shown == Shown(workspace), $"seed {seed} step {step}: marking saved changed the page\n{shown}\n---\n{Shown(workspace)}");
-        var again = workspace.CaptureChangeSet();
-        if (again.ChangeSet is { } next)
-        {
-            Assert.Equal(Content(workspace), Content(Workspace(Apply(saved, next, store))));
-        }
-
-        return saved;
     }
 
+    // What the store does beyond the plan, sometimes: keeps a new library under an id it invents at commit, which may be
+    // one a library the user made while the Save ran already holds (TakenIds cannot know it, Grok 4.7's G1), or keeps the
+    // outside version of a library it wrote as a new library.
+    private static List<StoreOutcome> Outcomes(
+        LibraryWorkspace workspace, LibraryCatalog catalog, LibraryChangeSet changes, Random random, Coverage totals)
+    {
+        var restoredAs = changes.RecentlyDeletedActions
+            .Where(action => action.Kind == RecentlyDeletedActionKind.Restore)
+            .Select(action => action.RestoreAsId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var used = catalog.Libraries.Select(library => library.Content.Id)
+            .Concat(changes.Writes.Select(write => write.LibraryId))
+            .Concat(restoredAs)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var madeMeanwhile = workspace.Draft.Libraries.Select(library => library.Content.Id).Where(id => !used.Contains(id)).ToList();
+
+        string Invent(string stem)
+        {
+            if (madeMeanwhile.Count > 0 && random.Next(2) == 0)
+            {
+                var taken = madeMeanwhile[random.Next(madeMeanwhile.Count)];
+                madeMeanwhile.Remove(taken);
+                used.Add(taken);
+                totals.KeptAtAnOccupiedId++;
+                return taken;
+            }
+
+            for (var n = 2; ; n++)
+            {
+                var id = $"{stem}-{n}";
+                if (used.Add(id) && workspace.Draft.Find(id) is null)
+                {
+                    return id;
+                }
+            }
+        }
+
+        var outcomes = new List<StoreOutcome>();
+        var planned = changes.Writes
+            .Where(write => !write.BuiltIn && write.ExpectedPreImage is null && !restoredAs.Contains(write.LibraryId))
+            .Select(write => write.LibraryId)
+            .ToList();
+        if (planned.Count > 0 && random.Next(3) == 0)
+        {
+            var id = planned[random.Next(planned.Count)];
+            outcomes.Add(new StoreOutcome.SavedUnderNewId(id, Invent(id), [new TermValues("theirs " + id, "Theirs")]));
+            totals.SavedUnderNewIds++;
+        }
+
+        var existing = changes.Writes
+            .Where(write => !write.BuiltIn && write.ExpectedPreImage is not null && !restoredAs.Contains(write.LibraryId))
+            .Select(write => write.LibraryId)
+            .ToList();
+        if (existing.Count > 0 && random.Next(4) == 0)
+        {
+            var id = existing[random.Next(existing.Count)];
+            outcomes.Add(new StoreOutcome.OutsideVersion(id, Invent("custom-outside"), [new TermValues("outside " + id, "Outside")]));
+            totals.OutsideVersions++;
+        }
+
+        return outcomes;
+    }
+
+    // What the page shows of every library it lists (an untouched new library included, since it is shown), without ids,
+    // which a Save can change (a library kept under another id, a library moved off an id the store gave another), in one
+    // order.
+    private static List<string> Kept(LibraryDraft draft) =>
+        draft.Libraries
+            .Where(library => !library.PendingDelete)
+            .Select(library => Signature(draft, library))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+    private static string Signature(LibraryDraft draft, DraftLibrary library)
+    {
+        var content = library.Content;
+        var ai = draft.LocalState.AiPermissions.TryGetValue(content.Id, out var permitted) ? permitted.ToString() : "none";
+        return $"{content.BuiltIn}|{content.Name}|{content.Category}|{content.Description}|"
+            + $"on={draft.LocalState.EnabledIds.Contains(content.Id)}|ai={ai}|"
+            + string.Join(";", content.Rows.Select(row => row.Values.ToString()));
+    }
     // One operation of the sequence, chosen by 0 to 18.
     private static void Operate(
         LibraryWorkspace workspace,
@@ -507,9 +673,4 @@ public sealed class LibraryWorkspacePropertyTests
         return string.Join("\n", lines) + "\ndeleted=" + string.Join(",", deleted)
             + $"\nlost={draft.LocalState.AiPermissionsLost}\nnotice={string.Join(",", draft.LocalState.AiUpgradeNotice.Order(StringComparer.OrdinalIgnoreCase))}";
     }
-
-    // What the page shows of the libraries the user keeps: the content without the deleted list, where a library the user
-    // removed while its Save ran moves from nowhere to a pending deletion of the saved library.
-    private static string Shown(LibraryWorkspace workspace) =>
-        string.Join("\n", Content(workspace).Split('\n').Where(line => !line.StartsWith("deleted=", StringComparison.Ordinal)));
 }

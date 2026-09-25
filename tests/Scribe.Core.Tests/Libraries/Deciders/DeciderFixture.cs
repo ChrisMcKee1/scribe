@@ -171,15 +171,43 @@ internal static class DeciderFixture
         return Assert.IsType<LibraryChangeSet>(result.ChangeSet);
     }
 
+    /// <summary>What the store did at commit beyond the plan (<see cref="LibraryKeptVersion"/>), for a test to inject.</summary>
+    public abstract record StoreOutcome
+    {
+        private StoreOutcome()
+        {
+        }
+
+        /// <summary>
+        /// Another app created the file of the new library <paramref name="PlannedId"/> while the Save ran: the store keeps
+        /// Scribe's content as <paramref name="KeptAsId"/>, an id it invents, and the planned id holds the other app's
+        /// library, <paramref name="TheirRows"/>.
+        /// </summary>
+        public sealed record SavedUnderNewId(string PlannedId, string KeptAsId, IReadOnlyList<TermValues> TheirRows) : StoreOutcome;
+
+        /// <summary>
+        /// The file of <paramref name="LibraryId"/> changed outside Scribe while the Save ran: Scribe's content is written,
+        /// and the outside version, <paramref name="OutsideRows"/> under the same header, is kept as the new library
+        /// <paramref name="KeptAsId"/>.
+        /// </summary>
+        public sealed record OutsideVersion(string LibraryId, string KeptAsId, IReadOnlyList<TermValues> OutsideRows) : StoreOutcome;
+    }
+
     /// <summary>
     /// A change set applied to <paramref name="catalog"/> the way the committed result reads back: custom writes stored
     /// as written, built-in documents applied through the overlay, deletions moved to Recently deleted, restores brought
     /// back (with the draft's edit when it made one), the local state with the accepted content of every file written.
+    /// Every operation's pre-image is checked against <paramref name="catalog"/> first, as the journal checks it, and
+    /// <paramref name="outcomes"/> are what the store did beyond the plan.
     /// </summary>
     public static LibraryCatalog Apply(
-        LibraryCatalog catalog, LibraryChangeSet changes, IDictionary<string, RecentlyDeletedContent>? store = null)
+        LibraryCatalog catalog,
+        LibraryChangeSet changes,
+        IDictionary<string, RecentlyDeletedContent>? store = null,
+        IReadOnlyList<StoreOutcome>? outcomes = null)
     {
         store ??= new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase);
+        AssertPreImages(catalog, changes);
         var libraries = catalog.Libraries.ToDictionary(library => library.Content.Id, StringComparer.OrdinalIgnoreCase);
         var recentlyDeleted = catalog.RecentlyDeleted.ToList();
         var accepted = changes.LocalState.AcceptedContent.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
@@ -188,7 +216,6 @@ internal static class DeciderFixture
         foreach (var deletion in changes.Deletions)
         {
             var library = libraries[deletion.LibraryId];
-            Assert.Equal(library.ContentHash, deletion.ExpectedPreImage);
             libraries.Remove(deletion.LibraryId);
             var entry = new RecentlyDeletedLibrary(
                 $"20260925T0000{stamp:00}Z.{deletion.FileName}", deletion.LibraryId, library.Content.Name, library.Content.Rows.Count,
@@ -200,7 +227,6 @@ internal static class DeciderFixture
         foreach (var action in changes.RecentlyDeletedActions)
         {
             var entry = recentlyDeleted.Single(candidate => candidate.EntryName == action.EntryName);
-            Assert.Equal(entry.ContentHash, action.ExpectedHash);
             recentlyDeleted.Remove(entry);
             if (action.Kind == RecentlyDeletedActionKind.Restore)
             {
@@ -233,14 +259,44 @@ internal static class DeciderFixture
             }
         }
 
+        var kept = new List<LibraryKeptVersion>();
+        var movedTo = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var outcome in outcomes ?? [])
+        {
+            switch (outcome)
+            {
+                case StoreOutcome.SavedUnderNewId saved:
+                    Assert.True(catalog.Find(saved.PlannedId) is null, $"{saved.PlannedId} was a library before the Save");
+                    Assert.False(libraries.ContainsKey(saved.KeptAsId), $"the store kept {saved.PlannedId} under an id in use");
+                    var mine = libraries[saved.PlannedId].Content with { Id = saved.KeptAsId };
+                    libraries[saved.KeptAsId] = new CatalogLibrary(mine, LibraryFileState.Available, saved.KeptAsId + ".csv", HashOf(mine));
+                    accepted[saved.KeptAsId] = HashOf(mine);
+                    libraries[saved.PlannedId] = Custom(saved.PlannedId, "Their notes", saved.TheirRows);
+                    accepted.Remove(saved.PlannedId);
+                    movedTo[saved.PlannedId] = saved.KeptAsId;
+                    kept.Add(new LibraryKeptVersion(saved.PlannedId, LibraryKeptVersionKind.SavedUnderNewId, saved.KeptAsId));
+                    break;
+
+                case StoreOutcome.OutsideVersion outside:
+                    Assert.False(libraries.ContainsKey(outside.KeptAsId), $"the store kept an outside version under an id in use");
+                    var version = Custom(outside.KeptAsId, libraries[outside.LibraryId].Content.Name, outside.OutsideRows);
+                    libraries[outside.KeptAsId] = version;
+                    accepted[outside.KeptAsId] = version.ContentHash!.Value;
+                    kept.Add(new LibraryKeptVersion(outside.LibraryId, LibraryKeptVersionKind.OutsideVersion, outside.KeptAsId));
+                    break;
+            }
+        }
+
+        // Scribe's choices for a library kept under another id go with it; the other app's file has none.
+        string Owner(string id) => movedTo.TryGetValue(id, out var keptAs) ? keptAs : id;
         var local = changes.LocalState;
         var ids = libraries.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var state = LibraryLocalState.Create(
-            local.EnabledIds.Where(ids.Contains),
+            local.EnabledIds.Select(Owner).Where(ids.Contains),
             local.LegacyEnabledIds,
-            local.AiPermissions.Where(pair => ids.Contains(pair.Key)),
-            local.LegacyMarkers.Where(marker => ids.Contains(marker.LibraryId)),
-            local.AiUpgradeNotice.Where(ids.Contains),
+            local.AiPermissions.Select(pair => new KeyValuePair<string, bool>(Owner(pair.Key), pair.Value)).Where(pair => ids.Contains(pair.Key)),
+            local.LegacyMarkers.Select(marker => marker with { LibraryId = Owner(marker.LibraryId) }).Where(marker => ids.Contains(marker.LibraryId)),
+            local.AiUpgradeNotice.Select(Owner).Where(ids.Contains),
             LocalStateHealth.Ok,
             accepted.Where(pair => ids.Contains(pair.Key)),
             local.AiPermissionsLost);
@@ -250,9 +306,57 @@ internal static class DeciderFixture
             state,
             recentlyDeleted,
             catalog.RetiredBuiltInEdits,
-            filesAwaitingRelease: 0);
+            filesAwaitingRelease: 0,
+            kept);
     }
 
+    /// <summary>
+    /// Every operation of <paramref name="changes"/> names what <paramref name="catalog"/> holds, as the journal requires
+    /// at prepare: a deletion a library with its hash, a restore or a permanent deletion a listed entry with its hash, a
+    /// write to an existing file that file's hash, a new file an id no library has, and a restored library's edit the hash
+    /// of the entry it restores.
+    /// </summary>
+    public static void AssertPreImages(LibraryCatalog catalog, LibraryChangeSet changes, string context = "")
+    {
+        foreach (var deletion in changes.Deletions)
+        {
+            var library = catalog.Find(deletion.LibraryId);
+            Assert.True(library is not null, $"{context}deletes {deletion.LibraryId}, which the catalog does not have");
+            Assert.True(library.ContentHash == deletion.ExpectedPreImage, $"{context}deletes {deletion.LibraryId} at another hash");
+        }
+
+        foreach (var action in changes.RecentlyDeletedActions)
+        {
+            var entry = catalog.RecentlyDeleted.FirstOrDefault(candidate => candidate.EntryName == action.EntryName);
+            Assert.True(entry is not null, $"{context}{action.Kind} of {action.EntryName}, which Recently deleted does not list");
+            Assert.True(entry.ContentHash == action.ExpectedHash, $"{context}{action.Kind} of {action.EntryName} at another hash");
+            if (action.Kind == RecentlyDeletedActionKind.Restore)
+            {
+                Assert.True(catalog.Find(action.RestoreAsId) is null, $"{context}restores {action.EntryName} over {action.RestoreAsId}");
+            }
+        }
+
+        var restoring = changes.RecentlyDeletedActions
+            .Where(action => action.Kind == RecentlyDeletedActionKind.Restore)
+            .ToDictionary(action => action.RestoreAsId!, action => action.ExpectedHash, StringComparer.OrdinalIgnoreCase);
+        foreach (var write in changes.Writes)
+        {
+            var before = catalog.Find(write.LibraryId);
+            if (!write.BuiltIn && restoring.TryGetValue(write.LibraryId, out var entryHash))
+            {
+                Assert.True(write.ExpectedPreImage == entryHash, $"{context}edits restored {write.LibraryId} at another hash");
+            }
+            else if (!write.BuiltIn && write.ExpectedPreImage is null)
+            {
+                Assert.True(before is null, $"{context}writes {write.LibraryId} as a new file over a library the catalog has");
+            }
+            else
+            {
+                Assert.True(before is not null, $"{context}writes {write.LibraryId}, which the catalog does not have");
+                Assert.True(before.ContentHash == write.ExpectedPreImage, $"{context}writes {write.LibraryId} at another hash");
+            }
+        }
+    }
     /// <summary>
     /// An overlay that follows the amended 3.2.1 rules, written from the contract rather than taken from the overlay
     /// stream: one definition of a row per entry (<see cref="RowOf"/>), which Apply, every command and Collect's check go

@@ -1219,12 +1219,14 @@ public sealed class LibraryWorkspace
     /// After the Save of the change set captured at <paramref name="revision"/> committed: <paramref name="committed"/> is
     /// the new catalog, everything the Save wrote is committed, and every edit made after <paramref name="revision"/>
     /// stays unsaved on top of it, structural ones included: a library the Save created or restored that the user
-    /// removed meanwhile is a pending deletion of the saved library, and a library it deleted that the user took back is
-    /// an unsaved restore of the Recently deleted entry the Save made (review finding A2). A library the Save had to keep
+    /// removed meanwhile is a pending deletion of the saved library, a library it deleted that the user took back is an
+    /// unsaved restore of the Recently deleted entry the Save made (review finding A2), and a restore or a permanent
+    /// deletion of an entry the Save consumed becomes a new library or is dropped (A8). A library the Save had to keep
     /// under another id (another app took its file name) is the kept library from now on, edits after the capture
-    /// included. The undo history ends here. Call it only when the Save stands (<see cref="LibrarySaveStatus.Applied"/>
-    /// or <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>): after any other outcome the draft is still unsaved,
-    /// and a newer catalog is taken with <see cref="Rebase"/>.
+    /// included, and a library the user made meanwhile at that id moves to a fresh one (G1). The undo history ends here.
+    /// Call it only when the Save stands (<see cref="LibrarySaveStatus.Applied"/> or
+    /// <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>): after any other outcome the draft is still unsaved, and a
+    /// newer catalog is taken with <see cref="Rebase"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">No change set was captured at <paramref name="revision"/>.</exception>
     public void MarkSaved(long revision, LibraryCatalog committed)
@@ -1235,24 +1237,7 @@ public sealed class LibraryWorkspace
             throw new InvalidOperationException("No change set was captured at that revision.");
         }
 
-        var from = Effective(capture);
-        var current = _state;
-        foreach (var kept in committed.KeptVersions)
-        {
-            if (kept.Kind == LibraryKeptVersionKind.SavedUnderNewId
-                && kept.KeptAsId is { } keptAs
-                && from.Libraries.TryGetValue(kept.LibraryId, out var planned)
-                && planned.Header.Origin != LibraryOrigin.Existing
-                && planned.Header.Committed is null
-                && !from.Libraries.ContainsKey(keptAs)
-                && committed.Find(keptAs) is not null)
-            {
-                from = from.Reidentified(planned.Header.Id, keptAs);
-                current = current.Reidentified(planned.Header.Id, keptAs);
-            }
-        }
-
-        RebaseOnto(from, current, committed);
+        RebaseOnto(Effective(capture), _state, committed);
     }
 
     /// <summary>Reload saved version: the draft is discarded and starts again from <paramref name="committed"/>.</summary>
@@ -1280,41 +1265,127 @@ public sealed class LibraryWorkspace
         RebaseOnto(_base, _state, committed);
     }
 
+    // One rule takes a committed catalog under the live draft, for MarkSaved (base: the draft as the captured Save
+    // committed it) and for Rebase (base: the catalog the draft started from), in three steps, each applied alike to every
+    // library and every Recently deleted entry rather than case by case:
+    //   1. Identities: which library of the catalog each library of the base and of the live draft is (Identities).
+    //   2. The three-way merge undo and redo use: whatever the draft left as the base had it takes the catalog's value,
+    //      and everything the draft changed stays, library by library, field by field and row by row (Merge).
+    //   3. What the merged draft means against the catalog it now stands on (Settled).
     private void RebaseOnto(State from, State current, LibraryCatalog committed)
     {
-        var to = FromCatalog(committed, mapFrom: from);
+        var (baseRenames, draftRenames) = Identities(from, current, committed);
+        from = from.Renamed(baseRenames);
+        current = current.Renamed(draftRenames);
 
-        // A library the user added after the capture must never take the id of one the new catalog brought in (a version
-        // kept under a name chosen when the Save was prepared), or its rows would be saved into that library's file.
+        // A copy the user made meanwhile of a library that moved follows it, so Use this copy instead turns off the one it
+        // was made from. A copy the Save wrote keeps the reference its file holds.
         foreach (var lib in current.Libraries.Values.ToList())
         {
-            var id = lib.Header.Id;
-            if (lib.Header.Committed is null && !from.Libraries.ContainsKey(id) && to.Libraries.ContainsKey(id))
+            if (lib.Header.Committed is null
+                && !from.Libraries.ContainsKey(lib.Header.Id)
+                && lib.Header.BasedOn is { } basedOn
+                && draftRenames.TryGetValue(basedOn, out var movedTo))
             {
-                var taken = TakenIds(includeRecentlyDeleted: true)
-                    .Concat(to.Libraries.Keys)
-                    .Concat(current.Libraries.Keys);
-                current = current.Reidentified(id, LibraryNaming.NewCustomId(lib.Header.Name, taken));
+                current = current.WithLib(lib with { Header = lib.Header with { BasedOn = movedTo } });
             }
         }
 
-        var merged = Merge(current, from, to);
+        var to = FromCatalog(committed, mapFrom: from);
+        var merged = Settled(Merge(current, from, to), from, current, to, committed);
 
-        // A library the Save committed that the user removed from the draft while it ran (a new library deleted, a
-        // restore or an import discarded or undone) is committed now, so it is a pending deletion of the committed
-        // library, which the next Save deletes (review finding A2). Only a library the draft added can leave the draft,
-        // so only a MarkSaved meets this.
+        _committed = committed;
+        _base = to;
+        ResetHistory();
+        Commit(merged);
+    }
+
+    // Step 1. A library keeps its identity: a library of the live draft is the base library with its id, and a base
+    // library is the catalog's library with its id, except one the store kept under another id because another app took
+    // its planned file (SavedUnderNewId), which is the kept library, in the base and in the live draft alike. A library
+    // of the live draft with no base counterpart (made while the Save ran, or left out of the capture as untouched) never
+    // shares an id with a different library: when the catalog, or a kept version, holds its id, it moves to a fresh one,
+    // since the store invents a kept id at commit and TakenIds cannot know it. The renames are applied all at once, so no
+    // library is ever renamed over another (review finding G1).
+    private (Dictionary<string, string> Base, Dictionary<string, string> Draft) Identities(
+        State from, State current, LibraryCatalog committed)
+    {
+        var baseRenames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kept in committed.KeptVersions)
+        {
+            if (kept.Kind == LibraryKeptVersionKind.SavedUnderNewId
+                && kept.KeptAsId is { } keptAs
+                && from.Libraries.TryGetValue(kept.LibraryId, out var planned)
+                && !planned.Header.BuiltIn
+                && planned.Header.Committed is null
+                && !from.Libraries.ContainsKey(keptAs)
+                && committed.Find(keptAs) is not null
+                && !baseRenames.ContainsKey(planned.Header.Id)
+                && !baseRenames.Values.Contains(keptAs, StringComparer.OrdinalIgnoreCase))
+            {
+                baseRenames[planned.Header.Id] = keptAs;
+            }
+        }
+
+        var draftRenames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (planned, keptAs) in baseRenames)
+        {
+            if (current.Libraries.ContainsKey(planned))
+            {
+                draftRenames[planned] = keptAs;
+            }
+        }
+
+        // A library of the live draft the base does not have must not hold an id the catalog uses for another library: a
+        // kept version's id first of all (the targets), and any other the catalog brought in (a file placed meanwhile).
+        var targets = new HashSet<string>(draftRenames.Values, StringComparer.OrdinalIgnoreCase);
+        var taken = new HashSet<string>(TakenIds(includeRecentlyDeleted: true), StringComparer.OrdinalIgnoreCase);
+        taken.UnionWith(committed.Libraries.Select(library => library.Content.Id));
+        taken.UnionWith(current.Libraries.Keys);
+        taken.UnionWith(baseRenames.Values);
+        foreach (var lib in current.Libraries.Values.OrderBy(lib => lib.Header.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            var id = lib.Header.Id;
+            var inBase = from.Libraries.ContainsKey(id) && !baseRenames.ContainsKey(id);
+            if (!draftRenames.ContainsKey(id) && (targets.Contains(id) || (!inBase && committed.Find(id) is not null)))
+            {
+                var fresh = LibraryNaming.NewCustomId(lib.Header.Name, taken);
+                taken.Add(fresh);
+                draftRenames[id] = fresh;
+            }
+        }
+
+        return (baseRenames, draftRenames);
+    }
+
+    // Step 3. What the merged draft means against the catalog it now stands on, applied to every library and entry:
+    //   - a library the catalog holds that the base had and the live draft no longer has (the user removed it while the
+    //     Save ran) is a pending deletion of the committed library, which the next Save deletes (review finding A2);
+    //   - a library the draft keeps whose committed file the catalog no longer has (the Save deleted it and the user took
+    //     the deletion back, or it went outside Scribe after the user edited it) is a restore of the entry the Save made,
+    //     or a new file with its content; a deletion it still asks for is done (A2);
+    //   - a restore of an entry the catalog no longer lists (the Save restored it already, or it was purged) is a new
+    //     library with the content the draft holds, and a permanent deletion of such an entry is dropped, so the next
+    //     change set never names an entry that is gone (A8);
+    //   - every library the catalog holds takes its committed facts from it.
+    private State Settled(State merged, State from, State current, State to, LibraryCatalog committed)
+    {
         foreach (var (id, saved) in to.Libraries)
         {
-            if (!saved.Header.BuiltIn
-                && !merged.Libraries.ContainsKey(id)
-                && !current.Libraries.ContainsKey(id)
-                && from.Libraries.TryGetValue(id, out var captured)
-                && captured.Header.Committed is null)
+            if (!saved.Header.BuiltIn && !merged.Libraries.ContainsKey(id) && from.Libraries.ContainsKey(id))
             {
                 merged = merged.WithLib(saved with { Header = saved.Header with { PendingDelete = true } });
             }
         }
+
+        var entries = new Dictionary<string, RecentlyDeletedLibrary>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in committed.RecentlyDeleted)
+        {
+            entries.TryAdd(entry.EntryName, entry);
+        }
+
+        bool Listed(RecentlyDeletedLibrary entry) =>
+            entries.TryGetValue(entry.EntryName, out var listed) && listed.ContentHash == entry.ContentHash;
 
         foreach (var lib in merged.Libraries.Values.ToList())
         {
@@ -1339,17 +1410,27 @@ public sealed class LibraryWorkspace
             }
             else if (lib.Header.Committed is not null)
             {
-                // Its committed file is gone from the new catalog while the draft keeps the library: the Save deleted it
-                // and the user took the deletion back, or it went outside Scribe after the user edited it. A deletion
-                // the draft still asks for is done; anything else stays, unsaved (review finding A2).
                 merged = lib.Header.PendingDelete ? merged.WithoutLib(id) : Recreated(merged, lib, current, committed);
+            }
+            else if (lib.Header.RestoredFrom is { } restoring && !Listed(restoring.Entry))
+            {
+                merged = merged.WithLib(lib with { Header = lib.Header with { Origin = LibraryOrigin.Created, RestoredFrom = null } });
             }
         }
 
-        _committed = committed;
-        _base = to;
-        ResetHistory();
-        Commit(merged);
+        var purges = merged.Local.Purges;
+        foreach (var (name, entry) in merged.Local.Purges)
+        {
+            if (!Listed(entry))
+            {
+                purges = purges.Remove(name);
+            }
+        }
+
+        var local = merged.Local;
+        return ReferenceEquals(purges, local.Purges)
+            ? merged
+            : merged with { Local = local.Update(local.Enabled, local.Ai, local.Markers, local.Notice, local.Lost, purges) };
     }
 
     // A library whose committed file the new catalog no longer has, kept by the draft: a restore of the Recently deleted
@@ -2941,27 +3022,49 @@ public sealed class LibraryWorkspace
                 Local.Purges));
         }
 
-        // The library with `oldId` under `newId`, its local entries moved with it; a library not written yet takes the
-        // file name of its new id.
-        public State Reidentified(string oldId, string newId)
+        // Every library named in `renames` under its new id, all at once, with its enabled state, AI choice, markers and
+        // notice; a library not written yet takes the file name of its new id. Local entries a library that is gone left
+        // at a new id are dropped, since the library renamed there brings its own. A rename never lands on a library that
+        // is not itself renamed away (review finding G1): a caller that would do that is wrong, and it throws.
+        public State Renamed(IReadOnlyDictionary<string, string> renames)
         {
-            if (!Libraries.TryGetValue(oldId, out var lib) || string.Equals(oldId, newId, StringComparison.OrdinalIgnoreCase))
+            var moving = renames
+                .Where(pair => Libraries.ContainsKey(pair.Key) && !string.Equals(pair.Key, pair.Value, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+            if (moving.Count == 0)
             {
                 return this;
             }
 
-            var header = lib.Header with
+            var libraries = Libraries.RemoveRange(moving.Keys);
+            foreach (var (oldId, newId) in moving)
             {
-                Id = newId,
-                FileName = lib.Header.BuiltIn || lib.Header.Committed is not null ? lib.Header.FileName : newId + ".csv",
-            };
-            var libraries = Libraries.Remove(oldId).SetItem(newId, lib with { Header = header });
-            var enabled = Local.Enabled.Contains(oldId) ? Local.Enabled.Remove(oldId).Add(newId) : Local.Enabled;
-            var ai = Local.Ai.TryGetValue(oldId, out var permitted) ? Local.Ai.Remove(oldId).SetItem(newId, permitted) : Local.Ai;
-            var markers = Local.Markers.Any(marker => IsOf(marker, oldId))
-                ? Local.Markers.Select(marker => IsOf(marker, oldId) ? marker with { LibraryId = newId } : marker).ToImmutableList()
-                : Local.Markers;
-            var notice = Local.Notice.Contains(oldId) ? Local.Notice.Remove(oldId).Add(newId) : Local.Notice;
+                if (libraries.ContainsKey(newId))
+                {
+                    throw new InvalidOperationException("A library would be renamed over another one.");
+                }
+
+                var lib = Libraries[oldId];
+                var header = lib.Header with
+                {
+                    Id = newId,
+                    FileName = lib.Header.BuiltIn || lib.Header.Committed is not null ? lib.Header.FileName : newId + ".csv",
+                };
+                libraries = libraries.Add(newId, lib with { Header = header });
+            }
+
+            var arriving = new HashSet<string>(moving.Values, StringComparer.OrdinalIgnoreCase);
+            bool Kept(string id) => !arriving.Contains(id) || moving.ContainsKey(id);
+            string Map(string id) => moving.TryGetValue(id, out var newId) ? newId : id;
+            var enabled = ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, Local.Enabled.Where(Kept).Select(Map));
+            var ai = ImmutableDictionary.CreateRange(
+                StringComparer.OrdinalIgnoreCase,
+                Local.Ai.Where(pair => Kept(pair.Key)).Select(pair => new KeyValuePair<string, bool>(Map(pair.Key), pair.Value)));
+            var markers = Local.Markers
+                .Where(marker => Kept(marker.LibraryId))
+                .Select(marker => moving.ContainsKey(marker.LibraryId) ? marker with { LibraryId = Map(marker.LibraryId) } : marker)
+                .ToImmutableList();
+            var notice = ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, Local.Notice.Where(Kept).Select(Map));
             return new State(libraries, Local.Update(enabled, ai, markers, notice, Local.Lost, Local.Purges));
         }
 
