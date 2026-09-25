@@ -76,11 +76,15 @@ public enum LibraryCsvIssues
 }
 
 /// <summary>How a CSV's bytes were decoded.</summary>
-/// <param name="CodePage">The code page used: 65001 for UTF-8, 1200 and 1201 for UTF-16, or the ANSI code page of a fallback.</param>
+/// <param name="CodePage">
+/// The code page used: 65001 for UTF-8, 1200 and 1201 for UTF-16, 12000 and 12001 for UTF-32 (both reads honour a byte
+/// order mark as <c>File.ReadAllText</c> does), or the ANSI code page of an import's fallback.
+/// </param>
 /// <param name="ByteOrderMark">The bytes began with a byte order mark.</param>
 /// <param name="AnsiFallback">The bytes were not valid UTF-8 and had no byte order mark, so the system ANSI code page was used.</param>
 /// <param name="InvalidBytesReplaced">
-/// Invalid bytes were replaced with U+FFFD, which only a managed file read the way 0.4.3 read it can report; the user
-/// is told the file should be imported again.
+/// Invalid bytes were replaced with U+FFFD: in a managed file, decoded the way 0.4.3 decoded it (the user is told the
+/// file should be imported again), or in an import whose byte order mark was honoured over broken bytes or whose ANSI
+/// fallback still met a sequence its code page does not define.
 /// </param>
 public readonly record struct LibraryTextEncoding(int CodePage, bool ByteOrderMark, bool AnsiFallback, bool InvalidBytesReplaced);
