@@ -131,6 +131,44 @@ public sealed class CleanupDisclosureTests
     }
 
     [Fact]
+    public void Only_the_save_that_stored_the_window_s_document_applies_it()
+    {
+        var root = RepositoryRoot();
+        var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+
+        // One call puts settings into effect from the window, the successful Save's: after the store, before the
+        // handlers of a Save that failed. A failed Save leaves every edit in _settings, a picked provider among them,
+        // so any other caller would apply what nothing stored.
+        var call = Assert.Single(Regex.Matches(code, @"_applySettings\s*(\(|\?\.|\.Invoke\b)"));
+        Assert.StartsWith("_applySettings(_settings);", code[call.Index..], StringComparison.Ordinal);
+        var save = code.IndexOf("private async Task<bool> TrySaveAsync()", StringComparison.Ordinal);
+        var store = code.IndexOf("_settingsRepository.SaveBundle(", save, StringComparison.Ordinal);
+        var failed = code.IndexOf("catch (Exception ex) when (_closed)", store, StringComparison.Ordinal);
+        Assert.True(
+            save >= 0 && save < store && store < call.Index && call.Index < failed,
+            "The window applies its own document outside the successful Save.");
+
+        // Nor is the delegate handed on another way: besides its field, its assignment and that call, it only goes to
+        // StoredSettingsReapply, which applies the settings as stored.
+        var uses = code.Split('\n').Select(line => line.Trim()).Where(line => Regex.IsMatch(line, @"\b_applySettings\b")).ToList();
+        Assert.All(uses, line => Assert.True(
+            line is "private readonly Action<AppSettings> _applySettings;" or "_applySettings = applySettings;" or "_applySettings(_settings);" ||
+            line.StartsWith("StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
+            $"The window uses _applySettings in a way this test does not know: {line}"));
+
+        // The Usage page's Add applies the stored settings, and the shell reloads only the vocabulary when there are none.
+        var add = code.IndexOf("private async void UsageNovelTermAddButton_Click(", StringComparison.Ordinal);
+        var next = code.IndexOf("private void RefreshUsageInsightAvailability()", add, StringComparison.Ordinal);
+        Assert.True(add >= 0 && next > add, "The Usage page's Add handler was not found.");
+        Assert.Contains(
+            "StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);",
+            code[add..next],
+            StringComparison.Ordinal);
+        var app = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "App.xaml.cs"));
+        Assert.Contains("() => _controller!.ReloadVocabulary(),", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_privacy_policy_states_what_cleanup_sends_with_the_limits_the_code_enforces()
     {
         var policy = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md")));

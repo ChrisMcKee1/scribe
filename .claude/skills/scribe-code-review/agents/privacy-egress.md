@@ -54,7 +54,7 @@ verdict, not a shrug.
 
 | Boundary | What crosses it | Gate |
 | --- | --- | --- |
-| AI cleanup | Per request: the recognized text, the cleanup instructions with the writing style (or the matching per-app profile's), and the glossary: every enabled dictionary and library term, up to `CleanupPrompt.MaxGlossaryTermsCloud` (5,000) terms and `MaxGlossaryChars` (24,000) characters (80 terms under the Local prompt style), whether or not the dictation mentions them, minus templates (`CleanupPrompt.IsVocabularyReplacement`). Never audio, snippet templates, history or the focused app's name. | `EnableAiCleanup` (`src/Scribe.Core/Models/AppSettings.cs:109`), plus a remote `CleanupProvider`. |
+| AI cleanup | Per request: the recognized text, the cleanup instructions with the writing style (or the matching per-app profile's), and the glossary: every enabled dictionary and library term, up to `CleanupPrompt.MaxGlossaryTermsCloud` (5,000) terms and `MaxGlossaryChars` (24,000) characters (80 terms under the Local prompt style), whether or not the dictation mentions them, minus templates (`CleanupPrompt.IsVocabularyReplacement`). Never audio, snippet templates, history or the focused app's name. | `EnableAiCleanup` (`src/Scribe.Core/Models/AppSettings.cs:109`), plus a remote `CleanupProvider`, both as stored: the settings window applies its editing document only right after `SaveBundle` stored it, and anything else it applies is the stored settings (`StoredSettingsReapply`). A window path that applies `_settings` without that store is 🔴: after a failed Save it moves every later dictation to a provider nobody saved. |
 | AI cleanup readiness probe | Each time cleanup connects (startup with cleanup on, switching it on, a provider or model change, the retry after a failure): one `"ok"` transcript under the real guardrails and writing style, with no glossary (`TextCleanupService.ProbeAgentAsync`, `BuildProbeSystemPrompt`), and once more on Chat Completions when an Azure deployment rejects Responses. A probe that carries the glossary again is 🔴 (`CleanupProbeVocabularyTests`). | The same as AI cleanup: no dictation needed. |
 | AI dictionary suggestions | A bounded sample of recent transcript history as it was inserted, capped at `AiDictionarySuggester.DefaultMaxSampleChars` (6000), after a consent naming the recipient. `CompleteAsync` sends only to the `CleanupRecipient` the user was asked about (`CleanupRecipientTests`). | An explicit button press in Settings. |
 | AI usage insight | Aggregate totals and dictionary-covered term labels only, never a template label (`UsageAnalyzer.TermUsage.Shareable`). | An explicit button press. |
@@ -71,6 +71,8 @@ The fail-closed pins that already exist, all in `tests/Scribe.Core.Tests/`:
 - `UsageInsightTests.cs:39` `BuildSummary_excludes_uncovered_terms_mined_from_dictation_text`
 - `CleanupProbeVocabularyTests` (the readiness probe carries no glossary, read from the wire)
 - `CleanupRecipientTests` (a one-off request reaches only the recipient the user was asked about)
+- `StoredSettingsReapplyTests` and `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it`
+  (after a failed Save, a dictionary entry the Usage page adds keeps cleanup on the stored provider)
 - `CleanupDisclosureTests` (what Settings and `PRIVACY.md` say is sent matches the limits the code enforces)
 
 A diff that weakens any of these, or adds a path that routes around one, is 🔴 Critical. Deleting

@@ -1205,14 +1205,16 @@ public partial class App : Application
                 position => _overlay?.Preview(position),
                 settings =>
                 {
-                    // The window has just saved (or applied) its whole document, so a tray change still on its way reads
-                    // the stored settings again before applying anything.
+                    // The window has just saved its whole document, or applied the stored settings after storing a
+                    // dictionary entry itself, so a tray change still on its way reads the stored settings again before
+                    // applying anything.
                     _settingsWrites?.NoteExternalApply();
                     _controller!.ApplySettings(settings);
                     _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
                     _overlay?.SetPosition(settings.OverlayPosition);
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
                 },
+                () => _controller!.ReloadVocabulary(),
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
                 services.GetRequiredService<SessionDiagnostics>());

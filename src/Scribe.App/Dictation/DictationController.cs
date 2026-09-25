@@ -343,9 +343,11 @@ internal sealed class DictationController : IDisposable
     }
 
     /// <summary>
-    /// Replaces the live settings (called by the settings window after a save). Re-binds the
-    /// hotkey and reloads the post-processor so changes take effect on the next capture without
-    /// a restart. Decode-thread changes still require a restart (the recognizer is warm-loaded).
+    /// Replaces the live settings with settings as stored: the settings window's document right after its save stored
+    /// it, the stored settings after a dictionary change the window stored on its own (<see cref="StoredSettingsReapply"/>),
+    /// and the tray's change once it is stored. Re-binds the hotkey and reloads the post-processor so changes take
+    /// effect on the next capture without a restart. Decode-thread changes still require a restart (the recognizer is
+    /// warm-loaded).
     /// </summary>
     public void ApplySettings(AppSettings settings)
     {
@@ -362,13 +364,31 @@ internal sealed class DictationController : IDisposable
             _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         }
         _postProcessor.Reload();
+        ReconfigureCleanup(settings);
+        RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
+        _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
+    }
 
+    /// <summary>
+    /// Puts a dictionary change the settings window stored on its own into effect when the stored settings cannot be
+    /// applied (<see cref="StoredSettingsReapply"/>): the post-processor reloads, and cleanup is handed its glossary again,
+    /// built for the settings in use, which changes what the prompt says and nothing else. No settings are applied, so
+    /// the provider, the hotkeys and everything else stay as they are.
+    /// </summary>
+    public void ReloadVocabulary()
+    {
+        _postProcessor.Reload();
+        ReconfigureCleanup(CurrentSettings);
+        _log.LogInformation("Reloaded the dictionary on the settings in use; no settings were applied.");
+    }
+
+    // Hands cleanup the configuration these settings describe, with the glossary built from the dictionary as it is now.
+    private void ReconfigureCleanup(AppSettings settings)
+    {
         var previous = _announcedCleanupOptions;
         var next = BuildCleanupOptions(settings);
         _cleanup.Configure(next);
         AnnounceCleanupChange(previous, next);
-        RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
-        _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
     }
 
     /// <summary>

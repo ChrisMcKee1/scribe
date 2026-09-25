@@ -218,6 +218,9 @@ anything was dictated.
   `CompletionOutcome.RecipientChanged`, unless it is still serving exactly that configuration. A Save that
   failed, or one made during the history read, can no longer send the sample somewhere unasked
   (`CleanupRecipientTests`).
+- **Cleanup goes only where a save sent it.** A change the window stores outside a Save applies the
+  settings as stored (`StoredSettingsReapply`), never the window's editing document, which after a failed
+  Save still names the provider that was picked (see "Settings document" below).
 - If you change what a request carries (a new field, a relevance filter, a new provider), change
   `CleanupDisclosure`, `PRIVACY.md` and the tests in the same change, and note that the matching macOS
   disclosure may be stale.
@@ -871,6 +874,18 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
   same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
   about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
+- **Only the Save that stored the window's document applies it.** `SettingsWindow._settings` is the
+  editing document: Save writes every field onto it before `SaveBundle`, and a Save that fails leaves them
+  all there, a picked AI cleanup provider among them, while dictation keeps running on what is stored. So
+  `_applySettings(_settings)` runs in one place, right after `SaveBundle` returns. Anything else in the
+  window that needs settings applied goes through `StoredSettingsReapply`, which applies the settings as
+  stored, or, while `LastLoadFailed`, applies none and has the controller reload only the vocabulary
+  (`DictationController.ReloadVocabulary`), because the defaults standing in are no more the user's
+  choice. The Usage page's Add used to apply `_settings` to reload the post-processor, which after a
+  failed Save moved AI cleanup, and every later dictation, to the provider nobody saved.
+  `StoredSettingsReapplyTests` drives that failed Save and the Add through a real repository and cleanup
+  service; `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it` pins the
+  window.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 

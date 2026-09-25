@@ -71,6 +71,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
+    private readonly Action _reloadVocabulary;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
@@ -175,6 +176,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         StartupRegistration startup,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
+        Action reloadVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         SessionDiagnostics? diagnostics = null)
@@ -194,6 +196,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _startup = startup;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
+        _reloadVocabulary = reloadVocabulary;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -5125,6 +5128,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _startupSwitch.Show(observedStartup);
             ShowStartupStatus(observedStartup);
+
+            // The one place this window applies its own document, which SaveBundle has just stored. Anything else here
+            // that has to put settings into effect uses the stored ones (StoredSettingsReapply).
             _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
@@ -6205,8 +6211,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return;
             }
 
-            // ApplySettings owns the live post-processor reload used by the normal Save path.
-            _applySettings(_settings);
+            // Only what is stored goes live. After a Save that failed, _settings still holds every edit it was given, a
+            // picked AI cleanup provider among them, and applying it would send later dictations there with nothing
+            // saved. The stored settings rebuild the post-processor and the glossary with the new entry; when none can be
+            // used, only the vocabulary reloads.
+            StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);
             ShowInfo($"Added \"{term.Text}\" to your dictionary.");
             LoadUsage();
         }
