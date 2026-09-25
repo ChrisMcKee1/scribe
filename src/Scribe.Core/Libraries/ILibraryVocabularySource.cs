@@ -27,7 +27,12 @@ namespace Scribe.Core.Libraries;
 /// </remarks>
 public interface ILibraryVocabularySource
 {
-    /// <summary>The vocabulary of the stored generation, read through the journal while its files are not all in place, or <see cref="LibraryVocabulary.Empty"/>.</summary>
+    /// <summary>
+    /// The vocabulary of the stored generation, read through the journal while its files are not all in place, or
+    /// <see cref="LibraryVocabulary.Empty"/>. While committed content cannot be read right now, the libraries it holds
+    /// back contribute nothing (review findings A13 and A15 on the storage stream), so dictation runs on the personal
+    /// dictionary alone until a later publication, often at the same generation, restores them.
+    /// </summary>
     LibraryVocabulary Current { get; }
 
     /// <summary>
@@ -59,9 +64,17 @@ public interface ILibraryVocabularySource
     bool TryHandOff(AiVocabularyScope admitted, Action handOff);
 
     /// <summary>
-    /// Raised with the new generation after a new vocabulary is published, on the thread that completed the Save or
-    /// recovery; subscribers must be quick. Raised through <see cref="Infrastructure.ResilientEvent.InvokeAll{T}"/>, so
-    /// one throwing subscriber never stops the others (pattern P-3).
+    /// Raised with the stored generation each time a vocabulary that differs from the one published before it is
+    /// published, on the thread of the call that published it once the library lock is released; subscribers must be
+    /// quick. Raised through <see cref="Infrastructure.ResilientEvent.InvokeAll{T}"/>, so one throwing subscriber never
+    /// stops the others (pattern P-3).
     /// </summary>
+    /// <remarks>
+    /// The generation is not a version of the vocabulary: a publication can keep the generation of the one before it,
+    /// as when a library another app held open at a fresh start becomes readable, when an adoption is used in memory,
+    /// and when libraries are held back because their committed content cannot be read right now, or restored once it
+    /// can (review findings A13 and A15 on the storage stream). A subscriber takes <see cref="Current"/> as the new
+    /// vocabulary at every notification and never drops one because its generation is unchanged.
+    /// </remarks>
     event Action<long>? Changed;
 }

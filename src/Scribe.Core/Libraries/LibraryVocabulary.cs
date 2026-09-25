@@ -123,7 +123,10 @@ public sealed class LibraryVocabulary
     /// <summary>No library vocabulary: nothing enabled, or nothing loaded yet.</summary>
     public static LibraryVocabulary Empty { get; } = new(0, [], [], AiVocabularyScope.None);
 
-    /// <summary>The committed generation this vocabulary was composed from.</summary>
+    /// <summary>
+    /// The committed generation this vocabulary was composed from. Not a version of the vocabulary: two publications can
+    /// share it (see <see cref="ILibraryVocabularySource.Changed"/>), so a consumer compares vocabularies, never only this.
+    /// </summary>
     public long Generation { get; }
 
     /// <summary>The library rules for local replacement, one per spoken form, in composition order.</summary>
