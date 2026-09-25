@@ -70,7 +70,7 @@ public sealed class AzureSettingsAccessTests
     [Theory]
     [InlineData(false, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.None)]
     [InlineData(true, false, false, null, null, null, AzureSettingsAccess.ValidationIssue.None)]
-    [InlineData(true, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.AuthenticationRequired)]
+    [InlineData(true, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.EndpointRequired)]
     [InlineData(true, true, false, "key", null, "deployment", AzureSettingsAccess.ValidationIssue.EndpointRequired)]
     [InlineData(true, true, true, null, "https://example.test", null, AzureSettingsAccess.ValidationIssue.DeploymentRequired)]
     [InlineData(true, true, true, null, "https://example.test", "deployment", AzureSettingsAccess.ValidationIssue.None)]
@@ -298,10 +298,10 @@ public sealed class AzureSettingsAccessTests
     }
 
     [Fact]
-    public void The_cli_path_still_requires_a_verified_sign_in_to_save()
+    public void The_cli_path_can_save_complete_setup_without_live_sign_in()
     {
-        // Unlike a service principal, an az login session cannot be judged offline, so this keeps
-        // its original behaviour.
+        // A dropped connection must not block unrelated settings. The running cleanup service will
+        // report sign-in trouble later and fall back to what Scribe heard.
         var issue = AzureSettingsAccess.ValidateCleanup(
             enabled: true,
             usesAzureProvider: true,
@@ -311,7 +311,7 @@ public sealed class AzureSettingsAccessTests
             deployment: "cleanup",
             authMode: AzureAuthMode.AzureCli);
 
-        Assert.Equal(AzureSettingsAccess.ValidationIssue.AuthenticationRequired, issue);
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.None, issue);
     }
 
     [Fact]
@@ -455,6 +455,29 @@ public sealed class AzureSettingsAccessTests
             clientSecret: null);
 
         Assert.Equal(AzureSettingsAccess.ValidationIssue.None, issue);
+    }
+
+    [Theory]
+    [InlineData(AzureAuthMode.AzureCli, null, null, null, true)]
+    [InlineData(AzureAuthMode.ServicePrincipal, Tenant, Client, Secret, true)]
+    [InlineData(AzureAuthMode.ServicePrincipal, Tenant, Client, null, false)]
+    public void Local_setup_completeness_is_separate_from_live_sign_in(
+        AzureAuthMode authMode,
+        string? tenantId,
+        string? clientId,
+        string? clientSecret,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            AzureSettingsAccess.HasCompleteLocalSetup(
+                "https://example.test",
+                "cleanup",
+                apiKey: null,
+                authMode,
+                tenantId,
+                clientId,
+                clientSecret));
     }
 
     [Fact]

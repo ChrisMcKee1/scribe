@@ -118,15 +118,6 @@ public static class AzureSettingsAccess
             return ValidationIssue.ServicePrincipalIncomplete;
         }
 
-        // A complete service principal counts as authentication even when it has not been verified
-        // in this session. Verification is a live network call, so requiring it to save would let a
-        // dropped connection block edits to unrelated settings, and cleanup already falls back to
-        // the raw transcript when a credential stops working.
-        if (!signedIn && !hasApiKey && !servicePrincipalComplete)
-        {
-            return ValidationIssue.AuthenticationRequired;
-        }
-
         if (string.IsNullOrWhiteSpace(endpoint))
         {
             return ValidationIssue.EndpointRequired;
@@ -135,5 +126,24 @@ public static class AzureSettingsAccess
         return string.IsNullOrWhiteSpace(deployment)
             ? ValidationIssue.DeploymentRequired
             : ValidationIssue.None;
+    }
+
+    public static bool HasCompleteLocalSetup(
+        string? endpoint,
+        string? deployment,
+        string? apiKey,
+        AzureAuthMode authMode = AzureAuthMode.AzureCli,
+        string? tenantId = null,
+        string? clientId = null,
+        string? clientSecret = null)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(deployment))
+        {
+            return false;
+        }
+
+        return authMode != AzureAuthMode.ServicePrincipal ||
+            !string.IsNullOrWhiteSpace(apiKey) ||
+            AzureServicePrincipalValidator.IsComplete(tenantId, clientId, clientSecret);
     }
 }

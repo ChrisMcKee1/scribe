@@ -26,11 +26,20 @@ public sealed class SavedSettingsNoticeTests
                      SavedSettingsNotice.AtStartup,
                      SavedSettingsNotice.FromTray("AI cleanup"),
                      SavedSettingsNotice.InSettings("Start with Windows"),
+                     SavedSettingsNotice.ForWindow(),
                  })
         {
             Assert.DoesNotContain("recover", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain('\u2013', text);
             Assert.DoesNotContain('\u2014', text);
         }
+    }
+
+    [Fact]
+    public void Window_notice_matches_the_redesign_inline_warning()
+    {
+        Assert.Equal(
+            "Scribe couldn't use your saved settings, so it's using defaults. Review them and choose Save to keep them.",
+            SavedSettingsNotice.ForWindow());
     }
 }

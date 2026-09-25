@@ -20,4 +20,8 @@ public static class SavedSettingsNotice
     /// <summary>For the Settings window, where the user already is: why a control will not change yet.</summary>
     /// <param name="change">What the user tried to change, as the window names it.</param>
     public static string InSettings(string change) => $"Scribe {Problem} Review them and save before changing {change}.";
+
+    /// <summary>The inline warning shown on every Settings page while defaults stand in for a lost document.</summary>
+    public static string ForWindow() =>
+        "Scribe couldn't use your saved settings, so it's using defaults. Review them and choose Save to keep them.";
 }
