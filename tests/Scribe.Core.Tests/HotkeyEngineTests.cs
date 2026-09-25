@@ -577,23 +577,23 @@ public class HotkeyEngineTests
     public async Task Leak_check_signal_runs_the_check_on_the_pool_and_rearms_after_each_run()
     {
         using var checks = new SemaphoreSlim(0);
-        using var signal = new HotkeyReconcileSignal(() => checks.Release());
+        using var signal = new HotkeyReconcileSignal(_ => checks.Release());
 
         // The dispatcher plays no part: the hook callback's SetEvent alone gets the check run.
-        signal.Signal();
+        signal.Signal(1);
         Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
 
-        signal.Signal();
+        signal.Signal(1);
         Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
     public void A_released_leak_check_signal_never_throws_at_the_hook()
     {
-        var signal = new HotkeyReconcileSignal(() => { });
+        var signal = new HotkeyReconcileSignal(_ => { });
         signal.Dispose();
 
-        signal.Signal();
+        signal.Signal(1);
     }
 
     [Fact]

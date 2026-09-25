@@ -37,12 +37,18 @@ internal sealed record HotkeyCommand(
         new(HotkeyCommandKind.CancelToggle, generation, Activation: activation);
 }
 
-/// <summary>What the hook callback does with one key event.</summary>
-internal readonly record struct HookDecision(bool Suppress, bool RequestReconcile);
+/// <summary>
+/// What a hook callback does with one key or button event: whether to swallow it, whether to ask for the leaked-key
+/// repair (a key or button release the bindings swallowed, <see cref="RequestReconcile"/>), and, for the mouse hook
+/// alone, whether to ask only for the mouse hook's sync (an event that settled a release owed to a swallowed press,
+/// <see cref="RequestMouseHookSync"/>), which never repairs a key.
+/// </summary>
+internal readonly record struct HookDecision(bool Suppress, bool RequestReconcile, bool RequestMouseHookSync = false);
 
 /// <summary>
-/// Everything the low-level hook callback touches, owned by one hook thread for the lifetime of one
-/// hook installation.
+/// Everything the low-level keyboard and mouse hook callbacks touch, owned by one hook thread for the lifetime of one
+/// hook installation. Both hooks run on that thread and feed this one engine, so a chord of a key and a mouse button,
+/// the modifier rule, pause, capture and a desktop switch see keys and buttons as one input state.
 ///
 /// Only the owner thread mutates this state. It applies queued commands at the start of every key
 /// event and whenever it is woken, so the callback never waits for another thread: a monitor shared
@@ -61,25 +67,59 @@ internal sealed class HotkeyEngine
     // number, with one interlocked add; it never wraps in practice (2^55 presses).
     private static long _lastActivation;
 
+    // Numbers every key view an engine has had, across every engine in the process, so a value names one view of one
+    // engine: a new engine takes a fresh one, and so does each clear of an engine's view (see KeyViewEpoch).
+    private static long _lastKeyViewEpoch;
+
     private readonly LockFreeInbox<HotkeyCommand> _commands = new();
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
     private readonly Func<uint, bool>? _isLogicallyDown;
+    private readonly Func<uint, bool>? _buttonDownInWindows;
     private readonly ChordStateMachine _standard;
     private ChordStateMachine? _dictationOnly;
     private bool _captureMode;
     private bool _paused;
     private bool _retired;
+    private bool _usesMouseButtons;
     private long _generation;
+    private long _appliedCaptureGeneration;
+    private long _keyViewEpoch;
     private long _activationEpoch;
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
+    private long _mouseHookLossesHandled;
+    private long _mouseButtonEvents;
     private int _wakePending;
     private uint _ownerThreadId;
+
+    // The mouse buttons whose press was swallowed and whose release has not been seen since, one bit per button code, and
+    // SealedDebts once the engine is retired. A new press of the button retires its debt, since buttons never repeat: the
+    // release went up where no hook could see it. A time no hook saw the mouse (a mouse hook found gone, the gap a
+    // reinstall leaves) drops every debt: a press may have reached Windows then, and nothing the callback can read tells
+    // that press from a swallowed one when Windows' answer may have failed. A debt that stays is decided when its release
+    // is made, on Windows' own view of the button (WindowsHoldsButton), and DefWindowProc is why it matters: it turns a
+    // side button's lone release into a Back or Forward command. One word, changed by compare-exchange, so a debt is
+    // either committed before the retirement seals it, or refused, and then its press is not swallowed either (see
+    // OnMouseButtonEvent).
+    private int _owedButtonReleases;
+
+    private const int SealedDebts = 1 << 30;
+    private const int ButtonDebts = (1 << (int)MouseButtons.Middle) | (1 << (int)MouseButtons.Back) | (1 << (int)MouseButtons.Forward);
 
     /// <param name="isLogicallyDown">
     /// Windows' view of a key, which each binding's machine asks about a modifier its own view holds (see
     /// <see cref="ChordStateMachine"/>). Null trusts the hook's view alone.
+    /// </param>
+    /// <param name="buttonDownInWindows">
+    /// Windows' own view of a mouse button, GetAsyncKeyState's high bit in production, which the callback reads for the
+    /// release of a press this engine swallowed (<see cref="OnMouseButtonEvent"/>). The delegate is made before any hook
+    /// exists, by whoever builds the router, and the callback only invokes it. Null for the tests that do not script
+    /// Windows, where the engine's own state decides: the release is swallowed.
+    /// </param>
+    /// <param name="appliedCaptureGeneration">
+    /// The generation of the latest capture request, which <paramref name="captureMode"/> already reflects
+    /// (<see cref="AppliedCaptureGeneration"/>).
     /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
@@ -88,22 +128,158 @@ internal sealed class HotkeyEngine
         bool paused,
         long generation,
         HotkeyTransitionQueue transitions,
-        Func<uint, bool>? isLogicallyDown = null)
+        Func<uint, bool>? isLogicallyDown = null,
+        Func<uint, bool>? buttonDownInWindows = null,
+        long appliedCaptureGeneration = 0)
     {
         _transitions = transitions;
         _isLogicallyDown = isLogicallyDown;
+        _buttonDownInWindows = buttonDownInWindows;
         _captureMode = captureMode;
         _paused = paused;
         _generation = generation;
+        _appliedCaptureGeneration = appliedCaptureGeneration;
+        _keyViewEpoch = Interlocked.Increment(ref _lastKeyViewEpoch);
         _standard = CreateMachine(binding);
         _dictationOnly = dictationOnlyBinding is null ? null : CreateMachine(dictationOnlyBinding);
+        _usesMouseButtons = MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding);
     }
+
+    /// <summary>
+    /// Any thread: the buttons whose press this engine swallowed and whose release it has not seen, as bits by code
+    /// (1 &lt;&lt; <see cref="MouseButtons.Back"/> and so on). After <see cref="Retire"/> it no longer changes.
+    /// </summary>
+    public int OwedButtonReleases => Volatile.Read(ref _owedButtonReleases) & ButtonDebts;
+
+    /// <summary>
+    /// Any thread: whether a swallowed button press still owes its release, so the hook thread keeps a drain-only mouse
+    /// hook for it even once no binding presses a mouse button.
+    /// </summary>
+    public bool OwesButtonRelease => OwedButtonReleases != 0;
+
+    // Owner thread, between messages: a time no hook saw the mouse ends. Every release still owed is dropped, and so reaches
+    // the app when it is made (fail-open): a press may have reached Windows while no hook saw the mouse, and the one read
+    // the callback makes cannot tell that press from a swallowed one when the read itself may have failed. At worst that
+    // release is one the app never needed, for Back or Forward one navigation; never one Windows is left waiting for.
+    // Sealed, nothing changes.
+    private void DropOwedReleases()
+    {
+        var debts = Volatile.Read(ref _owedButtonReleases);
+        while ((debts & SealedDebts) == 0 && (debts & ButtonDebts) != 0)
+        {
+            var observed = Interlocked.CompareExchange(ref _owedButtonReleases, debts & ~ButtonDebts, debts);
+            if (observed == debts)
+            {
+                return;
+            }
+
+            debts = observed;
+        }
+    }
+
+    // Owner thread, for a press the machines swallow: commits the debt of its release unless the retirement sealed the
+    // debts first, which is the one way this returns false.
+    private bool TryOweRelease(uint button)
+    {
+        var bit = 1 << (int)button;
+        var debts = Volatile.Read(ref _owedButtonReleases);
+        while ((debts & SealedDebts) == 0)
+        {
+            var observed = Interlocked.CompareExchange(ref _owedButtonReleases, debts | bit, debts);
+            if (observed == debts)
+            {
+                return true;
+            }
+
+            debts = observed;
+        }
+
+        return false;
+    }
+
+    // Owner thread: a release, or a new press, of this button pays or forgives its debt. Returns whether one was owed.
+    // Sealed, the debts stay as they are, but one owed is still reported. That matters only in the in-flight window: a
+    // callback this engine admitted before the retirement and is still running, whose release is then judged as an owed
+    // one rather than passed on alone. A callback that starts after the retirement returns at the top of
+    // OnMouseButtonEvent and swallows nothing.
+    private bool SettleRelease(uint button)
+    {
+        var bit = 1 << (int)button;
+        var debts = Volatile.Read(ref _owedButtonReleases);
+        while ((debts & bit) != 0 && (debts & SealedDebts) == 0)
+        {
+            var observed = Interlocked.CompareExchange(ref _owedButtonReleases, debts & ~bit, debts);
+            if (observed == debts)
+            {
+                return true;
+            }
+
+            debts = observed;
+        }
+
+        return (debts & bit) != 0;
+    }
+
+    // Owner thread, in the mouse hook callback, for the release of a press this engine swallowed: whether Windows holds
+    // the button, which lets that release through. One GetAsyncKeyState, through a delegate made before any hook existed.
+    // The callback runs before Windows applies this release, and Windows takes input one event at a time, so the answer
+    // shows every earlier press: a button Windows holds received a press this hook did not swallow (a second mouse, the
+    // secure desktop, an event lost in a renewal's swap), and its release must reach the app, or the app keeps the button
+    // down. Anything else, up or a read that failed and returned zero, keeps the release swallowed: no time without the
+    // hook has passed since the press (such a time drops the debt), so every press since went through this hook. A zero
+    // that is a failed read while Windows does hold the button leaves it down there until a later release of it is read
+    // as down.
+    private bool WindowsHoldsButton(uint button) => _buttonDownInWindows?.Invoke(button) == true;
 
     /// <summary>The owner's thread id once it has attached, otherwise zero. Any thread.</summary>
     public uint OwnerThreadId => Volatile.Read(ref _ownerThreadId);
 
     /// <summary>Any thread. True once a replacement took over the hook or the service stopped.</summary>
     public bool IsRetired => Volatile.Read(ref _retired);
+
+    /// <summary>
+    /// Any thread. The generation of the latest capture request (<see cref="HotkeyCommand.CaptureMode"/>) this engine has
+    /// applied with both its machines, published only once the second has, so until then the router counts capture as
+    /// owning input (<see cref="HotkeyCommandRouter.CaptureOwnsInput"/>): at capture's end both machines' views are
+    /// empty, and the one that has left capture tracks keys again only from there.
+    /// </summary>
+    public long AppliedCaptureGeneration => Volatile.Read(ref _appliedCaptureGeneration);
+
+    /// <summary>
+    /// Any thread. Which key view this engine has now: a value no other view of any engine in the process has had. The
+    /// owner takes a new one immediately before its machines clear or replace their keys (new bindings, capture's start
+    /// and end, a desktop reset), and a new engine starts with its own (a reinstall), so a leaked-key repair asked for at
+    /// one epoch judges only while the current engine's view still has it (review round 10, A12;
+    /// <c>HotkeyService.KeyViewIsWhole</c>).
+    /// </summary>
+    public long KeyViewEpoch => Volatile.Read(ref _keyViewEpoch);
+
+    /// <summary>
+    /// Test seam, null in production: run by the owner between the two machines' capture changes, where a test pauses
+    /// the change it is applying.
+    /// </summary>
+    internal Action? BetweenCaptureMachinesForTests { get; set; }
+
+    /// <summary>
+    /// Test seam, null in production: run by the owner right after its machines have cleared or replaced their keys (new
+    /// bindings, capture's start or end, a desktop reset), where a test checks that the view's new epoch is already out.
+    /// </summary>
+    internal Action? AfterKeyViewClearedForTests { get; set; }
+
+    /// <summary>
+    /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>). It is
+    /// one of the two reasons the hook thread keeps a mouse hook, not the only one: the hook is installed while
+    /// <c>HotkeyService.HookInstallation.MouseHookWanted</c> holds, which is this or a release still owed
+    /// (<see cref="OwesButtonRelease"/>), so nobody who binds keys alone gets a system-wide mouse hook except to drain
+    /// such a release. Updated by the owner when it applies new bindings.
+    /// </summary>
+    public bool UsesMouseButtons => Volatile.Read(ref _usesMouseButtons);
+
+    /// <summary>
+    /// Any thread, for tests: how many middle and side button events reached this engine from the mouse hook. Moves,
+    /// wheels and the left and right buttons never do.
+    /// </summary>
+    internal long MouseButtonEvents => Interlocked.Read(ref _mouseButtonEvents);
 
     /// <summary>
     /// Any thread. The hook's view of the physical keyboard, for the leaked-key reconciler: true
@@ -114,6 +290,60 @@ internal sealed class HotkeyEngine
 
     /// <summary>Any thread. How many desktop switches the owner has applied.</summary>
     public long DesktopSwitches => Interlocked.Read(ref _desktopSwitches);
+
+    /// <summary>Any thread, for tests: how many times the owner was told its mouse hook had been found removed.</summary>
+    internal long MouseHookLossesHandled => Interlocked.Read(ref _mouseHookLossesHandled);
+
+    /// <summary>
+    /// Owner thread, between messages: the mouse hook's renewal found the previous registration already gone, which is
+    /// how a hook Windows removed after a missed deadline shows (the <c>LowLevelMouseProc</c> documentation: such a hook
+    /// is removed silently, with no way for the application to know). Until the renewal no hook saw the mouse, so a
+    /// button the machines hold may have been released unseen, and a toggle's second click may have gone to the app.
+    /// The Core transition that follows keeps every guarantee the other state clears keep: commands requested before it
+    /// apply first; every release still owed is dropped, so it reaches the app when it is made, since a press may have
+    /// reached Windows while no hook saw the mouse and the one read the callback makes cannot tell that press from a
+    /// swallowed one when the read may have failed (review round 7: at worst one stray release, for Back or Forward one
+    /// navigation, never a button Windows is left holding); the machines forget their mouse buttons,
+    /// and a binding that presses one gives up its latch (<see cref="ChordStateMachine.ForgetMouseButtons"/>); and if the
+    /// arbiter's owner is a binding that presses a mouse button, this engine's activation epoch advances first, so its
+    /// Activated still waiting for the dispatcher can never open the microphone, and then the owner is released and its
+    /// dictation ended, reported as <see cref="HotkeyDeactivation.MouseHookLost"/>. A keyboard binding's dictation, its
+    /// queued Activated included, is left alone: the keyboard hook saw everything. A retired engine does nothing, as for
+    /// a desktop switch.
+    /// </summary>
+    public void OnMouseHookLost()
+    {
+        if (!IsOwnerCall())
+        {
+            return;
+        }
+
+        ApplyPendingCommands();
+        Interlocked.Increment(ref _mouseHookLossesHandled);
+        DropOwedReleases();
+        _standard.ForgetMouseButtons();
+        _dictationOnly?.ForgetMouseButtons();
+
+        // One owner at most, so one of these ends it, or neither does.
+        if (!EndDictationOf(HotkeyTrigger.Standard, _standard.UsesMouseButtons))
+        {
+            _ = EndDictationOf(HotkeyTrigger.DictationOnly, _dictationOnly?.UsesMouseButtons == true);
+        }
+    }
+
+    // The owner, if it is this trigger and its binding presses a mouse button: the epoch first, so its queued Activated is
+    // stale before the stop that follows it is queued.
+    private bool EndDictationOf(HotkeyTrigger trigger, bool pressesAMouseButton)
+    {
+        if (!pressesAMouseButton || !_arbiter.TryDeactivate(trigger))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _activationEpoch);
+        EmitStateClear(HotkeyTransition.Deactivated, trigger, HotkeyDeactivation.MouseHookLost);
+        return true;
+    }
 
     /// <summary>
     /// Any thread. The epoch this engine's own queued activations are judged by (see <see cref="HotkeyService.ShouldDispatch"/>):
@@ -171,7 +401,10 @@ internal sealed class HotkeyEngine
     /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
     /// An Activated this engine queued that is still waiting for the dispatcher is invalidated first, through this engine's
     /// activation epoch (<see cref="ActivationEpoch"/>), so it cannot open the microphone after the lock. A switch with
-    /// nothing recording starts and stops nothing. The service reaches this through <see cref="OnDesktopSwitchNotice"/>,
+    /// nothing recording starts and stops nothing. The release of a mouse button whose press was swallowed stays owed
+    /// (see <see cref="OnMouseButtonEvent"/>): a keyboard key's lone release is harmless, but DefWindowProc makes a side
+    /// button's lone release a Back or Forward command. The service reaches this through
+    /// <see cref="OnDesktopSwitchNotice"/>,
     /// from the WinEvent callback that runs on the thread that set the hook, which is the owner; a call from any other
     /// thread once an owner is attached is ignored rather than allowed to race the keyboard callback.
     /// </summary>
@@ -200,8 +433,13 @@ internal sealed class HotkeyEngine
 
         // Both machines are reset whatever they report: one can still hold a press the arbiter refused, or a toggle it
         // ignored, after the dictation it lost to has ended. Only the arbiter's real owner, if there is one, is stopped.
+        // A release still owed to a swallowed button press survives the reset (the engine keeps those, not the
+        // machines): a button held as the desktop switched and let go once it is back must reach no app, or a side
+        // button's release navigates it.
+        NewKeyView();
         _ = _standard.Reset();
         _ = _dictationOnly?.Reset();
+        AfterKeyViewClearedForTests?.Invoke();
         if (_arbiter.TryTakeActive() is { } active)
         {
             EmitStateClear(HotkeyTransition.Deactivated, active, HotkeyDeactivation.DesktopSwitch);
@@ -252,7 +490,7 @@ internal sealed class HotkeyEngine
         }
     }
 
-    /// <summary>Owner thread: one key event from the hook callback.</summary>
+    /// <summary>Owner thread: one key event from the keyboard hook callback.</summary>
     public HookDecision OnKeyEvent(uint virtualKey, bool isDown)
     {
         // Retired: the replacement engine decides now, or nobody does after Stop. A hook thread
@@ -263,6 +501,80 @@ internal sealed class HotkeyEngine
             return default;
         }
 
+        // A keyboard event carrying a mouse button's code is not that button, and only injected input can send one: the
+        // mouse hook alone reports buttons, so the two hooks never overwrite each other's view of one. No binding a
+        // capture could make was ever matched this way, because no keyboard key has these codes.
+        if (MouseButtons.IsMouseButton(virtualKey))
+        {
+            return default;
+        }
+
+        return OnInput(virtualKey, isDown);
+    }
+
+    /// <summary>
+    /// Owner thread: the middle or a side mouse button (<see cref="MouseButtons.Middle"/>, <see cref="MouseButtons.Back"/>
+    /// or <see cref="MouseButtons.Forward"/>) went down or up, from the mouse hook callback (<see cref="MouseHookFilter"/>).
+    /// A button is one more key to the machines: it completes a binding, is swallowed while it drives a dictation, is
+    /// let through while paused or capturing, and a bare binding of one lets a press made with a modifier through, as a
+    /// bare Page Up or Page Down does (see <see cref="ChordStateMachine"/>). The engine itself keeps what the machines'
+    /// resets must not lose, the release owed to a press it swallowed, which it judges even after a reset or in capture;
+    /// a press is swallowed only once that debt is committed, so a press the retirement overtakes reaches the app whole,
+    /// with its release. The release of a press it swallowed is swallowed too unless Windows holds the button
+    /// (<see cref="WindowsHoldsButton"/>); a time no hook saw the mouse drops such debts beforehand
+    /// (<see cref="OnMouseHookLost"/>, a reinstall), so those releases pass. The decision about a debt makes no delegate,
+    /// takes no lock of Scribe's, waits for no other thread and allocates nothing: two compare-exchanges at most, and for
+    /// such a release one GetAsyncKeyState, the only native call on this path, prelinked before either hook existed. What
+    /// can allocate here is what the keyboard path allocates too, in <see cref="OnInput"/>: a node for each transition it
+    /// queues (a press or release that starts or ends a dictation, or a state clear from a command it applies first) and
+    /// a new machine when a command it applies first adds a dictation-only binding. A release the bindings swallowed asks
+    /// for the leaked-key repair; an event that only settled a debt asks for the mouse hook's sync alone (see the end).
+    /// </summary>
+    public HookDecision OnMouseButtonEvent(uint button, bool isDown)
+    {
+        if (IsRetired || !MouseButtons.IsBindable(button))
+        {
+            return default;
+        }
+
+        Interlocked.Increment(ref _mouseButtonEvents);
+
+        // A button never repeats, so every press is new: a release still owed to an earlier swallowed press went up
+        // where no hook could see it. A release pays its own.
+        var owed = SettleRelease(button);
+        var decision = OnInput(button, isDown);
+        var suppress = decision.Suppress;
+        if (isDown)
+        {
+            if (suppress && !TryOweRelease(button))
+            {
+                // The retirement sealed the debts while this press was judged: its release goes to the replacement, which
+                // owes it nothing, so the press must reach the app too, or the app gets a release with no press.
+                suppress = false;
+            }
+        }
+        else if (suppress || owed)
+        {
+            suppress = !WindowsHoldsButton(button);
+        }
+
+        // Two requests, kept apart (review round 8, A9). A button release asks for the keyboard's leak repair only when the
+        // bindings themselves swallowed it (decision.Suppress, their pairing of it with a press they tracked since the last
+        // state clear, so their view of the chord's keys is whole) and it is still swallowed. A release swallowed only for
+        // a debt from before a state clear (capture, a desktop switch, new bindings) never asks: the clear forgot every
+        // key the user still holds, and capture tracks none, so the repair would find a held modifier down in Windows and
+        // not in the engine and send its key-up while the user holds it. Any event that settled a debt, a release that
+        // paid it, swallowed or let through, or a new press that forgave it, asks for the mouse hook's sync, which removes
+        // a drain-only hook kept for that debt at once rather than at the next watchdog period
+        // (HotkeyService.RunReconcilePass); on its own that sync repairs no key.
+        return new HookDecision(
+            suppress,
+            RequestReconcile: !isDown && suppress && decision.Suppress,
+            RequestMouseHookSync: owed);
+    }
+
+    private HookDecision OnInput(uint virtualKey, bool isDown)
+    {
         // Commands requested before this event took effect before it, exactly as if they had
         // been applied synchronously on the requesting thread.
         ApplyPendingCommands();
@@ -295,6 +607,10 @@ internal sealed class HotkeyEngine
     public HotkeyTrigger? Retire()
     {
         Volatile.Write(ref _retired, true);
+
+        // Seals the button debts: from here a press this engine is still judging cannot commit one, so it is not
+        // swallowed, and every debt committed before is the replacement's (OwedButtonReleases).
+        Interlocked.Or(ref _owedButtonReleases, SealedDebts);
         return _arbiter.Retire();
     }
 
@@ -316,6 +632,10 @@ internal sealed class HotkeyEngine
                 break;
             case HotkeyCommandKind.SetCaptureMode:
                 ApplyCaptureMode(command.Enabled);
+
+                // Published only now, once both machines have applied the request (review round 9, A11): until then the
+                // router counts capture as owning input, at its start and at its end.
+                Volatile.Write(ref _appliedCaptureGeneration, command.Generation);
                 break;
             case HotkeyCommandKind.SetPaused:
                 ApplyPaused(command.Enabled);
@@ -348,6 +668,10 @@ internal sealed class HotkeyEngine
     private void ApplyBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding)
     {
         var activeTrigger = _arbiter.TryTake(HotkeyTrigger.Standard);
+
+        // Both machines forget their keys (the standard one always, the dictation-only one whether it is updated, reset,
+        // created empty or removed), so the view is a new one from here.
+        NewKeyView();
         var (transition, _) = _standard.UpdateBinding(binding);
         var secondaryTransition = HotkeyTransition.None;
         if (dictationOnlyBinding is null)
@@ -368,6 +692,7 @@ internal sealed class HotkeyEngine
             (secondaryTransition, _) = _dictationOnly.UpdateBinding(dictationOnlyBinding);
         }
 
+        AfterKeyViewClearedForTests?.Invoke();
         if (transition != HotkeyTransition.None)
         {
             EmitStateClear(transition, activeTrigger);
@@ -376,13 +701,19 @@ internal sealed class HotkeyEngine
         {
             EmitStateClear(secondaryTransition, activeTrigger);
         }
+
+        // The hook thread reads this once the command is applied and installs or removes its mouse hook to match.
+        Volatile.Write(ref _usesMouseButtons, MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding));
     }
 
     private void ApplyCaptureMode(bool enabled)
     {
         _captureMode = enabled;
+        NewKeyView();
         var (transition, _) = _standard.SetCaptureMode(enabled);
+        BetweenCaptureMachinesForTests?.Invoke();
         var secondary = _dictationOnly?.SetCaptureMode(enabled);
+        AfterKeyViewClearedForTests?.Invoke();
         if (transition != HotkeyTransition.None)
         {
             EmitStateClear(transition, _arbiter.TryTake(HotkeyTrigger.Standard));
@@ -405,6 +736,14 @@ internal sealed class HotkeyEngine
             _arbiter.Reset();
         }
     }
+
+    // Owner thread, immediately before its machines clear or replace their key view (ApplyBindings, ApplyCaptureMode,
+    // ApplyDesktopSwitch; a new engine takes its first epoch in its constructor): the view gets a new epoch, published
+    // before the first key is cleared, so a reader that sees any cleared key sees the new epoch too. One interlocked add
+    // and one volatile write, no lock and no allocation, since it can run inside a hook callback (a queued command
+    // applied at the start of a key event). A mouse hook found gone (OnMouseHookLost) forgets buttons, never keys, and
+    // the leaked-key repair judges keys alone, so it takes none.
+    private void NewKeyView() => Volatile.Write(ref _keyViewEpoch, Interlocked.Increment(ref _lastKeyViewEpoch));
 
     // A machine created mid-session (a dictation-only binding added later) joins the modes already
     // in force instead of starting live while Settings is capturing or dictation is paused.
@@ -449,10 +788,11 @@ internal sealed class HotkeyEngine
 
         // The activation epoch is this engine's, read here on the owner thread, the only one that advances it, so an
         // Activated computed after a desktop switch always carries the new one; the item names this engine, whose epoch
-        // the consumer judges it by.
+        // the consumer judges it by. The key view's epoch goes with it too, so the repair a Deactivated asks for judges
+        // only the view the release was seen in.
         _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
             transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _activationEpoch, Engine: this,
-            Activation: activation));
+            Activation: activation, KeyViewEpoch: _keyViewEpoch));
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.

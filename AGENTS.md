@@ -38,7 +38,10 @@ over a recent dictation that saves the fix and repairs that transcript in place)
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
 disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause), a tray Microphone
 submenu (the Windows default or a specific device, plus Sound settings) and a
-first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
+first-run **welcome**; push-to-talk on any key, two-key chord, key with Ctrl, Alt or Shift, or a spare **mouse
+button** (middle, back or forward, alone or in a chord with a key; any other button through the key its software
+sends, such as F13; see the hook section); an **About** page links privacy, support, source, and
+the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
 benchmark‑validated optimum (see `docs/model-leaderboard.md`; a stricter A/B regressed it).
@@ -266,12 +269,15 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows: 3756 as of 0.4.4, 3747 with the filter below).
+# Run the unit tests (must stay green; the count only ever grows: 4061 as of 0.4.5, 4017 with the filter below).
 # Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
 # session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
 # or src/Scribe.App/models found from the test output); without models they pass vacuously. CI sets
 # SCRIBE_MODELS_DIR, so they run there.
+# The Start_ tests that inject mouse clicks and keys into the real hooks (HotkeyServiceMouseTests.cs) run only on CI
+# (GITHUB_ACTIONS) or with SCRIBE_INPUT_INJECTION_TESTS=1, and then require the input desktop: injected input lands
+# under the pointer, so never opt in on a desktop someone is using. Elsewhere they return at once.
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -665,8 +671,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   refused). A press the user made meanwhile, still queued behind the consumer, keeps its latch, so the
   recording it starts is still ended by its own release; releasing whatever the hook held, before the
   admission, cleared that latch and left the microphone recording. A stop the lifecycle turns away
-  releases nothing. The two stops the hook sends itself, a release or second press and a desktop switch,
-  release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
+  releases nothing. The stops the hook sends itself, a release or second press, a desktop switch and a mouse
+  hook found removed, release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
   turns away because the previous dictation is still processing releases its own latch the same way
   (`DictationStartPolicy.BeginRecording`): it started nothing, and after a stop Scribe made itself, whose
   release had just made that tap a new start, a latch left on cost the user a third tap. The other
@@ -708,10 +714,24 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 
 ## Hotkey hook threading (read before touching the hook)
 
-- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard hook that
-  answers too slowly. The callback takes no lock, logs nothing, queues nothing to the thread pool and
-  uses no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
-  those can take a lock shared with another thread. One hook thread owns all key state.
+- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard or mouse hook
+  that answers too slowly. The callbacks take no lock, log nothing, queue nothing to the thread pool and
+  use no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
+  those can take a lock shared with another thread. One hook thread owns all key and button state. The
+  only allocations on the callbacks' path are the node `LockFreeInbox` pushes for a transition (a press or
+  release that starts or ends a dictation, or a state clear a command makes) and a new machine when a
+  command adds a dictation-only binding; the mouse callback's move and wheel fast path, an unbound
+  button, the owed-release decision and a key no binding uses allocate nothing (`MouseButtonHotkeyTests`
+  measures it warm, and `MouseButtonRound8Tests` measures the first call of each cold, in a load context
+  of its own with fresh copies of Scribe.Core and the tests, so no other test can have warmed it). The
+  runtime's one-time work for the two P/Invokes the callbacks call, `CallNextHookEx` and
+  `GetAsyncKeyState`, is done before either hook exists (`NativeMethods.PrelinkHookCalls`,
+  `Marshal.Prelink`: "Executes one-time method setup tasks without calling the method"); on a first
+  call inside a callback it allocated 48 bytes each. None of those calls is promised a time:
+  `CallNextHookEx` "calls the next hook in the chain" and returns that hook's result, so it lasts as
+  long as that hook does, and `GetAsyncKeyState` and `SetEvent` do not wait for another thread, but
+  Learn gives neither a time bound. The chord machine tests modifiers with bit
+  tests, because `Enum.HasFlag` boxes both enums whenever the JIT does not optimize it (a Debug build).
 - **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
   during a reinstall never shares key state, or the desktop-switch activation epoch, with its
   replacement. A replaced engine is retired: it passes every key through, requests no leak check,
@@ -725,24 +745,255 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
   keep command order and epoch order in step. Other threads read published state lock-free.
   Transitions leave through a lock-free queue woken by a kernel event, and the leaked-key check runs
-  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`.
+  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`, after
+  interlocked writes that count the request and say which key view the pass should repair keys in, if
+  any (`HotkeyReconcileSignal`, one per hook installation).
 - **The hook thread creates its message queue first** (`NativeMethods.EnsureMessageQueue`, the
   `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
   other threads can only post the router's wake to a thread that already has a queue, and the
   documentation is not consistent about whether `SetWindowsHookEx` creates one.
+- **The mouse hook exists only while a binding presses a mouse button.** A middle, Back or Forward
+  button (`MouseButtons`, stored as VK_MBUTTON, VK_XBUTTON1 or VK_XBUTTON2 in the existing binding) is
+  read by a `WH_MOUSE_LL` hook on the same hook thread, feeding the same engine
+  (`HotkeyEngine.OnMouseButtonEvent`), so chords of a key and a button, suppression, pause, capture,
+  the modifier rule, a desktop switch and a reinstall treat a button as one more key. The thread
+  installs it, or removes it, between messages and never inside a callback, whenever it has applied a
+  change (`HookInstallation.SyncMouseHook`, after `HotkeyEngine.UsesMouseButtons`), so nobody who binds
+  keys alone gets a system-wide mouse hook: every pointer move on the desktop waits for this thread
+  while one is installed. The one exception is drain-only: while a swallowed press still owes its
+  release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
+  judge that release and nothing else (no binding can use a button then), and it is removed as soon as
+  the debt is gone: any event that settles it, its release swallowed or let through or a new press
+  that forgives it, asks for that sync at once (`HookDecision.RequestMouseHookSync`, a pass of
+  `HotkeyService.RunReconcilePass` that syncs the mouse hook and repairs no key; review round 8, A9),
+  and a renewal that finds the hook gone, which drops the debt, removes it in that same renewal (Grok's
+  G5, round 7). A debt whose release went up on
+  the lock screen or a secure desktop, where no hook could see it, keeps the drain-only hook until that
+  button is pressed once more. Its callback's first act is the one comparison
+  (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
+  hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
+  `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event
+  carrying a mouse button's code (only injected input can) is not the button. The left and right
+  buttons are never bindable.
+- **The mouse hook is renewed, not probed.** Windows removes a low-level hook that misses the callback
+  deadline, and the mouse hook is the one called for every pointer move, so it needs recovery, but the
+  keyboard probe has no safe mouse counterpart: the only input that clicks nothing is a move, and a
+  move that reaches the desktop brings back a pointer hidden while typing. So every watchdog period
+  (`MaintainMouseHookLocked`) the thread registers the mouse hook afresh, the new registration before
+  the old one is released and both before it takes another message, so the engine keeps its state
+  through the change. That is not a seal: Windows "always installs a hook procedure at the beginning of
+  a hook chain", and each procedure passes an event on to the next one (Hooks Overview), so an event
+  already inside a newer program's hook when the swap happens reaches neither registration; what that
+  can cost an owed release is decided when the release is made (below). A registration Windows removed
+  is normally back within one period, which is registration recovery only (a renewal whose new
+  registration Windows refuses keeps the old one, found gone or not, and tries again next period).
+  **A renewal that finds the old registration already gone is a lost hook, and the engine is told**
+  (`HotkeyEngine.OnMouseHookLost`, on the hook thread between messages, before any button event
+  reaches the new registration): while it was gone no hook saw the mouse, so a held button's release,
+  or a toggle's second click, may be the input nobody saw, and a press may have reached Windows unseen.
+  So every release still owed is dropped, and nothing is read from Windows then; both machines
+  forget their mouse buttons (keys stay: the keyboard hook saw them), a binding that presses one gives
+  up its latch, and if the arbiter's owner is such a binding, the engine advances its activation epoch
+  and then ends that dictation, reported as `HotkeyDeactivation.MouseHookLost`
+  (`DictationStopReason.MouseHookLost` in the log), so its queued Activated can never open the
+  microphone; a keyboard binding's dictation and its queued start are left alone. So recording
+  recovery is best effort and comes at the renewal that finds the loss, normally one watchdog period
+  after it, later if a renewal's registration fails, and until then a press or release no hook saw
+  reaches the app. The loss is logged. Nothing is injected and nothing is added to any event.
+- **An owed release is decided when it is made, on Windows' own view, and a gap lets it through**
+  (review rounds 6 and 7). The engine keeps a release owed to every button press it swallowed; a time
+  no hook saw the mouse (a renewal that finds the hook gone, or a reinstall, whose new engine starts
+  owing nothing) drops those debts. When a release reaches the mouse hook
+  (`HotkeyEngine.OnMouseButtonEvent`), the decision is:
+
+  | The release | What happens |
+  | --- | --- |
+  | Owed, and Windows shows the button down | Let through: a press reached Windows that this hook did not swallow (a second mouse, the secure desktop, an event lost in a renewal's swap), and its release is due |
+  | Owed, and Windows shows it up, or the read failed and returned zero | Swallowed: no time without the hook has passed since its press, so every press since went through this hook |
+  | Its debt dropped by a lost hook or a reinstall | Let through, with no read (fail-open) |
+  | Not owed, and no binding holds the button | Let through, as always |
+
+  The read is `GetAsyncKeyState`'s high bit, through a delegate `HotkeyService.CreateRouter` makes
+  before either hook exists, and the service's constructor prelinks the P/Invoke behind it (the hook
+  threading bullet above; round 7 made a first call for a key nobody presses instead, which round 8
+  replaced with `Marshal.Prelink`). It is the only native call the decision makes; nothing on the
+  mouse callback's path makes a delegate; and no process, window or token is queried inside the
+  hook's deadline (review round 7: opening a process can run drivers' callbacks, which a callback
+  Windows removes on timeout must not wait for). `MouseButtonRound7Tests` pins the three, and
+  `MouseButtonRound8Tests` measures, cold, that the first owed release after production
+  initialization allocates nothing. Why the read is current evidence: the callback runs before
+  Windows applies the event it is called for (the keyboard hook's documentation: "the callback
+  function is called before the asynchronous state of the key is updated"; for the mouse, a press
+  the hook swallows never shows in Windows' view, measured on CI by
+  `HotkeyServiceTests.Start_keeps_a_swallowed_button_press_out_of_windows_own_view`), and Windows takes
+  input from the system message queue "one at a time" (About Messages and Message Queues), so the
+  read shows every earlier press. Why a gap lets the release through: a press may have reached
+  Windows while no hook saw the mouse, including one still inside another program's hook when a
+  registration landed, and the one read the callback can make cannot tell a failed read from an up
+  (UIPI makes it zero while a window of a higher integrity level is in front, and no check around the
+  read can prove it did not fail), so nothing is guessed. Fail-open's cost is stated plainly: after a
+  rare hook loss or reinstall while a bound button is held, its release reaches the app once, which
+  for Back or Forward is one navigation; it never leaves a button down in Windows. What one read
+  cannot tell for a debt no gap has touched: a zero that is a failed read while Windows does hold the
+  button (a press that reached it some other way, with a higher-integrity window in front) swallows
+  that release, and the button stays down in Windows until a later release of it is read as down,
+  which then reaches the app (`A_release_owed_without_a_gap_gets_through_when_windows_holds_the_button`).
+- **A swallowed button press owes its release.** The engine, not the machines whose resets forget,
+  keeps the buttons whose press it swallowed until their release comes, and judges that release when
+  it comes (above), whatever happened in between: every path that clears the machines' state while
+  the hook keeps seeing the mouse (a desktop switch, capture, new bindings, a dictation-only trigger
+  removed), and new bindings with no mouse button at all, which keep the drain-only hook above. A gap
+  in the hook's view (a mouse hook found gone, a reinstall) drops the debts instead (above).
+  DefWindowProc makes a side button's lone release a
+  `WM_APPCOMMAND` (Back or Forward), so passing it on navigated the app under the pointer. A new press
+  of the button retires the debt (buttons never repeat, so its release went up where no hook could
+  see it) and is judged afresh; nothing is ever injected for it. The debts are one word changed by
+  compare-exchange, which the retirement seals: a press is swallowed only once its debt is committed,
+  so a press a reinstall overtakes while its callback is still judging it reaches the app whole, with
+  its release; a debt committed before the seal is not handed on, so that release reaches the app (the
+  reinstall's fail-open cost above). `MouseButtonRecoveryTests`, `MouseButtonRound3Tests` and
+  `MouseButtonRound6Tests` pin each path. Keys keep the reset they had: a key's lone release does nothing
+  documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
+  `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
+  Not covered: a release made while no mouse hook exists (Windows removed it, or a reinstall is between
+  the old thread's exit and the new one's install), which goes to the app, and a release the rule
+  above lets through.
+- **Scribe injects no mouse input, and the leaked-input check covers keys only.** No mouse button is
+  ever a candidate of `SuppressedKeyReconciler`, and no production code builds mouse `INPUT`
+  (`MouseButtonHotkeyTests.No_production_code_injects_mouse_input`): "the engine does not hold it" also
+  means "the engine never saw it go down", as for a button held in another app since before the mouse
+  hook existed, and even a claim made on better evidence was overtaken, in review, by a new press
+  during capture before the injection, which then ended the user's drag. Nothing needs that repair:
+  buttons do not repeat, and on Windows 7 and later a hook that misses its deadline is removed rather
+  than skipped, so a leaked press is one Windows received. Its release reaches the app too, unless the
+  watchdog's renewal registered the hook again before it came; that renewal dropped the debt (above),
+  so the release goes through then as well; the recording that press started ends through the lost-hook
+  recovery, not through an injected release. So
+  no button-up, and no mouse input of any kind, is ever injected by this feature. Keys keep the older
+  rule, which can still misjudge a key held since before a keyboard hook reinstall (a new engine never
+  saw it go down); reinstalls are rare. **Windows hands a low-level mouse hook only
+  the low 32 bits of `MOUSEINPUT.dwExtraInfo`** (measured on both CI runners: a 64-bit value arrived with
+  its high half zeroed), so the mouse hook recognizes Scribe's own input by the low half of
+  `SyntheticInputMarker` (`MouseHookFilter.Marker`); a full-width compare never matches there. Windows
+  also adds a `WM_MOUSEMOVE` of its own, carrying the same extra information, around injected button
+  events now and then, which the injection tests allow for.
+- **A mouse debt never asks for the keyboard's leak repair, and the repair never runs during capture**
+  (review round 8, A9). The repair judges a key leaked when Windows holds it and the engine's view does
+  not, which is evidence only while that view is whole: capture tracks no key, and every state clear
+  (capture's start and end, a desktop switch, new bindings, a reinstall) forgets the keys held across
+  it. Round 7 had every event that settled a mouse debt ask for the repair, to remove a drain-only hook
+  promptly, and Astra's sequence showed the harm: with Left Ctrl and Back bound, the chord pressed and
+  released on the lock screen (the debt stays), then Set chosen and Left Ctrl held with Back pressed to
+  capture a chord, Back's press forgave the debt, the repair found Left Ctrl down in Windows and not in
+  the engine, and sent a Ctrl-up while the user held Ctrl. So the two requests are separate
+  (`HookDecision.RequestReconcile` and `HookDecision.RequestMouseHookSync`, one interlocked word in
+  `HotkeyReconcileSignal` that the pass takes): a key release the bindings swallowed and a dictation's
+  release ask for the repair, exactly as before the mouse feature, and so does a button release the
+  bindings themselves swallowed, their pairing of it with a press they tracked since the last state
+  clear, which keeps their view of the chord's keys whole. Every other event that settles a debt (a
+  release swallowed only for a debt from before a state clear, a release let through, a new press that
+  forgives the debt) asks for the mouse hook's sync alone, and a renewal that finds the hook gone asks
+  for nothing (it removes a drain-only hook itself). Round 6 had a release swallowed only for such a
+  debt ask for the repair as well; that is the same harm (the chord held through a UAC prompt, then
+  Back released while Ctrl is still held), so it asks for the sync alone too. Round 8 added
+  `MouseButtonRound8Tests`, the two `Start_releases_no_key` service tests and
+  `Start_removes_the_drain_only_mouse_hook_without_releasing_a_held_key`.
+- **The key repair is excluded from binding capture, not just checked against it** (review round 9,
+  A11). A check alone could be overtaken: a legitimate repair pass (Left Ctrl and Back bound, Back
+  released while Ctrl is held) read "capture does not own input", then Set was chosen and the engine
+  applied capture, clearing its key view, and the pass went on to find Left Ctrl down in Windows and
+  absent from the engine and sent a Ctrl-up during the capture; and capture's end was published before
+  both machines had applied it. Now capture's start and the repair's key-ups are serialized on one
+  gate that only the requesting threads use (`HotkeyService._repairGate`): the repair
+  (`SuppressedKeyReconciler`) judges and sends one key at a time inside it, and checks inside it,
+  before the key's reads and again after them, before the key-up (`HotkeyService.KeyViewIsWhole`),
+  that no capture start is being admitted, capture does not own input and a hook runs at all.
+  `HotkeyService.AdmitCapture`, on the UI thread, first raises an admission count (which stops the
+  repair at its next check), then takes the gate (which waits for the one key-up that may already be
+  on its way) and publishes and posts the request inside it, so every key-up is sent before capture is
+  requested or not at all, and the engine clears its view only after. Capture owns input from that
+  request until the current engine has applied the latest capture request with both machines
+  (`HotkeyEngine.AppliedCaptureGeneration`, published after the second machine;
+  `HotkeyCommandRouter.CaptureOwnsInput` compares it with the router's latest capture generation, so a
+  request not yet applied, start or end, counts too, and a replacement engine starts with the latest
+  already applied). The wait for the gate is bounded, 250 ms: a key-up lasts as long as the low-level
+  hooks Windows passes it through (for injected input the context "switches back to the process that
+  installed the hook", then "back to the application that generated the event", LowLevelKeyboardProc;
+  Scribe's own keyboard callback passes a marked key-up on at once; each other hook has up to
+  LowLevelHooksTimeout, at most 1 second since Windows 10 1709, and is removed if it takes longer), and
+  the UI thread must not wait on them unboundedly. The bound is the gate's only: the rest of the call
+  (the router's lock, posting the command, the log call for the timeout's warning) is not in it. Past
+  the bound capture starts anyway and logs a warning. No deadlock: the hook thread never takes the gate
+  or any lock (an IL test pins it), so a key-up the gate's holder is sending never waits on a thread
+  that waits for the gate; the UI thread holds the gate only while it publishes and posts the request
+  (the router's lock, held by requesters for in-memory updates only, and PostThreadMessage, which does
+  not wait for the hook thread); the gate is taken before the router's lock and never after it; nothing
+  is logged under it; and the UI thread's wait ends at the bound even if another program's hook were
+  waiting on it.
+- **Every key-up the repair sends is conditional on the key view it judged** (review round 10, A12).
+  The capture checks alone left an ordering: a legitimate pass held up before its reads (or behind an
+  earlier key's slow SendInput, which another program's hook can stretch to its timeout, so the gate
+  can be held past 250 ms), Set timing out and publishing capture, the hook applying it, the user
+  cancelling and the end applied, then the pass finding Left Ctrl down in Windows and absent from the
+  cleared view with no admission pending and the generations equal, and sending a Ctrl-up. So the key
+  view has an epoch (`HotkeyEngine.KeyViewEpoch`): the owner takes a new one, with one interlocked add
+  on a counter shared by every engine and one volatile write, no lock and no allocation, immediately
+  before its machines clear or replace their keys, at every site that does: new bindings
+  (`ApplyBindings`, which clears the standard machine and updates, resets, creates or removes the
+  dictation-only one), capture's start and end (`ApplyCaptureMode`) and a desktop reset
+  (`ApplyDesktopSwitch`); a new engine starts with one of its own (a reinstall), and `EndEngine` leaves
+  no engine at all. A mouse hook found gone (`OnMouseHookLost`) forgets buttons, never keys, which the
+  repair never judges, so it takes none. A repair request carries the epoch its trigger was seen at
+  (the hook callbacks pass their engine's through `HotkeyReconcileSignal.Signal`, and a dictation's
+  release carries it in its `QueuedTransition`). Each hook installation has its own signal (review
+  round 11, A14): the signal's one word keeps the latest request, so a callback of a replaced
+  installation, whose thread can outlive the reinstall's 2 s join, would otherwise replace the
+  replacement's pending request with its own, which the pass then refuses, leaving a real leak for the
+  next trigger. The installation makes its signal and its hook thread disposes it once its hooks are
+  gone. `KeyViewIsWhole` checks, before the key's reads
+  and again immediately before the key-up, together with the capture checks and a fresh read of
+  whether the hook now holds the key, that the current engine's view still has that epoch. Any change
+  stops the rest of the pass, and nothing replays it. That also covers a clear between the trigger and
+  the pass (it waits 25 ms, longer on a busy pool) and closes the desktop reset and the reinstall that
+  were not excluded the way capture is. The engine takes the new epoch before the first key is cleared,
+  so reads that saw a cleared key make the check after them see the new epoch. What no check can
+  close is the time between the last check and the SendInput itself: a key-up already past that check
+  was decided on a view that was whole, and it is still sent if the view is cleared in that time, or if
+  the user presses that very key again in that time. Then it releases a key the user holds, and
+  Windows sees the key down again only when another down event for it reaches Windows: for a
+  modifier such as Ctrl that can mean releasing the key and pressing it again, since a modifier does
+  not dependably autorepeat into a fresh down, and a bound key's repeats stay swallowed
+  (`ChordStateMachine.Process` keeps a swallowed keystroke swallowed through its repeats) (review round
+  11, A15). That is also the one key-up that can arrive after capture's start
+  when capture stops waiting for the gate. **A pass that is stopped is not run again**, at capture's
+  end or after any other clear: the keys held across the clear are missing from the engine's view then,
+  so a replay would send key-ups for keys the user still holds; a real leak is repaired at the next
+  trigger (a key release the bindings swallow, or a dictation's release). A pass that reaches its check
+  after Stop has no engine and releases nothing; a key-up already past its last check when Stop runs
+  is still sent. `MouseButtonRound9Tests` and `MouseButtonRound10Tests` (barriers inside the scripted
+  Windows view, after the reads, and inside the key-up) pin it, and so does
+  `Start_runs_no_repair_again_when_capture_ends`, which counts repair requests where they are made,
+  on the asking thread (the signal counts each it is asked for, the transition queue each Deactivated
+  that will ask the consumer, the service each pass it schedules), and takes the hook thread's renewal as
+  the acknowledgment that capture's end is applied: no sleep, and no drain through the pool, whose
+  registered wait re-arms before its callback runs, so a later pass proves nothing about an earlier
+  callback (review round 11, A13). `Start_serves_the_current_installation_s_repair_whatever_an_obsolete_one_asks_for`
+  pins A14.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
   epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
   the lifecycle gate, and the router ignores a request older than the last one applied.
-- **Only a bare Page Up or Page Down lets modified presses through.** For a binding whose only key is
-  Page Up or Page Down, with no modifier (the shipped defaults, or either key bound in Settings),
-  `ChordStateMachine` refuses the press that would complete it while any Ctrl, Alt, Shift or Win key
-  is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that whole
-  keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
-  Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
-  dictation neither ends it nor lets the key through. No binding but a bare Page Up or Page Down
-  changes: every other one (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as
+- **Only a bare Page Up, Page Down or mouse button lets modified presses through.** For a binding whose
+  only input is Page Up, Page Down or a middle, Back or Forward mouse button, with no modifier (the
+  shipped defaults, or any of those bound in Settings), `ChordStateMachine` refuses the press that
+  would complete it while any Ctrl, Alt, Shift or Win key is held, or a Narrator key (Caps Lock,
+  Insert, or NonConvert on a Japanese 106 keyboard): that whole keystroke or click reaches the app and
+  starts nothing, so Ctrl+Page Down still switches tabs, Narrator+Page Down still changes views, and a
+  Ctrl or Shift click of a bound button still means what it means to the app. One rule for both
+  (`IsBarePassThroughBinding`). Only that press is judged, so a modifier pressed during a dictation
+  neither ends it nor lets the input through. No other binding changes: every other one (F9,
+  Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord, a key and a button together) matches exactly as
   before whatever else is held, and widening the rule would change them. An install that had already
   bound Page Up or Page Down on its own gets the pass-through too, because 0.4.3's capture stored that
   key exactly so: after the upgrade its Ctrl, Shift, Alt, Win or Narrator key plus the Page key reaches
@@ -750,10 +1001,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A modifier counts only while Windows agrees it is down.** A hook is called only for input on its
   own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
   prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
-  a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`, the one native
-  query the keyboard callback makes besides `CallNextHookEx`: only on such a press, never on a bare
-  one, and never about the key the callback is for, whose async state Windows updates only after the
-  callback returns.
+  a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`: only on such a
+  press, never on a bare one, and never about the key the callback is for, whose async state Windows
+  updates only after the callback returns. The only other native read the hook callbacks make besides
+  `CallNextHookEx` is for the release of a mouse button whose press was swallowed (the owed-release
+  bullet above): `GetAsyncKeyState` about that very button, where the state before this release is
+  exactly the answer wanted.
 - **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
   out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
   its message loop and calls `HotkeyEngine.OnDesktopSwitchNotice` (which ignores a call from any other
@@ -782,7 +1035,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   before a reinstall, and a shared epoch let that late switch discard the replacement's first genuine
   press. Without all this a key held through Win+L or a UAC prompt
   kept the microphone recording while the PC was locked, and its stale state swallowed the next press
-  as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
+  as an autorepeat. A switch with nothing recording starts and stops nothing. A mouse button whose press
+  was swallowed keeps its release owed through the reset (see above), so a side button held through a
+  UAC prompt and let go afterwards navigates nothing, even with the elevated app in front, unless the
+  mouse hook was also found gone meanwhile (the watchdog keeps renewing it while the prompt is up):
+  that drops the debt, so the release reaches the app and can become `WM_APPCOMMAND` (Grok's G4 in
+  round 5; since round 7 such a release goes through whoever is in front). The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
   Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
@@ -1071,6 +1329,50 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys to it, and the hint says so. Letting a
   short tap through would be a change to `ChordStateMachine` with tests of its own, not a tweak, and it waits on the
   maintainer.
+- **Mouse buttons are bound like keys, and captured in Core.** Set records keys and the middle, Back and Forward
+  buttons by `HotkeyCaptureSession` (Core, tested): up to two inputs in the order they go down, set once all are up,
+  the left and right buttons refused with a reason and left their meaning (the window only shows the reason for a
+  click on the capture box itself), and a chord recorded with a button first warns that the button still reaches the
+  app under the pointer (a chord is swallowed from the input that completes it). Beyond two inputs it records only
+  Ctrl, Alt and Shift keys and at most one other input, and builds that as the one input with modifier flags
+  ("Ctrl+Shift+F13"), matched on either side of each modifier and for the generic codes injected input can carry; one
+  or two inputs stay the exact physical binding every build captured. Only the input that completes a shortcut is
+  kept from Windows and the app: its key when the modifiers go down first, as a mouse's software and a person send
+  one; with the key first (F13, then Shift, then Ctrl) the key reaches the app whole and the last modifier is kept
+  instead, and Set warns when it records that order. A Windows key is never one of more than two
+  inputs: a Windows key Windows sees pressed and released with nothing
+  between opens Start. For the same reason a shortcut of Shift with Ctrl or Alt warns
+  (`HotkeyCaptureSession.LayoutSwitchWarning`) that its modifiers can still switch the keyboard language or layout;
+  sending a masking key, as AutoHotkey does, would remove that and is not done. The Settings window maps its own
+  Preview mouse events, and the title bar's `WM_NCMBUTTON*` and `WM_NCXBUTTON*` messages, into it, so a button
+  pressed with the pointer anywhere on the window counts, and it marks a recorded button's events handled, so a side
+  button's release never becomes a Back or Forward command there. `KeyNames` names them "Middle mouse button",
+  "Mouse Back (button 4)" and "Mouse Forward (button 5)", and the capture stores that name, which is what 0.4.3 and
+  0.4.2 show for the binding (they show the stored name). Those builds have no mouse hook, so a button binding never
+  fires in them; nothing in them throws on it or rejects it.
+- **Windows delivers five mouse buttons, so every other button binds as the key it sends.** Microsoft says so:
+  "Windows supports mice with up to five buttons" (`WM_XBUTTONDOWN`), the mouse features it supports are "Buttons 1-5"
+  and the wheels (keyboard and mouse HID client drivers), the low-level hook and `RAWMOUSE` carry only those
+  (`ulRawButtons`: "The Win32 subsystem does not use this member"), and "The system opens all keyboard and mouse
+  collections for its exclusive use", so no app reads a mouse's own reports. Raw Input's `RIM_TYPEHID` is for input
+  from "some device that is not a keyboard or a mouse", which for a mouse means a vendor-specific collection only its
+  vendor's software understands. A button past the fifth therefore reaches Scribe as the keyboard input its software
+  or firmware sends: F13 to F24, a media or browser key, or a shortcut with modifiers, each bound, named and swallowed
+  like any key (`MouseButtonHotkeyTests`, `HotkeyCaptureSessionTests` and the CI injection tests pin it). Raw Input
+  was assessed and left out: it cannot suppress input, needs a window, and has nothing generic to read. The Settings
+  hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
+  directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
+  here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
+  modifier. A release owed to a swallowed press stays swallowed through desktop switches, capture and any rebinding (one
+  that leaves no mouse binding keeps the drain-only hook for it), unless Windows shows that button down when it is let
+  go, which means a press reached Windows unseen and its release is due; a press or release made while Windows has
+  removed the mouse hook, before the next successful renewal, can still reach the app, and so does the release of a
+  button held across that time or across a reinstall (the gap dropped its debt: fail-open). The hint's second exception
+  says both in one clause: if Windows briefly stops passing input to Scribe, a click made or held while that lasts gets
+  through (a reinstall follows Windows removing the keyboard hook, so it is such a time too).
+  It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
+  press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
+  so the text promises no more than that. The same holds for a swallowed key.
 
 ## Startup (read before touching OnStartup)
 
@@ -1349,7 +1651,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.4.4.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.4.5.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.

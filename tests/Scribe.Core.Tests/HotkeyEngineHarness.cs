@@ -18,16 +18,20 @@ internal sealed class HotkeyEngineHarness : IDisposable
         HotkeyBinding binding,
         HotkeyBinding? dictationOnly = null,
         object? gate = null,
-        Func<uint, bool>? isLogicallyDown = null)
+        Func<uint, bool>? isLogicallyDown = null,
+        Func<uint, bool>? buttonDownInWindows = null,
+        Func<uint, bool>? keyDownInWindows = null,
+        Func<uint, bool>? releaseLeakedKey = null)
     {
-        Router = new HotkeyCommandRouter(binding, gate ?? new object(), isLogicallyDown);
+        Router = new HotkeyCommandRouter(binding, gate ?? new object(), isLogicallyDown, buttonDownInWindows);
         if (dictationOnly is not null)
         {
             Router.UpdateBindings(binding, dictationOnly);
         }
 
         (Engine, _) = Router.BeginEngine(Transitions);
-        Service = new HotkeyService(NullLogger<HotkeyService>.Instance, Router, () => true);
+        Service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance, Router, () => true, keyDownInWindows, releaseLeakedKey);
     }
 
     public HotkeyTransitionQueue Transitions { get; } = new();
@@ -52,6 +56,14 @@ internal sealed class HotkeyEngineHarness : IDisposable
         Down(key);
         Up(key);
     }
+
+    /// <summary>A middle or side mouse button going down, as the mouse hook reports it.</summary>
+    public HookDecision ButtonDown(uint button) => Engine.OnMouseButtonEvent(button, isDown: true);
+
+    /// <summary>A middle or side mouse button going up, as the mouse hook reports it.</summary>
+    public HookDecision ButtonUp(uint button) => Engine.OnMouseButtonEvent(button, isDown: false);
+
+    public (HookDecision Down, HookDecision Up) Click(uint button) => (ButtonDown(button), ButtonUp(button));
 
     public List<HotkeyService.QueuedTransition> TakeTransitions()
     {

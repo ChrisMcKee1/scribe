@@ -1,11 +1,13 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace Scribe.Core.Hotkeys;
 
-/// <summary>P/Invoke surface for the low-level keyboard hook and its message pump.</summary>
+/// <summary>P/Invoke surface for the low-level keyboard and mouse hooks and their message pump.</summary>
 internal static partial class NativeMethods
 {
     internal const int WH_KEYBOARD_LL = 13;
+    internal const int WH_MOUSE_LL = 14;
 
     internal const int WM_KEYDOWN = 0x0100;
     internal const int WM_KEYUP = 0x0101;
@@ -13,10 +15,12 @@ internal static partial class NativeMethods
     internal const int WM_SYSKEYUP = 0x0105;
     internal const uint WM_QUIT = 0x0012;
 
-    // Private thread message that wakes the hook thread to apply queued commands. WM_APP and above
-    // is the range reserved for application-defined messages.
+    // Private thread messages to the hook thread. WM_APP and above is the range reserved for application-defined
+    // messages. The first wakes it to apply queued commands; the second, from the watchdog, also has it register its
+    // mouse hook afresh (see HotkeyService.HookInstallation).
     internal const uint WM_APP = 0x8000;
     internal const uint WM_HOTKEY_COMMANDS = WM_APP + 1;
+    internal const uint WM_HOTKEY_REFRESH = WM_APP + 2;
 
     internal const int VK_SHIFT = 0x10;
     internal const int VK_CONTROL = 0x11;
@@ -26,11 +30,23 @@ internal static partial class NativeMethods
 
     internal delegate nint LowLevelKeyboardProc(int nCode, nint wParam, nint lParam);
 
+    internal delegate nint LowLevelMouseProc(int nCode, nint wParam, nint lParam);
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct KBDLLHOOKSTRUCT
     {
         public uint vkCode;
         public uint scanCode;
+        public uint flags;
+        public uint time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MSLLHOOKSTRUCT
+    {
+        public POINT pt;
+        public uint mouseData;
         public uint flags;
         public uint time;
         public nuint dwExtraInfo;
@@ -59,6 +75,9 @@ internal static partial class NativeMethods
     // classic DllImport; the remaining blittable calls use the source-generated LibraryImport.
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "SetWindowsHookExW")]
     internal static extern nint SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, nint hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "SetWindowsHookExW")]
+    internal static extern nint SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, nint hMod, uint dwThreadId);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -117,6 +136,33 @@ internal static partial class NativeMethods
     /// <summary>High bit of <see cref="GetAsyncKeyState"/>: the system's logical "key is down".</summary>
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
+
+    /// <summary>
+    /// Before either hook exists (the service's constructor): does the runtime's one-time work for the two P/Invokes the
+    /// hook callbacks call, CallNextHookEx in both and GetAsyncKeyState for the modifier rule and an owed button release.
+    /// <see cref="Marshal.Prelink"/> "executes one-time method setup tasks without calling the method", which Learn lists
+    /// as verifying the signature, locating and loading the DLL and locating the entry point, work each P/Invoke's first
+    /// call otherwise does, and which allocated on that call (48 bytes for each of these two, measured in the test host
+    /// before round 8), inside Windows' deadline. Found by the entry point the import names, so a generated wrapper around
+    /// an import is covered too. Returns the entry points it prelinked; for a test.
+    /// </summary>
+    internal static IReadOnlyList<string> PrelinkHookCalls()
+    {
+        var prelinked = new List<string>(2);
+        foreach (var method in typeof(NativeMethods).GetMethods(
+                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+        {
+            if ((method.Attributes & MethodAttributes.PinvokeImpl) != 0 &&
+                method.GetCustomAttribute<DllImportAttribute>()?.EntryPoint is { } entryPoint and
+                    ("CallNextHookEx" or "GetAsyncKeyState"))
+            {
+                Marshal.Prelink(method);
+                prelinked.Add(entryPoint);
+            }
+        }
+
+        return prelinked;
+    }
 
     internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
@@ -311,4 +357,7 @@ internal static partial class NativeMethods
 
         return SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
     }
+
+    // The INPUT type for mouse input. Scribe injects none (the leak check covers keys only); the tests build theirs with it.
+    internal const uint INPUT_MOUSE = 0;
 }

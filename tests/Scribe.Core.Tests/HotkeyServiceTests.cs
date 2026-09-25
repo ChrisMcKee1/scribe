@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Scribe.Core.Tests;
 
-public class HotkeyServiceTests
+public partial class HotkeyServiceTests
 {
     [Fact]
     public void Start_installs_hook_and_Stop_removes_it()
