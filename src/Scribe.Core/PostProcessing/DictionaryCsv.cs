@@ -1,4 +1,5 @@
 using System.Text;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.PostProcessing;
@@ -9,9 +10,15 @@ namespace Scribe.Core.PostProcessing;
 /// <c>pattern,replacement,whole_word,enabled</c> with a header row, quoted fields when needed,
 /// and <c>#</c> comment lines (which double as instructions in the downloadable template).
 /// </summary>
+/// <remarks>
+/// A thin wrapper over the library CSV codec's shared record reader and field writer (pattern P-2): rows are read by
+/// 0.4.3's rules exactly as before (<see cref="LibraryCsvCodec.ReadLegacyRows"/>), and rows are written by the one field
+/// writer, which also quotes a first field that starts with <c>#</c> or reads as the header and a value with white space
+/// at an edge, so a strict reader takes them as data; this reader skips and trims those exactly as it always did.
+/// </remarks>
 public static class DictionaryCsv
 {
-    public const string Header = "pattern,replacement,whole_word,enabled";
+    public const string Header = LibraryCsvRecords.Header;
 
     /// <summary>
     /// The starter file behind the "Get template" button. Comment lines explain the columns so the
@@ -46,11 +53,8 @@ public static class DictionaryCsv
         sb.AppendLine(Header);
         foreach (var entry in entries)
         {
-            sb.Append(Quote(entry.Pattern)).Append(',')
-              .Append(Quote(entry.Replacement)).Append(',')
-              .Append(entry.WholeWord ? "true" : "false").Append(',')
-              .Append(entry.Enabled ? "true" : "false")
-              .AppendLine();
+            LibraryCsvRecords.AppendRow(sb, entry.Pattern, entry.Replacement, entry.WholeWord, entry.Enabled);
+            sb.AppendLine();
         }
 
         return sb.ToString();
@@ -63,173 +67,24 @@ public static class DictionaryCsv
     /// </summary>
     public static DictionaryCsvResult Parse(string? csv)
     {
-        var entries = new List<DictionaryEntry>();
-        var errors = new List<string>();
-        if (string.IsNullOrWhiteSpace(csv))
-        {
-            return new DictionaryCsvResult(entries, errors);
-        }
-
-        foreach (var (fields, lineNumber) in ReadRecords(csv, errors))
-        {
-            // Skip blank lines, comment lines, and the header row wherever it appears.
-            if (fields.Count == 0 || (fields.Count == 1 && string.IsNullOrWhiteSpace(fields[0])))
-            {
-                continue;
-            }
-
-            if (fields[0].TrimStart().StartsWith('#'))
-            {
-                continue;
-            }
-
-            if (string.Equals(fields[0].Trim(), "pattern", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (fields.Count < 2)
-            {
-                errors.Add($"Line {lineNumber}: expected at least a pattern and a replacement.");
-                continue;
-            }
-
-            var pattern = fields[0].Trim();
-            var replacement = fields[1].Trim();
-            if (pattern.Length == 0)
-            {
-                errors.Add($"Line {lineNumber}: the pattern (spoken form) is empty.");
-                continue;
-            }
-
-            if (!TryParseFlag(fields.Count > 2 ? fields[2] : null, defaultValue: true, out var wholeWord))
-            {
-                errors.Add($"Line {lineNumber}: whole_word should be true or false, not \"{fields[2].Trim()}\".");
-                continue;
-            }
-
-            if (!TryParseFlag(fields.Count > 3 ? fields[3] : null, defaultValue: true, out var enabled))
-            {
-                errors.Add($"Line {lineNumber}: enabled should be true or false, not \"{fields[3].Trim()}\".");
-                continue;
-            }
-
-            entries.Add(new DictionaryEntry(0, pattern, replacement, wholeWord, enabled));
-        }
-
-        return new DictionaryCsvResult(entries, errors);
+        var (terms, errors) = LibraryCsvCodec.ReadLegacyRows(csv);
+        return new DictionaryCsvResult(terms.Select(term => term.ToEntry()).ToList(), errors.Select(Describe).ToList());
     }
 
-    private static bool TryParseFlag(string? field, bool defaultValue, out bool value)
+    /// <summary>
+    /// The message a row error has always been reported with, which the import dialogs show. It quotes an invalid flag
+    /// value, which is the user's own text, so it belongs on screen, never in a log.
+    /// </summary>
+    internal static string Describe(LibraryCsvRowError error) => error.Kind switch
     {
-        value = defaultValue;
-        if (string.IsNullOrWhiteSpace(field))
-        {
-            return true; // optional column
-        }
-
-        switch (field.Trim().ToLowerInvariant())
-        {
-            case "true" or "yes" or "1":
-                value = true;
-                return true;
-            case "false" or "no" or "0":
-                value = false;
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static string Quote(string value)
-    {
-        if (value.IndexOfAny([',', '"', '\r', '\n']) < 0)
-        {
-            return value;
-        }
-
-        return '"' + value.Replace("\"", "\"\"") + '"';
-    }
-
-    // Character-level RFC 4180 reader: quoted fields may contain commas, doubled quotes, and even
-    // line breaks (spreadsheets emit all three), so a naive Split on newline/comma is not enough.
-    private static IEnumerable<(List<string> Fields, int LineNumber)> ReadRecords(
-        string csv, List<string> errors)
-    {
-        var fields = new List<string>();
-        var field = new StringBuilder();
-        var inQuotes = false;
-        var line = 1;
-        var recordStartLine = 1;
-
-        for (var i = 0; i < csv.Length; i++)
-        {
-            var ch = csv[i];
-
-            if (inQuotes)
-            {
-                if (ch == '"')
-                {
-                    if (i + 1 < csv.Length && csv[i + 1] == '"')
-                    {
-                        field.Append('"');
-                        i++;
-                    }
-                    else
-                    {
-                        inQuotes = false;
-                    }
-                }
-                else
-                {
-                    if (ch == '\n')
-                    {
-                        line++;
-                    }
-
-                    field.Append(ch);
-                }
-
-                continue;
-            }
-
-            switch (ch)
-            {
-                case '"':
-                    inQuotes = true;
-                    break;
-                case ',':
-                    fields.Add(field.ToString());
-                    field.Clear();
-                    break;
-                case '\r':
-                    break; // handled by the following \n (or ignored for a lone \r)
-                case '\n':
-                    fields.Add(field.ToString());
-                    field.Clear();
-                    yield return (fields, recordStartLine);
-                    fields = new List<string>();
-                    line++;
-                    recordStartLine = line;
-                    break;
-                default:
-                    field.Append(ch);
-                    break;
-            }
-        }
-
-        if (inQuotes)
-        {
-            errors.Add($"Line {recordStartLine}: quoted field is missing its closing quote.");
-            yield break;
-        }
-
-        if (field.Length > 0 || fields.Count > 0)
-        {
-            fields.Add(field.ToString());
-            yield return (fields, recordStartLine);
-        }
-    }
+        LibraryCsvRowErrorKind.MissingFields => $"Line {error.Line}: expected at least a pattern and a replacement.",
+        LibraryCsvRowErrorKind.EmptySpoken => $"Line {error.Line}: the pattern (spoken form) is empty.",
+        LibraryCsvRowErrorKind.InvalidWholeWord => $"Line {error.Line}: whole_word should be true or false, not \"{error.Field}\".",
+        LibraryCsvRowErrorKind.InvalidEnabled => $"Line {error.Line}: enabled should be true or false, not \"{error.Field}\".",
+        LibraryCsvRowErrorKind.UnclosedQuote => $"Line {error.Line}: quoted field is missing its closing quote.",
+        LibraryCsvRowErrorKind.FieldTooLong => $"Line {error.Line}: a value is longer than {LibraryLimits.MaxFieldLength} characters.",
+        _ => $"Line {error.Line}: the row could not be read.",
+    };
 }
 
 /// <summary>Outcome of parsing a dictionary CSV: the usable entries plus per-line errors.</summary>

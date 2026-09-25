@@ -1,0 +1,1 @@
+{ "version": 1, "library": "github", "terms": [ { "key": "get hub", "intent": "hidden", "until": "2027" } ] }

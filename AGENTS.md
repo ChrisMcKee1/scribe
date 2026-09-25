@@ -361,7 +361,12 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
                                     Local storage policy and janitor
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
-                                    (which library wins a spoken form: frozen built-in ids, then file names)
+                                    (which library wins a spoken form: frozen built-in ids, then file names),
+                                    LibraryTermKey (one key per spoken form), LibraryMetadata (names 0.4.3 reads
+                                    back), and the library model's shared types:
+                                    the committed LibraryCatalog, the editor's LibraryDraft, LibraryChangeSet, the
+                                    save payload, LibraryVocabulary, and the interfaces of the library CSV codec,
+                                    the built-in overlay, composition and the committed store
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -394,8 +399,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
-                                    will read in stream M1) and composition-golden.txt (what the libraries
-                                    decide, captured from 0.4.3)
+                                    will read in stream M1), term-keys.json (the library term key's answers, for
+                                    the same port) and composition-golden.txt (what the libraries decide,
+                                    captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
@@ -1229,9 +1235,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests` fails until every shipped id
   appears exactly once, every other listed id is retired, the catalog follows the order with the retired ids left
   out, and the C# lists agree with the fixture.
-- **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
-  file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
-  comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
+- **Custom libraries compare as file names**, not bare ids: their physical file name (`DictionaryLibrary.FileName`,
+  which is `id + ".csv"` for every custom library except a hand-placed file whose logical id was remapped away from a
+  built-in id, which keeps ranking by its own name). The loader has always read them in file-name order, and '-' sorts
+  before '.', so "team-terms-2.csv", the file a second import of the same library gets, comes before "team-terms.csv";
+  comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
   `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
   prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)
@@ -1288,6 +1296,20 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `localizedStandardCompare` and the same two tie-breaks; until it lands, the Dictionary Libraries and Dictionary
   cleanup rows of `macos/PORTING-PLAN.md` are stale, and, as the mono-repo note says, nothing keeps the C# and Swift
   orders in step.
+- **One key per library term.** `LibraryTermKey` is 0.4.3's key: a spoken form trimmed (`string.Trim`, the Unicode
+  White_Space set), compared `OrdinalIgnoreCase`, with inner white space kept, so an older file's row with a double space
+  or a tab inside it keeps 0.4.3's matching and de-duplication and never suppresses a row that matches (review finding
+  A10). The editor commits every typed Spoken value in `LibraryTermKey.Normalize`'s form (trimmed, each inner run of white
+  space collapsed to one space), so for everything written from now on the key and a collapsing comparison agree. The
+  key keeps the spelling it was made from and its `ToString()` shows only the length, so a key handed to a log template
+  leaks nothing. The personal dictionary's merge trims and compares case-insensitively too.
+  `tests/fixtures/libraries/term-keys.json` pins the key and the commit form for the macOS port to read in stream M1 (it
+  reads no fixture yet), including the letters where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s,
+  final sigma).
+- **Library metadata stays readable by 0.4.3.** A managed library file stores its name, category and description as raw
+  `# key: value` comment lines, and 0.4.3's CSV reader treats a double quote on them as a quoted field, so an unpaired
+  quote hides every row from it. `LibraryMetadata` holds the rule (refuse a typed double quote; a header 0.4.3 reads back
+  has an even number of them), checked against `Legacy043LibraryCsv`, a verbatim copy of 0.4.3's reader in the tests.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 

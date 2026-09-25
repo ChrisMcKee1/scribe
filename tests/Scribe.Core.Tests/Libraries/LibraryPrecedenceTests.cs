@@ -306,6 +306,29 @@ public sealed class LibraryPrecedenceTests
         Assert.Equal(["github"], ordered.Select(l => l.Id));
     }
 
+    [Fact]
+    public void Every_built_in_beyond_the_eleven_older_builds_ship_has_a_dotted_scribe_id_and_none_looks_like_an_edits_copy()
+    {
+        // W1b contracts 2.4 and C-15. 0.4.2 and 0.4.3 ship the first eleven; an older build cannot list any later built-in,
+        // so reading the enabled list relies on the "scribe." form to tell such an id's absence from a choice. And the edits
+        // documents are recognised by suffix, ".backup.json", then ".previous.json", then "<id>.json" (6.5, round 4 G15),
+        // which only holds while no built-in id ends in ".previous" or ".backup".
+        var olderBuilds = CapturedFrom043.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string[] ids = [.. ShippedIds(), .. LibraryPrecedence.BuiltInOrder, .. LibraryPrecedence.RetiredBuiltInIds];
+
+        var undotted = ids.Where(id => !olderBuilds.Contains(id) && !id.StartsWith("scribe.", StringComparison.OrdinalIgnoreCase)).Distinct().ToList();
+        var editsLike = ids
+            .Where(id => id.EndsWith(".previous", StringComparison.OrdinalIgnoreCase) || id.EndsWith(".backup", StringComparison.OrdinalIgnoreCase))
+            .Distinct()
+            .ToList();
+
+        Assert.True(undotted.Count == 0,
+            "A built-in beyond the eleven that 0.4.2 and 0.4.3 ship needs an id of the form scribe.<name>: " + string.Join(", ", undotted));
+        Assert.True(editsLike.Count == 0,
+            "No built-in id may end in .previous or .backup, which name an edits document's copies: " + string.Join(", ", editsLike));
+        Assert.Equal(CapturedFrom043.Length, ids.Intersect(olderBuilds, StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
     private static DictionaryLibrary Library(string id, bool builtIn, string? name = null, string category = "Custom") =>
         new(id, name ?? id, category, Description: null, builtIn, [DictionaryEntry.New("term", "Term")]);
 

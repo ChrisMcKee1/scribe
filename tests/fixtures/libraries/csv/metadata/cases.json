@@ -1,0 +1,23 @@
+{
+  "about": "Library names, categories and descriptions that must survive both of the codec's metadata encodings (review finding A11, acceptance X-10). For each case: <label>.managed.csv is what WriteManaged writes, and ReadManaged and 0.4.3's reader both give the values back; <label>.export.csv is what WriteExport writes, <label>.spreadsheet.csv is that export after a spreadsheet's open and save (every line padded to four fields, a field holding a comma, a quote or a line break quoted again, every other field unquoted, CRLF line ends), and ReadImport of either gives the values back. The rows are the same for every case. The unpaired cases are headers WriteManaged refuses, because their double quotes do not pair and 0.4.3 would lose every row; WriteExport accepts them.",
+  "rows": [
+    { "spoken": "get hub", "written": "GitHub", "wholeWord": true, "enabled": true },
+    { "spoken": "say \"hi\"", "written": "Hello, world", "wholeWord": false, "enabled": true },
+    { "spoken": "kube", "written": "K8s", "wholeWord": true, "enabled": false }
+  ],
+  "cases": [
+    { "label": "commas", "name": "Team, terms", "category": "Work, notes", "description": "One, two, three", "basedOn": null },
+    { "label": "trailing-comma", "name": "Team,", "category": "Custom,", "description": "Ends with a comma,", "basedOn": null },
+    { "label": "paired-quotes", "name": "Team \"Q3\"", "category": "\"Work\"", "description": "Say \"hi\" and \"bye\"", "basedOn": null },
+    { "label": "quotes-across-fields", "name": "a\"b", "category": "c\"d", "description": "e, f", "basedOn": null },
+    { "label": "non-ascii", "name": "\u00c9quipe Gr\u00f6\u00dfe \u4e2d\u6587", "category": "Caf\u00e9", "description": "Cr\u00e8me br\u00fbl\u00e9e, na\u00efve", "basedOn": null },
+    { "label": "leading-hash", "name": "#1 team", "category": "#work", "description": "# not a comment", "basedOn": null },
+    { "label": "everything", "name": "#Q3, \"final\",", "category": "\u00c9t\u00e9, 2026,", "description": null, "basedOn": "custom-team-terms" },
+    { "label": "duplicate", "name": "GitHub - Copy", "category": "Microsoft", "description": "GitHub product names, copied.", "basedOn": "github" }
+  ],
+  "unpaired": [
+    { "name": "Team \"Notes", "category": "Custom", "description": null },
+    { "name": "a\"", "category": "b", "description": "c\"d\"e" },
+    { "name": "Plain", "category": "Work\"", "description": null }
+  ]
+}

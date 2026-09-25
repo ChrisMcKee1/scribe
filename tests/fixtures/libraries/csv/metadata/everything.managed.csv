@@ -1,0 +1,8 @@
+# name: #Q3, "final",
+# category: Été, 2026,
+# based-on: custom-team-terms
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+"say ""hi""","Hello, world",false,true
+kube,K8s,true,false

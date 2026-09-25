@@ -1,3 +1,4 @@
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
@@ -20,20 +21,11 @@ public class BuiltInLibraryDataTests
     /// <summary>
     /// Ordinary words in languages the bundled Parakeet model transcribes. A whole-word rule on any
     /// of these fires mid-sentence for a speaker of that language. "il" (French/Italian) and "di"
-    /// (Italian) were both shipped as bare acronym rules and are the reason this test exists.
+    /// (Italian) were both shipped as bare acronym rules and are the reason this test exists. The
+    /// list lives in <see cref="LibraryTermLint.CommonWords"/>, so the editor's hint and this
+    /// guardrail can never disagree about which words are ordinary.
     /// </summary>
-    private static readonly HashSet<string> CommonWordsInSupportedLanguages =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            // French / Italian / Spanish / Portuguese / German function words.
-            "il", "di", "la", "le", "les", "de", "du", "des", "un", "une", "et", "en", "au", "ce",
-            "se", "si", "su", "da", "del", "che", "non", "per", "con", "una", "el", "los", "las",
-            "es", "als", "das", "der", "die", "den", "und", "ist", "im", "am", "an", "zu", "so",
-            "no", "na", "os", "as", "em", "ao", "ou", "je", "tu", "me", "te", "ne", "on", "ma",
-            // English words short enough to be mistaken for an acronym.
-            "a", "i", "an", "as", "at", "be", "by", "do", "go", "he", "if", "in", "is", "it", "me",
-            "my", "no", "of", "on", "or", "so", "to", "up", "us", "we",
-        };
+    private static IReadOnlySet<string> CommonWordsInSupportedLanguages => LibraryTermLint.CommonWords;
 
     private static IReadOnlyList<DictionaryLibrary> Libraries => BuiltInDictionaryLibraries.All;
 
@@ -72,14 +64,10 @@ public class BuiltInLibraryDataTests
     /// Names that really are always lowercase, so forcing them down is the intended behaviour.
     /// Everything else that maps a word to its own lowercase form is a bug: matching is
     /// case-insensitive and nothing re-capitalises afterwards, so "Distillation reduces size"
-    /// came out as "distillation reduces size". Four such rows shipped enabled by default.
+    /// came out as "distillation reduces size". Four such rows shipped enabled by default. The
+    /// list lives in <see cref="LibraryTermLint.AlwaysLowercaseNames"/>, shared with the editor's hint.
     /// </summary>
-    private static readonly HashSet<string> AlwaysLowercaseNames =
-        new(StringComparer.Ordinal)
-        {
-            "npm", "pnpm", "kubectl", "webpack", "pandas", "conda", "dbt", "htmx",
-            "statsmodels", "torchvision", "torchaudio",
-        };
+    private static IReadOnlySet<string> AlwaysLowercaseNames => LibraryTermLint.AlwaysLowercaseNames;
 
     [Fact]
     public void No_rule_forces_an_ordinary_word_to_lowercase()

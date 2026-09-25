@@ -1,0 +1,7 @@
+﻿# name: GitHub - Copy
+# category: Microsoft
+# description: GitHub product names
+# based-on: github
+# formula-guard: 1
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true

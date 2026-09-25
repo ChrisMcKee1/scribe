@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.PostProcessing;
@@ -18,13 +19,14 @@ namespace Scribe.Core.PostProcessing;
 /// plain dictionary CSV doubles as a library. Row parsing and quoting are delegated to
 /// <see cref="DictionaryCsv"/>; this only adds the header layer.
 /// </summary>
+/// <remarks>
+/// A thin wrapper over the library CSV codec (pattern P-2): <see cref="Parse"/> is the codec's reading by 0.4.3's rules
+/// (<see cref="LibraryCsvCodec.ReadLegacy"/>), the one a managed file without the format marker gets, so this and the
+/// codec cannot drift apart. <see cref="Export"/> keeps 0.4.3's form (raw metadata lines, no format marker); files this
+/// version stores go through <see cref="LibraryCsvCodec.WriteManaged"/> instead.
+/// </remarks>
 public static class DictionaryLibraryCsv
 {
-    /// <summary>Recognized metadata keys in the comment header.</summary>
-    private const string NameKey = "name";
-    private const string CategoryKey = "category";
-    private const string DescriptionKey = "description";
-
     /// <summary>
     /// Parses a library CSV into its metadata (from the comment header, if present) and entries.
     /// Never throws on content: unreadable rows land in <see cref="DictionaryLibraryFile.Errors"/>
@@ -32,35 +34,13 @@ public static class DictionaryLibraryCsv
     /// </summary>
     public static DictionaryLibraryFile Parse(string? csv)
     {
-        string? name = null, category = null, description = null;
-
-        if (!string.IsNullOrEmpty(csv))
-        {
-            using var reader = new StringReader(csv);
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
-            {
-                var trimmed = line.TrimStart();
-                if (trimmed.StartsWith('#'))
-                {
-                    TryReadMeta(trimmed, NameKey, ref name);
-                    TryReadMeta(trimmed, CategoryKey, ref category);
-                    TryReadMeta(trimmed, DescriptionKey, ref description);
-                    continue;
-                }
-
-                if (trimmed.Length == 0)
-                {
-                    continue; // tolerate blank lines before the header
-                }
-
-                break; // reached the header/data; metadata only lives at the top
-            }
-        }
-
-        var parsed = DictionaryCsv.Parse(csv);
+        var file = LibraryCsvCodec.ReadLegacy(csv);
         return new DictionaryLibraryFile(
-            NullIfBlank(name), NullIfBlank(category), NullIfBlank(description), parsed.Entries, parsed.Errors);
+            file.Name,
+            file.Category,
+            file.Description,
+            file.Terms.Select(term => term.ToEntry()).ToList(),
+            file.Errors.Select(DictionaryCsv.Describe).ToList());
     }
 
     /// <summary>
@@ -83,32 +63,10 @@ public static class DictionaryLibraryCsv
         return sb.ToString();
     }
 
-    // Reads "# key: value" (case-insensitive key, tolerant of spacing) into value; first line wins.
-    private static void TryReadMeta(string commentLine, string key, ref string? value)
-    {
-        if (value is not null)
-        {
-            return;
-        }
-
-        var body = commentLine.TrimStart('#').TrimStart();
-        if (body.Length <= key.Length ||
-            !body.StartsWith(key, StringComparison.OrdinalIgnoreCase) ||
-            body[key.Length] != ':')
-        {
-            return;
-        }
-
-        value = body[(key.Length + 1)..].Trim();
-    }
-
     // Metadata is single-line: flatten any control characters so a value can't spill into extra
     // header lines or break the comment convention when re-imported.
     private static string SingleLine(string value) =>
         new(value.Select(c => char.IsControl(c) ? ' ' : c).ToArray());
-
-    private static string? NullIfBlank(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 /// <summary>

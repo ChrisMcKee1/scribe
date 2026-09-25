@@ -1,0 +1,7 @@
+# name: Loose
+# a comment, before the rows
+"#quoted",counts as a comment before the first row
+a,A
+# name: Ignored
+"#tag",Tag
+b,B,false

@@ -38,7 +38,16 @@ public readonly record struct DictionaryOverlap(
 /// The enabled library row that covers a spoken form: the first enabled row for it in precedence order, and the
 /// library that supplies it (its id and whether it is built in, which together place it in precedence).
 /// </summary>
-public readonly record struct LibraryCoverage(DictionaryEntry Entry, string LibraryId, string LibraryName, bool BuiltIn);
+public readonly record struct LibraryCoverage(DictionaryEntry Entry, string LibraryId, string LibraryName, bool BuiltIn)
+{
+    /// <summary>
+    /// For a custom library, the physical file name it ranks by among custom libraries (<see cref="LibraryPrecedence"/>),
+    /// which differs from <c>LibraryId + ".csv"</c> only for a hand-placed file remapped away from a built-in id
+    /// (<c>github.csv</c> for <c>custom-github</c>, review finding A16); null for a built-in, and null for a custom library
+    /// means <c>LibraryId + ".csv"</c>.
+    /// </summary>
+    public string? FileName { get; init; }
+}
 
 /// <summary>The overlaps found, split by what the user should be asked about.</summary>
 public readonly record struct DictionaryOverlapReport(IReadOnlyList<DictionaryOverlap> Overlaps)
@@ -166,7 +175,10 @@ public static class DictionaryLibraryOverlapAnalyzer
                     continue;
                 }
 
-                covering.TryAdd(entry.Pattern.Trim(), new LibraryCoverage(entry, library.Id, library.Name, library.BuiltIn));
+                covering.TryAdd(entry.Pattern.Trim(), new LibraryCoverage(entry, library.Id, library.Name, library.BuiltIn)
+                {
+                    FileName = library.BuiltIn ? null : library.FileName ?? library.Id + ".csv",
+                });
             }
         }
 
@@ -175,14 +187,15 @@ public static class DictionaryLibraryOverlapAnalyzer
 
     /// <summary>
     /// <see cref="Analyze"/> against the enabled libraries themselves: their rows, in precedence order whatever order
-    /// the libraries arrive in, are the library entries, and each spoken form is named after the first enabled library
-    /// that lists it. The Save prompt is built from this.
+    /// the libraries arrive in, are the library entries, and each spoken form is named after the library that supplies
+    /// its rule, the first enabled library with an enabled row for it. The Save prompt is built from this.
     /// </summary>
     /// <remarks>
-    /// The name counts a row turned off inside a library, as the Save prompt always has, so where an earlier library
-    /// lists a spoken form only in a turned-off row, the prompt names that library while a later one supplies the rule.
-    /// That is kept exactly, because this method only moves the prompt's loop out of the window, and
-    /// <c>LibraryCompositionGoldenTests</c> pins it.
+    /// Until W1b the name counted a row turned off inside a library, so where an earlier library listed a spoken form
+    /// only in a turned-off row, the prompt named that library while a later one supplied the rule (W1a's disclosed
+    /// quirk). A turned-off row supplies nothing, so it no longer takes the name; <c>LibraryCompositionGoldenTests</c>
+    /// pins the corrected names, and <see cref="Libraries.LibraryComposition.OverlapReport"/> gives the same answer under
+    /// Decision 1's tiers.
     /// </remarks>
     /// <param name="personal">The dictionary the user is saving.</param>
     /// <param name="libraries">The loaded libraries, in any order.</param>
@@ -204,7 +217,7 @@ public static class DictionaryLibraryOverlapAnalyzer
                 }
 
                 libraryEntries.Add(entry);
-                if (!string.IsNullOrWhiteSpace(entry.Pattern))
+                if (entry.Enabled && !string.IsNullOrWhiteSpace(entry.Pattern))
                 {
                     libraryNames.TryAdd(entry.Pattern.Trim(), library.Name);
                 }

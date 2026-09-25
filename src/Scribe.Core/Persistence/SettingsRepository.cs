@@ -1,6 +1,9 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.Persistence;
@@ -19,6 +22,10 @@ public sealed class SettingsRepository : ISettingsRepository
     internal const string LostMarkerKey = "app_settings_lost";
 
     private const string RecoveryKey = "app_settings_recovery";
+
+    // The document member holding AppSettings.EnabledDictionaryLibraryIds, named as the serializer's camelCase policy
+    // writes it; the serializer reads it without case, and so does the patch that splices a new list into it.
+    private const string EnabledLibraryListMember = "enabledDictionaryLibraryIds";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -53,8 +60,10 @@ public sealed class SettingsRepository : ISettingsRepository
     /// transaction, on the writing thread and under the write lock. "update began": a checked
     /// <see cref="Update(Action{AppSettings}, long, out bool)"/> has begun its transaction and has not yet looked at
     /// what saves carried. "save committing": <see cref="SaveBundle"/> has written and not committed. "save
-    /// committed": that commit has returned (no transaction) and the save has not yet recorded its intent. Unset in the
-    /// app.
+    /// committed": that commit has returned (no transaction) and the save has not yet recorded its intent. "library rows
+    /// written": a library commit (a <see cref="SaveBundle"/> with a payload, or <see cref="CommitLibraryState"/>) has
+    /// written its auxiliary rows and generation and not yet the document. "library state committing" and "library state
+    /// committed": <see cref="CommitLibraryState"/>'s pair, like the save's. Unset in the app.
     /// </summary>
     internal Action<string, SqliteConnection, SqliteTransaction?>? WriteStep { get; set; }
 
@@ -130,6 +139,44 @@ public sealed class SettingsRepository : ISettingsRepository
         return AppSettings.CreateForExistingInstall();
     }
 
+    /// <summary>For tests: raised inside the read transaction of the library settings read, after the document is read.</summary>
+    internal Action<string>? ReadStep { get; set; }
+
+    // One SQLite read transaction: whatever commits meanwhile, every value comes from one committed generation (round 2,
+    // A6). Load's rules for whether the document can be used, without its side effects: the recovery copy is Load's to
+    // write, and LastLoadFailed stays the session's.
+    LibrarySettingsRead ISettingsRepository.ReadLibrarySettings()
+    {
+        bool stored;
+        string json;
+        bool lost;
+        string? generation;
+        string? state;
+        string? fileIds;
+        using (var connection = _database.Open())
+        using (var transaction = connection.BeginTransaction(deferred: true))
+        {
+            (stored, json) = ReadDocument(connection, transaction);
+            ReadStep?.Invoke("document read");
+            lost = ReadValue(connection, transaction, LostMarkerKey) is not null;
+            generation = ReadValue(connection, transaction, LibrarySettingKeys.Generation);
+            state = ReadValue(connection, transaction, LibrarySettingKeys.State);
+            fileIds = ReadValue(connection, transaction, LibrarySettingKeys.FileIds);
+            transaction.Commit();
+        }
+
+        if (!stored)
+        {
+            var unusable = _database.SettingsLostInRepair || lost;
+            return new LibrarySettingsRead(
+                unusable ? null : [.. AppSettings.CreateDefault().EnabledDictionaryLibraryIds], unusable, generation, state, fileIds);
+        }
+
+        var document = string.IsNullOrWhiteSpace(json) ? null : TryDeserialize(json);
+        return new LibrarySettingsRead(
+            document is null ? null : [.. document.EnabledDictionaryLibraryIds], document is null, generation, state, fileIds);
+    }
+
     public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, setting: null, revision: null, out _);
 
     public AppSettings Update(Action<AppSettings> mutate, long revision, out bool superseded) =>
@@ -160,11 +207,19 @@ public sealed class SettingsRepository : ISettingsRepository
             // already committed and recorded its intent, or has not begun: saves take the write lock this change holds.
             if (revision is { } asked && setting is { } which && asked <= SavedThrough(which))
             {
-                return (ReadForUpdate(connection, transaction), true);
+                return (ReadForUpdate(connection, transaction).Settings, true);
             }
 
-            var settings = ReadForUpdate(connection, transaction);
+            var (settings, documentStored) = ReadForUpdate(connection, transaction);
+            var keptLibraries = documentStored && LibraryStateStored(connection, transaction)
+                ? settings.EnabledDictionaryLibraryIds.ToList()
+                : null;
             mutate(settings);
+            if (keptLibraries is not null)
+            {
+                settings.EnabledDictionaryLibraryIds = keptLibraries;
+            }
+
             WriteValue(connection, transaction, SettingsKey, JsonSerializer.Serialize(settings, JsonOptions));
             ForgetLoss(connection, transaction);
             transaction.Commit();
@@ -179,7 +234,6 @@ public sealed class SettingsRepository : ISettingsRepository
     public void Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        var json = JsonSerializer.Serialize(settings, JsonOptions);
 
         // Not behind the write gate, like SaveBundle. The document and the end of any recorded loss are one commit.
         Serialized(() =>
@@ -187,7 +241,14 @@ public sealed class SettingsRepository : ISettingsRepository
             _database.RequestYield();
             using var connection = _database.Open();
             using var transaction = connection.BeginTransaction();
-            WriteValue(connection, transaction, SettingsKey, json);
+            var document = settings;
+            if (StoredLibraryList(connection, transaction) is { } kept)
+            {
+                document = settings.Clone();
+                document.EnabledDictionaryLibraryIds = kept;
+            }
+
+            WriteValue(connection, transaction, SettingsKey, JsonSerializer.Serialize(document, JsonOptions));
             ForgetLoss(connection, transaction);
             transaction.Commit();
 
@@ -201,14 +262,22 @@ public sealed class SettingsRepository : ISettingsRepository
         IReadOnlyList<DictionaryEntry>? dictionaryEntries,
         IReadOnlyList<Snippet>? snippets,
         long aiCleanupIntent = 0) =>
-        SaveBundleCore(settings, dictionaryEntries, snippets, aiCleanupIntent, microphoneIntent: null);
+        SaveBundleCore(settings, dictionaryEntries, snippets, aiCleanupIntent, microphoneIntent: null, libraries: null);
 
     public void SaveBundle(
         AppSettings settings,
         IReadOnlyList<DictionaryEntry>? dictionaryEntries,
         IReadOnlyList<Snippet>? snippets,
         ExternalIntents intents) =>
-        SaveBundleCore(settings, dictionaryEntries, snippets, intents.AiCleanup, intents.Microphone);
+        SaveBundleCore(settings, dictionaryEntries, snippets, intents.AiCleanup, intents.Microphone, libraries: null);
+
+    public void SaveBundle(
+        AppSettings settings,
+        IReadOnlyList<DictionaryEntry>? dictionaryEntries,
+        IReadOnlyList<Snippet>? snippets,
+        ExternalIntents intents,
+        LibrarySavePayload? libraries) =>
+        SaveBundleCore(settings, dictionaryEntries, snippets, intents.AiCleanup, intents.Microphone, libraries);
 
     // A null microphone intent is a caller that does not track one, which writes the microphone as given and records
     // nothing, exactly as every save did before the tray could change the microphone.
@@ -217,7 +286,8 @@ public sealed class SettingsRepository : ISettingsRepository
         IReadOnlyList<DictionaryEntry>? dictionaryEntries,
         IReadOnlyList<Snippet>? snippets,
         long aiCleanupIntent,
-        long? microphoneIntent)
+        long? microphoneIntent,
+        LibrarySavePayload? libraries)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -231,15 +301,27 @@ public sealed class SettingsRepository : ISettingsRepository
             // IMMEDIATE, so the stored values read below cannot change before this transaction writes.
             using var transaction = connection.BeginTransaction(deferred: false);
 
+            // A library commit is refused before anything is written when another commit moved the generation since
+            // it was prepared: disposing the transaction unwritten rolls it back.
+            if (libraries is not null)
+            {
+                RequireGeneration(connection, transaction, libraries);
+            }
+
             // Without an intent for a setting, the window neither changed it nor took a tray change, so what it shows can
             // be older than what is stored: a tray change that committed before word of it reached the window. The stored
             // value stays. With no readable document there is nothing to keep, and the window's value is saved.
             var keepAiCleanup = aiCleanupIntent <= 0;
             var keepMicrophone = microphoneIntent is <= 0;
+
+            // The document's enabled-library list is the library state's projection, and once that state is stored the
+            // list is written only with it (review finding A17): a save that carries no list keeps the stored one.
+            var keepLibraries = libraries?.EnabledLibraryIds is null && LibraryStateStored(connection, transaction);
             var document = settings;
             bool? keptAiCleanup = null;
             (string? Id, string? Name)? keptMicrophone = null;
-            if ((keepAiCleanup || keepMicrophone) &&
+            List<string>? keptLibraries = null;
+            if ((keepAiCleanup || keepMicrophone || keepLibraries) &&
                 ReadValue(connection, transaction, SettingsKey) is { } storedJson &&
                 TryDeserialize(storedJson) is { } stored)
             {
@@ -253,10 +335,20 @@ public sealed class SettingsRepository : ISettingsRepository
                     keptMicrophone = (stored.InputDeviceId, stored.InputDeviceName);
                 }
 
-                if (keptAiCleanup is not null || keptMicrophone is not null)
+                if (keepLibraries)
                 {
-                    document = settings.Clone();
-                    Keep(document, keptAiCleanup, keptMicrophone);
+                    keptLibraries = [.. stored.EnabledDictionaryLibraryIds];
+                }
+            }
+
+            var libraryList = libraries?.EnabledLibraryIds is { } list ? list.ToList() : keptLibraries;
+            if (keptAiCleanup is not null || keptMicrophone is not null || libraryList is not null)
+            {
+                document = settings.Clone();
+                Keep(document, keptAiCleanup, keptMicrophone);
+                if (libraryList is not null)
+                {
+                    document.EnabledDictionaryLibraryIds = [.. libraryList];
                 }
             }
 
@@ -268,6 +360,12 @@ public sealed class SettingsRepository : ISettingsRepository
             if (snippets is not null)
             {
                 SnippetRepository.SaveAll(connection, transaction, snippets);
+            }
+
+            if (libraries is not null)
+            {
+                WriteLibraryRows(connection, transaction, libraries);
+                WriteStep?.Invoke("library rows written", connection, transaction);
             }
 
             WriteValue(connection, transaction, SettingsKey, JsonSerializer.Serialize(document, JsonOptions));
@@ -286,8 +384,195 @@ public sealed class SettingsRepository : ISettingsRepository
             }
 
             Keep(settings, keptAiCleanup, keptMicrophone);
+            if (libraryList is not null)
+            {
+                settings.EnabledDictionaryLibraryIds = [.. libraryList];
+            }
+
             LastLoadFailed = false;
         });
+    }
+
+    public void CommitLibraryState(LibrarySavePayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        Serialized(() =>
+        {
+            // Not behind the write gate, like every settings write; adoption runs off the dispatcher but must not queue
+            // behind a VACUUM either.
+            _database.RequestYield();
+            using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction(deferred: false);
+            RequireGeneration(connection, transaction, payload);
+
+            // Every refusal happens here, before anything is written, so a refused commit leaves the database as it was.
+            string? patched = null;
+            if (payload.EnabledLibraryIds is { } list)
+            {
+                var (stored, json) = ReadDocument(connection, transaction);
+                if (!stored)
+                {
+                    throw new InvalidOperationException(
+                        _database.SettingsLostInRepair || ReadValue(connection, transaction, LostMarkerKey) is not null
+                            ? "The saved settings were lost when the database was repaired, so the library list was not changed."
+                            : "No settings are saved yet, so the library list was not changed.");
+                }
+
+                if (ReadValue(connection, transaction, LostMarkerKey) is not null ||
+                    string.IsNullOrWhiteSpace(json) || TryDeserialize(json) is null)
+                {
+                    throw new InvalidOperationException("The stored settings could not be read, so the library list was not changed.");
+                }
+
+                patched = PatchEnabledLibraryList(json, list) ??
+                    throw new InvalidOperationException("The stored settings have no single library list to change, so nothing was changed.");
+            }
+
+            WriteLibraryRows(connection, transaction, payload);
+            WriteStep?.Invoke("library rows written", connection, transaction);
+            if (patched is not null)
+            {
+                WriteValue(connection, transaction, SettingsKey, patched);
+            }
+
+            WriteStep?.Invoke("library state committing", connection, transaction);
+            transaction.Commit();
+            WriteStep?.Invoke("library state committed", connection, null);
+        });
+    }
+
+    /// <summary>
+    /// The stored library generation: <see cref="LibrarySettingKeys.Generation"/> as a canonical decimal integer of at
+    /// least 1, or 0 when the row is absent or holds anything else (which the library service reads as lost).
+    /// </summary>
+    internal static long ParseLibraryGeneration(string? value) =>
+        long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var generation) && generation >= 1 &&
+        string.Equals(value, generation.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            ? generation
+            : 0;
+
+    private static void RequireGeneration(SqliteConnection connection, SqliteTransaction transaction, LibrarySavePayload payload)
+    {
+        var stored = ParseLibraryGeneration(ReadValue(connection, transaction, LibrarySettingKeys.Generation));
+        if (stored != payload.ExpectedGeneration)
+        {
+            throw new LibraryGenerationConflictException(stored, payload.ExpectedGeneration);
+        }
+    }
+
+    private static void WriteLibraryRows(SqliteConnection connection, SqliteTransaction transaction, LibrarySavePayload payload)
+    {
+        foreach (var row in payload.Values)
+        {
+            if (row.Value is null)
+            {
+                DeleteValue(connection, transaction, row.Key);
+            }
+            else
+            {
+                WriteValue(connection, transaction, row.Key, row.Value);
+            }
+        }
+
+        WriteValue(
+            connection, transaction, LibrarySettingKeys.Generation, payload.Generation.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static bool LibraryStateStored(SqliteConnection connection, SqliteTransaction transaction) =>
+        ReadValue(connection, transaction, LibrarySettingKeys.State) is not null;
+
+    // The stored document's enabled-library list, when library state is stored and the document can be read: the list a
+    // whole-document write without a library payload keeps (review finding A17). Null when there is nothing to keep.
+    private static List<string>? StoredLibraryList(SqliteConnection connection, SqliteTransaction transaction) =>
+        LibraryStateStored(connection, transaction) &&
+        ReadValue(connection, transaction, SettingsKey) is { } json && !string.IsNullOrWhiteSpace(json) &&
+        TryDeserialize(json) is { } stored
+            ? [.. stored.EnabledDictionaryLibraryIds]
+            : null;
+
+    /// <summary>
+    /// The stored document with only the value of its top-level <c>enabledDictionaryLibraryIds</c> member replaced by
+    /// <paramref name="ids"/>, or the member appended before the closing brace when it is absent; null when the document
+    /// is not a JSON object or holds the member more than once (compared without case, as the serializer reads it).
+    /// </summary>
+    /// <remarks>
+    /// A splice of bytes, never a typed round trip: deserializing into <see cref="AppSettings"/> and serializing again
+    /// would give missing members their defaults, drop members this build does not know and re-escape strings, so
+    /// every byte outside that one value stays exactly as stored (review findings A5 and its round 3 note).
+    /// </remarks>
+    internal static string? PatchEnabledLibraryList(string json, IReadOnlyList<string> ids)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(ids);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        try
+        {
+            var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { CommentHandling = JsonCommentHandling.Disallow });
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            {
+                return null;
+            }
+
+            var found = 0;
+            var valueStart = -1L;
+            var valueEnd = -1L;
+            var closingBrace = -1L;
+            var members = 0;
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject)
+                {
+                    closingBrace = reader.TokenStartIndex;
+                    break;
+                }
+
+                if (reader.TokenType != JsonTokenType.PropertyName)
+                {
+                    return null;
+                }
+
+                members++;
+                var matches = string.Equals(reader.GetString(), EnabledLibraryListMember, StringComparison.OrdinalIgnoreCase);
+                if (!reader.Read())
+                {
+                    return null;
+                }
+
+                var start = reader.TokenStartIndex;
+                reader.Skip();
+                if (matches)
+                {
+                    found++;
+                    valueStart = start;
+                    valueEnd = reader.BytesConsumed;
+                }
+            }
+
+            // Nothing may follow the object but white space; Read throws on anything else.
+            if (closingBrace < 0 || found > 1 || reader.Read())
+            {
+                return null;
+            }
+
+            var array = JsonSerializer.SerializeToUtf8Bytes(ids.ToList(), JsonOptions);
+            byte[] patched;
+            if (found == 1)
+            {
+                patched = [.. bytes.AsSpan(0, (int)valueStart), .. array, .. bytes.AsSpan((int)valueEnd)];
+            }
+            else
+            {
+                var member = Encoding.UTF8.GetBytes((members > 0 ? "," : string.Empty) + "\"" + EnabledLibraryListMember + "\":");
+                patched = [.. bytes.AsSpan(0, (int)closingBrace), .. member, .. array, .. bytes.AsSpan((int)closingBrace)];
+            }
+
+            return Encoding.UTF8.GetString(patched);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -449,7 +734,7 @@ public sealed class SettingsRepository : ISettingsRepository
     // committed on its own, and the change is refused. The copy is written on this connection because a second one
     // would wait behind this very transaction. A document a repair lost is refused the same way: defaults plus one
     // field would stand in for it as if the user had chosen them.
-    private AppSettings ReadForUpdate(SqliteConnection connection, SqliteTransaction transaction)
+    private (AppSettings Settings, bool DocumentStored) ReadForUpdate(SqliteConnection connection, SqliteTransaction transaction)
     {
         var (stored, json) = ReadDocument(connection, transaction);
         if (!stored)
@@ -462,13 +747,13 @@ public sealed class SettingsRepository : ISettingsRepository
             }
 
             LastLoadFailed = false;
-            return AppSettings.CreateDefault();
+            return (AppSettings.CreateDefault(), false);
         }
 
         if (!string.IsNullOrWhiteSpace(json) && TryDeserialize(json) is { } settings)
         {
             LastLoadFailed = false;
-            return settings;
+            return (settings, true);
         }
 
         LastLoadFailed = true;
@@ -535,6 +820,15 @@ public sealed class SettingsRepository : ISettingsRepository
             """;
         command.Parameters.AddWithValue("$key", key);
         command.Parameters.AddWithValue("$value", value);
+        command.ExecuteNonQuery();
+    }
+
+    private static void DeleteValue(SqliteConnection connection, SqliteTransaction transaction, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM settings WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", key);
         command.ExecuteNonQuery();
     }
 
