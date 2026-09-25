@@ -35,7 +35,7 @@ public static class KeyboardColdPathScenario
         RuntimeHelpers.RunClassConstructor(typeof(HotkeyService).TypeHandle);
         using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         var passOn = new KeyEventPassOn();
-        using var notice = new ForegroundNotice(static _ => { });
+        using var notice = new ForegroundNotice(static (_, _) => { });
         var message = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.KBDLLHOOKSTRUCT>());
         try
         {

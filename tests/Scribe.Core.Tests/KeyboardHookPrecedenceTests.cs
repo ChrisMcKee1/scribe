@@ -21,7 +21,7 @@ public class KeyboardHookPrecedenceTests
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
 
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         Assert.Empty(rig.Requests);
@@ -46,7 +46,7 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
@@ -68,14 +68,14 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
         Assert.Equal(KeyboardHookPrecedence.KeepAheadPeriod, rig.Time.Timer.Due);
 
         rig.Foreground = LocalWindow;
-        rig.Precedence.OnForegroundChanged(LocalWindow);
+        rig.Notice(LocalWindow);
 
         Assert.Null(rig.Time.Timer.Due);
         rig.Time.Timer.Fire(); // a tick already on its way when the timer was stopped
@@ -88,7 +88,7 @@ public class KeyboardHookPrecedenceTests
         // The notice for the change can still be on its way: the keep-ahead move asks Windows what is in front first.
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
@@ -106,7 +106,7 @@ public class KeyboardHookPrecedenceTests
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
 
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         var line = Assert.Single(rig.Log.Entries);
         Assert.StartsWith(
@@ -122,7 +122,7 @@ public class KeyboardHookPrecedenceTests
         var rig = new Rig();
         rig.Foreground = window;
 
-        rig.Precedence.OnForegroundChanged(window);
+        rig.Notice(window);
 
         Assert.Null(rig.Time.Timer.Due);
         Assert.Empty(rig.Requests);
@@ -134,10 +134,10 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         rig.Foreground = LocalWindow;
-        rig.Precedence.OnForegroundChanged(LocalWindow);
+        rig.Notice(LocalWindow);
 
         Assert.Null(rig.Time.Timer.Due);
         rig.Time.Timer.Fire(); // a tick already on its way when the timer was stopped
@@ -149,11 +149,11 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
 
         rig.Foreground = LocalWindow;
-        rig.Precedence.OnForegroundChanged(LocalWindow);
+        rig.Notice(LocalWindow);
 
         Assert.Equal(KeyboardHookPrecedence.RetiredGrace, rig.Time.Timer.Due);
         rig.Time.Timer.Fire();
@@ -167,7 +167,7 @@ public class KeyboardHookPrecedenceTests
         // The notice for the change back may still be on its way: each move asks Windows what is in front first.
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         rig.Foreground = LocalWindow;
         rig.Time.Timer.Fire();
@@ -181,7 +181,7 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
 
         rig.Foreground = LocalWindow;
@@ -198,12 +198,12 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
         rig.Time.Timer.Fire();
 
         rig.Foreground = OtherRemoteWindow;
-        rig.Precedence.OnForegroundChanged(OtherRemoteWindow);
+        rig.Notice(OtherRemoteWindow);
 
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         rig.Time.Timer.Fire();
@@ -219,11 +219,11 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         rig.Precedence.Dispose();
         rig.Time.Timer.Fire();
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         Assert.Empty(rig.Requests);
         Assert.True(rig.Time.Timer.Disposed);
@@ -235,20 +235,156 @@ public class KeyboardHookPrecedenceTests
         var rig = new Rig { ThrowFromQuery = true };
         rig.Foreground = RemoteWindow;
 
-        rig.Precedence.OnForegroundChanged(RemoteWindow);
+        rig.Notice(RemoteWindow);
 
         Assert.Null(rig.Time.Timer.Due);
         Assert.Empty(rig.Requests);
     }
 
+    [Fact]
+    public void An_older_lookup_that_finishes_last_cannot_cancel_the_newest_remote_schedule()
+    {
+        // Review round 2, item 4 (A4). The notice's pool callbacks can overlap (.NET re-arms a registered wait before it runs
+        // its callback), and each looks its window's process up before it takes the gate: a slow lookup of a local window
+        // published first can finish after a remote window published later armed the first move.
+        var rig = new Rig();
+        using var atLookup = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        rig.BeforeLookup = window =>
+        {
+            if (window == LocalWindow)
+            {
+                atLookup.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        rig.Foreground = RemoteWindow;
+        var local = rig.Publish();
+        var older = new Thread(() => rig.Precedence.OnForegroundChanged(LocalWindow, local)) { IsBackground = true };
+        older.Start();
+        Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The older lookup never started.");
+
+        rig.Notice(RemoteWindow);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        release.Set();
+        Assert.True(older.Join(TimeSpan.FromSeconds(10)), "The older lookup never finished.");
+
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move"], rig.Requests);
+    }
+
+    [Fact]
+    public void A_notice_no_newer_than_the_last_one_decided_changes_nothing()
+    {
+        var rig = new Rig();
+        rig.Foreground = RemoteWindow;
+        var first = rig.Publish();
+        var second = rig.Publish();
+
+        rig.Precedence.OnForegroundChanged(RemoteWindow, second);
+        rig.Precedence.OnForegroundChanged(LocalWindow, first);
+        rig.Precedence.OnForegroundChanged(LocalWindow, second);
+
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        Assert.Single(rig.Log.Entries);
+    }
+
+    [Fact]
+    public void A_tick_of_an_earlier_schedule_cannot_take_a_newer_one_before_it_is_due()
+    {
+        // Review round 2, item 4 (A4). A step's tick reads the step, looks up what is in front outside the gate and takes the
+        // gate again. Two schedules both at the first move looked alike, so a tick of the first, held up in its lookup while
+        // a second remote window armed its own first move, made that move at once, before the new client had registered.
+        var rig = new Rig();
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+        using var atRead = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var hold = 1;
+        rig.BeforeForegroundRead = () =>
+        {
+            if (Interlocked.Exchange(ref hold, 0) == 1)
+            {
+                atRead.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
+        tick.Start();
+        Assert.True(atRead.Wait(TimeSpan.FromSeconds(10)), "The first schedule's tick never looked up what is in front.");
+
+        rig.Foreground = OtherRemoteWindow;
+        rig.Notice(OtherRemoteWindow);
+        var armedAt = rig.Time.Elapsed;
+        release.Set();
+        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+
+        Assert.Empty(rig.Requests);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move"], rig.Requests);
+        Assert.Equal(armedAt + KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Elapsed);
+    }
+
+    [Fact]
+    public void A_tick_that_arrives_early_waits_for_the_time_that_remains()
+    {
+        // As ClosableTimer does it: each schedule records when it is due, and a tick is taken only once that moment has come.
+        var rig = new Rig();
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+
+        rig.Time.Timer.Tick();
+        Assert.Empty(rig.Requests);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+
+        rig.Time.Advance(TimeSpan.FromMilliseconds(100));
+        rig.Time.Timer.Tick();
+        Assert.Empty(rig.Requests);
+        Assert.Equal(TimeSpan.FromMilliseconds(150), rig.Time.Timer.Due);
+
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move"], rig.Requests);
+
+        // The next step is armed now; a late delivery of the tick just taken is early for it and moves nothing.
+        rig.Time.Timer.Tick();
+        Assert.Equal(["move"], rig.Requests);
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+    }
+
+    [Fact]
+    public void Each_foreground_notice_is_published_at_once_with_a_newer_revision_which_its_handler_receives()
+    {
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<(nint Window, long Revision)>();
+        using var notice = new ForegroundNotice((window, revision) => seen.Enqueue((window, revision)));
+        Assert.Equal(0, notice.PublishedRevision);
+
+        notice.Notify(RemoteWindow);
+        Assert.Equal(1, notice.PublishedRevision); // on the notifying thread, before any handler runs
+        Assert.True(SpinWait.SpinUntil(() => seen.Count == 1, TimeSpan.FromSeconds(10)), "The first notice was not handled.");
+        notice.Notify(LocalWindow);
+        Assert.Equal(2, notice.PublishedRevision);
+        Assert.True(SpinWait.SpinUntil(() => seen.Count == 2, TimeSpan.FromSeconds(10)), "The second notice was not handled.");
+
+        Assert.Equal([(RemoteWindow, 1L), (LocalWindow, 2L)], seen.ToArray());
+    }
+
     private sealed class Rig
     {
+        private long _revision;
+
         public Rig()
         {
             Precedence = new KeyboardHookPrecedence(
-                () => Foreground,
+                () =>
+                {
+                    BeforeForegroundRead?.Invoke();
+                    return Foreground;
+                },
                 window =>
                 {
+                    BeforeLookup?.Invoke(window);
                     if (ThrowFromQuery)
                     {
                         throw new InvalidOperationException("the process is gone");
@@ -272,6 +408,12 @@ public class KeyboardHookPrecedenceTests
 
         public bool ThrowFromQuery { get; set; }
 
+        /// <summary>Runs on the thread of a step's foreground read, before it (a step's lookup only).</summary>
+        public Action? BeforeForegroundRead { get; set; }
+
+        /// <summary>Runs on the thread of every process lookup, a notice's or a step's, before it.</summary>
+        public Action<nint>? BeforeLookup { get; set; }
+
         public List<string> Requests { get; } = [];
 
         public TextInjectionFakes.CapturingLogger<KeyboardHookPrecedenceTests> Log { get; } = new();
@@ -279,21 +421,52 @@ public class KeyboardHookPrecedenceTests
         public OneTimerClock Time { get; } = new();
 
         public KeyboardHookPrecedence Precedence { get; }
+
+        /// <summary>The revision the next notice gets, published the way the hook thread's notice publishes it.</summary>
+        public long Publish() => Interlocked.Increment(ref _revision);
+
+        /// <summary>A foreground notice for <paramref name="window"/>, handled on this thread with a newer revision.</summary>
+        public void Notice(nint window) => Precedence.OnForegroundChanged(window, Publish());
     }
 
-    /// <summary>A clock with one timer, which fires only when the test says so.</summary>
+    /// <summary>
+    /// A clock with one timer, which fires only when the test says so, and a time that moves only when the test or a firing
+    /// timer moves it (<see cref="ScriptedTimer.Fire"/> brings it to the tick's due time).
+    /// </summary>
     internal sealed class OneTimerClock : TimeProvider
     {
         private ScriptedTimer? _timer;
+        private long _now;
 
         public ScriptedTimer Timer => Volatile.Read(ref _timer)!;
 
         /// <summary>The timer once made (a service makes it as its hook installation is built), or null.</summary>
         public ScriptedTimer? MadeTimer => Volatile.Read(ref _timer);
 
+        /// <summary>How far the clock has moved since it was made.</summary>
+        public TimeSpan Elapsed => TimeSpan.FromTicks(Interlocked.Read(ref _now));
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _now);
+
+        public void Advance(TimeSpan by) => Interlocked.Add(ref _now, by.Ticks);
+
+        /// <summary>Moves the clock forward to <paramref name="timestamp"/>, never back.</summary>
+        public void AdvanceTo(long timestamp)
+        {
+            for (var now = Interlocked.Read(ref _now); now < timestamp; now = Interlocked.Read(ref _now))
+            {
+                if (Interlocked.CompareExchange(ref _now, timestamp, now) == now)
+                {
+                    return;
+                }
+            }
+        }
+
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            var timer = new ScriptedTimer(callback, state);
+            var timer = new ScriptedTimer(this, callback, state);
             Assert.Null(Interlocked.CompareExchange(ref _timer, timer, null));
             timer.Change(dueTime, period);
             return timer;
@@ -304,10 +477,11 @@ public class KeyboardHookPrecedenceTests
     /// A timer that ticks only when the test fires it. The pool thread arms it while the test reads it, so its state is
     /// read and written under a lock.
     /// </summary>
-    internal sealed class ScriptedTimer(TimerCallback callback, object? state) : ITimer
+    internal sealed class ScriptedTimer(OneTimerClock clock, TimerCallback callback, object? state) : ITimer
     {
         private readonly object _gate = new();
         private TimeSpan? _due;
+        private long _armedAt;
         private bool _disposed;
 
         /// <summary>When the armed tick is due, or null while disarmed.</summary>
@@ -339,20 +513,34 @@ public class KeyboardHookPrecedenceTests
             lock (_gate)
             {
                 _due = dueTime == Timeout.InfiniteTimeSpan ? null : dueTime;
+                _armedAt = clock.GetTimestamp();
                 return !_disposed;
             }
         }
 
-        /// <summary>Runs the callback, armed or not: a real timer can deliver a tick that was already on its way.</summary>
+        /// <summary>
+        /// The armed tick arrives when it is due: the clock is brought to that moment first. With nothing armed it still runs
+        /// the callback, as a real timer can deliver a tick that was already on its way.
+        /// </summary>
         public void Fire()
         {
+            long? dueAt;
             lock (_gate)
             {
+                dueAt = _due is { } due ? _armedAt + due.Ticks : null;
                 _due = null;
+            }
+
+            if (dueAt is { } moment)
+            {
+                clock.AdvanceTo(moment);
             }
 
             callback(state);
         }
+
+        /// <summary>A tick arrives now, whatever is armed and whatever the time: one queued for a schedule since replaced.</summary>
+        public void Tick() => callback(state);
 
         public void Dispose()
         {

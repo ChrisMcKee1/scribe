@@ -58,8 +58,17 @@ internal sealed class KeyboardHookPrecedence : IDisposable
     private readonly Action _moveAhead;
     private readonly Action _releaseRetired;
     private readonly ILogger _logger;
+    private readonly TimeProvider _time;
     private readonly ITimer _timer;
+
+    // Under _gate: the step the sequence is at; the newest foreground revision decided (a notice's revision is its
+    // publication's, ForegroundNotice); the schedule, one number per Arm, so a tick knows whether the schedule it read is
+    // still the one in force; and when that schedule is due, on _time's clock, or null once its one tick was taken or while
+    // nothing is armed (ClosableTimer keeps its schedules the same way).
     private int _step;
+    private long _decided;
+    private long _schedule;
+    private long? _dueTimestamp;
     private bool _disposed;
 
     /// <param name="foregroundWindow">The window in front now (GetForegroundWindow in production).</param>
@@ -81,16 +90,20 @@ internal sealed class KeyboardHookPrecedence : IDisposable
         _moveAhead = moveAhead;
         _releaseRetired = releaseRetired;
         _logger = logger;
+        _time = time;
         _timer = time.CreateTimer(
             static state => ((KeyboardHookPrecedence)state!).OnTimer(), this, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>
-    /// Pool thread: the foreground window changed to <paramref name="window"/>, or a hook installed with it in front. A
-    /// remote client starts the sequence over; any other window cancels a move not made yet and the keep-ahead moves, and
-    /// keeps the release due if a move was made.
+    /// Pool thread: the foreground window changed to <paramref name="window"/>, or a hook installed with it in front, as the
+    /// notice published with <paramref name="revision"/>. A remote client starts the sequence over; any other window cancels
+    /// a move not made yet and the keep-ahead moves, and keeps the release due if a move was made. The notice's pool
+    /// callbacks can overlap (.NET re-arms a registered wait before it runs its callback), and the lookup runs before the
+    /// gate, so a slow lookup can finish after a newer notice was decided: a revision no newer than the last one decided
+    /// changes nothing (review round 2, item 4), or an older local window's lookup would cancel a newer remote schedule.
     /// </summary>
-    public void OnForegroundChanged(nint window)
+    public void OnForegroundChanged(nint window, long revision)
     {
         try
         {
@@ -98,11 +111,12 @@ internal sealed class KeyboardHookPrecedence : IDisposable
             var remote = RemoteClientProcesses.IsRemoteClient(name);
             lock (_gate)
             {
-                if (_disposed)
+                if (_disposed || revision <= _decided)
                 {
                     return;
                 }
 
+                _decided = revision;
                 if (remote)
                 {
                     Arm(FirstMoveDue, FirstMoveDelay);
@@ -139,30 +153,51 @@ internal sealed class KeyboardHookPrecedence : IDisposable
         _timer.Dispose();
     }
 
-    // Pool thread, the timer's tick. Every step asks what is in front first, since the notice for a change can still be on
-    // its way: a move is made only if a remote client is still in front, and after a release the keep-ahead moves go on
+    // Pool thread, the timer's tick. A tick is taken only once its schedule is due, and at most once (a tick with nothing
+    // armed is dropped, and one that arrives early re-arms for the time that remains), and it acts only if that schedule is
+    // still the one in force once it has looked up what is in front, which it does outside the gate: a notice or a newer
+    // schedule meanwhile decided afresh. Every step asks what is in front first, since the notice for a change can still be
+    // on its way: a move is made only if a remote client is still in front, and after a release the keep-ahead moves go on
     // only while one is.
     private void OnTimer()
     {
         try
         {
             int step;
+            long schedule;
             lock (_gate)
             {
-                if (_disposed)
+                if (_disposed || _dueTimestamp is not { } due)
                 {
                     return;
                 }
 
+                var remaining = _time.GetElapsedTime(_time.GetTimestamp(), due);
+                if (remaining > TimeSpan.Zero)
+                {
+                    _timer.Change(remaining < MinimumRearm ? MinimumRearm : remaining, Timeout.InfiniteTimeSpan);
+                    return;
+                }
+
+                _dueTimestamp = null;
                 step = _step;
+                schedule = _schedule;
             }
 
-            var inFront = step != Idle &&
-                RemoteClientProcesses.IsRemoteClient(_processNameOfWindow(_foregroundWindow()));
+            bool inFront;
+            try
+            {
+                inFront = step != Idle && RemoteClientProcesses.IsRemoteClient(_processNameOfWindow(_foregroundWindow()));
+            }
+            catch (Exception)
+            {
+                // A window or process that went away mid-lookup: taken for no remote client, so no move is made.
+                inFront = false;
+            }
+
             lock (_gate)
             {
-                // A notice that arrived meanwhile decided afresh.
-                if (_disposed || _step != step)
+                if (_disposed || _schedule != schedule)
                 {
                     return;
                 }
@@ -212,28 +247,37 @@ internal sealed class KeyboardHookPrecedence : IDisposable
         }
     }
 
-    // Callers hold _gate.
+    // Re-arming for less than this would only spin: the platform timer cannot resolve a shorter wait anyway.
+    private static readonly TimeSpan MinimumRearm = TimeSpan.FromMilliseconds(1);
+
+    // Callers hold _gate. A new schedule every time, so a tick of any earlier one can tell it is not the one in force.
     private void Arm(int step, TimeSpan due)
     {
         _step = step;
+        _schedule++;
+        _dueTimestamp = due == Timeout.InfiniteTimeSpan
+            ? null
+            : _time.GetTimestamp() + (long)(due.TotalSeconds * _time.TimestampFrequency);
         _timer.Change(due, Timeout.InfiniteTimeSpan);
     }
 }
-
 /// <summary>
 /// The hop from the hook thread to the pool for a foreground change: the WinEvent callback, on the hook thread, makes one
-/// volatile write and a SetEvent, and the handler, which looks the window's process up, runs on a pool thread. Notices
-/// that arrive before the handler runs coalesce into the latest window, which is all the handler needs. Nothing thrown by
-/// the handler reaches the pool thread.
+/// volatile write, one interlocked increment and a SetEvent, and the handler, which looks the window's process up, runs on
+/// a pool thread. Each notice is published with a revision (<see cref="PublishedRevision"/>), which the handler is handed
+/// with the window, so it can tell an older notice's decision from a newer one's; the pool callbacks of a repeating
+/// registered wait can overlap. Notices that arrive before the handler runs coalesce into the latest window, which is all
+/// the handler needs. Nothing thrown by the handler reaches the pool thread.
 /// </summary>
 internal sealed class ForegroundNotice : IDisposable
 {
     private readonly AutoResetEvent _signal = new(false);
     private readonly RegisteredWaitHandle _registration;
-    private readonly Action<nint> _onNotice;
+    private readonly Action<nint, long> _onNotice;
     private nint _window;
+    private long _revision;
 
-    public ForegroundNotice(Action<nint> onNotice)
+    public ForegroundNotice(Action<nint, long> onNotice)
     {
         ArgumentNullException.ThrowIfNull(onNotice);
         _onNotice = onNotice;
@@ -245,10 +289,18 @@ internal sealed class ForegroundNotice : IDisposable
             executeOnlyOnce: false);
     }
 
+    /// <summary>
+    /// Any thread: how many notices have been published, which is each notice's revision: the hook thread reads it right
+    /// before a move ahead, and the handler is handed it with the window.
+    /// </summary>
+    public long PublishedRevision => Interlocked.Read(ref _revision);
+
     /// <summary>Any thread, the hook thread's WinEvent callback included: the window now in front. Never waits or throws.</summary>
     public void Notify(nint window)
     {
+        // The window before the revision: a reader that sees this revision sees this window or a newer one.
         Volatile.Write(ref _window, window);
+        Interlocked.Increment(ref _revision);
         try
         {
             _signal.Set();
@@ -265,11 +317,16 @@ internal sealed class ForegroundNotice : IDisposable
         _signal.Dispose();
     }
 
+    // The revision first, then the window, so the window is at least as new as the revision says: a newer notice published
+    // between the two reads hands this call its window with an older revision, which the handler decides too, and then
+    // again with the newer revision in the call that newer notice's SetEvent brings. Read the other way round, an older
+    // window could be handed on with the newer revision, and the newer notice's own call would then be ignored as no newer.
     private void Run()
     {
         try
         {
-            _onNotice(Volatile.Read(ref _window));
+            var revision = Interlocked.Read(ref _revision);
+            _onNotice(Volatile.Read(ref _window), revision);
         }
         catch (Exception)
         {
