@@ -139,6 +139,29 @@ public sealed class GlossaryInclusionTests
         Assert.Contains(scenario.ForbiddenPatterns!, pattern => pattern.Contains("PWNED", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Lines_rendered_a_hundred_at_a_time_are_the_lines_each_entry_renders_on_its_own()
+    {
+        // The chunked rendering must equal the renderer's answer for each entry alone, including where a chunk renders
+        // fewer lines than it has entries: written forms of only quotes, repeated keys, templates, spoken forms the
+        // renderer normalizes into another entry's, and entries that are off.
+        var random = new Random(20261002);
+        string[] written = ["GitHub", "\"\"", "`", "\" `", "Line\nbreak", new string('x', 101), "Kubernetes", "K8s", "", "  "];
+        string[] spoken = ["get hub", "get  hub", "\"get hub\"", "kube", "k u b e", "GITHUB", "github"];
+        for (var round = 0; round < 60; round++)
+        {
+            var entries = Enumerable.Range(0, random.Next(0, 450))
+                .Select(i => random.Next(4) == 0
+                    ? new DictionaryEntry(0, spoken[random.Next(spoken.Length)], written[random.Next(written.Length)], true, random.Next(8) != 0)
+                    : new DictionaryEntry(0, $"term {round} {i}", $"Term{i} " + new string('w', random.Next(0, 90)), random.Next(2) == 0))
+                .ToList();
+
+            var chunked = LibraryComposition.GlossaryLines(entries);
+
+            Assert.Equal(entries.Select(LibraryComposition.GlossaryLine), chunked);
+        }
+    }
+
     // Each rule's status against an oracle that counts over prefixes of the vocabulary dictation builds, with the
     // pipeline's own counter: a line is included when the prefix ending with it includes one more term than the prefix
     // before it, eligible when it has one more eligible term. The rendered glossary's lines are those of the included ones.

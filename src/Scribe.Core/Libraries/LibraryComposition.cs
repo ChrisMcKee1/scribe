@@ -480,13 +480,15 @@ public sealed class LibraryComposition
     private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary()
     {
         var inclusion = new Dictionary<DictionaryEntry, GlossaryInclusion>(ReferenceEqualityComparer.Instance);
+        var vocabulary = CleanupPrompt.ComposeVocabulary(_dictionary, AiLibraryEntries);
+        var lines = GlossaryLines(vocabulary);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         long chars = 0;
         var count = 0;
         var stopped = _budget.MaxTerms <= 0;
-        foreach (var entry in CleanupPrompt.ComposeVocabulary(_dictionary, AiLibraryEntries))
+        for (var i = 0; i < vocabulary.Count; i++)
         {
-            var line = GlossaryLine(entry);
+            var line = lines[i];
             GlossaryInclusion result;
             if (line is null || !seen.Add(GlossaryKey(line)))
             {
@@ -504,13 +506,58 @@ public sealed class LibraryComposition
                 stopped = ++count >= _budget.MaxTerms;
             }
 
-            if (_sourceOfRule.ContainsKey(entry))
+            if (_sourceOfRule.ContainsKey(vocabulary[i]))
             {
-                inclusion[entry] = result;
+                inclusion[vocabulary[i]] = result;
             }
         }
 
         return inclusion;
+    }
+
+    // The line the renderer gives each entry on its own, or null when it gives none, from the renderer itself, a hundred
+    // entries a call. A line is at most 222 characters, so a hundred of them stay inside the character budget, and the
+    // renderer emits them in entry order, each entry at most one line: a chunk that renders as many lines as it has entries
+    // gives each entry its own. One that renders fewer (an entry whose written form is only quotes, or two entries with
+    // one key) is rendered again entry by entry.
+    internal static string?[] GlossaryLines(IReadOnlyList<DictionaryEntry> entries)
+    {
+        const int chunkSize = 100;
+        var lines = new string?[entries.Count];
+        var chunk = new List<int>(chunkSize);
+        for (var i = 0; i <= entries.Count; i++)
+        {
+            if (i < entries.Count)
+            {
+                // The renderer's own first test; everything it lets through goes into a chunk.
+                var entry = entries[i];
+                if (entry is null || !entry.Enabled || !CleanupPrompt.IsVocabularyReplacement(entry.Replacement))
+                {
+                    continue;
+                }
+
+                chunk.Add(i);
+                if (chunk.Count < chunkSize)
+                {
+                    continue;
+                }
+            }
+
+            if (chunk.Count == 0)
+            {
+                continue;
+            }
+
+            var rendered = RenderedLines(CleanupPrompt.BuildGlossary([.. chunk.Select(index => entries[index])], chunk.Count));
+            for (var k = 0; k < chunk.Count; k++)
+            {
+                lines[chunk[k]] = rendered.Length == chunk.Count ? rendered[k] : GlossaryLine(entries[chunk[k]]);
+            }
+
+            chunk.Clear();
+        }
+
+        return lines;
     }
 
     // The line the glossary renders for an entry on its own, from the renderer itself, or null when it renders none.
@@ -521,9 +568,13 @@ public sealed class LibraryComposition
             return null;
         }
 
-        var glossary = CleanupPrompt.BuildGlossary([entry], 1);
-        return glossary.Length == 0 ? null : glossary[(glossary.LastIndexOf('\n') + 1)..];
+        var rendered = RenderedLines(CleanupPrompt.BuildGlossary([entry], 1));
+        return rendered.Length == 0 ? null : rendered[0];
     }
+
+    // A rendered glossary is one header line and then one line per term.
+    private static string[] RenderedLines(string glossary) =>
+        glossary.Length == 0 ? [] : glossary[(glossary.IndexOf('\n') + 1)..].Split('\n');
 
     // The key the glossary de-duplicates lines by: the written form, and the spoken form when the line shows one. The
     // renderer drops double quotes from both, so the first " (transcribed as " always separates them.
