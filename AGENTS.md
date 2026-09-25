@@ -354,6 +354,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     CaptureTriggerBinding, StartupFailureNotice
     Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
                                     OverlayPreviewGate
+    Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
+                                    SrgbColor: the foreground on every accent and palette fill, and the lightness
+                                    of accent text, links and switch tracks (see Accent contrast)
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
                                     SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
@@ -367,7 +370,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Settings/                       the nav-rail settings window (adapters call Core builders)
     Onboarding/                     WelcomeWindow (one-time first-run intro)
     Tray/ History/ Overlay/         tray menu + quick actions; history data/UI; OverlayProcessClient
-    Infrastructure/                 FileLoggerProvider (shared daily log; see Logging mandate)
+    Infrastructure/                 FileLoggerProvider (shared daily log; see Logging mandate),
+                                    AccentContrastResources (writes the accent colours), ButtonLabelContrast
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
@@ -1054,6 +1058,61 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `reasonLength=<n>`, never the reason text. The client's lifetime lines are `Overlay helper suspended
   after N idle minutes`, `Overlay helper released because dictation was paused`, `Overlay relaunch
   retry due after a N ms cooldown` and `Overlay command <verb> failed; tearing down for relaunch.`
+
+## Accent contrast (read before touching theme resources or anything drawn on an accent fill)
+
+- **WPF-UI 4.3.0 never recolours text on the accent.** Its theme dictionaries define every text-on-accent brush
+  (`TextOnAccentFillColorPrimaryBrush`, `AccentButtonForeground`, `CheckBoxCheckGlyphForeground`,
+  `ListBoxItemSelectedForegroundThemeBrush`, `ToggleSwitchKnobFillOn` and their siblings) with a `StaticResource` to
+  the theme's own colour, black in the dark theme and white in the light one, while its accent manager derives the
+  fills from the user's accent with fixed HSV steps. With the maintainer's accent #0E0E70 the dark theme drew black on
+  #42429B (2.48:1) and #59599B (3.33:1); a light accent such as Gold #FFB900 got white on #E6A700 (2.12:1) in the
+  light theme. Windows' own palette does not rescue it: for #0E0E70 it is darker still (`AccentLight2` #14149D).
+- **Every pressed `ui:Button` label is `Control.Foreground`'s default, black.** WPF-UI's template sets a pressed
+  button's Foreground to `{Binding PressedForeground, RelativeSource={RelativeSource TemplatedParent}}` on the button
+  itself; a button in a window or a dialog has no templated parent, so the binding fails (the offscreen harness logs
+  `PathError`) and the label is `SystemColors.ControlTextBrush` in every theme: 1.41:1 on a pressed standard button in
+  the dark theme, 2.70:1 on a pressed accent button with #0E0E70. Writing `AccentButtonForegroundPointerOver` or
+  `ButtonForegroundPressed` therefore changes nothing a `ui:Button` draws. `ButtonLabelContrast` (App) replaces the
+  application's `ui:Button` style, built in code on WPF-UI's own instance like `TitleBarButtonNames`, with style
+  triggers (which outrank template triggers) that draw the planned pressed label on the template's own conditions,
+  and the danger button's label at rest. **Base every Scribe `ui:Button` style on the application's**
+  (`BasedOn="{StaticResource {x:Type ui:Button}}"`), or that button loses them.
+- **`AccentContrastResources` (App) decides nothing; `AccentContrastPlanner` (Core) decides.** App attaches it in
+  `StartAsync` before the first theme is applied; it listens to `ApplicationThemeManager.Changed` (every WPF-UI theme
+  or accent application, the `SystemThemeWatcher` ones included) and `SystemParameters` `HighContrast`, reads the
+  colours WPF-UI just wrote, and writes application-level brushes, which beat the theme dictionary's. The planner maps
+  each role to the fills it sits on, one role per resource a template reads, so a pressed label is chosen apart from
+  the label at rest. `AccentForegroundChooser` tries the preferred foregrounds first (the theme's own; for a pressed
+  label, what shows today, then what the template means to draw), then black or white; text is held to 4.5:1 and a
+  glyph (check, knob) to SC 1.4.11's 3:1. Where the theme's own reads, WPF-UI's brush is left in place.
+- **Colours that are themselves read are corrected in lightness only** (`ContrastShade`): the accent text brushes
+  (headings, the Welcome icons, the Diagnostics best pace), links (WPF-UI has no Hyperlink style, so a link draws in
+  WPF's `HotTrackColor`, 2.93:1 on the dark page whatever the accent, and red when hovered) and the on switch's track.
+  A colour that reads on every surface it is drawn on (page, window, card, filled row, the Diagnostics panel) is kept
+  exactly; otherwise its HSL lightness moves, hue and saturation kept, to the first shade that reads. WPF-UI's accent
+  manager rewrites the accent text brushes in the application dictionary on every theme application, identical or
+  not, so the adapter judges the value there now, never only what it wrote last.
+- **State cues.** A checked box whose fill is under 3:1 against the page gets the theme's own unchecked border
+  (`CheckBoxCheckBorderBrush`); an on switch, whose visible track has no stroke, gets its track corrected and a knob
+  chosen on the corrected track; a selected list item (the rail, Snippets, Profiles) gets a 1 DIP outline in its own
+  text colour, drawn over the transparent ring WPF-UI's template reserves, only where its fill is under 3:1 (a
+  SemiBold label widened user-authored names and added a horizontal scroll bar); a selected library row always gets
+  its strong-stroke outline and SemiBold name in light and dark. A filled text button needs no boundary.
+- **Contrast themes are untouched.** With WPF-UI's contrast dictionary loaded, or with Windows in a contrast theme
+  while Scribe applies light or dark itself, the plan is empty: every brush the class wrote is removed, and
+  `AccentContrastFlag` (set from the `ScribeAccentContrastApplies` resource) is off. Every Scribe trigger that replaces
+  a WPF-UI or WPF colour has the flag among its conditions, so in a contrast theme none is active, whatever its
+  precedence; a new trigger of that kind needs it too.
+- **Scribe's own keys** (`AccentContrastKeys`, defaults in App.xaml, all inert until the flag is on): per-appearance
+  badge foregrounds (WPF-UI draws every badge appearance in `BadgeForeground`), the danger button's labels, the three
+  pressed labels, the two link colours and the selection cues.
+- **Do not put a literal black or white on an accent fill.** Use `TextOnAccentFillColorPrimaryBrush` (now correct),
+  or add a role to the planner and a key to the adapter. A new palette-coloured control needs a role too.
+- **On a WPF-UI upgrade**, re-check the planner's role table and the adapter's key table against the new theme
+  dictionaries and templates, and whether the pressed-label binding is fixed (then `ButtonLabelContrast` can go): the
+  adapter logs a warning when a key it overrides is missing from the loaded theme dictionary, because a renamed brush
+  quietly brings the old colour back. It logs one line per distinct outcome (counts and ratios only, never a colour).
 
 ## Azure authentication (read before touching credentials)
 
