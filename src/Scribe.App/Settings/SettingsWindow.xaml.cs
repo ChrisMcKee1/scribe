@@ -71,6 +71,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
+    private readonly Action _reloadVocabulary;
+    // The library selection of the settings dictation runs on, for the usage report: after a failed Save _settings holds
+    // unsaved library switches, and a fresh read of the stored document may find it unreadable.
+    private readonly Func<IReadOnlyList<string>> _enabledLibrariesInUse;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
@@ -136,6 +140,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // failed it would hold keys that were never stored.
     private HotkeyBinding _savedBinding;
     private HotkeyBinding? _savedDictationOnlyBinding;
+
+    // The AI cleanup provider the stored settings hold, as loaded or last saved, for the same reason: after a
+    // Save that failed, _settings names a provider that cleanup never switched to.
+    private CleanupProvider _savedAiProvider;
     private bool _capturingDictationOnly;
     private readonly List<Key> _capturedKeys = new(2);
     private readonly HashSet<Key> _pressedCaptureKeys = new();
@@ -171,6 +179,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         StartupRegistration startup,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
+        Action reloadVocabulary,
+        Func<IReadOnlyList<string>> enabledLibrariesInUse,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         SessionDiagnostics? diagnostics = null)
@@ -190,12 +200,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _startup = startup;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
+        _reloadVocabulary = reloadVocabulary;
+        _enabledLibrariesInUse = enabledLibrariesInUse;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
         _log = log;
 
         _settings = settingsRepository.Load();
+        _savedAiProvider = _settings.AiCleanupProvider;
         _settingsRecovered = settingsRepository.LastLoadFailed;
         _startupToggle = new StartupToggle(
             startup, enabled => StartupPreference.PersistAsync(settingsRepository, enabled), log);
@@ -1547,14 +1560,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // The glossary sent to AI cleanup is bounded, but the bound depends on where cleanup runs: a
-    // cloud endpoint takes everything, a small on-device model takes a short list so the vocabulary
-    // does not crowd out the transcript. Local find-and-replace is never capped either way. This is
-    // surfaced as a status line rather than enforced as an input limit, because blocking the 81st
-    // entry would break a feature that still works.
+    // What the dictionary gives AI cleanup, counted by Core the way dictation builds it (GlossaryHint):
+    // this page's rows as typed, the libraries switched on, and the provider, prompt style and switches on
+    // screen, so every control it reads refreshes it. Local find-and-replace is never capped. This is a
+    // status line rather than an input limit, because blocking the 81st entry would break a feature that
+    // still works.
     private void UpdateDictionaryGlossaryHint()
     {
-        if (DictionaryGlossaryHint is null)
+        // Also reached from the AI page's handlers, which can run while InitializeComponent is still
+        // creating the controls this reads.
+        if (DictionaryGlossaryHint is null || AiProviderCombo is null || AiPromptStyleCombo is null ||
+            AiCleanupCheck is null || PostCheck is null)
         {
             return;
         }
@@ -1567,74 +1583,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var enabled = _rows.Count(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Replacement));
-        var total = _rows.Count;
+        var enabledLibraries = _loadedLibraries
+            .Where(library => _libraryRows.Any(r => r.Enabled &&
+                string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
 
-        if (AiCleanupCheck?.IsChecked != true)
-        {
-            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled.";
-            return;
-        }
-
-        var style = CleanupPrompt.ResolvePromptStyle(SelectedPromptStyle, SelectedProvider);
-        if (style != CleanupPromptStyle.Local)
-        {
-            DictionaryGlossaryHint.Text =
-                $"{enabled:N0} of {total:N0} entries enabled. All of them are replaced locally, and all " +
-                "of them are sent to AI cleanup as a glossary.";
-            return;
-        }
-
-        // The glossary the model actually receives is the merged list, not just this page's rows, and
-        // the enabled libraries alone can run to several hundred terms. Counting only personal entries
-        // reported "well under the cap" on a stock install that was in fact discarding most of the
-        // library. Mirror DictionaryLibraryComposer's de-duplication (trimmed, case-insensitive,
-        // personal first) so the number quoted here is the number that gets built.
-        var effective = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var row in _rows)
-        {
-            if (row.Enabled && !string.IsNullOrWhiteSpace(row.Pattern) &&
-                !string.IsNullOrWhiteSpace(row.Replacement))
-            {
-                effective.Add(row.Pattern.Trim());
-            }
-        }
-
-        var personalCount = effective.Count;
-        foreach (var library in _loadedLibraries)
-        {
-            if (!_libraryRows.Any(r => r.Enabled &&
-                    string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
-            foreach (var entry in library.EnabledEntries)
-            {
-                if (!string.IsNullOrWhiteSpace(entry.Pattern))
-                {
-                    effective.Add(entry.Pattern.Trim());
-                }
-            }
-        }
-
-        var cap = CleanupPrompt.MaxGlossaryTermsLocal;
-        var libraryCount = effective.Count - personalCount;
-        var libraryNote = libraryCount > 0 ? $" plus {libraryCount:N0} from enabled libraries" : string.Empty;
-
-        if (effective.Count <= cap)
-        {
-            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled{libraryNote}.";
-            return;
-        }
-
-        DictionaryGlossaryHint.Text =
-            $"{enabled:N0} of {total:N0} entries enabled{libraryNote}. All of them are replaced locally. " +
-            $"On-device cleanup has a small context window, so only the first {cap:N0} of those " +
-            $"{effective.Count:N0} terms are sent to it as a glossary; {effective.Count - cap:N0} are not. " +
-            "Your own entries come first, so they always make the cut. Local replacement still covers " +
-            "the rest, and a cloud provider receives the full list.";
+        DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
+            _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
+            enabledLibraries,
+            AiCleanupOn: AiCleanupCheck.IsChecked == true,
+            PostProcessingOn: PostCheck.IsChecked == true,
+            SelectedProvider,
+            SelectedPromptStyle));
     }
+
+    private void PostCheck_Toggled(object sender, RoutedEventArgs e) => UpdateDictionaryGlossaryHint();
 
     // --- Libraries -----------------------------------------------------------------------
 
@@ -2544,6 +2507,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void AiCleanupCheck_Toggled(object sender, RoutedEventArgs e)
     {
+        // Before the loading guard: the dictionary line reads this switch whatever set it.
+        UpdateDictionaryGlossaryHint();
         if (_loadingUi)
         {
             return;
@@ -2563,6 +2528,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void AiProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        UpdateDictionaryGlossaryHint();
         if (_loadingUi)
         {
             return;
@@ -2577,7 +2543,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // RefreshAiStatus reports the saved provider. When that is another one, its status is not
             // Foundry Local's and must not stand in the Foundry Local panel.
-            if (_settings.AiCleanupProvider != CleanupProvider.FoundryLocal)
+            if (_savedAiProvider != CleanupProvider.FoundryLocal)
             {
                 AiStatusText.Text = FoundryIdleStatus;
             }
@@ -4435,7 +4401,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Prompt-style selector has no live side effects; the choice is applied on Save with the other
     // cleanup settings. The handler exists only because the XAML binds SelectionChanged.
-    private void AiPromptStyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) { }
+    private void AiPromptStyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateDictionaryGlossaryHint();
 
     private async void ResetFrontierPromptButton_Click(object sender, RoutedEventArgs e)
     {
@@ -4538,7 +4505,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // one. Only Foundry Local and Microsoft Foundry have a status line: another provider's status in the
         // Foundry Local panel would describe an engine that is not running, and stay there once the user
         // switched back.
-        switch (_settings.AiCleanupProvider)
+        switch (_savedAiProvider)
         {
             case CleanupProvider.AzureFoundry:
                 AzureCleanupStatusText.Text = detail;
@@ -5148,6 +5115,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
+
+            // Only now, once the document is stored: _settings already holds the picked provider, and a
+            // Save that fails keeps it there while cleanup goes on serving the saved one.
+            _savedAiProvider = _settings.AiCleanupProvider;
             _externalAiCleanup.Saved();
             _externalMicrophone.Saved();
             if ((AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
@@ -5162,6 +5133,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _startupSwitch.Show(observedStartup);
             ShowStartupStatus(observedStartup);
+
+            // The one place this window applies its own document, which SaveBundle has just stored. Anything else here
+            // that has to put settings into effect uses the stored ones (StoredSettingsReapply).
             _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
@@ -5592,19 +5566,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Prefer the user's configured AI model: it can work out how a term is spoken versus how it is
         // written (acronyms, phonetic mishears, casing), not just spot repeated words. Fall back to the
         // offline pattern miner when no model is ready, so the button still helps with no AI configured.
-        if (_cleanup.Status == CleanupStatus.Ready)
+        if (_cleanup.Recipient is { } recipient)
         {
-            if (SelectedProvider != CleanupProvider.FoundryLocal &&
+            // The recipient is captured before the question and handed to CompleteAsync, which sends only
+            // while cleanup still serves it, so the history goes where the dialog said or nowhere. Asked
+            // unless both it and the saved provider run on this PC (AiRequestConsent says why both).
+            if (AiRequestConsent.IsNeeded(recipient, _savedAiProvider) &&
                 !await ConfirmRiskyAsync(
-                    "Send recent dictations to your AI provider?",
-                    "To suggest vocabulary, Scribe will send up to 6,000 characters from recent " +
-                    "dictation history to the provider endpoint you configured. Audio is never sent.",
+                    CleanupDisclosure.SuggestionConsentTitle,
+                    CleanupDisclosure.SuggestionConsentFor(recipient.Provider),
                     "Send and continue"))
             {
                 return;
             }
 
-            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current));
+            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current, recipient));
         }
         else
         {
@@ -5636,7 +5612,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current)
+    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current, CleanupRecipient recipient)
     {
         List<HistoryEntry> history;
         try
@@ -5670,12 +5646,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            var response = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample);
+            // The recipient the user agreed to, checked again where the request is built: a Save during the
+            // history read above cannot turn this into a request to another provider.
+            var completion = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);
             if (_closed)
             {
                 return;
             }
 
+            if (completion.Outcome == CompletionOutcome.RecipientChanged)
+            {
+                ShowThemedMessage(
+                    "Nothing was sent",
+                    "Your AI cleanup provider changed after you agreed to send your dictations, so Scribe sent " +
+                    "nothing. Press the button again to decide about the provider now in use.");
+                return;
+            }
+
+            var response = completion.Text;
             if (string.IsNullOrWhiteSpace(response))
             {
                 // The model was unavailable or returned nothing: fall back to the deterministic miner.
@@ -6110,9 +6098,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 var request = work;
                 var now = DateTimeOffset.UtcNow;
+                var libraryIds = _enabledLibrariesInUse();
                 result = await Task.Run(
                     () => UsageReport.Build(
-                        _history, _dictionary, _libraries, request.Value.Days, now, request.Cancellation),
+                        _history, _dictionary, _libraries, libraryIds, request.Value.Days, now, request.Cancellation),
                     request.Cancellation);
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested)
@@ -6228,8 +6217,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return;
             }
 
-            // ApplySettings owns the live post-processor reload used by the normal Save path.
-            _applySettings(_settings);
+            // Only what is stored goes live. After a Save that failed, _settings still holds every edit it was given, a
+            // picked AI cleanup provider among them, and applying it would send later dictations there with nothing
+            // saved. The stored settings rebuild the post-processor and the glossary with the new entry; when none can be
+            // used, only the vocabulary reloads.
+            StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);
             ShowInfo($"Added \"{term.Text}\" to your dictionary.");
             LoadUsage();
         }
@@ -6261,7 +6253,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        if (_cleanup.Status != CleanupStatus.Ready)
+        if (_cleanup.Recipient is not { } recipient)
         {
             UsageInsightText.Text = "Configure a ready AI cleanup model to generate an insight.";
             return;
@@ -6272,16 +6264,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageInsightText.Text = "Generating insight…";
         try
         {
-            var response = await _cleanup.CompleteAsync(
+            var completion = await _cleanup.CompleteAsync(
                 UsageInsight.SystemPrompt,
-                UsageInsight.BuildSummary(snapshot));
+                UsageInsight.BuildSummary(snapshot),
+                recipient);
             if (!InsightStillApplies(snapshot))
             {
                 return;
             }
 
-            UsageInsightText.Text = UsageInsight.Parse(response)
-                ?? "The configured model did not return an insight.";
+            UsageInsightText.Text = completion.Outcome == CompletionOutcome.RecipientChanged
+                ? "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again."
+                : UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.";
         }
         catch (Exception ex)
         {

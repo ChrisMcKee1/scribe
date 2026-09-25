@@ -71,9 +71,9 @@ public sealed class UsageAnalyzerTests
         var snapshot = UsageAnalyzer.Compute(entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         Assert.Contains(snapshot.Terms, term =>
-            term == new UsageAnalyzer.TermUsage("Tailwind CSS", 2, 2, Covered: true));
+            term == new UsageAnalyzer.TermUsage("Tailwind CSS", 2, 2, Covered: true) { Shareable = true });
         Assert.Contains(snapshot.Terms, term =>
-            term == new UsageAnalyzer.TermUsage("Next.js", 2, 2, Covered: true));
+            term == new UsageAnalyzer.TermUsage("Next.js", 2, 2, Covered: true) { Shareable = true });
     }
 
     [Fact]
@@ -162,11 +162,11 @@ public sealed class UsageAnalyzerTests
         var snapshot = UsageAnalyzer.Compute(entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         Assert.Contains(snapshot.Terms, term =>
-            term == new UsageAnalyzer.TermUsage("Next.js", 1, 1, Covered: true));
+            term == new UsageAnalyzer.TermUsage("Next.js", 1, 1, Covered: true) { Shareable = true });
         // ".net" matches case-insensitively in both entries; the dot in "dotnet" is absent so
         // the leading-dot form must not fire there.
         Assert.Contains(snapshot.Terms, term =>
-            term == new UsageAnalyzer.TermUsage(".NET", 2, 2, Covered: true));
+            term == new UsageAnalyzer.TermUsage(".NET", 2, 2, Covered: true) { Shareable = true });
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public sealed class UsageAnalyzerTests
             TimeZoneInfo.Utc);
 
         var term = Assert.Single(snapshot.Terms, term => term.Covered);
-        Assert.Equal(new UsageAnalyzer.TermUsage("Rust", 1, 1, Covered: true), term);
+        Assert.Equal(new UsageAnalyzer.TermUsage("Rust", 1, 1, Covered: true) { Shareable = true }, term);
     }
 
     [Fact]
@@ -206,11 +206,11 @@ public sealed class UsageAnalyzerTests
         var snapshot = UsageAnalyzer.Compute(entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         Assert.Contains(snapshot.Terms, term =>
-            term == new UsageAnalyzer.TermUsage("Tailwind CSS", 1, 1, Covered: true));
+            term == new UsageAnalyzer.TermUsage("Tailwind CSS", 1, 1, Covered: true) { Shareable = true });
         // Pattern and replacement each match once in entry 2; occurrences take the max across
         // forms (one spoken term), not the sum, which would double count it as 2.
         Assert.Contains(snapshot.Terms, term =>
-            term == new UsageAnalyzer.TermUsage("Next.js", 1, 1, Covered: true));
+            term == new UsageAnalyzer.TermUsage("Next.js", 1, 1, Covered: true) { Shareable = true });
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public sealed class UsageAnalyzerTests
             TimeZoneInfo.Utc);
 
         var term = Assert.Single(snapshot.Terms, term => term.Covered);
-        Assert.Equal(new UsageAnalyzer.TermUsage("A-A", 1, 1, Covered: true), term);
+        Assert.Equal(new UsageAnalyzer.TermUsage("A-A", 1, 1, Covered: true) { Shareable = true }, term);
     }
 
     private static HistoryEntry Entry(

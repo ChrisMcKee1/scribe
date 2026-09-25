@@ -223,14 +223,15 @@ public sealed class CleanupDiagnosticsPrivacyTests
 
         Volatile.Write(ref phase, 1);
         var failed = await svc.CleanAsync("this dictation will fail");
-        var completion = await svc.CompleteAsync("system", "user");
+        var completion = await svc.CompleteAsync("system", "user", svc.Recipient!);
 
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
         Assert.Equal("this dictation will fail", failed.Text);
         AssertNoHost(failed.FailureReason, "FailureReason");
         Assert.Contains("404", failed.FailureReason);
         Assert.Contains(Host, failed.DisplayDetail);
-        Assert.Null(completion);
+        Assert.Equal(CompletionOutcome.Failed, completion.Outcome);
+        Assert.Null(completion.Text);
         AssertNoHost(harness.Log.AllText, "The log");
         Assert.Contains("status=404", harness.Log.AllText);
         Assert.Contains("code=upstream_failure", harness.Log.AllText);

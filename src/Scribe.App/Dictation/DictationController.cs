@@ -195,7 +195,7 @@ internal sealed class DictationController : IDisposable
         var settings = _settingsRepository.Load();
         Volatile.Write(ref _settings, settings);
         _unavailableMicrophone.SelectionCommitted(settings.InputDeviceId);
-        _postProcessor.Reload();
+        _postProcessor.Reload(settings.EnabledDictionaryLibraryIds);
         var startupOptions = BuildCleanupOptions(settings);
         lock (_announceGate)
         {
@@ -343,9 +343,11 @@ internal sealed class DictationController : IDisposable
     }
 
     /// <summary>
-    /// Replaces the live settings (called by the settings window after a save). Re-binds the
-    /// hotkey and reloads the post-processor so changes take effect on the next capture without
-    /// a restart. Decode-thread changes still require a restart (the recognizer is warm-loaded).
+    /// Replaces the live settings with settings as stored: the settings window's document right after its save stored
+    /// it, the stored settings after a dictionary change the window stored on its own (<see cref="StoredSettingsReapply"/>),
+    /// and the tray's change once it is stored. Re-binds the hotkey and reloads the post-processor so changes take
+    /// effect on the next capture without a restart. Decode-thread changes still require a restart (the recognizer is
+    /// warm-loaded).
     /// </summary>
     public void ApplySettings(AppSettings settings)
     {
@@ -361,14 +363,34 @@ internal sealed class DictationController : IDisposable
         {
             _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         }
-        _postProcessor.Reload();
+        _postProcessor.Reload(settings.EnabledDictionaryLibraryIds);
+        ReconfigureCleanup(settings);
+        RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
+        _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
+    }
 
+    /// <summary>
+    /// Puts a dictionary change the settings window stored on its own into effect when the stored settings cannot be
+    /// applied (<see cref="StoredSettingsReapply"/>): the post-processor reloads, and cleanup is handed its glossary again,
+    /// both from the library selection of the settings in use, which changes what the prompt says and nothing else. No
+    /// settings are applied, so the provider, the hotkeys, the libraries and everything else stay as they are: the stored
+    /// document is not read again, since the defaults standing in for it are not the user's.
+    /// </summary>
+    public void ReloadVocabulary()
+    {
+        var settings = CurrentSettings;
+        _postProcessor.Reload(settings.EnabledDictionaryLibraryIds);
+        ReconfigureCleanup(settings);
+        _log.LogInformation("Reloaded the dictionary on the settings in use; no settings were applied.");
+    }
+
+    // Hands cleanup the configuration these settings describe, with the glossary built from the dictionary as it is now.
+    private void ReconfigureCleanup(AppSettings settings)
+    {
         var previous = _announcedCleanupOptions;
         var next = BuildCleanupOptions(settings);
         _cleanup.Configure(next);
         AnnounceCleanupChange(previous, next);
-        RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
-        _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
     }
 
     /// <summary>
@@ -516,22 +538,16 @@ internal sealed class DictationController : IDisposable
     // is a text service with a huge context window and no reason to drop vocabulary; a 1-2B on-device
     // model has to fit the guardrails, style, transcript and its own output into a few thousand
     // tokens, so there the list stays short. Merge order matters either way: the user's own entries
-    // come first, because those are the terms a model cannot infer and must survive truncation.
+    // come first, because those are the terms a model cannot infer and must survive truncation. The
+    // libraries are those these settings enable, the same selection the post-processor was given.
     private string? BuildGlossary(AppSettings settings)
     {
         try
         {
-            var baseEntries = _dictionary.GetEnabled();
-            var libraryEntries = _libraries.GetEnabledLibraryEntries();
-            var effective = libraryEntries.Count == 0
-                ? (IReadOnlyList<DictionaryEntry>)baseEntries
-                : DictionaryLibraryComposer.Merge(baseEntries, libraryEntries);
-
-            var style = CleanupPrompt.ResolvePromptStyle(
-                settings.AiCleanupPromptStyle, settings.AiCleanupProvider);
-            var maxTerms = style == CleanupPromptStyle.Local
-                ? CleanupPrompt.MaxGlossaryTermsLocal
-                : CleanupPrompt.MaxGlossaryTermsCloud;
+            // Composed and budgeted by the same Core code the dictionary page counts with (GlossaryHint).
+            var effective = CleanupPrompt.ComposeVocabulary(
+                _dictionary.GetEnabled(), _libraries.GetEnabledLibraryEntries(settings.EnabledDictionaryLibraryIds));
+            var maxTerms = CleanupPrompt.GlossaryTermBudget(settings.AiCleanupPromptStyle, settings.AiCleanupProvider);
 
             var glossary = CleanupPrompt.BuildGlossary(effective, maxTerms);
             return string.IsNullOrEmpty(glossary) ? null : glossary;

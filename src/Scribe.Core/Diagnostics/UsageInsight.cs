@@ -1,4 +1,5 @@
 using System.Text;
+using Scribe.Core.Cleanup;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -13,8 +14,10 @@ public static class UsageInsight
 
     /// <summary>
     /// Builds the payload sent to the user's configured AI endpoint. Guarantee: only terms with
-    /// <c>Covered == true</c> (dictionary-canonical labels) are ever included; novel mined
-    /// tokens are verbatim words from the user's dictations and never enter the payload.
+    /// <c>Covered == true</c> (dictionary-canonical labels) whose replacements are vocabulary
+    /// (<see cref="UsageAnalyzer.TermUsage.Shareable"/>, the rule the AI cleanup glossary applies) are ever
+    /// included; novel mined tokens are verbatim words from the user's dictations and never enter the
+    /// payload, and neither does a replacement that is really a template.
     /// </summary>
     public static string BuildSummary(UsageAnalyzer.Snapshot snapshot, int maxChars = 4000)
     {
@@ -32,8 +35,10 @@ public static class UsageInsight
         foreach (var term in snapshot.Terms)
         {
             // Uncovered terms are raw tokens mined from dictation text (surnames, project
-            // codenames); only dictionary-canonical labels may leave the machine.
-            if (!term.Covered)
+            // codenames); only dictionary-canonical labels may leave the machine, and only short,
+            // single-line ones. The label itself is checked too, so a term marked shareable by
+            // mistake still cannot add lines to this payload.
+            if (!term.Covered || !term.Shareable || !CleanupPrompt.IsVocabularyReplacement(term.Text))
             {
                 continue;
             }

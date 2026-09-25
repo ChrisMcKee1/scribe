@@ -56,13 +56,25 @@ public interface ITextCleanupService : IAsyncDisposable
         string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null);
 
     /// <summary>
-    /// Runs a one-off prompt against the currently configured cleanup model and returns the raw text
-    /// response, or <c>null</c> when no model is ready or the call fails. Unlike <see cref="CleanAsync"/>
-    /// this uses the caller's own system prompt (not the cleanup guardrails), so opt-in helpers such as
-    /// AI dictionary suggestions can reuse the user's configured model. Never throws.
+    /// The configuration a one-off request would reach right now (see <see cref="CleanupRecipient"/>), or
+    /// null when no model is ready. A caller that asks the user before sending captures this before it asks
+    /// and hands it to <see cref="CompleteAsync"/>, so the request goes where the user agreed or nowhere.
     /// </summary>
-    Task<string?> CompleteAsync(
-        string systemPrompt, string userMessage, CancellationToken cancellationToken = default);
+    CleanupRecipient? Recipient { get; }
+
+    /// <summary>
+    /// Runs a one-off prompt against the currently configured cleanup model and returns its answer. Unlike
+    /// <see cref="CleanAsync"/> this uses the caller's own system prompt (not the cleanup guardrails or the
+    /// glossary), so opt-in helpers such as AI dictionary suggestions can reuse the user's configured model.
+    /// <para>
+    /// Fails closed: it sends nothing, and says <see cref="CompletionOutcome.RecipientChanged"/>, unless the
+    /// service is serving exactly <paramref name="recipient"/> at the moment it builds the request, so a
+    /// provider saved after the user agreed to send never receives what they agreed to send elsewhere. Never
+    /// throws for a failed call; <see cref="CompletionOutcome.Failed"/> says so.
+    /// </para>
+    /// </summary>
+    Task<CompletionResult> CompleteAsync(
+        string systemPrompt, string userMessage, CleanupRecipient recipient, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lightweight availability probe for the settings UI: initializes the Foundry Local runtime

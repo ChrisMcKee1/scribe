@@ -26,11 +26,11 @@ internal static class AuxiliaryScenarios
         words: 21430,
         activeDays: 19,
         [
-            new UsageAnalyzer.TermUsage("Kubernetes", 32, 42, Covered: true),
-            new UsageAnalyzer.TermUsage("PostgreSQL", 27, 35, Covered: true),
-            new UsageAnalyzer.TermUsage("Terraform", 19, 24, Covered: true),
-            new UsageAnalyzer.TermUsage("GitHub Actions", 14, 18, Covered: true),
-            new UsageAnalyzer.TermUsage("Azure", 11, 15, Covered: true),
+            Covered("Kubernetes", 32, 42),
+            Covered("PostgreSQL", 27, 35),
+            Covered("Terraform", 19, 24),
+            Covered("GitHub Actions", 14, 18),
+            Covered("Azure", 11, 15),
         ]);
 
     private static readonly string ClinicalSummary = BuildUsageSummary(
@@ -38,10 +38,10 @@ internal static class AuxiliaryScenarios
         words: 9840,
         activeDays: 12,
         [
-            new UsageAnalyzer.TermUsage("Radiology", 21, 26, Covered: true),
-            new UsageAnalyzer.TermUsage("MRI", 18, 22, Covered: true),
-            new UsageAnalyzer.TermUsage("Hypertension", 9, 11, Covered: true),
-            new UsageAnalyzer.TermUsage("Cardiology", 7, 9, Covered: true),
+            Covered("Radiology", 21, 26),
+            Covered("MRI", 18, 22),
+            Covered("Hypertension", 9, 11),
+            Covered("Cardiology", 7, 9),
         ]);
 
     private static readonly string SparseSummary = BuildUsageSummary(
@@ -49,8 +49,8 @@ internal static class AuxiliaryScenarios
         words: 980,
         activeDays: 4,
         [
-            new UsageAnalyzer.TermUsage("Unity", 5, 7, Covered: true),
-            new UsageAnalyzer.TermUsage("Blender", 3, 4, Covered: true),
+            Covered("Unity", 5, 7),
+            Covered("Blender", 3, 4),
         ]);
 
     // Dictation samples in the shape BuildHistorySample emits (one dictation per line). Each
@@ -120,4 +120,8 @@ internal static class AuxiliaryScenarios
             TopApps: [],
             Trend: [],
             Terms: terms));
+
+    // A dictionary term the analyzer would share: covered, with a one-line replacement under the cap.
+    private static UsageAnalyzer.TermUsage Covered(string text, int dictations, int occurrences) =>
+        new(text, dictations, occurrences, Covered: true) { Shareable = true };
 }

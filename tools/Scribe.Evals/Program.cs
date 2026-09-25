@@ -199,12 +199,20 @@ internal static class Program
                 continue;
             }
 
-            var response = await svc.CompleteAsync(scenario.SystemPrompt, scenario.UserMessage, ct);
-            if (response is null)
+            // The eval is the only caller and nothing is sent anywhere the harness did not configure, so
+            // the recipient is simply whatever the service is serving now.
+            if (svc.Recipient is not { } recipient)
             {
-                // CompleteAsync's null contract covers both "not ready" and "call failed".
                 failures++;
-                rows.Add((scenario.Name, "-", "ERROR", "CompleteAsync returned null (call failed)"));
+                rows.Add((scenario.Name, "-", "ERROR", $"model not ready ({svc.Status})"));
+                continue;
+            }
+
+            var completion = await svc.CompleteAsync(scenario.SystemPrompt, scenario.UserMessage, recipient, ct);
+            if (completion.Text is not { } response)
+            {
+                failures++;
+                rows.Add((scenario.Name, "-", "ERROR", $"CompleteAsync returned {completion.Outcome}"));
                 continue;
             }
 
