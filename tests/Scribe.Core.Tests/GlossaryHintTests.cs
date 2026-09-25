@@ -25,6 +25,7 @@ public sealed class GlossaryHintTests
     private static DictionaryLibrary Library(string id, params DictionaryEntry[] entries) =>
         new(id, id, "Custom", null, BuiltIn: false, entries);
 
+    // The page hands the hint the entries its enabled libraries compose to, as the window does.
     private static string Describe(
         IReadOnlyList<DictionaryEntryBuilder.Row> rows,
         IReadOnlyList<DictionaryLibrary> libraries,
@@ -32,7 +33,8 @@ public sealed class GlossaryHintTests
         CleanupPromptStyle style = CleanupPromptStyle.Auto,
         bool aiCleanupOn = true,
         bool postProcessingOn = true) =>
-        GlossaryHint.Describe(new GlossaryHint.Input(rows, libraries, aiCleanupOn, postProcessingOn, provider, style));
+        GlossaryHint.Describe(new GlossaryHint.Input(
+            rows, DictionaryLibraryComposer.ComposeLibraries(libraries), aiCleanupOn, postProcessingOn, provider, style));
 
     private static string N(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
 
@@ -118,7 +120,8 @@ public sealed class GlossaryHintTests
     public void A_library_imported_this_session_is_counted_in_the_order_the_service_loads_it()
     {
         // The page appends a library it imports, while the service reads the folder in file-name order.
-        // With the size budget binding, the order decides which library's long lines are counted first.
+        // With the size budget binding, the order decides which library's long lines are counted first. The page
+        // composes its libraries with the service's composer, which puts them in precedence order itself.
         using var folder = new TempDirectory();
         using var db = ScribeDatabase.CreateInMemory();
         var service = new DictionaryLibraryService(new AppPaths(folder.Combine("data")), new SettingsRepository(db), NullLogger<DictionaryLibraryService>.Instance);
@@ -131,7 +134,7 @@ public sealed class GlossaryHintTests
         var text = Describe([], inPageOrder);
 
         var loaded = service.GetLibraries().Where(l => !l.BuiltIn).ToList();
-        Assert.Equal(loaded.Select(l => l.Id), GlossaryHint.InLoadOrder(inPageOrder).Select(l => l.Id));
+        Assert.Equal(service.GetEnabledLibraryEntries(["zeta", "alpha", "alpha-2"]), DictionaryLibraryComposer.ComposeLibraries(inPageOrder));
         var sent = SentByDictation([], loaded);
 
         // The fixture must separate the orders: the page's order, first spoken form winning, which is how the composer
@@ -141,6 +144,38 @@ public sealed class GlossaryHintTests
         Assert.NotEqual(sent, CleanupPrompt.CountGlossary(inPageOrderAsGiven).Included);
         Assert.Equal(DictionaryLibraryComposer.ComposeLibraries(loaded), DictionaryLibraryComposer.ComposeLibraries(inPageOrder));
         Assert.Contains($"receives the first {N(sent)} of 1,200 terms", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Library_entries_are_counted_in_the_order_they_are_given()
+    {
+        // The entries arrive composed, in precedence order, and carry no library of origin, so the hint must not reorder
+        // them. Long lines first and short ones after, with the size budget binding: counted as given, the budget stops
+        // after the long lines, while sorted by spoken form it would reach far more of the short ones.
+        var entries = Enumerable.Range(0, 1550).Select(i => DictionaryEntry.New($"z {i:D4}", new string('L', 90) + i.ToString("D4", CultureInfo.InvariantCulture)))
+            .Concat(Enumerable.Range(0, 1550).Select(i => DictionaryEntry.New($"a {i:D4}", $"T{i:D4}")))
+            .ToList();
+        var budget = CleanupPrompt.GlossaryTermBudget(CleanupPromptStyle.Auto, CleanupProvider.AzureFoundry);
+
+        var text = GlossaryHint.Describe(new GlossaryHint.Input([], entries, true, true, CleanupProvider.AzureFoundry, CleanupPromptStyle.Auto));
+
+        var asGiven = CleanupPrompt.CountGlossary(entries, budget).Included;
+        var sorted = CleanupPrompt.CountGlossary([.. entries.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance)], budget).Included;
+        Assert.True(sorted > asGiven * 2, $"The fixture must separate the orders ({sorted} against {asGiven}), or it proves nothing.");
+        Assert.Contains($"receives the first {N(asGiven)} of 3,100 terms", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_settings_window_hands_the_hint_the_entries_its_libraries_compose_to()
+    {
+        // The window is the one caller: it composes the ticked libraries the way the library service does for dictation,
+        // in precedence order whatever order its A to Z list holds them in.
+        var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+
+        Assert.Contains(
+            "var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()));",
+            code, StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(code, @"new GlossaryHint\.Input\("));
     }
 
     [Fact]

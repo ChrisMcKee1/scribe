@@ -205,7 +205,9 @@ anything was dictated.
 - **The wording lives in Core.** `CleanupDisclosure` holds the AI cleanup page card and the dictionary
   suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
   glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
-  collation, `SqliteBinaryCollation`), the libraries in the order the service loads them, then the shared
+  collation, `SqliteBinaryCollation`), the enabled libraries' entries as the page composes them
+  (`DictionaryLibraryComposer.ComposeLibraries`, precedence order, as the library service gives dictation),
+  which it counts as given and never reorders, then the shared
   `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
   `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
   and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
@@ -945,10 +947,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
   `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
-  prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The window hands the glossary hint
-  (`GlossaryHint`) and the cleanup scan their libraries through `LibraryPrecedence.Enabled`, and saves the enabled ids
-  in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display, reversed and
-  random orders.
+  prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)
+  is the exception by design: it takes entries, not libraries, and a flattened list has no library of origin left to
+  order by, so the window hands it `ComposeLibraries` over `LibraryPrecedence.Enabled` and the hint never reorders
+  them. The window also hands the cleanup scan its libraries through `LibraryPrecedence.Enabled`, and saves the
+  enabled ids in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display,
+  reversed and random orders.
 - **The cleanup switches a library off only when that cannot change what dictation writes.** `LibrarySwitchOffCopy`
   decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
   first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule

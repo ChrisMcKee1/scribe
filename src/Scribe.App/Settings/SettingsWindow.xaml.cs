@@ -1571,13 +1571,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Precedence, not the list's A to Z order: which library's row survives a shared spoken form, and so what the
-        // count below includes, must be what dictation's glossary gets.
-        var enabledLibraries = LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds());
+        // The entries the enabled libraries compose to, as the library service hands them to dictation's glossary:
+        // precedence, not the list's A to Z order, decides which library's row survives a shared spoken form, and so
+        // what the count below includes. The hint counts them as given and never reorders them.
+        var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()));
 
         DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
             _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
-            enabledLibraries,
+            libraryEntries,
             AiCleanupOn: AiCleanupCheck.IsChecked == true,
             PostProcessingOn: PostCheck.IsChecked == true,
             SelectedProvider,
