@@ -235,9 +235,10 @@ public enum LibraryPrepareStatus
     Busy,
 
     /// <summary>
-    /// The committed generation's files are not all in place yet (<see cref="LibraryPrepareResult.Failure"/> says why,
-    /// most often another app holding a file open). Nothing advances the generation until they are, so nothing was
-    /// written; the shell asks the user to close the file, and the next attempt finishes the earlier Save first.
+    /// The committed generation's files are not all in place yet, or a manifest recovery must set aside or discard is
+    /// held because its files cannot yet be made whole (review finding G14; <see cref="LibraryPrepareResult.Failure"/>
+    /// says why, most often another app holding a file open). Nothing advances the generation until they are, so nothing
+    /// was written; the shell asks the user to close the file, and the next attempt finishes the earlier work first.
     /// </summary>
     PreviousSaveUnfinished,
 
@@ -308,7 +309,8 @@ public enum LibraryKeptVersionKind
 
     /// <summary>
     /// A built-in's edits document changed outside Scribe. Scribe's committed document is in place and the other version
-    /// was set aside with a time stamp, never read again (<see cref="LibraryKeptVersion.KeptAsId"/> is null).
+    /// was set aside under a name ending in <c>.backup.json</c> (the operation's set-aside stem and a hash infix), never
+    /// read again and never listed as a library (review finding G15; <see cref="LibraryKeptVersion.KeptAsId"/> is null).
     /// </summary>
     EditsSetAside,
 }
@@ -346,7 +348,13 @@ public sealed record LibrarySaveOutcome(
 /// <param name="FilesAwaitingRelease">Files of the committed generation still not in place.</param>
 /// <param name="OrphansRemoved">Staged, backup or redo files no manifest, live or set aside, names, removed.</param>
 /// <param name="KeptVersions">Versions kept rather than overwritten while finishing.</param>
-/// <param name="Failure">Why files are not in place, when some are not.</param>
+/// <param name="Failure">Why files are not in place, or why a manifest is held, when either is so.</param>
+/// <param name="Held">
+/// Manifests recovery would set aside or discard but holds, pending, because their files cannot yet be made whole (a
+/// target to restore from its backup, or a backup holding someone else's bytes not yet verified at a preservation
+/// destination; review finding G14). Retried at every attempt; while any is held the libraries are unresolved, and a
+/// held manifest never reaches the quarantine's expiry.
+/// </param>
 public sealed record LibraryRecoveryResult(
     int Completed,
     int Discarded,
@@ -354,4 +362,5 @@ public sealed record LibraryRecoveryResult(
     int FilesAwaitingRelease,
     int OrphansRemoved,
     IReadOnlyList<LibraryKeptVersion> KeptVersions,
-    LibraryIoFailure Failure = LibraryIoFailure.None);
+    LibraryIoFailure Failure = LibraryIoFailure.None,
+    int Held = 0);
