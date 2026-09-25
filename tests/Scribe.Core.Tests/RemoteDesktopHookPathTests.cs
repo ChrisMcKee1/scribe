@@ -90,7 +90,7 @@ public sealed class RemoteDesktopHookPathTests
         var measured = (long[])scenario.GetMethod(nameof(KeyboardColdPathScenario.Run))!.Invoke(null, null)!;
 
         Assert.NotSame(typeof(RemoteDesktopHookPathTests).Assembly, tests);
-        Assert.Equal(new long[] { 0, 0, 0, 0, 0, 1, 1, 1 }, measured);
+        Assert.Equal(new long[] { 0, 0, 0, 0, 0, 0, 1, 1, 1, 1 }, measured);
     }
 
     // The warning no longer asserts a missed deadline: a Remote Desktop client's hook, called first, can keep every key.

@@ -23,10 +23,11 @@ public static class KeyboardColdPathScenario
     /// <item>the echo check and a pass on and off (KeyEventPassOn), as the callback makes them around CallNextHookEx;</item>
     /// <item>the foreground notice's hop to the pool (a volatile write and a SetEvent);</item>
     /// <item>the callback's route for a key no binding uses, through the current registration, down and up;</item>
-    /// <item>the route of an echo through a replaced registration.</item>
+    /// <item>the route of an echo through a replaced registration;</item>
+    /// <item>the route of an uncertain key-down and its release, right after the hook became the newest registration.</item>
     /// </list>
-    /// Returns those five byte counts, then 1 or 0 for: the probe was recognized, the echo was recognized, a new event
-    /// was not taken for an echo.
+    /// Returns those six byte counts, then 1 or 0 for: the probe was recognized, the echo was recognized, a new event
+    /// was not taken for an echo; then how many key-downs the engine judged uncertain (1).
     /// </summary>
     public static long[] Run()
     {
@@ -77,7 +78,22 @@ public static class KeyboardColdPathScenario
             var echoRoute = GC.GetAllocatedBytesForCurrentThread() - before;
             passOn.Leave();
 
-            return [reads, pass, hop, route, echoRoute, probe ? 1 : 0, echo ? 1 : 0, fresh ? 1 : 0];
+            // Review round 2, item 1: right after the hook became the newest registration, the route of a key-down of a key
+            // the engine has not seen (uncertain, so judged and passed on) and of its release, inside the window.
+            h.Engine.SetUncertaintyWindow(875);
+            h.Engine.OnRegisteredAhead(100);
+            var unseen = new KeyEventIdentity(0x84, 0x6C, 0, 150);
+            var unseenUp = new KeyEventIdentity(0x84, 0x6C, 0x80, 180);
+            before = GC.GetAllocatedBytesForCurrentThread();
+            _ = KeyboardHookFilter.Route(h.Engine, passOn, throughCurrentRegistration: true, unseen, isDown: true, 0);
+            _ = KeyboardHookFilter.Route(h.Engine, passOn, throughCurrentRegistration: true, unseenUp, isDown: false, 0);
+            var uncertainRoute = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            return
+            [
+                reads, pass, hop, route, echoRoute, uncertainRoute, probe ? 1 : 0, echo ? 1 : 0, fresh ? 1 : 0,
+                h.Engine.UncertainPresses,
+            ];
         }
         finally
         {

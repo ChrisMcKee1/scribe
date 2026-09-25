@@ -93,6 +93,16 @@ internal sealed class HotkeyEngine
     private int _wakePending;
     private uint _ownerThreadId;
 
+    // What makes a key-down uncertain once Scribe's hook has become the newest registration (OnRegisteredAhead; review round
+    // 2, item 1): when that happened, on the tick-count clock key events are stamped with; whether the window it opened may
+    // still be open; the keys seen go up since; and how long the window is (the user's keyboard repeat settings,
+    // KeyRepeatTiming), which the service publishes from another thread. Everything else is the owner thread's alone.
+    private readonly KeySet _releasedSinceAhead = new();
+    private uint _aheadSince;
+    private bool _uncertaintyArmed;
+    private int _uncertaintyWindowMs = KeyRepeatTiming.WorstCaseWindowMs;
+    private long _uncertainPresses;
+
     // The mouse buttons whose press was swallowed and whose release has not been seen since, one bit per button code, and
     // SealedDebts once the engine is retired. A new press of the button retires its debt, since buttons never repeat: the
     // release went up where no hook could see it. A time no hook saw the mouse (a mouse hook found gone, the gap a
@@ -374,6 +384,70 @@ internal sealed class HotkeyEngine
     public bool HoldsSwallowedKey => _standard.HoldsSwallowedKey || Volatile.Read(ref _dictationOnly)?.HoldsSwallowedKey == true;
 
     /// <summary>
+    /// Owner thread, between messages: Scribe's keyboard hook has just become the newest registration in the chain (a move
+    /// ahead, or the registration a reinstall makes), at <paramref name="tick"/> on the clock key events are stamped with
+    /// (the tick count: KBDLLHOOKSTRUCT.time is "equivalent to what GetMessageTime would return", the milliseconds "from
+    /// the time the system was started"). A hook ahead of the old registration may have forwarded a key's press into a
+    /// remote session and kept it, so that neither this engine nor GetAsyncKeyState knows the key is held (a kept
+    /// low-level event never reaches the asynchronous state); its next autorepeat now reaches this engine first. So for
+    /// <see cref="UncertaintyWindowMs"/> from here, a key-down of a key this engine neither holds nor has seen go up since is
+    /// uncertain (<see cref="OnKeyEvent"/>): judged, so a dictation still starts or ends, but never swallowed, nor is the
+    /// rest of its keystroke, so the hook that forwarded the press also gets the release. A key seen going up since, and
+    /// any key once the window is over, is judged as ever.
+    /// </summary>
+    public void OnRegisteredAhead(uint tick)
+    {
+        _aheadSince = tick;
+        _uncertaintyArmed = true;
+        _releasedSinceAhead.Clear();
+    }
+
+    /// <summary>
+    /// Any thread (the service, off the hook thread): how long the window <see cref="OnRegisteredAhead"/> opens lasts, in
+    /// milliseconds (<see cref="KeyRepeatTiming"/>); zero or less opens none.
+    /// </summary>
+    public void SetUncertaintyWindow(int windowMs) => Volatile.Write(ref _uncertaintyWindowMs, windowMs);
+
+    /// <summary>Any thread: the window's length.</summary>
+    public int UncertaintyWindowMs => Volatile.Read(ref _uncertaintyWindowMs);
+
+    /// <summary>For tests, read after a barrier: when the hook last became the newest registration (the tick count).</summary>
+    internal uint AheadSince => _aheadSince;
+
+    /// <summary>Any thread, for tests: how many key-downs were judged uncertain and so passed with their whole keystroke.</summary>
+    internal long UncertainPresses => Interlocked.Read(ref _uncertainPresses);
+
+    // Owner thread, on the keyboard callback's path: two field reads, a subtraction, and for a key-down two bit tests; for a
+    // release inside the window one bit set. No lock, no allocation, no call into Windows. The time difference is taken as
+    // signed, so the tick count's wrap is ignored (GetMessageTime: "subtract the time of the first message from the time of
+    // the second message (ignoring overflow)") and an event stamped a little before the registration, an autorepeat that
+    // was on its way when the hook moved, counts as inside the window. The first event stamped past the window closes it,
+    // so a time stamp far from the registration's cannot open it again, a wrap of the tick count included.
+    private bool IsUncertain(uint virtualKey, bool isDown, uint eventTime)
+    {
+        var window = Volatile.Read(ref _uncertaintyWindowMs);
+        if (window <= 0 || unchecked((int)(eventTime - _aheadSince)) >= window)
+        {
+            _uncertaintyArmed = false;
+            return false;
+        }
+
+        if (!isDown)
+        {
+            _releasedSinceAhead.Add(virtualKey);
+            return false;
+        }
+
+        if (IsPressed(virtualKey) || _releasedSinceAhead.Contains(virtualKey))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _uncertainPresses);
+        return true;
+    }
+
+    /// <summary>
     /// Owner thread: an <c>EVENT_SYSTEM_DESKTOPSWITCH</c> notice arrived. It is only a reason to check again: it also
     /// arrives for the switch back, and any process can raise it with <c>NotifyWinEvent</c> (this repository's own wiring
     /// test does). So the switch is applied (<see cref="OnDesktopSwitch"/>) only when this thread's desktop has stopped
@@ -501,9 +575,11 @@ internal sealed class HotkeyEngine
     /// <param name="mayBeSwallowed">
     /// False for an event that reached a keyboard hook registration a move ahead replaced without passing the current one
     /// (<c>KeyboardHookFilter.Route</c>): it is judged, so the key view stays whole and a dictation can start or end, but
-    /// nothing is swallowed, now or for the rest of the keystroke.
+    /// nothing is swallowed, now or for the rest of the keystroke. An uncertain key-down (see <see cref="OnRegisteredAhead"/>)
+    /// is judged the same way.
     /// </param>
-    public HookDecision OnKeyEvent(uint virtualKey, bool isDown, bool mayBeSwallowed = true)
+    /// <param name="eventTime">The event's time stamp (KBDLLHOOKSTRUCT.time, the tick-count clock).</param>
+    public HookDecision OnKeyEvent(uint virtualKey, bool isDown, bool mayBeSwallowed = true, uint eventTime = 0)
     {
         // Retired: the replacement engine decides now, or nobody does after Stop. A hook thread
         // that outlived its join still reaches here, and swallowing on its stale bindings or pause
@@ -519,6 +595,11 @@ internal sealed class HotkeyEngine
         if (MouseButtons.IsMouseButton(virtualKey))
         {
             return default;
+        }
+
+        if (_uncertaintyArmed && IsUncertain(virtualKey, isDown, eventTime))
+        {
+            mayBeSwallowed = false;
         }
 
         return OnInput(virtualKey, isDown, mayBeSwallowed);

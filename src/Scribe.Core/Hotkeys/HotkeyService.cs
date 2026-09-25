@@ -30,6 +30,7 @@ public sealed class HotkeyService : IHotkeyService
     private readonly Func<nint> _foregroundWindow;
     private readonly Func<nint, string?> _processNameOfWindow;
     private readonly TimeProvider _time;
+    private readonly Func<int> _keyRepeatWindowMs;
     private readonly object _sync = new();
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
@@ -125,6 +126,10 @@ public sealed class HotkeyService : IHotkeyService
     /// </param>
     /// <param name="processNameOfWindow">The name of a window's process (<see cref="WindowOwners.ProcessNameOf"/>); a test scripts it.</param>
     /// <param name="time">The clock the moves ahead are timed on; a test owns it.</param>
+    /// <param name="keyRepeatWindowMs">
+    /// How long after the keyboard hook becomes the newest registration an unseen key-down is uncertain
+    /// (<see cref="KeyRepeatTiming.ReadUncertaintyWindowMs"/>, read off the hook thread); a test scripts it.
+    /// </param>
     internal HotkeyService(
         ILogger<HotkeyService> logger,
         HotkeyCommandRouter router,
@@ -133,13 +138,15 @@ public sealed class HotkeyService : IHotkeyService
         Func<uint, bool>? releaseLeakedKey = null,
         Func<nint>? foregroundWindow = null,
         Func<nint, string?>? processNameOfWindow = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        Func<int>? keyRepeatWindowMs = null)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
         _foregroundWindow = foregroundWindow ?? WindowOwners.Foreground;
         _processNameOfWindow = processNameOfWindow ?? WindowOwners.ProcessNameOf;
         _time = time ?? TimeProvider.System;
+        _keyRepeatWindowMs = keyRepeatWindowMs ?? KeyRepeatTiming.ReadUncertaintyWindowMs;
         _router = router;
         _reconciler = CreateReconciler(
             _router,
@@ -417,7 +424,7 @@ public sealed class HotkeyService : IHotkeyService
             // exists yet, so nothing from a previous run can leak into this one.
             var transitions = new HotkeyTransitionQueue();
             var (engine, _) = _router.BeginEngine(transitions);
-            var installation = new HookInstallation(this, engine);
+            var installation = new HookInstallation(this, engine, replacesRegistration: false);
 
             if (!installation.Install(InstallTimeout))
             {
@@ -1098,7 +1105,7 @@ public sealed class HotkeyService : IHotkeyService
                 HotkeyTransition.Deactivated, trigger, _router.CurrentGeneration, AllowReconcile: false));
         }
 
-        var installation = new HookInstallation(this, engine);
+        var installation = new HookInstallation(this, engine, replacesRegistration: true);
         _installation = installation;
         if (!installation.Install(InstallTimeout))
         {
@@ -1140,6 +1147,7 @@ public sealed class HotkeyService : IHotkeyService
     {
         private readonly HotkeyService _service;
         private readonly HotkeyEngine _engine;
+        private readonly bool _replacesRegistration;
 
         // This installation's own, never shared with its replacement (review round 11, A14): a callback of this
         // installation that is still running after a reinstall (its thread can outlive the 2 s join) writes its repair
@@ -1207,10 +1215,20 @@ public sealed class HotkeyService : IHotkeyService
         private long _mouseHookRegistrations;
         private long _mouseHookLosses;
 
-        public HookInstallation(HotkeyService service, HotkeyEngine engine)
+        /// <param name="replacesRegistration">
+        /// True for a reinstall: its registration is the newest in the chain and replaces one of Scribe's that a hook ahead
+        /// of it may have been keeping keys from, so the engine opens its uncertainty window as a move ahead does
+        /// (<see cref="HotkeyEngine.OnRegisteredAhead"/>). The first install replaces none.
+        /// </param>
+        public HookInstallation(HotkeyService service, HotkeyEngine engine, bool replacesRegistration)
         {
             _service = service;
             _engine = engine;
+            _replacesRegistration = replacesRegistration;
+
+            // Read here, off the hook thread (it asks Windows for the keyboard repeat settings), and published to the engine,
+            // which reads it on the callback's path. Each move ahead asks again, in case the user changed the settings.
+            _engine.SetUncertaintyWindow(service._keyRepeatWindowMs());
             _reconcileSignal = new HotkeyReconcileSignal(service.ScheduleReconcile);
             _desktopReceivesInput = service._desktopReceivesInput;
             _registrations = new KeyboardRegistration[RetiredHookRegistrations.Capacity + 2];
@@ -1389,6 +1407,9 @@ public sealed class HotkeyService : IHotkeyService
             var threadId = _engine.OwnerThreadId;
             if (threadId != 0 && !_engine.IsRetired)
             {
+                // Off the hook thread: the keyboard repeat settings, which bound how long after the move an unseen key-down
+                // is uncertain, read afresh in case the user changed them.
+                _engine.SetUncertaintyWindow(_service._keyRepeatWindowMs());
                 NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_MOVE_AHEAD, nint.Zero, nint.Zero);
             }
         }
@@ -1458,6 +1479,15 @@ public sealed class HotkeyService : IHotkeyService
                     // The queue already exists, so publishing the id makes every later wake and
                     // quit deliverable; commands queued before this point apply here.
                     _engine.AttachOwner(NativeMethods.GetCurrentThreadId());
+
+                    // A reinstall's registration is the newest in the chain, like a move's: from here, for a while, a key-down
+                    // of a key the new engine has not seen is not swallowed (HotkeyEngine.OnRegisteredAhead). The tick is
+                    // taken now, after the registration, on the clock key events are stamped with. Before _installed is set,
+                    // so the service's reinstall returns with it done.
+                    if (_replacesRegistration)
+                    {
+                        _engine.OnRegisteredAhead(unchecked((uint)Environment.TickCount));
+                    }
 
                     // Desktop-switch notices, delivered on this thread by its message loop. On one that finds this
                     // desktop no longer receiving input, the engine resets its key state and ends a recording whose key
@@ -1649,6 +1679,11 @@ public sealed class HotkeyService : IHotkeyService
             var replaced = _current;
             _current = registration;
             Volatile.Write(ref _hookId, replacement);
+
+            // Ahead of every hook registered before it now: for a while a key-down of a key the engine has not seen is not
+            // swallowed, since a hook that was ahead may have kept its press (HotkeyEngine.OnRegisteredAhead). Taken before
+            // this thread takes another message, so before any event can reach the new registration.
+            _engine.OnRegisteredAhead(unchecked((uint)Environment.TickCount));
             var evicted = _retired.Retire(replaced.Handle, Environment.TickCount64);
             if (evicted != 0)
             {

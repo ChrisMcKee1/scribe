@@ -261,6 +261,69 @@ public partial class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_lets_a_key_nobody_saw_go_down_through_with_its_whole_keystroke_right_after_a_move()
+    {
+        // Review round 2, item 1. The registration's own delegate, called as Windows calls it (this desktop has no input),
+        // with the time stamps Windows would give: 0 is passed on, 1 swallowed. Right Ctrl was held before the move and a
+        // hook ahead of Scribe's kept its press, so its next repeat, after the move, is the first of it Scribe sees.
+        var events = new ConcurrentQueue<string>();
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        service.Activated += (_, _) => events.Enqueue("start");
+        service.Deactivated += (_, _) => events.Enqueue("stop");
+        service.Start();
+        MoveAhead(service, 1);
+        var engine = service.CurrentEngineForTests!;
+        var moved = engine.AheadSince;
+        var window = engine.UncertaintyWindowMs;
+        Assert.InRange(window, KeyRepeatTiming.UncertaintyWindowMs(0, 31), KeyRepeatTiming.WorstCaseWindowMs);
+        var current = service.KeyboardProcsForTests!.Value.Current;
+
+        Assert.Equal(0, Call(current, NativeMethods.WM_KEYDOWN, RightCtrl, time: moved + 1, flags: 0x01));
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The uncertain press started nothing.");
+        Assert.Equal(0, Call(current, NativeMethods.WM_KEYDOWN, RightCtrl, time: moved + 31, flags: 0x01));
+        Assert.Equal(0, Call(current, NativeMethods.WM_KEYUP, RightCtrl, time: moved + 61, flags: 0x81));
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The release ended nothing.");
+
+        // Its release was seen, so the next press is swallowed, as ever.
+        Assert.Equal(1, Call(current, NativeMethods.WM_KEYDOWN, RightCtrl, time: moved + 91, flags: 0x01));
+        Assert.Equal(1, Call(current, NativeMethods.WM_KEYUP, RightCtrl, time: moved + 121, flags: 0x81));
+
+        // A second move opens a new window, and a first press once it is over is an ordinary one.
+        MoveAhead(service, 2);
+        var movedAgain = engine.AheadSince;
+        current = service.KeyboardProcsForTests!.Value.Current;
+        Assert.Equal(1, Call(current, NativeMethods.WM_KEYDOWN, RightCtrl, time: movedAgain + (uint)window, flags: 0x01));
+        Assert.Equal(1, Call(current, NativeMethods.WM_KEYUP, RightCtrl, time: movedAgain + (uint)window + 30, flags: 0x81));
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 6, HookTimeout), "A press or release was not judged.");
+        Assert.Equal(["start", "stop", "start", "stop", "start", "stop"], events.ToArray());
+        Assert.Equal(1, engine.UncertainPresses);
+    }
+
+    [Fact]
+    public void Start_opens_the_window_after_a_reinstall_but_not_at_its_first_install()
+    {
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        service.Start();
+        var first = service.CurrentEngineForTests!;
+        var current = service.KeyboardProcsForTests!.Value.Current;
+
+        // The first install replaced no registration of Scribe's: even a press stamped at the start of time is ordinary.
+        Assert.Equal(1, Call(current, NativeMethods.WM_KEYDOWN, RightCtrl, time: 1, flags: 0x01));
+        Assert.Equal(1, Call(current, NativeMethods.WM_KEYUP, RightCtrl, time: 2, flags: 0x81));
+        Assert.Equal(0, first.UncertainPresses);
+
+        // A reinstall is the watchdog's answer to a hook ahead of Scribe's that keeps the keys: the new registration is
+        // the newest, and a key held across it may have had its press kept.
+        service.ReinstallHookNow();
+        var engine = service.CurrentEngineForTests!;
+        Assert.NotSame(first, engine);
+        current = service.KeyboardProcsForTests!.Value.Current;
+        Assert.Equal(0, Call(current, NativeMethods.WM_KEYDOWN, RightCtrl, time: engine.AheadSince + 1, flags: 0x01));
+        Assert.Equal(0, Call(current, NativeMethods.WM_KEYUP, RightCtrl, time: engine.AheadSince + 30, flags: 0x81));
+        Assert.Equal(1, engine.UncertainPresses);
+    }
+
+    [Fact]
     public void Start_does_not_move_the_hook_for_any_other_window_in_front()
     {
         var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
@@ -309,13 +372,81 @@ public partial class HotkeyServiceTests
         Assert.Empty(events);
 
         // Moved ahead, Scribe's is called first: the bound key starts and stops a dictation, and never reaches the client.
+        // Pressed once the uncertainty window after the move is over (review round 2, item 1): the times are the test's,
+        // which KEYBDINPUT.time lets it choose, so no clock is waited on.
         MoveAhead(service, 1);
-        Inject(Key(F21, up: false));
+        var afterWindow = service.CurrentEngineForTests!.AheadSince + (uint)service.CurrentEngineForTests!.UncertaintyWindowMs;
+        Inject(KeyAt(F21, up: false, afterWindow));
         Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The bound key started nothing once moved ahead.");
-        Inject(Key(F21, up: true));
+        Inject(KeyAt(F21, up: true, afterWindow + 30));
         Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The bound key's release ended nothing.");
         Assert.Equal(["start", "stop"], events.ToArray());
         Assert.Equal(2, client.Seen.Length);
+    }
+
+    [Fact]
+    public void Start_lets_the_rest_of_a_keystroke_a_hook_ahead_of_it_kept_through_after_a_move()
+    {
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        // Review round 2, item 1 (Astra's A1, Grok's G1). The chain, newest first, once the move is made: Scribe's new
+        // registration, a hook that forwards every key into a remote session and keeps it, as a Remote Desktop client's can,
+        // the registration the move replaced, and the test's guard, which swallows whatever reaches it.
+        var events = new ConcurrentQueue<string>();
+        using var guard = new InjectedKeyboardHook(swallow: true);
+        using var service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true);
+        service.Activated += (_, _) => events.Enqueue("start");
+        service.Deactivated += (_, _) => events.Enqueue("stop");
+        service.Start();
+        using var client = new InjectedKeyboardHook(swallow: true);
+
+        // The bound key goes down while the client is first: it forwards the press and keeps it, and Scribe sees nothing.
+        Inject(Key(F21, up: false));
+        Assert.True(client.WaitFor(1), "The hook ahead of Scribe's never saw the press.");
+        var engine = service.CurrentEngineForTests!;
+        Assert.False(engine.IsPressed(F21));
+
+        // Moved ahead while the key is still held. Its repeats reach Scribe first now, and its release after them: every one
+        // goes on to the client, which forwarded the press, so the remote session gets the whole keystroke.
+        MoveAhead(service, 1);
+        var moved = engine.AheadSince;
+        Inject(KeyAt(F21, up: false, moved + 1));
+        Inject(KeyAt(F21, up: false, moved + 31));
+        Inject(KeyAt(F21, up: true, moved + 61));
+        Assert.True(client.WaitFor(4), "Scribe kept part of a keystroke the client forwarded.");
+        Assert.Equal([(F21, false, false), (F21, false, false), (F21, false, false), (F21, true, false)], client.Seen);
+        Assert.Equal([moved + 1, moved + 31, moved + 61], client.Times[1..]);
+
+        // Push-to-talk still worked: the repeat started the dictation and the release ended it.
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The keystroke did not dictate.");
+
+        // The next press after that release, and a first press once a later move's window is over, are swallowed as ever.
+        // An unbound key sent after each shows the swallowed ones never reached the client.
+        Inject(KeyAt(F21, up: false, moved + 91), KeyAt(F21, up: true, moved + 121), KeyAt(F20, up: false, moved + 151), KeyAt(F20, up: true, moved + 181));
+        Assert.True(client.WaitFor(6), "The unbound key never came through.");
+        MoveAhead(service, 2);
+        var afterWindow = engine.AheadSince + (uint)engine.UncertaintyWindowMs;
+        Inject(KeyAt(F21, up: false, afterWindow), KeyAt(F21, up: true, afterWindow + 30), KeyAt(F20, up: false, afterWindow + 60), KeyAt(F20, up: true, afterWindow + 90));
+        Assert.True(client.WaitFor(8), "The second unbound key never came through.");
+        Assert.Equal(
+            [(F21, false, false), (F21, false, false), (F21, false, false), (F21, true, false),
+             (F20, false, false), (F20, true, false), (F20, false, false), (F20, true, false)],
+            client.Seen);
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 6, HookTimeout), "A swallowed press did not dictate.");
+        Assert.Equal(2, engine.UncertainPresses); // the held key's first repeat, and F20's first press inside the window
+    }
+
+    // A test key with the time stamp the test chooses (KEYBDINPUT.time: "If this parameter is zero, the system will provide
+    // its own time stamp"), which a low-level hook receives as KBDLLHOOKSTRUCT.time.
+    private static NativeMethods.INPUT KeyAt(uint virtualKey, bool up, uint time)
+    {
+        var input = Key(virtualKey, up);
+        input.U.ki.time = time;
+        return input;
     }
 
     [Fact]
@@ -504,6 +635,7 @@ public partial class HotkeyServiceTests
         private readonly Action<uint, bool>? _onEvent;
         private readonly ConcurrentQueue<(uint Key, bool Up, bool Scribes)> _seen = new();
         private readonly ConcurrentQueue<nuint> _extraInfo = new();
+        private readonly ConcurrentQueue<uint> _times = new();
         private readonly ManualResetEventSlim _ready = new(false);
         private readonly Thread _thread;
         private uint _threadId;
@@ -524,6 +656,9 @@ public partial class HotkeyServiceTests
         public (uint Key, bool Up, bool Scribes)[] Seen => _seen.ToArray();
 
         public nuint[] ExtraInfo => _extraInfo.ToArray();
+
+        /// <summary>The time stamp each recorded event arrived with (KBDLLHOOKSTRUCT.time), in the order seen.</summary>
+        public uint[] Times => _times.ToArray();
 
         public bool WaitFor(int events) => SpinWait.SpinUntil(() => _seen.Count >= events, HookTimeout);
 
@@ -566,6 +701,7 @@ public partial class HotkeyServiceTests
                 var up = message is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
                 var key = (uint)Marshal.ReadInt32(lParam, KeyboardHookFilter.VkCodeOffset);
                 _extraInfo.Enqueue(extra);
+                _times.Enqueue((uint)Marshal.ReadInt32(lParam, KeyboardHookFilter.TimeOffset));
                 _seen.Enqueue((key, up, scribes));
                 _onEvent?.Invoke(key, up);
                 if (_swallow)

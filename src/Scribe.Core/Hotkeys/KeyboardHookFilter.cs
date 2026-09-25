@@ -54,7 +54,9 @@ internal static class KeyboardHookFilter
     /// replaced one it may not (<see cref="HotkeyEngine.OnKeyEvent"/> with mayBeSwallowed false): such an event entered
     /// the chain before the move and has passed every hook registered between the two registrations, which may have
     /// forwarded it into a remote session, so the rest of its keystroke has to reach them too; judged, it still starts or
-    /// ends a dictation and keeps the key view whole.</item>
+    /// ends a dictation and keeps the key view whole. The engine is handed the event's time stamp too: for a while after the
+    /// hook becomes the newest registration it swallows no key-down of a key it has not seen, and none of the rest of that
+    /// keystroke (<see cref="HotkeyEngine.OnRegisteredAhead"/>).</item>
     /// </list>
     /// Nothing here takes a lock, logs or allocates; the engine's own path is the keyboard callback's as it always was,
     /// GetAsyncKeyState included where ChordStateMachine describes it.
@@ -87,7 +89,8 @@ internal static class KeyboardHookFilter
             return new KeyboardHookRoute(Swallow: false, TrackPass: false, Echo: true, RepairAt: 0);
         }
 
-        var decision = engine.OnKeyEvent(identity.VirtualKey, isDown, mayBeSwallowed: throughCurrentRegistration);
+        var decision = engine.OnKeyEvent(
+            identity.VirtualKey, isDown, mayBeSwallowed: throughCurrentRegistration, eventTime: identity.Time);
         return new KeyboardHookRoute(
             Swallow: decision.Suppress,
             TrackPass: !decision.Suppress,
