@@ -280,6 +280,19 @@ public sealed class AppSettings
     public bool ShiftEnterLineBreaks { get; set; } = true;
 
     /// <summary>
+    /// Type one space after each dictation, so back-to-back dictations do not run together (issue #78). Only the target
+    /// gets it, and only when the text does not already end in white space
+    /// (<see cref="TextInjection.DictationInsertion.TextToType"/>); history and the tray's copies keep the text as dictated.
+    /// </summary>
+    /// <remarks>
+    /// On for every install, new or upgraded, so the default is the property initializer and not
+    /// <see cref="CreateDefault"/>: a stored document written before the setting existed reads as on. That is the
+    /// opposite of a first-run opt-in, and deliberate. An older build ignores the key and leaves it out of a document it
+    /// saves, which this version then reads as on again. A plain value type, so the memberwise <see cref="Clone"/> copies it.
+    /// </remarks>
+    public bool AddSpaceAfterDictation { get; set; } = true;
+
+    /// <summary>
     /// Persist a compact (16-bit) copy of each capture's audio alongside its history entry, kept
     /// within <see cref="Persistence.StorageRetentionPolicy"/>'s age and size limits.
     /// </summary>

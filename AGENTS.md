@@ -28,7 +28,10 @@ replacement highlights, and per-step timings across the full pipeline;
 (local totals/trend chart/top apps/recurring terms with one-click dictionary add; opt-in AI
 insight sends aggregate totals + dictionary-covered term labels ONLY, and withholds a label whose
 replacement is multi-line or over 100 characters as written; novel mined terms never
-leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu, injection
+leave the machine); **space after each dictation** (on by default, Settings > Dictation > Text insertion; only the
+target gets it, so history, the tray's recent dictations, the recovery copy and quick add keep the text as dictated;
+see [Text insertion](#text-insertion-the-space-after-a-dictation-read-before-touching-dictationinsertion));
+**dictation recovery** (last 5 transcripts in a tray submenu, injection
 failure raises a recovery notification); **tray quick add to dictionary** (chip-style word picker
 over a recent dictation that saves the fix and repairs that transcript in place); **dictionary
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
@@ -362,7 +365,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
-    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower); push-to-talk hotkeys
+    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower; DictationInsertion adds the
+                                    space after a dictation); push-to-talk hotkeys
                                     (HotkeyEngine, HotkeyCommandRouter; KeyNames and HotkeyText name the keys)
     Persistence/                    SQLite store, HistoryWriter + OrderedHistoryRepository, StorageMaintenance
     Security/ Infrastructure/ Models/ DependencyInjection/
@@ -778,6 +782,31 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   alone. If the WinEvent hook cannot be set, the service logs a warning and everything else works as
   before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and the
   `HotkeyServiceTests.Start_` desktop-switch tests (desktop filter, so CI) the wiring and the check.
+
+## Text insertion: the space after a dictation (read before touching DictationInsertion)
+
+- **Only the target gets the space, and one place adds it.** With `AppSettings.AddSpaceAfterDictation` on (the default,
+  issue #78), `DictationInsertion.Insert` types the dictation followed by one space, unless the text is empty or already
+  ends in white space (any `char.IsWhiteSpace`: a space, a tab, a line break, a no-break space and every other Unicode
+  space), so a snippet ending in a line break gets nothing. It keeps the text for recovery first, as dictated, then
+  checks cancellation, then types. The controller inserts through nothing else: it hands history, the `Dictated` event
+  and the playground's report `DictationInsertionResult.Recorded`, and the spaced text (`DictationInsertionResult.Typed`)
+  is internal to Core, so the shell cannot give it to anything that keeps text. History, the tray's recent dictations,
+  the recovery notice's copy, quick add, usage insights and learning from history never see the space; the playground's
+  Text insertion row says when one was typed. `DictationInsertionTests` drives every insertion path (typing, the
+  clipboard paste, its typing fallback, a standard edit control) through the real `TextInjector` and pins the controller
+  by source.
+- **The space comes after everything else.** AI cleanup and its guards, the dash normalizer, the dictionary and
+  snippets, and the line-break handling for the target all run first. Flattening trims the text for a single-line
+  target, so the space has to follow it: a terminal, or a profile that flattens, still gets the space. Both hotkeys,
+  hold and toggle, and the silence auto-stop insert the same way, and a dictation that inserts nothing inserts no space.
+  A partial insertion counts the space as due, so a stall on the final space reports the insertion incomplete and raises
+  the recovery notice.
+- **On for every install, so the default is the property initializer**, the opposite of the first-run opt-ins of
+  pattern P-7: a document written before the key existed reads as on, and an older build, which ignores the key and
+  leaves it out of a document it saves, hands back a document that reads as on again. It is a whole-document setting
+  (Save applies it, Cancel discards it), not a tray one, so the external-intent rules do not apply. The session banner
+  logs it as `spaceAfter=True|False` and the insertion line says whether a space was added; neither carries any text.
 
 ## Clipboard paste (read before touching ClipboardBorrower)
 
