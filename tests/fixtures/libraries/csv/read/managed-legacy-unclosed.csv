@@ -1,0 +1,5 @@
+# name: Team "Notes
+# category: Custom
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+kube,K8s,true,true

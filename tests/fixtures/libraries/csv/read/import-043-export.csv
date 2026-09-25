@@ -1,0 +1,6 @@
+﻿# name: Team terms, 2026
+# category: Custom
+# description: Our "house" spellings, acronyms and names
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+"acme, inc","Acme ""The Best"" Inc.",true,true

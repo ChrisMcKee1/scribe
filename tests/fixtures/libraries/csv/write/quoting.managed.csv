@@ -1,0 +1,15 @@
+# name: Quoting
+# category: Custom
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+"#tag",#tag,true,true
+"pattern",Pattern,true,true
+" Pattern ",x,true,true
+"edge "," edge",true,true
+" nbsp","nbsp ",true,true
+"a,b","c,d",true,true
+"say ""hi""","""quoted""",true,true
+multi,"line one
+line two",true,true
+cr,"ab",true,true
+tab	inside,tab	inside,true,true

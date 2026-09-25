@@ -1,0 +1,12 @@
+# name: Strict terms
+# category: Custom
+# description: Written by this version
+# based-on: github
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+"#tag",Tag,true,true
+"pattern",Pattern,true,true
+" padded ",Kept,true,false
+multi,"line one
+line two",false,true
