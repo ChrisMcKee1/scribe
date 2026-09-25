@@ -7,7 +7,9 @@ namespace Scribe.Core.Libraries;
 /// Its content. A paused library (<see cref="LibraryFileState.Unreadable"/> or <see cref="LibraryFileState.Newer"/>)
 /// has no rows here; a <see cref="LibraryFileState.PartlyReadable"/> one has the rows that could be read; an
 /// <see cref="LibraryFileState.AwaitingRelease"/> one has its committed content (from the journal's redo image, or the
-/// content this process last read when another app holds the file open), or no rows at a start that has read neither.
+/// content this process last read when another app holds the file open), or no rows at a start that has read neither,
+/// or while its committed content cannot be read right now and nothing vouches for it (held back; review findings A13
+/// and A15 on the storage stream).
 /// </param>
 /// <param name="State">Whether its file could be used.</param>
 /// <param name="FileName">
@@ -19,9 +21,10 @@ namespace Scribe.Core.Libraries;
 /// <param name="ContentHash">
 /// The pre-image the journal checks before replacing the file, and the content identity compared with
 /// <see cref="LibraryLocalState.AcceptedContent"/>: the custom CSV's bytes, or the built-in's edits document (null when
-/// it has none). While a committed manifest is unresolved, the hash of the committed content it names. It is also the
-/// hash a request scope pairs the library with while it is permitted (<see cref="AiVocabularyScope.PermittedContent"/>),
-/// whatever the state accepted.
+/// it has none). While a committed manifest is unresolved, the hash of the committed content it names; null while the
+/// library is held back because that content cannot be read right now (review finding A13 on the storage stream). It is
+/// also the hash a request scope pairs the library with while it is permitted
+/// (<see cref="AiVocabularyScope.PermittedContent"/>), whatever the state accepted.
 /// </param>
 /// <param name="Edits">A built-in's parsed edits document, or null when it has none or it could not be used.</param>
 /// <param name="PreviousEditsAvailable">A built-in's last good edits document is kept beside it (Restore the previous copy).</param>
@@ -157,7 +160,10 @@ public sealed class LibraryCatalog
     /// <summary>
     /// Files of the committed generation not in place yet (another app holds one open, access is denied, the disk is
     /// full). While it is above zero the journal reads the committed content from its redo images, so dictation is
-    /// unaffected, but no library change can be saved until recovery has finished them.
+    /// unaffected, but no library change can be saved until recovery has finished them. A redo image that cannot be read
+    /// right now is taken from this process's last complete read of it, or from its file when that already holds the
+    /// committed bytes; otherwise its library is held back (<see cref="LibraryFileState.AwaitingRelease"/> with no rows;
+    /// review finding A13 on the storage stream).
     /// </summary>
     public int FilesAwaitingRelease { get; }
 

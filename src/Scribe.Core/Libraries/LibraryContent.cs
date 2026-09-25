@@ -78,7 +78,12 @@ public enum LibraryFileState
     /// the journal's redo image while a committed manifest names the file, otherwise the content this process last read
     /// from it (none at a start that has not read it yet, which for a built-in means its shipped rows are held back too,
     /// so no turned-off term comes back). The shell asks the user to close the other app; it never offers a reset or a
-    /// restore for a lock, and the next load tries again.
+    /// restore for a lock, and the next load tries again. Also this state, with no rows and no content hash, for committed
+    /// content that cannot be read right now (the stored generation's manifest or a redo image it needs, or the listing of
+    /// pending manifests, fails at this attempt) when this process holds no complete earlier read of it and its file does
+    /// not already hold exactly the committed bytes: held back, out of replacement and out of AI cleanup's vocabulary,
+    /// until a read succeeds; when the manifest itself or the listing is what failed, every library is held back (review
+    /// findings A13 and A15 on the storage stream).
     /// </summary>
     AwaitingRelease,
 }

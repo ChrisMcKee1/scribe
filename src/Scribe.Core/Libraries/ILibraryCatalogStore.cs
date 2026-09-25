@@ -34,7 +34,13 @@ namespace Scribe.Core.Libraries;
 /// whole manifest logically over the files as they stand: a written, created or restored library reads its redo image
 /// (the committed bytes), a deleted library and a removed edits document are absent, a purged entry is gone from
 /// Recently deleted, and a restored entry is gone from it and present as its library. So every reader sees generation
-/// G or G + 1, never a mix, and dictation never applies a library a committed Save deleted.
+/// G or G + 1, never a mix, and dictation never applies a library a committed Save deleted. A read that fails right now
+/// is never a verdict (review findings A13 and A15 on the storage stream): the stored generation's own manifest stays
+/// pending and keeps its logical read, from this process's last complete read of it and of its redo images; committed
+/// content nothing vouches for is held back (no rows, <see cref="LibraryFileState.AwaitingRelease"/>, no content hash)
+/// unless its file already holds exactly the committed bytes; and when the manifest itself, or the listing of pending
+/// manifests, cannot be read and this process never read it, every library is held back. The files as they stand are
+/// never served as the committed generation while that cannot be told.
 /// </para>
 /// <para>
 /// While the session runs on defaults (<see cref="LibraryStateContext.RunningOnDefaults"/>), nothing library-related is
@@ -84,14 +90,21 @@ public interface ILibraryCatalogStore
     /// Finishes, discards or quarantines what the journal holds that this process's live preparation is not: at
     /// startup, from <see cref="LoadCatalog"/>, and on the storage maintenance schedule while a committed manifest is
     /// unresolved. A manifest of the stored generation is finished; one above it is discarded; one below it, one whose
-    /// redo image fails its hash, and any manifest while the generation row is absent or unparsable, are set aside. Before
-    /// a manifest is set aside or discarded, the files are made whole: a target an interrupted install left absent gets
-    /// back the bytes it last held, and every backup holding someone else's bytes is kept as an outside version; a
-    /// manifest whose files cannot yet be made whole is held, pending and neither set aside nor discarded, until an
-    /// attempt succeeds (review finding G14), so the quarantine never holds an only copy. Quarantine then holds only the
-    /// manifest's own journal files (its redo images, install copies and spare backups), never a library file it names (a
-    /// target, a kept version, a set-aside document, a Recently deleted entry), which nothing in the quarantine ever deletes
-    /// (review finding G11). Orphan install copies and redo folders are removed; an orphan backup is kept.
+    /// redo image is missing or fails its hash, and any manifest while the generation row is absent or unparsable, are set
+    /// aside. Before a manifest is set aside or discarded, the files are made whole: a target an interrupted install left
+    /// absent gets back the bytes it last held, every backup holding someone else's bytes is kept as an outside version,
+    /// and every entry a restore or a purge took goes back to Recently deleted, a permanent deletion's evidence included
+    /// (review finding A12 on the storage stream); a manifest whose files cannot yet be made whole is held, pending and
+    /// neither set aside nor discarded, until an attempt succeeds (review finding G14), so the quarantine never holds an
+    /// only copy. Quarantine then holds only the manifest's own journal files (its redo images, install copies and spare
+    /// backups), never a library file it names (a target, a kept version, a set-aside document, a Recently deleted entry),
+    /// which nothing in the quarantine ever deletes (review finding G11). A manifest or a redo image that cannot be read
+    /// right now, or a journal folder that cannot be listed, is never a verdict: nothing is set aside, discarded or resumed
+    /// on that failure, the stored generation's own manifest stays unresolved and keeps its logical read, and the next
+    /// attempt reads it again (review finding A13 on the storage stream). Orphan install copies, redo folders and
+    /// unfinished manifest files are removed; an orphan backup is kept, moved into the journal's orphans folder, including
+    /// a permanent deletion's evidence that an interrupted retirement left behind, so Delete permanently is not a secure
+    /// erasure.
     /// </summary>
     LibraryRecoveryResult Recover();
 

@@ -241,7 +241,9 @@ public enum LibraryPrepareStatus
     /// <summary>
     /// The committed generation's files are not all in place yet, or a manifest recovery must set aside or discard is
     /// held because its files cannot yet be made whole (review finding G14; <see cref="LibraryPrepareResult.Failure"/>
-    /// says why, most often another app holding a file open), or an earlier Save's outcome is not known yet
+    /// says why, most often another app holding a file open), or a manifest or the journal's listing cannot be read
+    /// right now (review findings A2 and A13 on the storage stream; <see cref="LibraryPrepareResult.Failure"/> says why),
+    /// or an earlier Save's outcome is not known yet
     /// (<see cref="LibrarySaveStatus.CommitUnknown"/>: the stored generation could not be read, and
     /// <see cref="LibraryPrepareResult.Failure"/> is <see cref="LibraryIoFailure.None"/>). Nothing advances the generation
     /// until they are settled, so nothing was written; the shell asks the user to close the file, or to try again in a
@@ -339,7 +341,10 @@ public enum LibraryKeptVersionKind
 
 /// <summary>
 /// A version of a library that completion or recovery kept rather than overwrote, so nothing written outside Scribe is
-/// lost. The shell shows one notice per kept version; the library it describes stays either way.
+/// lost, within the journal's stated scope: an entry removed from Recently deleted outside Scribe before a permanent
+/// deletion first ran, then re-created at exactly its name, can still be taken by that deletion (review finding A12 on
+/// the storage stream, an accepted residual). The shell shows one notice per kept version; the library it describes
+/// stays either way.
 /// </summary>
 /// <param name="LibraryId">The library the Save wrote.</param>
 /// <param name="Kind">What was kept, and where.</param>
@@ -370,19 +375,29 @@ public sealed record LibrarySaveOutcome(
 /// <param name="Completed">Manifests of the committed generation finished and retired.</param>
 /// <param name="Discarded">Manifests of a generation that never committed, discarded with their redo images.</param>
 /// <param name="SetAside">
-/// Manifests quarantined unapplied because the committed generation was lost, was older than them, or their redo image
-/// failed its hash: their own journal files (redo images, install copies, spare backups) kept for the quarantine
-/// retention, after the files were made whole; no library file they name is ever deleted by the quarantine.
+/// Manifests quarantined unapplied because the committed generation was lost or is newer than theirs, their operations
+/// cannot be read, they share the committed generation with another manifest, or a redo image is missing or fails its
+/// hash: their own journal files (redo images, install copies, spare backups) kept for the quarantine retention, after
+/// the files were made whole; no library file they name is ever deleted by the quarantine. Never for a read that fails
+/// right now (review finding A13 on the storage stream), which is counted in <paramref name="Held"/>.
 /// </param>
 /// <param name="FilesAwaitingRelease">Files of the committed generation still not in place.</param>
-/// <param name="OrphansRemoved">Staged, backup or redo files no manifest, live or set aside, names, removed.</param>
+/// <param name="OrphansRemoved">
+/// Install copies, redo folders and unfinished manifest files that no live, pending or set-aside manifest names,
+/// removed. An orphan backup is never removed or counted here: it is moved into the journal's orphans folder and kept
+/// (decision 31), and the log counts it; an interrupted retirement can leave a permanent deletion's evidence there
+/// (review finding A12 on the storage stream).
+/// </param>
 /// <param name="KeptVersions">Versions kept rather than overwritten while finishing.</param>
 /// <param name="Failure">Why files are not in place, or why a manifest is held, when either is so.</param>
 /// <param name="Held">
 /// Manifests recovery would set aside or discard but holds, pending, because their files cannot yet be made whole (a
 /// target to restore from its backup, or a backup holding someone else's bytes not yet verified at a preservation
 /// destination; review finding G14). Retried at every attempt; while any is held the libraries are unresolved, and a
-/// held manifest never reaches the quarantine's expiry.
+/// held manifest never reaches the quarantine's expiry. Also counted, and read again at the next attempt: a manifest
+/// that cannot be read right now (the stored generation's own included, which stays trusted), another manifest whose
+/// redo image cannot be read right now, and an attempt whose listing of pending or set-aside manifests failed (review
+/// findings A2 and A13 on the storage stream).
 /// </param>
 public sealed record LibraryRecoveryResult(
     int Completed,
