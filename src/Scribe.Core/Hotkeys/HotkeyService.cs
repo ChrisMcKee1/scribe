@@ -37,6 +37,11 @@ public sealed class HotkeyService : IHotkeyService
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
 
+    // Serializes capture's start with the leaked-key repair's key-ups (AdmitCapture, SuppressedKeyReconciler). Taken only
+    // by the thread that asks for capture and by the repair's pool thread, never by the hook thread, in a callback or
+    // between messages.
+    private readonly object _repairGate = new();
+
     /// <summary>
     /// A transition in flight between the hook thread and the consumer thread. The generation
     /// lets the dispatcher drop an Activated that was computed before a state-clearing request
@@ -68,6 +73,8 @@ public sealed class HotkeyService : IHotkeyService
     private Timer? _watchdog;
     private long _hookCallbackCount;
     private long _reconcilePasses;
+    private int _captureAdmissions;
+    private TimeSpan _captureAdmissionWait = TimeSpan.FromMilliseconds(250);
     private readonly HookLivenessProbe _livenessProbe = new();
 
     // What the log last said about an installation's mouse hook (ReportMouseHookLocked). Guarded by _sync.
@@ -117,7 +124,11 @@ public sealed class HotkeyService : IHotkeyService
         _desktopReceivesInput = desktopReceivesInput;
         _router = router;
         _reconciler = CreateReconciler(
-            _router, keyDownInWindows ?? NativeMethods.IsKeyLogicallyDown, releaseLeakedKey ?? ReleaseLeakedInput);
+            _router,
+            keyDownInWindows ?? NativeMethods.IsKeyLogicallyDown,
+            releaseLeakedKey ?? ReleaseLeakedInput,
+            _repairGate,
+            KeyViewIsWhole);
 
         // Before either hook can exist: neither callback's first CallNextHookEx or GetAsyncKeyState does the runtime's
         // one-time work for a P/Invoke inside Windows' deadline.
@@ -125,13 +136,18 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     /// <summary>
-    /// The leak check the service runs, over <paramref name="router"/>'s current engine; <paramref name="isLogicallyDown"/>
-    /// is Windows' view and <paramref name="releaseInput"/> the repair, which a test replaces. Keys only: no mouse button
-    /// is ever a candidate (see <see cref="SuppressedKeyReconciler"/>).
+    /// The leak check over <paramref name="router"/>'s current engine; <paramref name="isLogicallyDown"/> is Windows' view
+    /// and <paramref name="releaseInput"/> the repair, which a test replaces. The service's own also takes its gate and
+    /// the check of whether the engine's view may be trusted (<see cref="KeyViewIsWhole"/>); a test of the rule itself
+    /// leaves both out. Keys only: no mouse button is ever a candidate (see <see cref="SuppressedKeyReconciler"/>).
     /// </summary>
     internal static SuppressedKeyReconciler CreateReconciler(
-        HotkeyCommandRouter router, Func<uint, bool> isLogicallyDown, Func<uint, bool> releaseInput) =>
-        new(isLogicallyDown, router.IsPressed, releaseInput);
+        HotkeyCommandRouter router,
+        Func<uint, bool> isLogicallyDown,
+        Func<uint, bool> releaseInput,
+        object? gate = null,
+        Func<bool>? mayJudge = null) =>
+        new(isLogicallyDown, router.IsPressed, releaseInput, gate ?? new object(), mayJudge ?? (static () => true));
 
     // A key left down gets a marked key-up. Scribe injects no mouse input at all: the leak check never lists a mouse button.
     private static bool ReleaseLeakedInput(uint key) => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true);
@@ -206,6 +222,31 @@ public sealed class HotkeyService : IHotkeyService
 
     /// <summary>How many reconcile passes have finished, whatever each one did; for tests that wait for one.</summary>
     internal long ReconcilePassesRun => Interlocked.Read(ref _reconcilePasses);
+
+    /// <summary>
+    /// How long capture's start waits for a leaked-key release already being sent; a test that holds that release sets
+    /// its own.
+    /// </summary>
+    internal TimeSpan CaptureAdmissionWaitForTests
+    {
+        get => _captureAdmissionWait;
+        set => _captureAdmissionWait = value;
+    }
+
+    /// <summary>Whether a capture start is being admitted right now; for tests that pause the repair it waits for.</summary>
+    internal bool CaptureAdmissionPendingForTests => Volatile.Read(ref _captureAdmissions) != 0;
+
+    /// <summary>Whether the leaked-key repair may judge a key right now (<see cref="KeyViewIsWhole"/>); for tests.</summary>
+    internal bool KeyRepairAllowedForTests => KeyViewIsWhole();
+
+    // Whether the engine's view of the keys may be trusted to judge a leak, which the repair checks under _repairGate
+    // before each key's reads and again before its key-up: no capture start is being admitted, capture does not own input
+    // (from its request until both machines have applied its end, HotkeyCommandRouter.CaptureOwnsInput), and a hook runs at
+    // all (a pass that outlives Stop has no view: every key Windows holds would look leaked to it). The admission count is
+    // read first and the router's request after it: AdmitCapture raises the count before the request and lowers it only
+    // after the request is published, so a start in progress is seen by one of the two.
+    private bool KeyViewIsWhole() =>
+        Volatile.Read(ref _captureAdmissions) == 0 && !_router.CaptureOwnsInput && _router.CurrentEngine is not null;
 
     /// <summary>One reconcile pass, run now on the calling thread without the settling delay; for tests.</summary>
     internal void RunReconcilePassForTests(bool repairKeys) => RunReconcilePass(repairKeys);
@@ -362,8 +403,58 @@ public sealed class HotkeyService : IHotkeyService
 
     public void SetCaptureMode(bool enabled)
     {
-        Wake(_router.SetCaptureMode(enabled));
+        if (enabled)
+        {
+            AdmitCapture();
+        }
+        else
+        {
+            // Capture's end needs no exclusion: the repair judges no key until both machines have applied it
+            // (HotkeyCommandRouter.CaptureOwnsInput).
+            Wake(_router.SetCaptureMode(false));
+        }
+
         _logger.LogInformation("Hotkey binding capture mode {State}.", enabled ? "enabled" : "disabled");
+    }
+
+    // The requesting thread (Settings' UI thread): capture's start, serialized with the leaked-key repair's key-ups on
+    // _repairGate (review round 9, A11). The repair judges and sends one key at a time inside that gate, checking before
+    // the key's reads and again before its key-up that no start is being admitted and capture does not own input
+    // (KeyViewIsWhole). So the count is raised first, which stops the repair at its next check, then the gate is taken,
+    // which waits for the one key-up that may already be on its way, and the request is published and posted inside it:
+    // every key-up is sent before capture is requested or not at all, and the engine clears its view only after. The wait
+    // is bounded (_captureAdmissionWait, 250 ms): a key-up can take as long as the low-level hooks Windows passes it through
+    // (Scribe's own keyboard callback passes a marked key-up on at once), and the UI thread must not wait on them without
+    // a bound. Past it capture starts anyway: the key-up still on its way was decided on reads made before the request, of
+    // a view capture had not touched, and the repair's second check stops any key whose reads came later, so that one
+    // key-up is the only one that can arrive after capture has started. Nothing here waits on the hook thread: the gate is
+    // never the hook thread's, and posting the command does not wait for it.
+    private void AdmitCapture()
+    {
+        Interlocked.Increment(ref _captureAdmissions);
+        var admitted = false;
+        try
+        {
+            admitted = Monitor.TryEnter(_repairGate, _captureAdmissionWait);
+            Wake(_router.SetCaptureMode(true));
+        }
+        finally
+        {
+            if (admitted)
+            {
+                Monitor.Exit(_repairGate);
+            }
+
+            Interlocked.Decrement(ref _captureAdmissions);
+        }
+
+        if (!admitted)
+        {
+            _logger.LogWarning(
+                "Binding capture started while a leaked-key release was still being sent (it outlasted the {Wait} ms wait); " +
+                "that one release may arrive during the capture, and no other is sent until the capture ends.",
+                (int)_captureAdmissionWait.TotalMilliseconds);
+        }
     }
 
     public void SetPaused(bool paused) => OnPauseRequested(paused, _router.SetPaused(paused));
@@ -537,11 +628,13 @@ public sealed class HotkeyService : IHotkeyService
     // One pass. First the mouse hook's sync, which every pass does: an event that settled a debt, swallowed, let through
     // or forgiven by a new press, is the moment a drain-only mouse hook kept only for that debt stops being needed, and
     // the hook thread removes it at the sync this asks for now. Then the leaked-key repair, only when a signal asked for
-    // it (a key or button release the bindings swallowed, or a dictation's release) and never while binding capture owns
-    // input, from Set's request until the engine has applied capture's end (HotkeyCommandRouter.CaptureOwnsInput):
-    // capture tracks no key, so every key the user holds for the chord would look leaked (review round 8, A9). A capture
-    // that begins after this check and before the repair's own reads, a few calls later but with no bound on the time
-    // (this pool thread can be preempted between them), is not covered.
+    // it (a key or button release the bindings swallowed, or a dictation's release), each key judged and released under
+    // _repairGate and only while the engine's view may be trusted (KeyViewIsWhole, checked there before the key's reads
+    // and again before its key-up): never while capture is being admitted or owns input, from Set's request until both
+    // machines have applied capture's end, because capture tracks no key and every key the user holds for the chord
+    // would look leaked (review rounds 8 and 9, A9 and A11). A pass capture stops is not run again when capture ends: the
+    // keys held for the capture are missing from the engine's view then, so a replay would release keys the user still
+    // holds; a real leak is repaired at the next trigger. Nothing is logged under the gate.
     private void RunReconcilePass(bool repairKeys)
     {
         try
@@ -556,20 +649,21 @@ public sealed class HotkeyService : IHotkeyService
                 return;
             }
 
-            if (_router.CaptureOwnsInput)
-            {
-                _logger.LogDebug("Leaked-key check skipped: binding capture owns input.");
-                return;
-            }
-
             var result = _reconciler.ReleaseLeakedKeys(Binding);
-            if (DictationOnlyBinding is { } dictationOnly)
+            if (!result.Interrupted && DictationOnlyBinding is { } dictationOnly)
             {
                 var secondaryResult = _reconciler.ReleaseLeakedKeys(dictationOnly);
                 result = new SuppressedKeyReconciler.Result(
                     result.Released.Concat(secondaryResult.Released).Distinct().ToList(),
-                    result.Failed.Concat(secondaryResult.Failed).Distinct().ToList());
+                    result.Failed.Concat(secondaryResult.Failed).Distinct().ToList(),
+                    secondaryResult.Interrupted);
             }
+
+            if (result.Interrupted)
+            {
+                _logger.LogDebug("Leaked-key check stopped: binding capture is starting or owns input, or no hook is running.");
+            }
+
             foreach (var key in result.Released)
             {
                 _logger.LogWarning(

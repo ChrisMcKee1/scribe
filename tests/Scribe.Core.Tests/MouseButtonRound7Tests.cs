@@ -161,8 +161,9 @@ public sealed class MouseButtonRound7Tests
             .Where(instruction => instruction.Code == OpCodes.Call || instruction.Code == OpCodes.Callvirt)
             .Select(instruction => method.Module.ResolveMethod(instruction.Token)!);
 
-    // The method's IL, one instruction at a time, with the 4-byte token of those that carry one (zero otherwise).
-    private static IEnumerable<(OpCode Code, int Token)> Instructions(MethodBase method)
+    // The method's IL, one instruction at a time, with the 4-byte token of those that carry a method, field, type or token (zero
+    // otherwise).
+    internal static IEnumerable<(OpCode Code, int Token)> Instructions(MethodBase method)
     {
         var il = method.GetMethodBody()?.GetILAsByteArray() ?? [];
         for (var i = 0; i < il.Length;)
@@ -189,7 +190,7 @@ public sealed class MouseButtonRound7Tests
                 OperandType.InlineSwitch => 4 + (4 * BitConverter.ToInt32(il, i)),
                 _ => 4,
             };
-            var token = code.OperandType is OperandType.InlineMethod or OperandType.InlineTok or OperandType.InlineType
+            var token = code.OperandType is OperandType.InlineMethod or OperandType.InlineTok or OperandType.InlineType or OperandType.InlineField
                 ? BitConverter.ToInt32(il, i)
                 : 0;
             yield return (code, token);

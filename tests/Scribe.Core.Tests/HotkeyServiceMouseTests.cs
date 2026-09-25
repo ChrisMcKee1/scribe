@@ -421,6 +421,35 @@ public partial class HotkeyServiceTests
         Assert.Empty(injected);
     }
 
+    // Round 9 (A11): a repair that capture stopped is not run again when capture ends, through the real hook thread and
+    // signal. The Left Ctrl the user holds from the capture gesture is not in the engine's view then, so a replay would
+    // send its key-up while it is held; a real leak is repaired at the next trigger instead.
+    [Fact]
+    public void Start_runs_no_repair_again_when_capture_ends()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        var injected = new ConcurrentQueue<uint>();
+        using var service = ScriptedKeysService(
+            ChordOf(LeftCtrlKey, MouseButtons.Back), windowsHoldsBack: false, desktopReceivesInput: true, injected);
+        service.Start();
+        service.SetCaptureMode(true);
+        AwaitRenewal(service); // the hook thread has applied capture
+        var passes = service.ReconcilePassesRun;
+        service.ReconcileSignalForTests!.Signal(); // a repair asked for during the capture
+        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The repair never ran.");
+
+        service.SetCaptureMode(false);
+        AwaitRenewal(service); // the hook thread has applied capture's end
+        Thread.Sleep(250); // ten times the pass's settling delay: a replay would have run by now
+
+        Assert.Equal(passes + 1, service.ReconcilePassesRun);
+        Assert.Empty(injected);
+    }
+
     // A service whose leak repair sees a scripted Windows holding Left Ctrl and records the key-ups it would send, over a
     // router whose view of a mouse button in Windows is scripted too.
     private static HotkeyService ScriptedKeysService(
