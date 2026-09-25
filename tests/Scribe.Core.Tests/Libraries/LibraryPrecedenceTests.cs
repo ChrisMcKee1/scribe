@@ -103,11 +103,31 @@ public sealed class LibraryPrecedenceTests
     [Fact]
     public void A_retirement_done_the_documented_way_leaves_the_catalog_in_that_order()
     {
-        // Retire github as AGENTS.md says: its CSV stops shipping, and its id stays in BuiltInOrder and is listed as retired.
-        // BuiltInDictionaryLibraries.All is LibraryPrecedence.Order over the libraries that ship, so the same call over the
-        // ten that would still ship is the catalog that retirement produces.
-        string[] retired = ["github"];
-        var catalog = LibraryPrecedence.Order(BuiltInDictionaryLibraries.All.Where(l => !retired.Contains(l.Id))).Select(l => l.Id).ToList();
+        // Retire each shipped built-in in turn as AGENTS.md says, on top of any retirement already made: its CSV stops
+        // shipping, and its id stays in BuiltInOrder and is listed as retired.
+        foreach (var id in BuiltInDictionaryLibraries.All.Select(l => l.Id))
+        {
+            AssertRetirementKeepsTheOrder(BuiltInDictionaryLibraries.All, LibraryPrecedence.RetiredBuiltInIds, id);
+        }
+    }
+
+    [Fact]
+    public void A_retirement_after_an_earlier_one_leaves_both_out_of_the_catalog()
+    {
+        // As if data-and-ai had already been retired for real: its CSV no longer ships and RetiredBuiltInIds names it.
+        var shipping = BuiltInDictionaryLibraries.All.Where(l => l.Id != "data-and-ai").ToList();
+
+        AssertRetirementKeepsTheOrder(shipping, ["data-and-ai"], "github");
+    }
+
+    // BuiltInDictionaryLibraries.All is LibraryPrecedence.Order over the libraries that ship, so the same call over the ones
+    // that would still ship is the catalog a retirement produces. The ids already retired stay retired.
+    private static void AssertRetirementKeepsTheOrder(IEnumerable<DictionaryLibrary> shipping, IReadOnlyList<string> alreadyRetired, string retire)
+    {
+        string[] retired = [.. alreadyRetired.Append(retire).Distinct(StringComparer.OrdinalIgnoreCase)];
+        var catalog = LibraryPrecedence.Order(shipping.Where(l => !retired.Contains(l.Id, StringComparer.OrdinalIgnoreCase)))
+            .Select(l => l.Id)
+            .ToList();
 
         AssertCatalogFollows(catalog, LibraryPrecedence.BuiltInOrder, retired);
 
