@@ -366,6 +366,9 @@ public sealed class DictationInsertionTests
         Assert.Contains("typed => _injector.Inject(", call, StringComparison.Ordinal);
         Assert.Contains("typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks", call, StringComparison.Ordinal);
 
+        // The target's process, which paces typing into a Remote Desktop or virtual machine client (TypingPace).
+        Assert.Contains("settings.ShiftEnterLineBreaks, targetApp)", call, StringComparison.Ordinal);
+
         // After AI cleanup (its guards and the dash normalizer run inside CleanAsync), the dictionary and snippets, and the
         // line breaks handled for the target, which trims; the report keeps the text as dictated.
         var cleanup = controller.IndexOf(".CleanAsync(recognized, cancellationToken, cleanupWritingStyle)", StringComparison.Ordinal);

@@ -15,13 +15,16 @@ public interface ITextInjector
     /// <paramref name="method"/>. Runs the clipboard/SendInput sequence on a dedicated STA
     /// thread; callers should invoke this off the UI thread because it includes short delays.
     /// When <paramref name="shiftEnterLineBreaks"/> is true (the default), typed line breaks are
-    /// sent as Shift+Enter so they do not submit a chat message.
+    /// sent as Shift+Enter so they do not submit a chat message. <paramref name="targetProcessName"/> is the process that
+    /// owned the focused window when the dictation started: typing into a Remote Desktop or virtual machine client is paced
+    /// for the remote session (see <see cref="RemoteClientProcesses"/>).
     /// </summary>
     InjectionResult Inject(
         string text,
         InjectionMethod method = InjectionMethod.ClipboardPaste,
         nint expectedForegroundWindow = 0,
-        bool shiftEnterLineBreaks = true);
+        bool shiftEnterLineBreaks = true,
+        string? targetProcessName = null);
 }
 
 /// <summary>Outcome of placing text into the target application.</summary>

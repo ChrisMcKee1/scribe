@@ -49,6 +49,24 @@ public static class ScribeTelemetry
     public const string TagInjectComplete = "scribe.inject.complete";
     public const string TagInjectFallback = "scribe.inject.fallback";
 
+    /// <summary>Whether the target was a Remote Desktop or virtual machine client (<c>RemoteClientProcesses</c>).</summary>
+    public const string TagInjectRemote = "scribe.inject.remote";
+
+    /// <summary>Typing: the most code units one SendInput call carried, which the target's pace sets (<c>TypingPace</c>).</summary>
+    public const string TagInjectBatchUnits = "scribe.inject.batch_units";
+
+    /// <summary>Typing: how many SendInput calls the text took.</summary>
+    public const string TagInjectBatches = "scribe.inject.batches";
+
+    /// <summary>How many line breaks the inserted text held (a CRLF counts once), a count only.</summary>
+    public const string TagInjectLineBreaks = "scribe.inject.line_breaks";
+
+    /// <summary>How many surrogate pairs (characters outside the Basic Multilingual Plane) it held, a count only.</summary>
+    public const string TagInjectSurrogatePairs = "scribe.inject.surrogate_pairs";
+
+    /// <summary>How many control characters other than line breaks (a tab, for example) it held, a count only.</summary>
+    public const string TagInjectControlCharacters = "scribe.inject.control_chars";
+
     /// <summary>How the clipboard paste path ended (a <c>PasteDelivery</c> name).</summary>
     public const string TagPasteDelivery = "scribe.inject.paste";
 

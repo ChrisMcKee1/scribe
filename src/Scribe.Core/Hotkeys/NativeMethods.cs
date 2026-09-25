@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Scribe.Core.TextInjection;
 
 namespace Scribe.Core.Hotkeys;
 
@@ -17,10 +18,14 @@ internal static partial class NativeMethods
 
     // Private thread messages to the hook thread. WM_APP and above is the range reserved for application-defined
     // messages. The first wakes it to apply queued commands; the second, from the watchdog, also has it register its
-    // mouse hook afresh (see HotkeyService.HookInstallation).
+    // mouse hook afresh (see HotkeyService.HookInstallation). The third has it register its keyboard hook afresh, ahead
+    // of a Remote Desktop client's, and the fourth release the registrations those moves replaced (wParam 1: whatever
+    // their age, for tests).
     internal const uint WM_APP = 0x8000;
     internal const uint WM_HOTKEY_COMMANDS = WM_APP + 1;
     internal const uint WM_HOTKEY_REFRESH = WM_APP + 2;
+    internal const uint WM_HOTKEY_MOVE_AHEAD = WM_APP + 3;
+    internal const uint WM_HOTKEY_RELEASE_RETIRED = WM_APP + 4;
 
     internal const int VK_SHIFT = 0x10;
     internal const int VK_CONTROL = 0x11;
@@ -165,6 +170,10 @@ internal static partial class NativeMethods
     }
 
     internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
+
+    // "The foreground window has changed. The system sends this event even if the foreground window has changed to
+    // another window in the same thread." (Event Constants)
+    internal const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 
     internal delegate void WinEventProc(
@@ -325,38 +334,46 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
-    // Right-hand modifiers and the nav/arrow cluster carry the extended-key flag; a synthetic
-    // key-up without it maps to the left-hand sibling and would fail to release the right key.
-    private static bool IsExtendedKey(uint virtualKey) => virtualKey is
-        0xA3 /* RCtrl */ or 0xA5 /* RAlt */ or 0x5B /* LWin */ or 0x5C /* RWin */ or
-        0x21 /* PgUp */ or 0x22 /* PgDn */ or 0x23 /* End */ or 0x24 /* Home */ or
-        0x25 or 0x26 or 0x27 or 0x28 /* arrows */ or
-        0x2D /* Insert */ or 0x2E /* Delete */ or 0x90 /* NumLock */ or 0x6F /* NumDivide */;
-
     /// <summary>
     /// Injects a synthetic key event tagged with <see cref="SyntheticInputMarker"/> so the hook
     /// ignores it for chord state (the liveness probe still ticks the callback counter).
     /// </summary>
-    internal static bool SendMarkedKeyEvent(ushort virtualKey, bool keyUp)
-    {
-        var flags = (keyUp ? KEYEVENTF_KEYUP : 0u) |
-            (IsExtendedKey(virtualKey) ? KEYEVENTF_EXTENDEDKEY : 0u);
-        var input = new INPUT
-        {
-            type = INPUT_KEYBOARD,
-            U = new InputUnion
-            {
-                ki = new KEYBDINPUT
-                {
-                    wVk = virtualKey,
-                    dwFlags = flags,
-                    dwExtraInfo = SyntheticInputMarker.Value,
-                },
-            },
-        };
+    internal static bool SendMarkedKeyEvent(ushort virtualKey, bool keyUp) =>
+        SendInput(1, [MarkedKeyEvent(virtualKey, keyUp)], Marshal.SizeOf<INPUT>()) == 1;
 
-        return SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
-    }
+    /// <summary>The event <see cref="SendMarkedKeyEvent"/> sends, with its scan code from the foreground window's layout.</summary>
+    internal static INPUT MarkedKeyEvent(ushort virtualKey, bool keyUp) =>
+        BuildMarkedKeyEvent(virtualKey, keyUp, MarkedKeyScanCode(virtualKey, KeyScanCodes.ForForegroundLayout));
+
+    /// <summary>
+    /// The scan code a marked key event carries: the layout's for every key (the leaked-key repair's key-ups), so a Remote
+    /// Desktop or virtual machine client, which forwards keys by scan code, forwards the key that was pressed; none for the
+    /// watchdog's probe, an unassigned virtual key the layout is not asked about.
+    /// </summary>
+    internal static KeyScanCode MarkedKeyScanCode(ushort virtualKey, Func<uint, KeyScanCode> scanCodeOf) =>
+        virtualKey == VK_PROBE ? KeyScanCode.None : scanCodeOf(virtualKey);
+
+    /// <summary>
+    /// A marked key event: the virtual key, the scan code and extended flag <paramref name="scan"/> gives it, and never
+    /// KEYEVENTF_SCANCODE, so Windows takes the key from wVk as it always has (see <see cref="KeyScanCodes"/>). Right-hand
+    /// modifiers and the navigation cluster stay extended: a synthetic key-up without the flag maps to the left-hand
+    /// sibling and would fail to release the right key.
+    /// </summary>
+    internal static INPUT BuildMarkedKeyEvent(ushort virtualKey, bool keyUp, KeyScanCode scan) => new()
+    {
+        type = INPUT_KEYBOARD,
+        U = new InputUnion
+        {
+            ki = new KEYBDINPUT
+            {
+                wVk = virtualKey,
+                wScan = scan.Code,
+                dwFlags = KeyScanCodes.Flags(
+                    scan with { Extended = scan.Extended || KeyScanCodes.IsExtendedVirtualKey(virtualKey) }, keyUp),
+                dwExtraInfo = SyntheticInputMarker.Value,
+            },
+        },
+    };
 
     // The INPUT type for mouse input. Scribe injects none (the leak check covers keys only); the tests build theirs with it.
     internal const uint INPUT_MOUSE = 0;

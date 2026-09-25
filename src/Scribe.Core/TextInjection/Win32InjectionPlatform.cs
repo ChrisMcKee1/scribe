@@ -18,6 +18,8 @@ internal sealed class Win32InjectionPlatform : IInjectionPlatform
 
     public void Sleep(int milliseconds) => Thread.Sleep(milliseconds);
 
+    public KeyScanCode ScanCodeOf(ushort virtualKey) => KeyScanCodes.ForForegroundLayout(virtualKey);
+
     public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)
     {
         var foreground = InjectionNativeMethods.GetForegroundWindow();

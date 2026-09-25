@@ -74,6 +74,12 @@ public static class TraceTagPolicy
         [ScribeTelemetry.TagInjectTotal] = ValueShape.Number,
         [ScribeTelemetry.TagInjectComplete] = ValueShape.Flag,
         [ScribeTelemetry.TagInjectFallback] = ValueShape.Flag,
+        [ScribeTelemetry.TagInjectRemote] = ValueShape.Flag,
+        [ScribeTelemetry.TagInjectBatchUnits] = ValueShape.Number,
+        [ScribeTelemetry.TagInjectBatches] = ValueShape.Number,
+        [ScribeTelemetry.TagInjectLineBreaks] = ValueShape.Number,
+        [ScribeTelemetry.TagInjectSurrogatePairs] = ValueShape.Number,
+        [ScribeTelemetry.TagInjectControlCharacters] = ValueShape.Number,
         [ScribeTelemetry.TagPasteDelivery] = ValueShape.Code,
         [ScribeTelemetry.TagClipboardRestore] = ValueShape.Code,
     }.ToFrozenDictionary(StringComparer.Ordinal);

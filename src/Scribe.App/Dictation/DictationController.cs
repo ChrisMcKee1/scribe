@@ -697,17 +697,19 @@ internal sealed class DictationController : IDisposable
             // Everything a "my dictation cut out" report needs to be answerable: which press, which
             // mode (a hold that ends early and a toggle that auto-stops look identical to the user
             // but have completely different causes), and which app was focused. The mode and key are
-            // the binding that fired: the dictation-only binding has a mode of its own.
+            // the binding that fired: the dictation-only binding has a mode of its own. Whether that app is a Remote
+            // Desktop or virtual machine client, whose typing is paced for the remote session (TypingPace).
             var binding = CaptureTriggerBinding.For(settings, e.Trigger);
             _log.LogInformation(
                 "#{Id} recording started: trigger={Trigger} mode={Mode} key='{Key}' device='{Device}' " +
-                "target={App} autoStopOnSilence={AutoStop} vad={Vad} cleanup={Cleanup}",
+                "target={App} remote={Remote} autoStopOnSilence={AutoStop} vad={Vad} cleanup={Cleanup}",
                 id,
                 e.Trigger,
                 (object?)binding?.Mode ?? "unknown",
                 binding is null ? "custom" : HotkeyText.Describe(binding),
                 _audio.LastDeviceName ?? "unknown",
                 capture.TargetApp ?? "unknown",
+                RemoteClientProcesses.IsRemoteClient(capture.TargetApp),
                 settings.AutoStopOnSilence,
                 settings.UseVoiceActivityDetection,
                 settings.EnableAiCleanup);
@@ -1327,7 +1329,7 @@ internal sealed class DictationController : IDisposable
                 settings.AddSpaceAfterDictation,
                 _lastTranscript,
                 typed => _injector.Inject(
-                    typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks),
+                    typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks, targetApp),
                 cancellationToken);
             injectionTimer.Stop();
             var injection = insertion.Injection;
