@@ -99,8 +99,9 @@ public enum TermReviewChoice
 /// <see cref="Values"/> and the other members by value, which is what undo and change detection rely on.
 /// </para>
 /// <para>
-/// <see cref="Key"/> is identity, not the pattern that competes (review question 2). Composition, the editor's
-/// duplicate check and legacy markers compare the spoken form a row writes, <c>LibraryTermKey.From(Values.Spoken)</c>;
+/// <see cref="Key"/> is identity, not the pattern that competes (review question 2). Composition and the editor's
+/// duplicate check compare the spoken form a row writes, <c>LibraryTermKey.From(Values.Spoken)</c>, and a legacy marker
+/// is stored under it (while finding the built-in rows it answers by <see cref="PostProcessing.SpokenFormFold"/>);
 /// <see cref="Key"/> only says which shipped row an edit belongs to, so upgrades find it. For a custom row the two are
 /// the same. A built-in row whose Spoken the user changed from "get hub" to "git hub" competes as "git hub" (authored
 /// tier), no longer supplies "get hub", and is still found by the key "get hub" when a later version changes that

@@ -67,7 +67,8 @@ public interface ILibraryComposer
     /// private. Completion writes no settings (decision 12), so a group kept out only because of this commit's physical
     /// changes (a deleted twin, bytes rewritten under a permission granted in the same Save) joins the projection at the
     /// next commit. An id no library has, before or after, stays in the document's list if it was there (it is in
-    /// <see cref="LibraryLocalState.LegacyEnabledIds"/>) and is dropped from the stored library state. A
+    /// <see cref="LibraryLocalState.LegacyEnabledIds"/>, a set, so such ids follow the libraries' ids, sorted ignoring
+    /// case and then ordinally) and is dropped from the stored library state. A
     /// <see cref="LocalStateHealth.Newer"/> state encodes with a null <see cref="LibraryStateEncoding.StateValue"/> and
     /// the document's list as it was read. <see cref="LibraryLocalState.AiPermissionsLost"/> is always encoded, so every
     /// commit carries a denial until the user confirms the choices.
@@ -82,8 +83,9 @@ public interface ILibraryComposer
     /// <summary>
     /// The state to commit because the stored state has not recorded what the catalog shows
     /// (<see cref="LibraryAdoptionReasons"/>: the first start, a discovered file, content that no longer matches
-    /// <see cref="LibraryLocalState.AcceptedContent"/>, a lost or unreadable state), or null when there is nothing to
-    /// record or nothing may be written now: a session on defaults, or a state from a newer version.
+    /// <see cref="LibraryLocalState.AcceptedContent"/>, including an edits document that disappeared, a lost or
+    /// unreadable state), or null when there is nothing to record or nothing may be written now: a session on defaults,
+    /// or a state from a newer version.
     /// </summary>
     LibraryAdoption? PlanAdoption(LibraryCatalog catalog, LibraryStateContext context);
 

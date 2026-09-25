@@ -32,6 +32,11 @@ namespace Scribe.Core.Libraries;
 /// spoken form there as well.
 /// </para>
 /// <para>
+/// Legacy markers are stored under this key but do not compare spoken forms by it: a marker finds the built-in rows its
+/// row answers by <see cref="PostProcessing.SpokenFormFold"/> of the trimmed forms, which reaches across keys wherever the
+/// matcher does (a Kelvin sign and a k are two keys and one text to the matcher). The key itself stays trim-only.
+/// </para>
+/// <para>
 /// <see cref="Value"/> keeps the spelling it was made from, so a document can store it and a message can show it.
 /// <see cref="ToString"/> deliberately returns only its length: a key is the user's words, and a key handed to a log
 /// template by mistake must not put them in the log.

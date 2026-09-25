@@ -18,7 +18,9 @@ namespace Scribe.Core.Libraries;
 /// <param name="ContentHash">
 /// The pre-image the journal checks before replacing the file, and the content identity compared with
 /// <see cref="LibraryLocalState.AcceptedContent"/>: the custom CSV's bytes, or the built-in's edits document (null when
-/// it has none). While a committed manifest is unresolved, the hash of the committed content it names.
+/// it has none). While a committed manifest is unresolved, the hash of the committed content it names. It is also the
+/// hash a request scope pairs the library with while it is permitted (<see cref="AiVocabularyScope.PermittedContent"/>),
+/// whatever the state accepted.
 /// </param>
 /// <param name="Edits">A built-in's parsed edits document, or null when it has none or it could not be used.</param>
 /// <param name="PreviousEditsAvailable">A built-in's last good edits document is kept beside it (Restore the previous copy).</param>

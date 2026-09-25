@@ -87,7 +87,8 @@ public sealed record RecentlyDeletedAction(
 /// one restore of the edited content, so no file is the target of two operations in one manifest. Enabled state and AI
 /// permission travel only in <see cref="LocalState"/>, never in a file. The journal adds to the local state it commits
 /// the hash of every file it writes, creates or restores, custom CSVs and edits documents alike
-/// (<see cref="LibraryLocalState.AcceptedContent"/>), so Scribe's own writes never read as an outside replacement. A
+/// (<see cref="LibraryLocalState.AcceptedContent"/>), and drops the entry of every edits document it removes (Restore all
+/// built-in values, Back up and reset), so Scribe's own writes never read as an outside replacement or disappearance. A
 /// change set whose local state is <see cref="LocalStateHealth.Newer"/> is refused
 /// (<see cref="LibraryPrepareStatus.ReadOnly"/>): a newer version's library state makes the libraries read-only.
 /// </para>

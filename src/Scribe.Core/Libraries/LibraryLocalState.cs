@@ -28,8 +28,10 @@ namespace Scribe.Core.Libraries;
 /// Consent is bound to content (review finding A4): <see cref="AcceptedContent"/> holds, per library, the hash of the
 /// file this version last wrote or adopted. A file whose bytes no longer match was replaced outside Scribe (an older
 /// build deleted the library and imported another under the same file name, say), and composition treats it as newly
-/// discovered: this version's earlier choices for that id no longer apply to it. The journal records the hash of
-/// every file it writes in the same commit, so Scribe's own writes never read as a replacement.
+/// discovered: this version's earlier choices for that id no longer apply to it. An entry left for a built-in that has
+/// no edits document means the document disappeared outside Scribe, which is replaced content too. The journal records
+/// the hash of every file it writes, and drops the entry of every edits document it removes, in the same commit, so
+/// Scribe's own writes never read as a replacement.
 /// </para>
 /// </remarks>
 public sealed class LibraryLocalState
@@ -70,7 +72,8 @@ public sealed class LibraryLocalState
     /// The ids the document's <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/> held when this state was
     /// read (the projection, as an older build may have changed it), or, when no readable document held the list (a
     /// session on defaults), the projection the auxiliary row stored; so an id the encoder cannot place (a library that is
-    /// not there right now) stays in the list it came from.
+    /// not there right now) stays in the list it came from. A set, not an ordered list: the ids it keeps for no library are
+    /// written after the libraries' ids, sorted ignoring case and then ordinally, whatever order the document had them in.
     /// </summary>
     public IReadOnlySet<string> LegacyEnabledIds { get; }
 
@@ -93,8 +96,10 @@ public sealed class LibraryLocalState
 
     /// <summary>
     /// By library id, the hash of the content every choice above was made for: a custom library's CSV, or a built-in's
-    /// edits document (no entry for a built-in with no document). A library whose file does not match is treated as
-    /// newly discovered (review finding A4).
+    /// edits document (no entry for a built-in with no document). A library whose file does not match was replaced
+    /// outside Scribe (review finding A4), and so was an available built-in with no document while its entry remains:
+    /// the document disappeared, so its AI permission goes and its enabled state stays
+    /// (<see cref="LibraryAdoptionReasons.ContentReplaced"/>).
     /// </summary>
     public IReadOnlyDictionary<string, LibraryContentHash> AcceptedContent { get; }
 
@@ -180,12 +185,15 @@ public sealed class LibraryLocalState
 }
 
 /// <summary>
-/// A legacy custom row (Decision 1): a row of <see cref="LibraryId"/> whose spoken form a built-in also ships with a
-/// different result. While a built-in with a different enabled result is on, the row keeps the pre-upgrade winner, the
+/// A legacy custom row (Decision 1): a row of <see cref="LibraryId"/> that a built-in's enabled row answers, which the
+/// matcher can take for the same text (the two spoken forms fold alike under <see cref="PostProcessing.SpokenFormFold"/>,
+/// a superset of the matcher's case-insensitive, culture-invariant equivalence, whatever their keys), and that the row
+/// does not apply exactly alike: another written form or whole-word flag, or a spoken form the matcher or the expansion
+/// guard reads differently. While a built-in with such an enabled row is on, the row keeps the pre-upgrade winner, the
 /// built-in's; editing the row or choosing Use my spelling removes the marker.
 /// </summary>
 /// <param name="LibraryId">The custom library's id, compared case-insensitively.</param>
-/// <param name="Key">The row's key.</param>
+/// <param name="Key">The row's key (<see cref="LibraryTermKey"/>, trim-only), under which the marker is stored.</param>
 public readonly record struct LegacyMarker(string LibraryId, LibraryTermKey Key)
 {
     public bool Equals(LegacyMarker other) =>
@@ -224,9 +232,10 @@ public enum LocalStateHealth
 
 /// <summary>A library state encoded for the settings store.</summary>
 /// <param name="EnabledLibraryIds">
-/// The list for <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/>, in precedence order: the downgrade-safe
-/// projection of the enabled libraries, by the ids older builds load them as, safe both before and after the commit's
-/// physical changes (review findings A15 and A18).
+/// The list for <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/>: the downgrade-safe projection of the
+/// enabled libraries, by the ids older builds load them as, safe both before and after the commit's physical changes
+/// (review findings A15 and A18), in precedence order, then the ids kept for no library, sorted ignoring case and then
+/// ordinally, since <see cref="LibraryLocalState.LegacyEnabledIds"/> holds them as a set.
 /// </param>
 /// <param name="StateValue">
 /// The value of the auxiliary row <see cref="LibrarySettingKeys.State"/>, which carries every enabled library by logical
@@ -288,6 +297,8 @@ public enum LibraryAdoptionReasons
     /// <summary>
     /// A library's content no longer matches <see cref="LibraryLocalState.AcceptedContent"/>: this version's earlier
     /// choices for its id are dropped (AI off, out of the enabled lists, markers recomputed) and the new content accepted.
+    /// A built-in keeps its enabled state and loses only its AI permission, and one whose edits document disappeared
+    /// outside Scribe (an entry remains, no document does) has the stale entry dropped.
     /// </summary>
     ContentReplaced = 4,
 

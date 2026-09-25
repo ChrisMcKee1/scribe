@@ -13,11 +13,14 @@ namespace Scribe.Core.Libraries;
 /// <remarks>
 /// <para>
 /// Consent is bound to content (review finding A4), so the scope is too (A12): it pairs each permitted library id with
-/// the hash of the content permission covers, its <see cref="LibraryLocalState.AcceptedContent"/> (a custom library's
-/// CSV, a built-in's edits document, or null for a built-in with no document, whose shipped rows cannot change while
-/// the process runs). A request admitted for "team" at content H1 is therefore refused after that file was replaced
-/// by H2 outside Scribe, even once the user has permitted H2, and so is one admitted before a Save that changed the
-/// library's content: local rules finish that dictation.
+/// the hash of the content permission covers, the hash the catalog holds for it (<see cref="CatalogLibrary.ContentHash"/>:
+/// a custom library's CSV, a built-in's edits document, or null for a built-in with no document, whose shipped rows
+/// cannot change while the process runs). For a permitted library that is its <see cref="LibraryLocalState.AcceptedContent"/>
+/// hash, except that a built-in whose edits document disappeared outside Scribe is paired with null, never with the
+/// hash of the document it no longer has, so a request scope always carries the catalog's actual hash. A request
+/// admitted for "team" at content H1 is therefore refused after that file was replaced by H2 outside Scribe, even once
+/// the user has permitted H2, and so is one admitted before a Save that changed the library's content, or with the terms
+/// of a built-in's edits document that has since gone: local rules finish that dictation.
 /// </para>
 /// <para>Only composition builds one (the constructor is internal to Core). Ids compare case-insensitively.</para>
 /// </remarks>
@@ -51,7 +54,10 @@ public sealed class AiVocabularyScope
     /// <summary>The libraries whose terms may be sent: the keys of <see cref="PermittedContent"/>.</summary>
     public IReadOnlySet<string> PermittedLibraryIds { get; }
 
-    /// <summary>Each permitted library with the content its permission covers (null for a built-in with no edits document).</summary>
+    /// <summary>
+    /// Each permitted library with the content its permission covers: the hash the catalog holds for it, null for a
+    /// built-in with no edits document.
+    /// </summary>
     public IReadOnlyDictionary<string, LibraryContentHash?> PermittedContent { get; }
 
     /// <summary>
