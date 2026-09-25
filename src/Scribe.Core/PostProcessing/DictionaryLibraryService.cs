@@ -477,12 +477,22 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             settings.Generation, settings.GenerationLost, _live?.Manifest.Id, context.RunningOnDefaults, _parts.Time.GetUtcNow(), kept);
 
         // An attempt that could not list the journal cannot see the pending manifest an earlier attempt of this process
-        // found, but that manifest is still there: readers keep applying it whole until an inventory succeeds.
-        if (outcome is { InventoryIncomplete: true, Unresolved: null } &&
-            _recovery?.Unresolved is { } known && !settings.GenerationLost && known.Generation == settings.Generation)
+        // found, or that of a Save whose outcome was unknown and whose generation the read now shows committed, but that
+        // manifest is still there: readers keep applying it whole until an inventory succeeds, never a mix of the new
+        // state and the old files (contract 6.6.1).
+        if (outcome is { InventoryIncomplete: true, Unresolved: null } && !settings.GenerationLost)
         {
-            outcome.Unresolved = known;
-            outcome.FilesAwaitingRelease = Math.Max(outcome.FilesAwaitingRelease, _recovery.FilesAwaitingRelease);
+            if (_recovery?.Unresolved is { } known && known.Generation == settings.Generation)
+            {
+                outcome.Unresolved = known;
+                outcome.FilesAwaitingRelease = Math.Max(outcome.FilesAwaitingRelease, _recovery.FilesAwaitingRelease);
+            }
+            else if (_unsettled is { } committed && committed.Manifest.Generation == settings.Generation)
+            {
+                // Nothing of it is installed yet.
+                outcome.Unresolved = committed.Manifest;
+                outcome.FilesAwaitingRelease = Math.Max(outcome.FilesAwaitingRelease, Math.Max(1, committed.Manifest.Operations.Count));
+            }
         }
 
         // A Save whose outcome was unknown is settled once recovery, with the generation read, has finished it, discarded
@@ -1112,8 +1122,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             _unsettled = live;
             TryLog(
                 LogLevel.Warning,
-                "Library save outcome unknown at generation {Generation}: the stored generation could not be read ({Failure}); the manifest stays pending.",
-                prepared.Generation, FailureShape.Describe(ex));
+                "Library save outcome unknown for generation {Generation}: the stored generation could not be read ({Failure}); {Operations} prepared operation(s) kept pending.",
+                prepared.Generation, FailureShape.Describe(ex), live.Manifest.Operations.Count);
             return new LibrarySaveOutcome(LibrarySaveStatus.CommitUnknown, prepared.BaseGeneration, 0, [], LibraryIoFailure.None);
         }
 
@@ -1247,17 +1257,28 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         }
 
         var outcome = CompleteCore(save, wrapper: true);
-        if (outcome.Status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
+        switch (outcome.Status)
         {
-            return;
-        }
+            case LibrarySaveStatus.Applied:
+            case LibrarySaveStatus.AppliedAwaitingRelease:
+                return;
 
-        if (commitFailure is not null)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(commitFailure);
-        }
+            case LibrarySaveStatus.CommitUnknown:
+                // Whether it committed is not known yet (round 2, A8): never reported as a change that failed, which would
+                // invite doing it again; the manifest stays pending and a later read of the generation settles it.
+                throw new InvalidOperationException(
+                    "Scribe couldn't confirm that the library change was saved. It will finish saving it.");
 
-        throw new InvalidOperationException("The library change could not be saved.");
+            case LibrarySaveStatus.NotCommitted:
+            case LibrarySaveStatus.Superseded:
+            default:
+                if (commitFailure is not null)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(commitFailure);
+                }
+
+                throw new InvalidOperationException("The library change could not be saved.");
+        }
     }
 
     // --- the janitor (contract 3.1.6) -----------------------------------------------------------------------------------
