@@ -819,7 +819,19 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   PRIVACY.md quotes the trigger delay, the backoff, `MaxQuickReclaimRetries` and the hourly interval,
   and `CleanupDisclosureTests` pins them, so change the text with the numbers. Dictionary, snippet and
   profile deletions owe nothing, and PRIVACY.md says so. `StorageMaintenanceWalTests` reads the WAL
-  after real passes.
+  after real passes. `HistoryRepository.PruneOlderThan` counts no deletion either: production retention
+  never calls it (maintenance deletes through `DeleteEntriesOlderThan` and counts that itself), only the
+  soak harness does, so nothing PRIVACY.md describes may be routed through it without counting.
+- **The close only tries to empty the WAL.** `ScribeDatabase.Dispose` runs a final `TRUNCATE` checkpoint
+  and, once the pool is cleared, logs its result row's shape (the outcome, SQLite's page counts, and
+  whether the file outlived the close). It skips the checkpoint when the write gate cannot be had within
+  `ShutdownGateTimeout` (3 s); SQLite reports it busy and leaves the log in place when another connection
+  is still using the log once the busy timeout runs out (sqlite.org, `PRAGMA wal_checkpoint`); and SQLite
+  folds the log in and deletes it only when the last connection closes (sqlite.org, `wal.html`), which a
+  connection still open elsewhere prevents. PRIVACY.md therefore says Scribe tries to empty the log when
+  it closes normally, and that contention or a failed checkpoint can leave earlier copies until the log
+  is next emptied. `ShutdownCheckpointTests` reads the files after each kind of close; never make the
+  close wait longer to turn that into a promise.
 - **`StorageMaintenance` owns all retention**: history text follows the retention setting (90 days by
   default), recordings at most 7 days and 250 MB, oldest first, cleanup failure samples 7 days, and
   damaged-copy files 14 days after they are first seen, except that the newest damaged copy is never

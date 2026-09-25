@@ -286,11 +286,13 @@ dictation or a settings save, interrupts maintenance, it does not empty the log
 until it tries again: two minutes later at first, twice as long after each
 further interruption, and never more than an hour later. If the database is in
 use at that moment, maintenance tries again shortly after, up to three times,
-and then hourly. Scribe also empties the log when it closes normally. Secure
-delete applies to everything Scribe deletes from its database, dictionary
-entries, snippets and profiles included, but Scribe does not empty the log
-specially after those deletions, so an earlier copy can stay there until the
-log is next emptied.
+and then hourly. Scribe also tries to empty the log when it closes normally,
+but if the database is still in use then, or the attempt does not succeed, an
+earlier copy can stay in the log until the log is next emptied. Secure delete
+applies to everything Scribe deletes from its database, dictionary entries,
+snippets and profiles included, but Scribe does not empty the log specially
+after those deletions, so an earlier copy can stay there until the log is next
+emptied.
 
 This has limits. Scribe versions up to 0.4.3 did not overwrite deleted content,
 so what they deleted can remain in unused space inside the database file until

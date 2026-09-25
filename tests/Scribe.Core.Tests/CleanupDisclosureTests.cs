@@ -213,7 +213,14 @@ public sealed class CleanupDisclosureTests
             policy, StringComparison.Ordinal);
         Assert.Contains(
             "maintenance tries again shortly after, up to three times, and then hourly.", policy, StringComparison.Ordinal);
-        Assert.Contains("Scribe also empties the log when it closes normally.", policy, StringComparison.Ordinal);
+
+        // A normal close only tries: SQLite reports a TRUNCATE checkpoint busy, and leaves the log, while another
+        // connection still uses it, and the close skips the checkpoint when it cannot have the write gate in time.
+        Assert.Contains(
+            "Scribe also tries to empty the log when it closes normally, but if the database is still in use then, or " +
+            "the attempt does not succeed, an earlier copy can stay in the log until the log is next emptied.",
+            policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("empties the log when it closes", policy, StringComparison.Ordinal);
         Assert.Contains(
             "Secure delete applies to everything Scribe deletes from its database, dictionary entries, snippets and " +
             "profiles included, but Scribe does not empty the log specially after those deletions",
