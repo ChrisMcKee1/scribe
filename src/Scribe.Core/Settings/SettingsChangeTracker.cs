@@ -10,6 +10,9 @@ public sealed record SettingsChangeSet(IReadOnlySet<SettingsPage> Pages)
 public static class SettingsChangeTracker
 {
     public const string AllChangesSaved = "All changes saved";
+    public const string TryDictationUnsavedNotice =
+        "You have unsaved changes. Try dictation uses the settings Scribe is running with.";
+    public const string TryDictationSaveNow = "Save now";
 
     public static SettingsChangeSet Compare(
         AppSettings baseline,

@@ -16,6 +16,15 @@ public sealed class SettingsChangeTrackerTests
     }
 
     [Fact]
+    public void Try_dictation_unsaved_notice_uses_the_plan_copy()
+    {
+        Assert.Equal(
+            "You have unsaved changes. Try dictation uses the settings Scribe is running with.",
+            SettingsChangeTracker.TryDictationUnsavedNotice);
+        Assert.Equal("Save now", SettingsChangeTracker.TryDictationSaveNow);
+    }
+
+    [Fact]
     public void Dirty_on_edit_and_clean_again_when_reverted()
     {
         var baseline = AppSettings.CreateDefault();
