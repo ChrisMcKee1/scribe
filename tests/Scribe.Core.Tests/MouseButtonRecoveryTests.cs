@@ -303,7 +303,8 @@ public sealed class MouseButtonRecoveryTests
         Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
     }
 
-    // A3: the leak check repairs a button only on the evidence of a release the hook swallowed.
+    // A3: the leak check never releases a mouse button (round 3 removed the repair altogether; see
+    // MouseButtonRound3Tests). These pin the sequences round 2 guarded, now with nothing ever injected.
 
     [Fact]
     public void The_leak_check_never_releases_a_button_the_engine_never_saw_go_down()
@@ -323,33 +324,32 @@ public sealed class MouseButtonRecoveryTests
     }
 
     [Fact]
-    public void The_leak_check_repairs_a_button_whose_swallowed_release_left_windows_holding_it_once()
+    public void The_leak_check_leaves_even_a_button_windows_holds_after_a_swallowed_release_alone()
     {
+        // The one state a repair could once fix: a press a missed deadline let through, then a release swallowed. On
+        // Windows 7 and later a hook that misses its deadline is removed rather than skipped, so that release reaches the
+        // app too; nothing is injected either way.
         using var h = new HotkeyEngineHarness(Bare(Back));
         var windows = new HashSet<uint>();
         var injected = new List<uint>();
         var reconciler = HotkeyService.CreateReconciler(h.Router, windows.Contains, Record(injected));
 
         Assert.True(h.ButtonDown(Back).Suppress);
-        windows.Add(Back); // a missed deadline let the press through to Windows
-        Assert.True(h.ButtonUp(Back).Suppress); // and the release was swallowed, so Windows still holds Back
+        windows.Add(Back);
+        Assert.True(h.ButtonUp(Back).Suppress);
 
-        Assert.Equal(new[] { Back }, reconciler.ReleaseLeakedKeys(Bare(Back)).Released);
-        Assert.Equal(new[] { Back }, injected.ToArray());
-
-        // That evidence answers one check: a later one touches nothing, whatever Windows holds by then.
         Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Back)).Released);
-        Assert.Single(injected);
+        Assert.Empty(injected);
     }
 
-    public static TheoryData<string> WaysTheEvidenceEnds => new()
+    public static TheoryData<string> ResetsAfterASwallowedRelease => new()
     {
         "a later press", "a desktop switch", "capture", "new bindings", "a lost mouse hook", "a reinstall",
     };
 
     [Theory]
-    [MemberData(nameof(WaysTheEvidenceEnds))]
-    public void The_evidence_of_a_swallowed_release_ends_with_the_next_press_and_with_every_reset(string what)
+    [MemberData(nameof(ResetsAfterASwallowedRelease))]
+    public void The_leak_check_releases_no_button_the_user_holds_after_any_reset(string what)
     {
         using var h = new HotkeyEngineHarness(Bare(Back));
         var windows = new HashSet<uint> { Back }; // from here on the user really holds Back, in another app
@@ -387,11 +387,10 @@ public sealed class MouseButtonRecoveryTests
     }
 
     [Fact]
-    public void A_press_during_capture_ends_the_evidence_of_the_release_swallowed_just_before_it()
+    public void A_press_during_capture_after_a_swallowed_release_is_never_released()
     {
-        // Set chosen while Middle is held; its owed release is swallowed during the capture, which is evidence; then the
-        // user presses Middle for the capture itself. The machines track nothing during a capture, so only that press
-        // ending the evidence keeps the leak check from releasing the button the user is holding.
+        // Set chosen while Middle is held; its owed release is swallowed during the capture; then the user presses Middle
+        // for the capture itself, which the machines do not track.
         using var h = new HotkeyEngineHarness(Bare(Middle));
         var windows = new HashSet<uint>();
         var injected = new List<uint>();

@@ -116,6 +116,91 @@ public partial class HotkeyServiceTests
         Assert.Equal(1, service.MouseHookLossesHandled);
     }
 
+    // G1: the last mouse binding replaced by a key while Back is still held after a swallowed press. The service keeps a
+    // drain-only mouse hook until the owed release arrives, and removes it once the debt is gone, whether the release came
+    // or Back was pressed again. The test plays the hook thread between its messages; nothing else feeds this engine on
+    // a desktop that receives no input (on CI the injected version below covers the real callback).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Start_keeps_a_drain_only_mouse_hook_until_the_owed_release_is_paid(bool pressedAgain)
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        service.Start();
+        var engine = service.CurrentEngineForTests!;
+        Assert.True(engine.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress);
+
+        service.UpdateBindings(HotkeyBinding.DefaultDictation, null);
+        AwaitRenewal(service);
+        Assert.False(engine.UsesMouseButtons);
+        Assert.True(service.MouseHookInstalled, "The mouse hook was removed while a swallowed press still owed its release.");
+
+        if (pressedAgain)
+        {
+            Assert.False(engine.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress); // no binding: the user's own
+        }
+        else
+        {
+            Assert.True(engine.OnMouseButtonEvent(MouseButtons.Back, isDown: false).Suppress);
+        }
+
+        AwaitMouseHookRemoved(service);
+    }
+
+    [Fact]
+    public void Start_swallows_an_owed_button_release_after_the_last_mouse_binding_is_gone()
+    {
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        using var guard = new InjectedMouseGuard();
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        var events = new ConcurrentQueue<string>();
+        service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
+        service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger);
+        service.Start();
+
+        Inject(ButtonDown(MouseButtons.Back));
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The bound button started nothing.");
+        service.UpdateBindings(HotkeyBinding.DefaultDictation, null); // Save with a key while Back is still held
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The new bindings left the dictation running.");
+        AwaitRenewal(service);
+        Assert.True(service.MouseHookInstalled);
+
+        // Back's release, then an unbound Forward click: once the guard has the click, Back's release, sent before it,
+        // would be there too had the drain-only hook passed it on.
+        Inject(ButtonUp(MouseButtons.Back), ButtonDown(MouseButtons.Forward), ButtonUp(MouseButtons.Forward));
+        Assert.True(guard.WaitFor(2), "The unbound click never came through.");
+        Assert.Equal(
+            new[] { Message(ButtonDown(MouseButtons.Forward)), Message(ButtonUp(MouseButtons.Forward)) },
+            guard.SeenWithoutMoves);
+
+        // The swallowed release asks for the leak check, which asks the hook thread to drop the hook nobody needs now:
+        // no watchdog upkeep is needed for that.
+        AwaitMouseHookRemoved(service, allowUpkeep: false);
+    }
+
+    // Removed at the hook thread's next sync once nothing needs it: the swallowed release's own request, or, with
+    // allowUpkeep, the watchdog's upkeep, which is the only sync when the debt went with a new press.
+    private static void AwaitMouseHookRemoved(HotkeyService service, bool allowUpkeep = true)
+    {
+        if (allowUpkeep)
+        {
+            service.MaintainMouseHookNow();
+        }
+
+        Assert.True(
+            SpinWait.SpinUntil(() => !service.MouseHookInstalled, HookTimeout),
+            "The drain-only mouse hook outlived the release it was kept for.");
+    }
+
     [Fact]
     public void Start_ends_a_button_hold_whose_release_came_while_the_mouse_hook_was_gone()
     {
@@ -334,9 +419,12 @@ public partial class HotkeyServiceTests
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Forward), () => true);
         service.Start();
 
-        // What the leaked-input check sends for a bound button Windows still holds: Windows hands the hook only the low
-        // half of its marker, which the hook still recognizes, so the engine never takes the release as the user's.
-        Inject(NativeMethods.MarkedMouseButtonUp(MouseButtons.Forward));
+        // A button release carrying Scribe's own marker (Scribe injects no mouse input today, so only a test sends one):
+        // Windows hands the hook only the low half of the marker, which the hook still recognizes, so the engine never
+        // takes such a release as the user's.
+        var marked = Mouse(MouseEventXUp, data: 2);
+        marked.U.mi.dwExtraInfo = SyntheticInputMarker.Value;
+        Inject(marked);
 
         Assert.True(guard.WaitFor(1), "Scribe's own release never came through the service's hook.");
         Assert.Equal(new[] { (MouseHookFilter.WM_XBUTTONUP, 0x0002_0000u) }, guard.SeenWithoutMoves);

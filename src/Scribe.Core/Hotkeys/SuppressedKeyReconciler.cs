@@ -11,6 +11,14 @@ namespace Scribe.Core.Hotkeys;
 /// stuck down, and because the hook keeps swallowing that key, the user can never release it from
 /// the affected side of the keyboard. This class detects exactly that state (system says down,
 /// the hook's physical view says released) and injects a synthetic key-up to unstick it.
+///
+/// Keys only: a mouse button is never a candidate, and Scribe injects no mouse input of any kind. "The hook does not
+/// hold it" also means "the hook never saw it go down", as for a button held in another app since before the mouse hook
+/// existed, and a claim made on better evidence could still be overtaken by a new press before the injection, which then
+/// ended a drag the user was making. Nothing needs the repair either: a mouse button does not repeat, and on Windows 7 and
+/// later a hook that misses the deadline is removed rather than skipped, so a release after a leaked press reaches the
+/// app like the press did, and the recording that press started ends through the lost-hook recovery
+/// (<see cref="HotkeyEngine.OnMouseHookLost"/>).
 /// </summary>
 internal sealed class SuppressedKeyReconciler
 {
@@ -29,7 +37,6 @@ internal sealed class SuppressedKeyReconciler
     private readonly Func<uint, bool> _isLogicallyDown;
     private readonly Func<uint, bool> _isPhysicallyPressed;
     private readonly Func<uint, bool> _releaseKey;
-    private readonly Func<uint, bool>? _claimButtonRelease;
 
     /// <param name="isLogicallyDown">The system's view (GetAsyncKeyState high bit).</param>
     /// <param name="isPhysicallyPressed">The hook's view (ChordStateMachine.IsPressed).</param>
@@ -37,30 +44,21 @@ internal sealed class SuppressedKeyReconciler
     /// Injects a synthetic, marker-tagged key-up; returns false when the injection was rejected
     /// (e.g. UIPI or a desktop switch), so a failed release is never reported as healed.
     /// </param>
-    /// <param name="claimButtonRelease">
-    /// For a mouse button: claims the engine's evidence that it swallowed that button's release (true once per swallowed
-    /// release; see <see cref="HotkeyEngine.ClaimButtonReleaseEvidence"/>). Null: no mouse button is ever released.
-    /// </param>
     public SuppressedKeyReconciler(
         Func<uint, bool> isLogicallyDown,
         Func<uint, bool> isPhysicallyPressed,
-        Func<uint, bool> releaseKey,
-        Func<uint, bool>? claimButtonRelease = null)
+        Func<uint, bool> releaseKey)
     {
         _isLogicallyDown = isLogicallyDown;
         _isPhysicallyPressed = isPhysicallyPressed;
         _releaseKey = releaseKey;
-        _claimButtonRelease = claimButtonRelease;
     }
 
     /// <summary>
     /// Releases every candidate key of <paramref name="binding"/> that the system believes is
     /// still down although the hook saw it released. A key the user genuinely holds right now
     /// (hook agrees it is down) is never touched, so a real modifier held for a shortcut
-    /// survives reconciliation. A mouse button needs more than that: the hook not holding a button
-    /// also means it never saw it go down (held in another app since before the mouse hook existed,
-    /// or while Windows had removed it), so one is released only on the engine's evidence of a
-    /// release it swallowed, claimed here once whatever Windows reports, and never without it.
+    /// survives reconciliation.
     /// </summary>
     public Result ReleaseLeakedKeys(HotkeyBinding binding)
     {
@@ -73,11 +71,6 @@ internal sealed class SuppressedKeyReconciler
         List<uint>? failed = null;
         foreach (var key in CandidateKeys(binding))
         {
-            if (MouseButtons.IsMouseButton(key) && _claimButtonRelease?.Invoke(key) != true)
-            {
-                continue;
-            }
-
             if (_isLogicallyDown(key) && !_isPhysicallyPressed(key))
             {
                 if (_releaseKey(key))
@@ -97,12 +90,17 @@ internal sealed class SuppressedKeyReconciler
     /// <summary>
     /// The physical keys this binding can suppress: the explicit chord keys plus, for a
     /// modifier-flag binding, both left/right variants (the hook suppresses whichever generic
-    /// modifier completes the chord).
+    /// modifier completes the chord). Never a mouse button (see the class summary).
     /// </summary>
     internal static IEnumerable<uint> CandidateKeys(HotkeyBinding binding)
     {
-        var keys = new HashSet<uint> { binding.VirtualKey };
-        if (binding.SecondaryVirtualKey is { } secondary)
+        var keys = new HashSet<uint>();
+        if (!MouseButtons.IsMouseButton(binding.VirtualKey))
+        {
+            keys.Add(binding.VirtualKey);
+        }
+
+        if (binding.SecondaryVirtualKey is { } secondary && !MouseButtons.IsMouseButton(secondary))
         {
             keys.Add(secondary);
         }

@@ -76,8 +76,9 @@ internal static class MouseHookFilter
     /// <summary>
     /// The hook callback's decision: true to swallow the message (the callback returns 1), false to pass it to the next
     /// hook. Hook thread only. Anything but a button message returns false before <paramref name="lParam"/> is read, so
-    /// a test can pass zero for it; a button message injected by Scribe itself (the leaked-button release carries
-    /// <see cref="SyntheticInputMarker"/>) is passed on as the keyboard hook passes its own. Like the keyboard callback
+    /// a test can pass zero for it; a button message carrying <see cref="SyntheticInputMarker"/> is passed on as the
+    /// keyboard hook passes Scribe's own input (Scribe injects no mouse input today; the check keeps any it ever does out
+    /// of the engine). Like the keyboard callback
     /// this never waits, locks or logs; its only allocation is the one the engine makes when a press or release starts
     /// or ends a dictation.
     /// </summary>
