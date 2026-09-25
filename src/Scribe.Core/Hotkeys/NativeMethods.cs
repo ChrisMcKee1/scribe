@@ -330,41 +330,6 @@ internal static partial class NativeMethods
         return SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
     }
 
+    // The INPUT type for mouse input. Scribe injects none (the leak check covers keys only); the tests build theirs with it.
     internal const uint INPUT_MOUSE = 0;
-    internal const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
-    internal const uint MOUSEEVENTF_XUP = 0x0100;
-
-    /// <summary>
-    /// The synthetic, marker-tagged release of a middle or side mouse button (<see cref="MouseButtons"/>), for the
-    /// leaked-input reconciler: the mouse counterpart of <see cref="SendMarkedKeyEvent"/>. It moves nothing, since
-    /// neither MOUSEEVENTF_MOVE nor an absolute position is set, and the mouse hook passes it on because of the marker.
-    /// </summary>
-    internal static INPUT MarkedMouseButtonUp(uint button)
-    {
-        var (flags, data) = button switch
-        {
-            MouseButtons.Middle => (MOUSEEVENTF_MIDDLEUP, 0u),
-            MouseButtons.Back => (MOUSEEVENTF_XUP, 0x0001u), // XBUTTON1
-            MouseButtons.Forward => (MOUSEEVENTF_XUP, 0x0002u), // XBUTTON2
-            _ => throw new ArgumentOutOfRangeException(nameof(button), button, "Not a bindable mouse button."),
-        };
-
-        return new INPUT
-        {
-            type = INPUT_MOUSE,
-            U = new InputUnion
-            {
-                mi = new MOUSEINPUT
-                {
-                    mouseData = data,
-                    dwFlags = flags,
-                    dwExtraInfo = SyntheticInputMarker.Value,
-                },
-            },
-        };
-    }
-
-    /// <summary>Injects <see cref="MarkedMouseButtonUp"/>; false when SendInput rejected it.</summary>
-    internal static bool SendMarkedMouseButtonUp(uint button) =>
-        SendInput(1, [MarkedMouseButtonUp(button)], Marshal.SizeOf<INPUT>()) == 1;
 }

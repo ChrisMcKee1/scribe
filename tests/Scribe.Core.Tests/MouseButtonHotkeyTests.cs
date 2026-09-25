@@ -679,35 +679,38 @@ public sealed class MouseButtonHotkeyTests
         Assert.True(checkRan.Wait(TimeSpan.FromSeconds(10)), "The swallowed release never asked for the leak check.");
     }
 
-    [Theory]
-    [InlineData(Middle, NativeMethods.MOUSEEVENTF_MIDDLEUP, 0u)]
-    [InlineData(Back, NativeMethods.MOUSEEVENTF_XUP, 1u)]
-    [InlineData(Forward, NativeMethods.MOUSEEVENTF_XUP, 2u)]
-    public void The_leaked_button_release_releases_that_button_moves_nothing_and_is_marked(uint button, uint flags, uint data)
+    [Fact]
+    public void No_production_code_injects_mouse_input()
     {
-        var input = NativeMethods.MarkedMouseButtonUp(button);
+        // The leak check covers keys only, and nothing else sends mouse input: Scribe injects no mouse button event.
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "Scribe.slnx")))
+        {
+            root = Path.GetDirectoryName(root.TrimEnd(Path.DirectorySeparatorChar))!;
+        }
 
-        Assert.Equal(NativeMethods.INPUT_MOUSE, input.type);
-        Assert.Equal(flags, input.U.mi.dwFlags); // no MOUSEEVENTF_MOVE (0x1) or MOUSEEVENTF_ABSOLUTE (0x8000)
-        Assert.Equal(data, input.U.mi.mouseData);
-        Assert.Equal(0, input.U.mi.dx);
-        Assert.Equal(0, input.U.mi.dy);
-        Assert.Equal(SyntheticInputMarker.Value, input.U.mi.dwExtraInfo);
-        Assert.Throws<ArgumentOutOfRangeException>(() => NativeMethods.MarkedMouseButtonUp(MouseButtons.Left));
+        var sources = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(path => (path, text: File.ReadAllText(path)));
+        foreach (var (path, text) in sources)
+        {
+            Assert.DoesNotContain("type = INPUT_MOUSE", text);
+            Assert.DoesNotContain("type = NativeMethods.INPUT_MOUSE", text);
+            Assert.DoesNotContain("MOUSEEVENTF_", text);
+        }
     }
 
     [Fact]
-    public void The_leak_check_covers_a_bound_button_but_releases_one_only_on_evidence()
+    public void The_leak_check_never_lists_or_releases_a_mouse_button()
     {
-        Assert.Equal(new[] { Back }, SuppressedKeyReconciler.CandidateKeys(Bare(Back)));
-        Assert.Equal(new[] { Back, LeftCtrl }, SuppressedKeyReconciler.CandidateKeys(Chord(LeftCtrl, Back)).OrderBy(k => k));
+        Assert.Empty(SuppressedKeyReconciler.CandidateKeys(Bare(Back)));
+        Assert.Equal(new[] { LeftCtrl }, SuppressedKeyReconciler.CandidateKeys(Chord(LeftCtrl, Back)).ToArray());
 
-        // Windows holding a button the hook sees released is not enough: without the engine's evidence of a release it
-        // swallowed (MouseButtonRecoveryTests), the button may simply be held for another app since before the hook saw it.
-        var windowsDown = new HashSet<uint> { Back, Middle };
-        var hookDown = new HashSet<uint> { Middle };
+        // Windows holding a button the hook sees released is never reason enough: the button may be held for another app
+        // since before the hook saw it, and a new press can overtake any check (MouseButtonRound3Tests).
+        var windowsDown = new HashSet<uint> { Back, Middle, LeftCtrl };
         var released = new List<uint>();
-        var reconciler = new SuppressedKeyReconciler(windowsDown.Contains, hookDown.Contains, key =>
+        var reconciler = new SuppressedKeyReconciler(windowsDown.Contains, _ => false, key =>
         {
             released.Add(key);
             return true;
@@ -715,22 +718,8 @@ public sealed class MouseButtonHotkeyTests
 
         Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Back)).Released);
         Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Middle)).Released);
-        Assert.Empty(released);
-
-        var claimed = new List<uint>();
-        var withEvidence = new SuppressedKeyReconciler(windowsDown.Contains, hookDown.Contains, key =>
-        {
-            released.Add(key);
-            return true;
-        }, button =>
-        {
-            claimed.Add(button);
-            return button == Back;
-        });
-        Assert.Equal(new[] { Back }, withEvidence.ReleaseLeakedKeys(Bare(Back)).Released);
-        Assert.Empty(withEvidence.ReleaseLeakedKeys(Bare(Middle)).Released); // no evidence for Middle, held for real besides
-        Assert.Equal(new[] { Back }, released);
-        Assert.Equal(new[] { Back, Middle }, claimed.ToArray());
+        Assert.Equal(new[] { LeftCtrl }, reconciler.ReleaseLeakedKeys(Chord(LeftCtrl, Back)).Released); // keys as before
+        Assert.Equal(new[] { LeftCtrl }, released);
     }
 
     // A mouse's buttons beyond the fifth reach Scribe only as the keys its software or firmware sends for them (Windows

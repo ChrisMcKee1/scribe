@@ -749,7 +749,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   installs it, or removes it, between messages and never inside a callback, whenever it has applied a
   change (`HookInstallation.SyncMouseHook`, after `HotkeyEngine.UsesMouseButtons`), so nobody who binds
   keys alone gets a system-wide mouse hook: every pointer move on the desktop waits for this thread
-  while one is installed. Its callback's first act is the one comparison
+  while one is installed. The one exception is drain-only: while a swallowed press still owes its
+  release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
+  swallow that release and nothing else (no binding can use a button then), and it is removed at the
+  thread's next sync once the debt is gone: the swallowed release asks for that sync at once, and a new
+  press of the button leaves it to the watchdog, within one period. Its callback's first act is the one comparison
   (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
   hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
   `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event
@@ -761,8 +765,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   move that reaches the desktop brings back a pointer hidden while typing. So every watchdog period
   (`MaintainMouseHookLocked`) the thread registers the mouse hook afresh, the new registration before
   the old one is released and both before it takes another message, so the engine keeps its state and
-  no event falls between them; a registration Windows removed is back within one period, which is
-  registration recovery only. **A renewal that finds the old registration already gone is a lost
+  no event falls between them; a registration Windows removed is normally back within one period,
+  which is registration recovery only (a renewal whose new registration Windows refuses keeps the old
+  one, found gone or not, and tries again next period). **A renewal that finds the old registration already gone is a lost
   hook, and the engine is told** (`HotkeyEngine.OnMouseHookLost`, on the hook thread between
   messages, before any button event reaches the new registration): while it was gone no hook saw the
   mouse, so a held button's release, or a toggle's second click, may be the input nobody saw. Both
@@ -771,34 +776,40 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   activation epoch and then ends that dictation, reported as `HotkeyDeactivation.MouseHookLost`
   (`DictationStopReason.MouseHookLost` in the log), so its queued Activated can never open the
   microphone; a keyboard binding's dictation and its queued start are left alone. So recording
-  recovery comes at that renewal, at most one watchdog period after the loss, and until then a press
-  or release no hook saw reaches the app. The loss is logged. Nothing is injected and nothing is added
-  to any event.
+  recovery is best effort and comes at the renewal that finds the loss, normally one watchdog period
+  after it, later if a renewal's registration fails, and until then a press or release no hook saw
+  reaches the app. The loss is logged. Nothing is injected and nothing is added to any event.
 - **A swallowed button press owes its release.** The engine, not the machines whose resets forget,
   keeps the buttons whose press it swallowed until their release comes, and swallows that release
   once, whatever happened in between: every path that clears the machines' state (a desktop switch,
-  capture, new bindings, a dictation-only trigger removed, a mouse hook found removed), and a reinstall,
+  capture, new bindings, a dictation-only trigger removed, a mouse hook found removed), a reinstall,
   whose new engine takes the debts from the retired one (`HotkeyCommandRouter.BeginEngine`,
-  `HotkeyEngine.OwedButtonReleases`). DefWindowProc makes a side button's lone release a
+  `HotkeyEngine.OwedButtonReleases`), and new bindings with no mouse button at all, which keep the
+  drain-only hook above. DefWindowProc makes a side button's lone release a
   `WM_APPCOMMAND` (Back or Forward), so passing it on navigated the app under the pointer. A new press
   of the button retires the debt (buttons never repeat, so its release went up where no hook could
-  see it) and is judged afresh; nothing is ever injected for it. `MouseButtonRecoveryTests` pins each
-  path. Keys keep the reset they had: a key's lone release does nothing
+  see it) and is judged afresh; nothing is ever injected for it. The debts are one word changed by
+  compare-exchange, which the retirement seals: a press is swallowed only once its debt is committed,
+  so a press a reinstall overtakes while its callback is still judging it reaches the app whole, with
+  its release, and a debt committed before the seal is always handed on (the arbiter's rule, for
+  debts). `MouseButtonRecoveryTests` and `MouseButtonRound3Tests` pin each path. Keys keep the reset
+  they had: a key's lone release does nothing
   documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
   `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
-  Not covered: new bindings that need no mouse hook at all, which remove it, and a release made while
-  no mouse hook exists (Windows removed it, or a reinstall is between the old thread's exit and the new
-  one's install), which goes to the app.
-- **The leaked-input check releases a button only on evidence.** It releases a bound button Windows
-  still holds with a marked button-up (`NativeMethods.MarkedMouseButtonUp`), as it releases a key, but
-  only on the engine's evidence of a release it swallowed (`HotkeyEngine.ClaimButtonReleaseEvidence`):
-  the one state in which Windows holds a bound button the user let go of is a press a missed deadline
-  let through whose release was then swallowed. "The engine does not hold it" also means "the engine
-  never saw it go down", as for a button held in another app since before the mouse hook existed, which
-  a release would end mid-drag. The evidence answers one check (a compare-exchange claims it), and a
-  new press of the button, a desktop switch, capture, new bindings, a lost mouse hook and a reinstall
-  all end it. Keys keep the older rule, which can still misjudge a key held since before a keyboard hook
-  reinstall (a new engine never saw it go down); reinstalls are rare. **Windows hands a low-level mouse hook only
+  Not covered: a release made while no mouse hook exists (Windows removed it, or a reinstall is between
+  the old thread's exit and the new one's install), which goes to the app.
+- **Scribe injects no mouse input, and the leaked-input check covers keys only.** No mouse button is
+  ever a candidate of `SuppressedKeyReconciler`, and no production code builds mouse `INPUT`
+  (`MouseButtonHotkeyTests.No_production_code_injects_mouse_input`): "the engine does not hold it" also
+  means "the engine never saw it go down", as for a button held in another app since before the mouse
+  hook existed, and even a claim made on better evidence was overtaken, in review, by a new press
+  during capture before the injection, which then ended the user's drag. Nothing needs that repair:
+  buttons do not repeat, and on Windows 7 and later a hook that misses its deadline is removed rather
+  than skipped, so a release after a leaked press reaches the app like the press did, and the
+  recording it started ends through the lost-hook recovery above, not through an injected release. So
+  no button-up, and no mouse input of any kind, is ever injected by this feature. Keys keep the older
+  rule, which can still misjudge a key held since before a keyboard hook reinstall (a new engine never
+  saw it go down); reinstalls are rare. **Windows hands a low-level mouse hook only
   the low 32 bits of `MOUSEINPUT.dwExtraInfo`** (measured on both CI runners: a 64-bit value arrived with
   its high half zeroed), so the mouse hook recognizes Scribe's own input by the low half of
   `SyntheticInputMarker` (`MouseHookFilter.Marker`); a full-width compare never matches there. Windows

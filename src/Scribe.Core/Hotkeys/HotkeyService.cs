@@ -110,19 +110,15 @@ public sealed class HotkeyService : IHotkeyService
 
     /// <summary>
     /// The leak check the service runs, over <paramref name="router"/>'s current engine; <paramref name="isLogicallyDown"/>
-    /// is Windows' view and <paramref name="releaseInput"/> the repair, which a test replaces. A mouse button is released
-    /// only on the engine's evidence of a release it swallowed (<see cref="HotkeyEngine.ClaimButtonReleaseEvidence"/>).
+    /// is Windows' view and <paramref name="releaseInput"/> the repair, which a test replaces. Keys only: no mouse button
+    /// is ever a candidate (see <see cref="SuppressedKeyReconciler"/>).
     /// </summary>
     internal static SuppressedKeyReconciler CreateReconciler(
         HotkeyCommandRouter router, Func<uint, bool> isLogicallyDown, Func<uint, bool> releaseInput) =>
-        new(isLogicallyDown, router.IsPressed, releaseInput, router.ClaimButtonRelease);
+        new(isLogicallyDown, router.IsPressed, releaseInput);
 
-    // A key left down gets a marked key-up and a mouse button left down a marked button-up: the same repair for either
-    // hook. GetAsyncKeyState, the reconciler's view of Windows, reports the mouse buttons as well as the keys.
-    private static bool ReleaseLeakedInput(uint key) =>
-        MouseButtons.IsBindable(key)
-            ? NativeMethods.SendMarkedMouseButtonUp(key)
-            : NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true);
+    // A key left down gets a marked key-up. Scribe injects no mouse input at all: the leak check never lists a mouse button.
+    private static bool ReleaseLeakedInput(uint key) => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true);
 
     // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding while
     // the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
@@ -160,6 +156,12 @@ public sealed class HotkeyService : IHotkeyService
 
     /// <summary>How many times the current engine was told its mouse hook had been found removed; for tests.</summary>
     internal long MouseHookLossesHandled => _router.CurrentEngine?.MouseHookLossesHandled ?? 0;
+
+    /// <summary>
+    /// The engine the hook thread drives, for a test on a desktop with no input to play that thread between its messages
+    /// (after <see cref="MaintainMouseHookNow"/> has been answered), never while it is busy.
+    /// </summary>
+    internal HotkeyEngine? CurrentEngineForTests => _router.CurrentEngine;
 
     /// <summary>What the watchdog does for the mouse hook each period, done now; for tests.</summary>
     internal void MaintainMouseHookNow()
@@ -466,6 +468,14 @@ public sealed class HotkeyService : IHotkeyService
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
+
+            // A swallowed release asks for this check, so it is also the moment a drain-only mouse hook, kept only for
+            // that release, stops being needed: the hook thread removes it at its next sync, which this asks for now.
+            if (CurrentInstallation is { MouseHookInstalled: true, MouseHookWanted: false } drained)
+            {
+                drained.RequestMouseHookRefresh();
+            }
+
             var result = _reconciler.ReleaseLeakedKeys(Binding);
             if (DictationOnlyBinding is { } dictationOnly)
             {
@@ -575,8 +585,9 @@ public sealed class HotkeyService : IHotkeyService
     // whose callback misses the deadline, and the mouse hook is the one called for every pointer move, but it is not
     // probed: any mouse input that clicks nothing is a move, and a move reaching the desktop brings back a pointer hidden
     // while typing. Renewing injects nothing, adds nothing to any event and keeps the engine's state, and a registration
-    // Windows removed is back within one period; that renewal is also when the engine learns the hook was gone and ends a
-    // dictation a mouse button was driving (HotkeyEngine.OnMouseHookLost). Callers hold _sync.
+    // Windows removed is normally back within one period (best effort: a renewal Windows refuses keeps the old
+    // registration, found gone or not, until a later one succeeds); that renewal is also when the engine learns the hook
+    // was gone and ends a dictation a mouse button was driving (HotkeyEngine.OnMouseHookLost). Callers hold _sync.
     private void MaintainMouseHookLocked()
     {
         if (_installation is not { } installation)
@@ -712,13 +723,14 @@ public sealed class HotkeyService : IHotkeyService
     /// what lets a reinstall proceed while a previous hook thread is still winding down.
     ///
     /// The mouse hook is part of the installation but exists only while a binding presses a mouse
-    /// button (<see cref="HotkeyEngine.UsesMouseButtons"/>): the thread installs or removes it between
+    /// button (<see cref="HotkeyEngine.UsesMouseButtons"/>), or, drain-only, while a swallowed press
+    /// still owes its release (<see cref="HotkeyEngine.OwesButtonRelease"/>): the thread installs or removes it between
     /// messages, whenever it has applied a change, so nobody who binds keys alone gets a system-wide
     /// mouse hook, and every mouse event on the desktop waits for this thread only while one is bound.
     /// It is not probed like the keyboard hook: the only probe that clicks nothing is a move, and a
     /// move reaching the desktop brings back a pointer hidden while typing. Instead the watchdog has
     /// the thread register it afresh every period (<see cref="SyncMouseHook"/>), so a registration
-    /// Windows removed for missing the callback deadline is back within one period, and a dictation a
+    /// Windows removed for missing the callback deadline is normally back within one period, and a dictation a
     /// mouse button was driving meanwhile is ended then (<see cref="HotkeyEngine.OnMouseHookLost"/>).
     /// </summary>
     private sealed class HookInstallation
@@ -789,8 +801,11 @@ public sealed class HotkeyService : IHotkeyService
         /// <summary>Any thread: whether the mouse hook is registered right now.</summary>
         public bool MouseHookInstalled => Volatile.Read(ref _mouseHookId) != 0;
 
-        /// <summary>Any thread: whether this installation's bindings want the mouse hook.</summary>
-        public bool MouseHookWanted => !_engine.IsRetired && _engine.UsesMouseButtons;
+        /// <summary>
+        /// Any thread: whether this installation needs its mouse hook: a binding presses a mouse button, or a swallowed
+        /// press still owes its release, which a drain-only hook must still swallow once the last mouse binding is gone.
+        /// </summary>
+        public bool MouseHookWanted => !_engine.IsRetired && (_engine.UsesMouseButtons || _engine.OwesButtonRelease);
 
         /// <summary>
         /// Any thread: the Win32 error of the last failed attempt to register the mouse hook, or 0 once one succeeded or
@@ -959,8 +974,10 @@ public sealed class HotkeyService : IHotkeyService
         }
 
         // Hook thread only, between messages, never inside a hook callback. Installs the mouse hook while a binding presses
-        // a mouse button and removes it once none does, or once this engine is retired (a pass-through hook would still
-        // make every pointer move wait for this thread). With refresh, a hook that is wanted and installed is registered
+        // a mouse button, or, drain-only, while a swallowed press still owes its release after the last such binding went
+        // (the engine swallows that release and nothing else: no binding can use the button), and removes it once neither
+        // holds, or once this engine is retired (a pass-through hook would still make every pointer move wait for this
+        // thread). With refresh, a hook that is wanted and installed is registered
         // afresh: the new registration first and the old one released after it, both before this thread takes another
         // message, so no button event can fall between them and the engine keeps its state through the change. A failed
         // registration keeps the one in place. An old registration that can no longer be released was already gone,
@@ -968,7 +985,7 @@ public sealed class HotkeyService : IHotkeyService
         private void SyncMouseHook(bool refresh)
         {
             var current = _mouseHookId;
-            if (_engine.IsRetired || !_engine.UsesMouseButtons)
+            if (!MouseHookWanted)
             {
                 Volatile.Write(ref _mouseHookError, 0);
                 RemoveMouseHook();
