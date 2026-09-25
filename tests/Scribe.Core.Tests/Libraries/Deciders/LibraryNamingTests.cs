@@ -66,9 +66,9 @@ public sealed class LibraryNamingTests
     [Fact]
     public void Suggested_names_are_unique_without_case_and_use_ascii_hyphens()
     {
-        Assert.Equal("New library", LibraryNaming.NewLibraryName(["Team terms"]));
-        Assert.Equal("New library 2", LibraryNaming.NewLibraryName(["new LIBRARY"]));
-        Assert.Equal("New library 3", LibraryNaming.NewLibraryName(["New library", "New library 2"]));
+        Assert.Equal("New word pack", LibraryNaming.NewLibraryName(["Team terms"]));
+        Assert.Equal("New word pack 2", LibraryNaming.NewLibraryName(["new WORD PACK"]));
+        Assert.Equal("New word pack 3", LibraryNaming.NewLibraryName(["New word pack", "New word pack 2"]));
         Assert.Equal("GitHub - Copy", LibraryNaming.CopyName("GitHub", ["GitHub"]));
         Assert.Equal("GitHub - Copy 2", LibraryNaming.CopyName("GitHub", ["GitHub", "github - copy"]));
         Assert.Equal("Team terms (changed outside Scribe)", LibraryNaming.ChangedOutsideName("Team terms"));
@@ -85,23 +85,23 @@ public sealed class LibraryNamingTests
         var catalog = Catalog(
             [
                 BuiltIn(GitHubId),
-                Custom("custom-new-library", "Old thing", [new TermValues("a", "A")]),
+                Custom("custom-new-word-pack", "Old thing", [new TermValues("a", "A")]),
                 Custom("custom-github", "Hand placed", [new TermValues("b", "B")], fileName: "github.csv"),
             ],
-            recentlyDeleted: [Deleted("20260901T100000Z.custom-new-library-2.csv", "custom-new-library-2", "Gone").Entry]);
+            recentlyDeleted: [Deleted("20260901T100000Z.custom-new-word-pack-2.csv", "custom-new-word-pack-2", "Gone").Entry]);
         var workspace = Workspace(catalog);
 
         var first = workspace.CreateLibrary();
         var second = workspace.CreateLibrary();
 
-        Assert.Equal("custom-new-library-3", first);
-        Assert.Equal("custom-new-library-2-2", second);
-        Assert.Equal("New library", workspace.Draft.Find(first)!.Content.Name);
-        Assert.Equal("New library 2", workspace.Draft.Find(second)!.Content.Name);
+        Assert.Equal("custom-new-word-pack-3", first);
+        Assert.Equal("custom-new-word-pack-2-2", second);
+        Assert.Equal("New word pack", workspace.Draft.Find(first)!.Content.Name);
+        Assert.Equal("New word pack 2", workspace.Draft.Find(second)!.Content.Name);
 
         // The id is fixed at creation: a rename changes neither the id nor the file name.
         workspace.Rename(first, "Release notes");
-        Assert.Equal("custom-new-library-3.csv", workspace.Draft.Find(first)!.FileName);
+        Assert.Equal("custom-new-word-pack-3.csv", workspace.Draft.Find(first)!.FileName);
         Assert.Null(workspace.Draft.Find("custom-release-notes"));
     }
 

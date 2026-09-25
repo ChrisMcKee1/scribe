@@ -16,7 +16,7 @@ public sealed record LibrarySearchMatches(string LibraryId, IReadOnlyList<long> 
 }
 
 /// <summary>
-/// What "Search all libraries" found: every library searched with its matches (none included), in the order searched.
+/// What "Search all word packs" found: every library searched with its matches (none included), in the order searched.
 /// It never says which library to select: the selection stays where the user put it (plan 3.1, review finding I4), and a
 /// selected library with no matches says where the others are (<see cref="FoundElsewhere"/>).
 /// </summary>
@@ -67,7 +67,7 @@ public sealed class LibrarySearchResult
 }
 
 /// <summary>
-/// "Search all libraries" (plan 3.1): Spoken or Written containing the query, case- and accent-insensitive by the
+/// "Search all word packs" (plan 3.1): Spoken or Written containing the query, case- and accent-insensitive by the
 /// culture captured when the page loads, per library.
 /// </summary>
 /// <remarks>

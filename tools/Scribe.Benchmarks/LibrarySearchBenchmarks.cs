@@ -7,7 +7,7 @@ using Scribe.Core.Settings;
 namespace Scribe.Benchmarks;
 
 /// <summary>
-/// "Search all libraries" and the terms grid's Sort menu at the sizes plan 3.14 names: the 1,549 shipped rows, and
+/// "Search all word packs" and the terms grid's Sort menu at the sizes plan 3.14 names: the 1,549 shipped rows, and
 /// 10,000 and 100,000 library terms (the shipped rows plus custom libraries of up to 10,000 terms each). The search
 /// runs on every debounced keystroke (150 ms), so its time at 100,000 terms is what decides whether the page needs
 /// anything smarter than a scan.

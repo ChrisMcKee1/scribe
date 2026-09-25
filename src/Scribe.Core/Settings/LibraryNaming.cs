@@ -4,10 +4,17 @@ using Scribe.Core.Libraries;
 namespace Scribe.Core.Settings;
 
 /// <summary>
-/// Names and ids for custom libraries: the names the editor suggests ("New library", "GitHub - Copy", a kept version's
+/// Names and ids for custom libraries: the names the editor suggests ("New word pack", "GitHub - Copy", a kept version's
 /// "(changed outside Scribe)"), the uniqueness check a typed name gets, and the ids a new or remapped library is given.
 /// </summary>
 /// <remarks>
+/// <para>
+/// People know libraries as word packs (the maintainer's product decision), so every name suggested here says word pack,
+/// in sentence case. The code, the ids and the file names keep "library": an id is derived from the name a library is
+/// created with, by the unchanged rule, so a new word pack's id follows its default name (<c>custom-new-word-pack</c>),
+/// and the slug's own fallback for a name with no letter or digit stays <c>library</c>, which the storage stream's copy
+/// of the rule shares.
+/// </para>
 /// <para>
 /// An id is fixed when the library is created and never follows a rename, because the local state, the legacy markers
 /// and the file name all refer to it (review finding R11). New ids are <c>custom-&lt;slug&gt;</c>, which no built-in id can
@@ -33,22 +40,22 @@ public static class LibraryNaming
     public const string CustomIdPrefix = "custom-";
 
     /// <summary>The name a new library starts with, before it is made unique.</summary>
-    public const string NewLibraryBaseName = "New library";
+    public const string NewLibraryBaseName = "New word pack";
 
     /// <summary>The name an imported library gets when neither its header nor its file name gives one.</summary>
-    public const string ImportedLibraryBaseName = "Imported library";
+    public const string ImportedLibraryBaseName = "Imported word pack";
 
-    /// <summary>"New library", or "New library 2", "New library 3" and so on while the name is taken.</summary>
+    /// <summary>"New word pack", or "New word pack 2", "New word pack 3" and so on while the name is taken.</summary>
     public static string NewLibraryName(IEnumerable<string?> takenNames) => UniqueName(NewLibraryBaseName, takenNames);
 
     /// <summary>
     /// The name of a duplicate of <paramref name="name"/>: "GitHub - Copy", or "GitHub - Copy 2" and so on while that is
-    /// taken. The separator is an ASCII hyphen.
+    /// taken ("Word pack - Copy" for a blank name). The separator is an ASCII hyphen.
     /// </summary>
     public static string CopyName(string? name, IEnumerable<string?> takenNames)
     {
         var committed = LibraryMetadata.Commit(name);
-        return UniqueName(committed.Length == 0 ? "Library - Copy" : committed + " - Copy", takenNames);
+        return UniqueName(committed.Length == 0 ? "Word pack - Copy" : committed + " - Copy", takenNames);
     }
 
     /// <summary>
@@ -58,7 +65,7 @@ public static class LibraryNaming
     public static string ChangedOutsideName(string? name) => LibraryMetadata.Commit(name) + " (changed outside Scribe)";
 
     /// <summary>
-    /// <paramref name="baseName"/> in committed form ("Library" when that is blank), or the first of "base 2", "base 3"
+    /// <paramref name="baseName"/> in committed form ("Word pack" when that is blank), or the first of "base 2", "base 3"
     /// and so on that no name in <paramref name="takenNames"/> holds.
     /// </summary>
     public static string UniqueName(string? baseName, IEnumerable<string?> takenNames)
@@ -67,7 +74,7 @@ public static class LibraryNaming
         var committed = LibraryMetadata.Commit(baseName);
         if (committed.Length == 0)
         {
-            committed = "Library";
+            committed = "Word pack";
         }
 
         var taken = NameSet(takenNames);
@@ -100,7 +107,8 @@ public static class LibraryNaming
     /// <summary>
     /// The slug of a library name: lowercased with the invariant culture, letters and digits of any script kept, every
     /// other run of characters collapsed to one hyphen, no hyphen at either end, and "library" when nothing is left. The
-    /// rule <c>DictionaryLibraryService.Slugify</c> has always applied, character for character.
+    /// rule <c>DictionaryLibraryService.Slugify</c> has always applied, character for character. That fallback is part of
+    /// an id, never shown as a name, so it stays "library" whatever the page calls a library.
     /// </summary>
     public static string Slug(string? name)
     {

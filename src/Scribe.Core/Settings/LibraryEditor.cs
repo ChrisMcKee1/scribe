@@ -62,7 +62,8 @@ public enum LibraryMetadataField
 /// run of white space collapsed to one space (<see cref="LibraryTermKey.Normalize"/>), so everything the editor writes is
 /// in the form the key and the matcher agree on (review finding A10); a Written value is only trimmed, its inner line
 /// breaks and spacing kept, never flattened. Storage keeps whatever it is given. Messages quote the user's own words and
-/// are for the screen only; nothing here is ever logged.
+/// are for the screen only; nothing here is ever logged. They call a library a word pack, the name people see (the
+/// maintainer's product decision), in sentence case; identifiers, ids, file names and logs keep "library".
 /// </remarks>
 public static class LibraryEditor
 {
@@ -188,19 +189,19 @@ public static class LibraryEditor
         {
             LibraryValidationKind.WrittenWithoutSpoken => "Type what you say before how it should be written.",
             LibraryValidationKind.DuplicateSpoken when quoted.Length > 0 && other.Length > 0 && !LibraryTermKey.AreSame(quoted, other) =>
-                $"\"{quoted}\" is already in this library as the term you changed to \"{other}\".",
+                $"\"{quoted}\" is already in this word pack as the term you changed to \"{other}\".",
             LibraryValidationKind.DuplicateSpoken => quoted.Length == 0
-                ? "This term is already in this library."
-                : $"\"{quoted}\" is already in this library.",
+                ? "This term is already in this word pack."
+                : $"\"{quoted}\" is already in this word pack.",
             LibraryValidationKind.EmptyWrittenWithoutIntent => quoted.Length == 0
                 ? "Type how this should be written."
                 : $"Type how \"{quoted}\" should be written.",
             LibraryValidationKind.FieldTooLong =>
                 $"This is longer than {LibraryLimits.MaxFieldLength.ToString("N0", CultureInfo.InvariantCulture)} characters. Shorten it to save.",
             LibraryValidationKind.TooManyTerms =>
-                $"A library can hold up to {LibraryLimits.MaxTermsPerLibrary.ToString("N0", CultureInfo.InvariantCulture)} terms.",
-            LibraryValidationKind.EmptyName => "Type a name for this library.",
-            LibraryValidationKind.DuplicateName => "Another library already has this name.",
+                $"A word pack can hold up to {LibraryLimits.MaxTermsPerLibrary.ToString("N0", CultureInfo.InvariantCulture)} terms.",
+            LibraryValidationKind.EmptyName => "Type a name for this word pack.",
+            LibraryValidationKind.DuplicateName => "Another word pack already has this name.",
             LibraryValidationKind.MetadataDoubleQuote or LibraryValidationKind.MetadataUnreadableInOlder => issue.Metadata switch
             {
                 LibraryMetadataField.Category => "Categories can't contain a double quote (\"), which older versions of Scribe misread.",
@@ -210,10 +211,10 @@ public static class LibraryEditor
             LibraryValidationKind.ContentNotSaveable => state switch
             {
                 LibraryFileState.PartlyReadable =>
-                    "Some rows of this library couldn't be read, so it can't be edited here. Import the file again to see them.",
+                    "Some rows of this word pack couldn't be read, so it can't be edited here. Import the file again to see them.",
                 LibraryFileState.AwaitingRelease =>
-                    "This library is open in another app. Close it there to make changes.",
-                _ => "This library couldn't be read, so it can't be edited here.",
+                    "This word pack is open in another app. Close it there to make changes.",
+                _ => "This word pack couldn't be read, so it can't be edited here.",
             },
             LibraryValidationKind.MalformedText =>
                 "This text has a broken character that can't be saved. Delete it and type it again.",

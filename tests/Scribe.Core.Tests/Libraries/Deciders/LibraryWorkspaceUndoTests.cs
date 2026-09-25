@@ -78,13 +78,13 @@ public sealed class LibraryWorkspaceUndoTests
         var operations = new (string Label, Action<LibraryWorkspace> Run)[]
         {
             ("Delete term", workspace => workspace.DeleteTerm("team-terms", RowIdOf(workspace, "team-terms", "kube"))),
-            ("Delete library", workspace => workspace.DeleteLibrary("team-terms")),
-            ("Turn off library", workspace => workspace.SetEnabled(GitHubId, false)),
-            ("Turn on library", workspace => workspace.SetEnabled("team-terms-copy", true)),
+            ("Delete word pack", workspace => workspace.DeleteLibrary("team-terms")),
+            ("Turn off word pack", workspace => workspace.SetEnabled(GitHubId, false)),
+            ("Turn on word pack", workspace => workspace.SetEnabled("team-terms-copy", true)),
             ("Turn off term", workspace => workspace.SetTermEnabled(GitHubId, RowIdOf(workspace, GitHubId, "copilot"), false)),
             ("Turn off term", workspace => workspace.SetTermEnabled("team-terms", RowIdOf(workspace, "team-terms", "kube"), false)),
             ("Use this copy instead", workspace => workspace.UseCopyInstead("team-terms-copy")),
-            ("Turn off in other libraries", workspace =>
+            ("Turn off in other word packs", workspace =>
                 workspace.TurnOffInOtherLibraries("team-terms", RowIdOf(workspace, "team-terms", "copilot"), [GitHubId, AzureId])),
             ("Import terms", workspace => workspace.ApplyImport(
                 LibraryImportPlanner.Plan(

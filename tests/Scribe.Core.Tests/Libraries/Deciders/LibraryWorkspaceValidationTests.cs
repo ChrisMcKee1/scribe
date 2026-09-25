@@ -168,7 +168,7 @@ public sealed class LibraryWorkspaceValidationTests
         var issue = refused.Issue!;
         Assert.Equal((GitHubId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, getHub), (issue.LibraryId, issue.Kind, issue.Field, issue.OtherRowId));
         Assert.Equal(
-            "\"Get Hub\" is already in this library as the term you changed to \"git hub\".",
+            "\"Get Hub\" is already in this word pack as the term you changed to \"git hub\".",
             LibraryEditor.Message(issue, "Get Hub", otherSpoken: "git hub"));
         Assert.Equal(revision, workspace.Revision);
         Assert.Equal(3, workspace.RowsOf(GitHubId).Count);

@@ -263,7 +263,10 @@ public sealed class LibraryWorkspace
     /// <summary>Whether <see cref="Redo"/> would change something.</summary>
     public bool CanRedo => FindApplicable(_redo, undoing: false) >= 0;
 
-    /// <summary>The operation <see cref="Undo"/> would undo ("Delete term", "Turn off library"), for the notice's Undo; null when none.</summary>
+    /// <summary>
+    /// The operation <see cref="Undo"/> would undo ("Delete term", "Turn off word pack"), for the notice's Undo; null when
+    /// none. Labels call a library a word pack, the name people see.
+    /// </summary>
     public string? UndoLabel
     {
         get
@@ -274,7 +277,7 @@ public sealed class LibraryWorkspace
     }
 
     /// <summary>
-    /// New library: "New library" made unique, an id fixed from it (<see cref="LibraryNaming.NewCustomId"/>), on, AI
+    /// New library: "New word pack" made unique, an id fixed from it (<see cref="LibraryNaming.NewCustomId"/>), on, AI
     /// permission from Decision 2. Until the user changes it, it is not saved and is no change.
     /// </summary>
     /// <exception cref="InvalidOperationException">The state is read-only.</exception>
@@ -418,7 +421,7 @@ public sealed class LibraryWorkspace
             return;
         }
 
-        Structural(enabled ? "Turn on library" : "Turn off library", _state.WithEnabled(lib.Header.Id, enabled));
+        Structural(enabled ? "Turn on word pack" : "Turn off word pack", _state.WithEnabled(lib.Header.Id, enabled));
     }
 
     /// <summary>
@@ -556,7 +559,7 @@ public sealed class LibraryWorkspace
         }
 
         Structural(
-            "Delete library",
+            "Delete word pack",
             lib.Header.Committed is null
                 ? _state.WithoutLib(lib.Header.Id)
                 : _state.WithLib(lib with { Header = lib.Header with { PendingDelete = true } }));
@@ -770,7 +773,7 @@ public sealed class LibraryWorkspace
             switchedOff.Add(id);
         }
 
-        Structural("Turn off unused libraries", next);
+        Structural("Turn off unused word packs", next);
         return switchedOff;
     }
 
@@ -1117,7 +1120,7 @@ public sealed class LibraryWorkspace
             }
         }
 
-        Structural("Turn off in other libraries", next);
+        Structural("Turn off in other word packs", next);
     }
 
     /// <summary>

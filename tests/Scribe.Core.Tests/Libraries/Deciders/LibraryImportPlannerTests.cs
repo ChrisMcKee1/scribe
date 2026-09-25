@@ -154,7 +154,7 @@ public sealed class LibraryImportPlannerTests
 
         Assert.Equal("Team terms 2", fromHeader.SuggestedName);
         Assert.Equal("Release notes", fromFile.SuggestedName);
-        Assert.Equal("Imported library", fallback.SuggestedName);
+        Assert.Equal("Imported word pack", fallback.SuggestedName);
         Assert.Equal(GitHubId, basedOn.BasedOnTarget);
         Assert.IsType<LibraryImportTarget.NewLibrary>(basedOn.Target);
 

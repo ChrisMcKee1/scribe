@@ -48,7 +48,7 @@ public enum CloseChoice
 
 /// <summary>What closing the window should do.</summary>
 /// <param name="Ask">Ask first with <paramref name="Prompt"/>; false means close now.</param>
-/// <param name="Prompt">"You have unsaved changes to Libraries and Dictionary.", naming only the tracked sections; null when not asking.</param>
+/// <param name="Prompt">"You have unsaved changes to Word packs and Dictionary.", naming only the tracked sections; null when not asking.</param>
 /// <param name="Choices">The prompt's buttons in order: Save, Discard changes, Keep editing; empty when not asking.</param>
 /// <param name="DefaultChoice">The focused button, Keep editing, so a stray Enter commits nothing half-typed; null when not asking.</param>
 public sealed record CloseDecision(bool Ask, string? Prompt, IReadOnlyList<CloseChoice> Choices, CloseChoice? DefaultChoice);
@@ -79,26 +79,29 @@ public enum EscapeAction
 public readonly record struct EscapeState(
     bool HotkeyCapture, bool ImeComposing, bool EditingCell, bool MenuOpen, bool SearchFocused, bool SearchHasText);
 
-/// <summary>The Settings window's keyboard commands (plan 3.9, S6).</summary>
+/// <summary>
+/// The Settings window's keyboard commands (plan 3.9, S6). The Libraries page and its commands are shown as Word packs
+/// (the maintainer's product decision); the identifiers keep "library".
+/// </summary>
 public enum SettingsAccelerator
 {
     /// <summary>Ctrl+S, Save, on any page.</summary>
     Save,
 
-    /// <summary>Ctrl+F, Search all libraries, on the Libraries page.</summary>
+    /// <summary>Ctrl+F, Search all word packs, on the Word packs page.</summary>
     Find,
 
-    /// <summary>Ctrl+N, Add term, on the Libraries page.</summary>
+    /// <summary>Ctrl+N, Add term, on the Word packs page.</summary>
     AddTerm,
 
-    /// <summary>Ctrl+Shift+N, New library, on the Libraries page.</summary>
+    /// <summary>Ctrl+Shift+N, New word pack, on the Word packs page.</summary>
     NewLibrary,
 }
 
 /// <summary>What the window knows when an accelerator is pressed.</summary>
 /// <param name="HotkeyCapture">A hotkey box is capturing: every key is the hotkey being recorded.</param>
 /// <param name="ImeComposing">An editor holds an IME composition.</param>
-/// <param name="OnLibrariesPage">The Libraries page is the one shown.</param>
+/// <param name="OnLibrariesPage">The Libraries page, shown as Word packs, is the one shown.</param>
 public readonly record struct AcceleratorState(bool HotkeyCapture, bool ImeComposing, bool OnLibrariesPage);
 
 /// <summary>
@@ -128,13 +131,16 @@ public static class SettingsCloseGuard
         return new CloseDecision(true, Prompt(tracked), PromptChoices, CloseChoice.KeepEditing);
     }
 
-    /// <summary>"You have unsaved changes to Libraries, Dictionary and Snippets.", naming only the sections given; empty for none.</summary>
+    /// <summary>
+    /// "You have unsaved changes to Word packs, Dictionary and Snippets.", naming only the sections given, each by the
+    /// title its page shows (the Libraries section's is Word packs); empty for none.
+    /// </summary>
     public static string Prompt(UnsavedSections sections)
     {
         var names = new List<string>(3);
         if (sections.HasFlag(UnsavedSections.Libraries))
         {
-            names.Add("Libraries");
+            names.Add("Word packs");
         }
 
         if (sections.HasFlag(UnsavedSections.Dictionary))

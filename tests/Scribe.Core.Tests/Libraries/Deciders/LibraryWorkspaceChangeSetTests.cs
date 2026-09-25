@@ -476,10 +476,10 @@ public sealed class LibraryWorkspaceChangeSetTests
     [InlineData("restored")]
     public void D4_a_library_at_the_id_a_save_kept_another_under_keeps_its_content_and_its_choices(string how)
     {
-        // Grok 4.7's G1 sequence: the Save in flight creates "custom-new-library"; another app creates that file meanwhile,
-        // so the store keeps Scribe's content as "custom-new-library-2", an id it invents at commit. While the Save ran
+        // Grok 4.7's G1 sequence: the Save in flight creates "custom-new-word-pack"; another app creates that file meanwhile,
+        // so the store keeps Scribe's content as "custom-new-word-pack-2", an id it invents at commit. While the Save ran
         // the user made another library that holds exactly that id.
-        var gone = Deleted("20260801T100000Z.custom-new-library-2.csv", "custom-new-library-2", "Archived notes", new TermValues("zz", "ZZ"));
+        var gone = Deleted("20260801T100000Z.custom-new-word-pack-2.csv", "custom-new-word-pack-2", "Archived notes", new TermValues("zz", "ZZ"));
         var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase) { [gone.Entry.EntryName] = gone };
         var catalog = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId)], [GitHubId], recentlyDeleted: how == "restored" ? [gone.Entry] : []);
         var workspace = Workspace(catalog);
@@ -493,10 +493,10 @@ public sealed class LibraryWorkspaceChangeSetTests
         var occupant = how switch
         {
             "created" => workspace.CreateLibrary(),
-            "imported" => ImportNew(workspace, Document("New library 2", new TermValues("rc", "release candidate"))),
+            "imported" => ImportNew(workspace, Document("New word pack 2", new TermValues("rc", "release candidate"))),
             _ => workspace.RestoreDeleted(gone),
         };
-        Assert.Equal("custom-new-library-2", occupant);
+        Assert.Equal("custom-new-word-pack-2", occupant);
         if (how == "created")
         {
             workspace.AddTerm(occupant, new TermValues("rc", "release candidate"));
@@ -506,7 +506,7 @@ public sealed class LibraryWorkspaceChangeSetTests
         workspace.SetAiPermission(occupant, true);
         var occupantRows = ValuesOf(workspace, occupant);
         var saved = Apply(catalog, changes, store,
-            [new StoreOutcome.SavedUnderNewId(planned, "custom-new-library-2", [new TermValues("theirs", "Theirs")])]);
+            [new StoreOutcome.SavedUnderNewId(planned, "custom-new-word-pack-2", [new TermValues("theirs", "Theirs")])]);
         workspace.MarkSaved(changes.DraftRevision, saved);
 
         // Scribe's library is the kept one, with its rows and choices; the user's other library moved to a fresh id with
@@ -514,12 +514,12 @@ public sealed class LibraryWorkspaceChangeSetTests
         var draft = workspace.Draft;
         Assert.Equal(
             [new TermValues("ga", "general availability"), new TermValues("beta", "Beta")],
-            ValuesOf(workspace, "custom-new-library-2"));
+            ValuesOf(workspace, "custom-new-word-pack-2"));
         Assert.Equal([new TermValues("theirs", "Theirs")], ValuesOf(workspace, planned));
-        Assert.False(draft.LocalState.AiPermissions["custom-new-library-2"]);
-        Assert.Contains("custom-new-library-2", draft.LocalState.EnabledIds);
+        Assert.False(draft.LocalState.AiPermissions["custom-new-word-pack-2"]);
+        Assert.Contains("custom-new-word-pack-2", draft.LocalState.EnabledIds);
         var moved = draft.Libraries.Single(library => library.Content.Rows.Select(row => row.Values).SequenceEqual(occupantRows)).Content.Id;
-        Assert.NotEqual("custom-new-library-2", moved);
+        Assert.NotEqual("custom-new-word-pack-2", moved);
         Assert.True(draft.LocalState.AiPermissions[moved]);
         Assert.Contains(moved, draft.LocalState.EnabledIds);
         Assert.Equal("Their notes", draft.Find(planned)!.Content.Name);
@@ -527,7 +527,7 @@ public sealed class LibraryWorkspaceChangeSetTests
         var next = Capture(workspace);
         AssertPreImages(saved, next);
         Assert.True(Writes(next, moved));
-        Assert.Equal(saved.Find("custom-new-library-2")!.ContentHash, next.Writes.Single(write => write.LibraryId == "custom-new-library-2").ExpectedPreImage);
+        Assert.Equal(saved.Find("custom-new-word-pack-2")!.ContentHash, next.Writes.Single(write => write.LibraryId == "custom-new-word-pack-2").ExpectedPreImage);
         Assert.False(Writes(next, planned));
         workspace.MarkSaved(next.DraftRevision, Apply(saved, next, store));
         Assert.False(workspace.HasUnsavedChanges);
@@ -1499,7 +1499,7 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Empty(changes.Writes);
         Assert.True(changes.LocalStateChanged);
         Assert.Equal([AzureId], changes.LocalState.EnabledIds);
-        Assert.Equal("Turn off unused libraries", workspace.UndoLabel);
+        Assert.Equal("Turn off unused word packs", workspace.UndoLabel);
 
         workspace.Undo();
         Assert.False(workspace.HasUnsavedChanges);

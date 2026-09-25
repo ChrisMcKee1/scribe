@@ -19,7 +19,7 @@ public sealed class SettingsCloseGuardTests
         var decision = SettingsCloseGuard.Decide(UnsavedSections.Libraries | UnsavedSections.Dictionary, trigger);
 
         Assert.True(decision.Ask);
-        Assert.Equal("You have unsaved changes to Libraries and Dictionary.", decision.Prompt);
+        Assert.Equal("You have unsaved changes to Word packs and Dictionary.", decision.Prompt);
         Assert.Equal([CloseChoice.Save, CloseChoice.DiscardChanges, CloseChoice.KeepEditing], decision.Choices);
         Assert.Equal(CloseChoice.KeepEditing, decision.DefaultChoice);
 
@@ -44,10 +44,10 @@ public sealed class SettingsCloseGuardTests
     [Fact]
     public void D8_the_prompt_names_only_the_sections_it_tracks()
     {
-        Assert.Equal("You have unsaved changes to Libraries.", SettingsCloseGuard.Prompt(UnsavedSections.Libraries));
+        Assert.Equal("You have unsaved changes to Word packs.", SettingsCloseGuard.Prompt(UnsavedSections.Libraries));
         Assert.Equal("You have unsaved changes to Snippets.", SettingsCloseGuard.Prompt(UnsavedSections.Snippets));
         Assert.Equal(
-            "You have unsaved changes to Libraries, Dictionary and Snippets.",
+            "You have unsaved changes to Word packs, Dictionary and Snippets.",
             SettingsCloseGuard.Prompt(UnsavedSections.Snippets | UnsavedSections.Libraries | UnsavedSections.Dictionary));
         Assert.Equal(string.Empty, SettingsCloseGuard.Prompt(UnsavedSections.None));
 

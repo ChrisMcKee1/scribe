@@ -68,7 +68,7 @@ public sealed record LibraryImportOperation(
 /// <param name="Target">Where it goes.</param>
 /// <param name="DraftRevision">The draft revision the plan was computed against.</param>
 /// <param name="SuggestedName">
-/// For a new library: the <c># name:</c> header, else the file's name, else "Imported library", committed and made
+/// For a new library: the <c># name:</c> header, else the file's name, else "Imported word pack", committed and made
 /// unique. A name holding a double quote is shown here and must be edited before the import applies (the shell passes
 /// the edited name as <c>plan with { SuggestedName = ... }</c>). For an existing library, its name.
 /// </param>
@@ -231,7 +231,7 @@ public static class LibraryImportPlanner
             nonAscii);
     }
 
-    // The header's name, else the file's name without its extension, else "Imported library".
+    // The header's name, else the file's name without its extension, else "Imported word pack".
     private static string NameFor(LibraryCsvDocument document, LibraryImportTarget.NewLibrary target)
     {
         var header = LibraryMetadata.Commit(document.Name);

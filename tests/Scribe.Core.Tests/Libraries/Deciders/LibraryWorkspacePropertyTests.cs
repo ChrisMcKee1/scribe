@@ -1183,7 +1183,7 @@ public sealed class LibraryWorkspacePropertyTests
                 break;
         }
     }
-    // Undo can bring back a library whose generated name another library took meanwhile ("New library", say); that is a
+    // Undo can bring back a library whose generated name another library took meanwhile ("New word pack", say); that is a
     // real duplicate the user would rename, so the sequence renames it and captures again. Anything else fails the seed.
     private static LibraryChangeSet CaptureOrFail(LibraryWorkspace workspace, int seed, int step)
     {
