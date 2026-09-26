@@ -663,7 +663,10 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Settings_window_tracks_committed_settings_for_try_dictation()
     {
-        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var settingsDir = Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings");
+        var source = string.Join("\n", Directory.EnumerateFiles(settingsDir, "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var tryDictation = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs"));
 
         Assert.Contains("_committedSettings = _settings.Clone();", source, StringComparison.Ordinal);

@@ -9,7 +9,7 @@ public sealed class SnippetSaveBaselineSourceTests
     [Fact]
     public void A_save_takes_its_submitted_snippet_rows_as_the_baseline_without_reading_storage()
     {
-        var window = Read("SettingsWindow.xaml.cs");
+        var window = ReadSettingsWindowSources();
         var snippets = Read("SettingsWindow.Snippets.cs");
 
         // The submission is what the builder stored, taken where the Save builds the list, and adopted right after it is
@@ -47,6 +47,11 @@ public sealed class SnippetSaveBaselineSourceTests
 
     private static string Read(string file) =>
         File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", file));
+
+    private static string ReadSettingsWindowSources() =>
+        string.Join("\n", Directory.EnumerateFiles(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
 
     // A member's text, from its signature to the closing brace at its own indentation.
     private static string Body(string code, string signature)

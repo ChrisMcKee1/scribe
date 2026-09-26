@@ -408,7 +408,9 @@ public sealed class SaveDraftCoverageTests
 
     private static (string Window, string Save, string Draft, IReadOnlyCollection<string> Skipped, IReadOnlyDictionary<string, XElement> Xaml) Sources()
     {
-        var window = File.ReadAllText(Path.Combine(Root(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var window = string.Join("\n", Directory.EnumerateFiles(Path.Combine(Root(), "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
         var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
