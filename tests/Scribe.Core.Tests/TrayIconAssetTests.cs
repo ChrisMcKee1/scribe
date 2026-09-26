@@ -108,6 +108,87 @@ public sealed partial class TrayIconAssetTests
         }
     }
 
+    [Theory]
+    [InlineData(16)]
+    [InlineData(20)]
+    public void Recording_small_frames_have_no_ink_inside_the_capsule_box(int size)
+    {
+        using var idle = IconFile.Read(AssetPath("scribe.ico")).Frame(size).Decode();
+        using var recording = IconFile.Read(AssetPath("scribe-recording.ico")).Frame(size).Decode();
+        var box = FindCapsuleBox(idle);
+        var ink = ToColor(ScribeBrand.Ink);
+
+        for (var y = box.Top; y <= box.Bottom; y++)
+        {
+            for (var x = box.Left; x <= box.Right; x++)
+            {
+                Assert.False(IsClose(ink, recording.GetPixel(x, y)), $"Unexpected ink pixel at {x},{y} in {size} px frame.");
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(24, 3)]
+    [InlineData(32, 3)]
+    [InlineData(40, 5)]
+    public void Recording_native_waveform_is_one_pixel_columns_with_paper_gaps(int size, int expectedColumns)
+    {
+        using var idle = IconFile.Read(AssetPath("scribe.ico")).Frame(size).Decode();
+        using var recording = IconFile.Read(AssetPath("scribe-recording.ico")).Frame(size).Decode();
+        var sourceWaveform = FindSourceWaveformBox(idle);
+        var ink = ToColor(ScribeBrand.Ink);
+        var columns = new SortedSet<int>();
+
+        for (var y = sourceWaveform.Top; y <= sourceWaveform.Bottom; y++)
+        {
+            for (var x = sourceWaveform.Left - 2; x <= sourceWaveform.Right + 2; x++)
+            {
+                if (x >= 0 && x < recording.Width && IsClose(ink, recording.GetPixel(x, y)))
+                {
+                    columns.Add(x);
+                }
+            }
+        }
+
+        Assert.Equal(expectedColumns, columns.Count);
+        var ordered = columns.ToArray();
+        for (var i = 1; i < ordered.Length; i++)
+        {
+            Assert.True(ordered[i] - ordered[i - 1] >= 2, $"Waveform columns {ordered[i - 1]} and {ordered[i]} touch in {size} px frame.");
+        }
+    }
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(20)]
+    public void Processing_small_frames_match_the_hand_tuned_grid(int size)
+    {
+        using var bitmap = IconFile.Read(AssetPath("scribe-processing.ico")).Frame(size).Decode();
+        var ink = ToColor(ScribeBrand.Ink);
+        var dot = ToColor(ScribeBrand.ProcessingDots);
+        var corner = Blend(dot, ink, 0.4);
+        var dots = size == 16
+            ? new[] { new PixelRect(1, 6, 3, 3), new PixelRect(6, 6, 3, 3), new PixelRect(11, 6, 3, 3) }
+            : new[] { new PixelRect(3, 8, 4, 4), new PixelRect(8, 8, 4, 4), new PixelRect(13, 8, 4, 4) };
+
+        AssertSmallGrid(bitmap, ink, dots, dot, corner);
+    }
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(20)]
+    public void Paused_small_frames_match_the_hand_tuned_grid(int size)
+    {
+        using var bitmap = IconFile.Read(AssetPath("scribe-paused.ico")).Frame(size).Decode();
+        var slate = ToColor(ScribeBrand.Slate);
+        var paper = ToColor(ScribeBrand.Paper);
+        var corner = Blend(paper, slate, 0.4);
+        var bars = size == 16
+            ? new[] { new PixelRect(4, 4, 3, 8), new PixelRect(9, 4, 3, 8) }
+            : new[] { new PixelRect(6, 5, 3, 10), new PixelRect(11, 5, 3, 10) };
+
+        AssertSmallGrid(bitmap, slate, bars, paper, corner);
+    }
     [Fact]
     public void Generator_brand_literals_match_scribe_brand()
     {
@@ -139,6 +220,71 @@ public sealed partial class TrayIconAssetTests
 
     private static string ToHex(SrgbColor color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
 
+    private static void AssertSmallGrid(Bitmap bitmap, Color baseColor, IReadOnlyList<PixelRect> shapes, Color fill, Color corner)
+    {
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var pixel = bitmap.GetPixel(x, y);
+                if (pixel.A == 0)
+                {
+                    continue;
+                }
+
+                var expected = baseColor;
+                foreach (var shape in shapes)
+                {
+                    if (shape.Contains(x, y))
+                    {
+                        expected = shape.IsCorner(x, y) ? corner : fill;
+                        break;
+                    }
+                }
+
+                Assert.True(IsClose(expected, pixel), $"Expected {expected} at {x},{y} but found {pixel}.");
+            }
+        }
+    }
+
+    private static PixelRect FindCapsuleBox(Bitmap bitmap)
+    {
+        PixelRect? bounds = null;
+        var paper = ToColor(ScribeBrand.Paper);
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var pixel = bitmap.GetPixel(x, y);
+                if (pixel.A > 0 && (IsClose(paper, pixel) || IsSourceWaveform(pixel)))
+                {
+                    bounds = bounds is null ? new PixelRect(x, y, 1, 1) : bounds.Value.Include(x, y);
+                }
+            }
+        }
+
+        Assert.NotNull(bounds);
+        return bounds.Value;
+    }
+
+    private static PixelRect FindSourceWaveformBox(Bitmap bitmap)
+    {
+        PixelRect? bounds = null;
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                if (IsSourceWaveform(bitmap.GetPixel(x, y)))
+                {
+                    bounds = bounds is null ? new PixelRect(x, y, 1, 1) : bounds.Value.Include(x, y);
+                }
+            }
+        }
+
+        Assert.NotNull(bounds);
+        return bounds.Value;
+    }
+
     private static void AssertContainsClose(Color expected, Bitmap bitmap, int x, int y)
     {
         const int radius = 3;
@@ -159,6 +305,14 @@ public sealed partial class TrayIconAssetTests
         Math.Abs(expected.R - actual.R) <= 2 &&
         Math.Abs(expected.G - actual.G) <= 2 &&
         Math.Abs(expected.B - actual.B) <= 2;
+
+    private static bool IsSourceWaveform(Color color) => color.A > 0 && color.B > color.R + 40 && color.B > 150;
+
+    private static Color Blend(Color foreground, Color background, double amount) => Color.FromArgb(
+        255,
+        (int)Math.Round(foreground.R * amount + background.R * (1 - amount)),
+        (int)Math.Round(foreground.G * amount + background.G * (1 - amount)),
+        (int)Math.Round(foreground.B * amount + background.B * (1 - amount)));
 
     private static string AssetPath(string fileName) =>
         Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Assets", fileName);
@@ -257,8 +411,27 @@ public sealed partial class TrayIconAssetTests
             return bitmap;
         }
     }
-}
 
+    private readonly record struct PixelRect(int Left, int Top, int Width, int Height)
+    {
+        public int Right => Left + Width - 1;
+
+        public int Bottom => Top + Height - 1;
+
+        public bool Contains(int x, int y) => x >= Left && x <= Right && y >= Top && y <= Bottom;
+
+        public bool IsCorner(int x, int y) => (x == Left || x == Right) && (y == Top || y == Bottom);
+
+        public PixelRect Include(int x, int y)
+        {
+            var left = Math.Min(Left, x);
+            var top = Math.Min(Top, y);
+            var right = Math.Max(Right, x);
+            var bottom = Math.Max(Bottom, y);
+            return new PixelRect(left, top, right - left + 1, bottom - top + 1);
+        }
+    }
+}
 
 
 

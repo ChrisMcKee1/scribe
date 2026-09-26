@@ -105,53 +105,59 @@ public static class TrayIconGenerator
             }
         }
 
-        if (size == 16)
+        if (size == 16 || size == 20)
         {
-            TuneRecording16(output, idle);
+            ClearRecordingWaveform(output, idle, size);
         }
-        else if (size == 20)
+        else if (size == 24 || size == 32 || size == 40)
         {
-            TuneRecording20(output, idle);
+            TuneRecordingWaveform(output, idle, size);
         }
 
         return output;
     }
 
-    private static void TuneRecording16(Bitmap output, Bitmap idle)
+    private static void ClearRecordingWaveform(Bitmap output, Bitmap idle, int size)
     {
-        // Keep one clean paper pixel around the ink waveform at the native tray size.
-        SetIfVisible(output, idle, 7, 6, Paper);
-        SetIfVisible(output, idle, 8, 6, Paper);
-        SetIfVisible(output, idle, 6, 8, Paper);
-        SetIfVisible(output, idle, 9, 8, Paper);
-        SetIfVisible(output, idle, 7, 9, Paper);
-        SetIfVisible(output, idle, 8, 9, Paper);
-        SetIfVisible(output, idle, 7, 7, Ink);
-        SetIfVisible(output, idle, 8, 7, Ink);
-        SetIfVisible(output, idle, 7, 8, Ink);
-        SetIfVisible(output, idle, 8, 8, Ink);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                if (IsWaveformSource(idle.GetPixel(x, y)))
+                {
+                    SetIfVisible(output, idle, x, y, Paper);
+                }
+            }
+        }
     }
 
-    private static void TuneRecording20(Bitmap output, Bitmap idle)
+    private static void TuneRecordingWaveform(Bitmap output, Bitmap idle, int size)
     {
-        // The generated antialiasing is useful at 20 px, but these pixels keep the ink mark off the blue tile.
-        for (int x = 8; x <= 11; x++)
+        ClearRecordingWaveform(output, idle, size);
+        if (!TryFindWaveformBounds(idle, out var bounds))
         {
-            SetIfVisible(output, idle, x, 7, Paper);
-            SetIfVisible(output, idle, x, 12, Paper);
+            return;
         }
 
-        for (int y = 8; y <= 11; y++)
+        int centreX = (bounds.Left + bounds.Right) / 2;
+        int centreY = (bounds.Top + bounds.Bottom) / 2;
+        int tallest = bounds.Bottom - bounds.Top + 1;
+        double[] ratios = size == 40
+            ? new[] { 0.26, 0.56, 1.0, 0.56, 0.26 }
+            : new[] { 0.56, 1.0, 0.56 };
+        int startX = centreX - (ratios.Length - 1);
+        for (int i = 0; i < ratios.Length; i++)
         {
-            SetIfVisible(output, idle, 7, y, Paper);
-            SetIfVisible(output, idle, 12, y, Paper);
-        }
-
-        for (int x = 8; x <= 11; x++)
-        {
-            for (int y = 8; y <= 11; y++)
+            int x = startX + i * 2;
+            int height = Math.Max(1, (int)Math.Round(tallest * ratios[i]));
+            int top = centreY - (height - 1) / 2;
+            int bottom = top + height - 1;
+            for (int y = top; y <= bottom; y++)
             {
-                SetIfVisible(output, idle, x, y, Ink);
+                if (IsCapsuleSource(idle.GetPixel(x, y)))
+                {
+                    SetIfVisible(output, idle, x, y, Ink);
+                }
             }
         }
     }
@@ -164,15 +170,15 @@ public static class TrayIconGenerator
         using var brush = new SolidBrush(ProcessingDots.ToColor());
         if (size == 16)
         {
-            FillEllipse(g, brush, 3, 7, 3, 3);
-            FillEllipse(g, brush, 7, 7, 3, 3);
-            FillEllipse(g, brush, 11, 7, 3, 3);
+            DrawDotGrid(output, 1, 6, 3, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
+            DrawDotGrid(output, 6, 6, 3, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
+            DrawDotGrid(output, 11, 6, 3, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
         }
         else if (size == 20)
         {
-            FillEllipse(g, brush, 3, 8, 4, 4);
-            FillEllipse(g, brush, 8, 8, 4, 4);
-            FillEllipse(g, brush, 13, 8, 4, 4);
+            DrawDotGrid(output, 3, 8, 4, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
+            DrawDotGrid(output, 8, 8, 4, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
+            DrawDotGrid(output, 13, 8, 4, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
         }
         else
         {
@@ -196,13 +202,13 @@ public static class TrayIconGenerator
         using var brush = new SolidBrush(Paper.ToColor());
         if (size == 16)
         {
-            FillRoundBar(g, brush, 5, 4, 3, 9, 1.5f);
-            FillRoundBar(g, brush, 10, 4, 3, 9, 1.5f);
+            DrawPauseBar(output, 4, 4, 3, 8, Paper, Blend(Paper, Slate, 0.4));
+            DrawPauseBar(output, 9, 4, 3, 8, Paper, Blend(Paper, Slate, 0.4));
         }
         else if (size == 20)
         {
-            FillRoundBar(g, brush, 6, 5, 3, 11, 1.5f);
-            FillRoundBar(g, brush, 12, 5, 3, 11, 1.5f);
+            DrawPauseBar(output, 6, 5, 3, 10, Paper, Blend(Paper, Slate, 0.4));
+            DrawPauseBar(output, 11, 5, 3, 10, Paper, Blend(Paper, Slate, 0.4));
         }
         else
         {
@@ -218,6 +224,30 @@ public static class TrayIconGenerator
         }
 
         return output;
+    }
+
+    private static void DrawDotGrid(Bitmap output, int left, int top, int size, Rgb fill, Rgb corner)
+    {
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                bool isCorner = (x == 0 || x == size - 1) && (y == 0 || y == size - 1);
+                SetPixelPreservingAlpha(output, left + x, top + y, isCorner ? corner : fill);
+            }
+        }
+    }
+
+    private static void DrawPauseBar(Bitmap output, int left, int top, int width, int height, Rgb fill, Rgb endCorner)
+    {
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                bool isEndCorner = (y == 0 || y == height - 1) && (x == 0 || x == width - 1);
+                SetPixelPreservingAlpha(output, left + x, top + y, isEndCorner ? endCorner : fill);
+            }
+        }
     }
 
     private static Bitmap FillSilhouette(Bitmap idle, Rgb fill, int size)
@@ -283,9 +313,67 @@ public static class TrayIconGenerator
         }
     }
 
+    private static void SetPixelPreservingAlpha(Bitmap output, int x, int y, Rgb color)
+    {
+        if (x < 0 || y < 0 || x >= output.Width || y >= output.Height)
+        {
+            return;
+        }
+
+        var current = output.GetPixel(x, y);
+        if (current.A > 0)
+        {
+            output.SetPixel(x, y, Color.FromArgb(current.A, color.R, color.G, color.B));
+        }
+    }
+
+    private static bool IsWaveformSource(Color color) => color.A > 0 && Decompose(color).Signal >= 0.18;
+
+    private static bool IsCapsuleSource(Color color)
+    {
+        if (color.A == 0)
+        {
+            return false;
+        }
+
+        var weights = Decompose(color);
+        return weights.Paper >= 0.12 || weights.Signal >= 0.12;
+    }
+
+    private static bool TryFindWaveformBounds(Bitmap idle, out Bounds bounds)
+    {
+        int left = idle.Width;
+        int top = idle.Height;
+        int right = -1;
+        int bottom = -1;
+        for (int y = 0; y < idle.Height; y++)
+        {
+            for (int x = 0; x < idle.Width; x++)
+            {
+                if (!IsWaveformSource(idle.GetPixel(x, y)))
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x);
+                bottom = Math.Max(bottom, y);
+            }
+        }
+
+        bounds = new Bounds(left, top, right, bottom);
+        return right >= left && bottom >= top;
+    }
+
     private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     private static double Clamp01(double value) => Math.Max(0, Math.Min(1, value));
     private static int ClampByte(double value) => Math.Max(0, Math.Min(255, (int)Math.Round(value)));
+
+    private static Rgb Blend(Rgb foreground, Rgb background, double amount) => new(
+        ClampByte(foreground.R * amount + background.R * (1 - amount)),
+        ClampByte(foreground.G * amount + background.G * (1 - amount)),
+        ClampByte(foreground.B * amount + background.B * (1 - amount)));
 
     private static Bitmap DecodeFrame(byte[] payload, int size)
     {
@@ -415,6 +503,8 @@ public static class TrayIconGenerator
 
     private readonly record struct Weights(double Ink, double Paper, double Signal);
 
+    private readonly record struct Bounds(int Left, int Top, int Right, int Bottom);
+
     private readonly record struct Rgb(int R, int G, int B)
     {
         public static Rgb Parse(string hex) => new(
@@ -510,6 +600,5 @@ public static class TrayIconGenerator
 
 Add-Type -TypeDefinition $source -ReferencedAssemblies System.Runtime,System.Collections,System.Drawing.Common,System.Drawing.Primitives,System.Private.Windows.GdiPlus,System.Private.Windows.Core
 [TrayIconGenerator]::Generate($root)
-
 
 
