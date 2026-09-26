@@ -84,6 +84,8 @@ internal sealed class OverlayIpcServer : IDisposable
         }
     }
 
+    // The verbs are Scribe.Core.Overlay.OverlayPipeProtocol's, written here as literals because the overlay has no
+    // reference to Scribe.Core; OverlayPipeProtocolTests keeps this switch and that list equal.
     private void Dispatch(string line)
     {
         var trimmed = line.Trim();
@@ -106,6 +108,18 @@ internal sealed class OverlayIpcServer : IDisposable
                 break;
             case "PROCESSING":
                 _window.ShowProcessing(arg.Trim() == "1");
+                break;
+            case "TYPED":
+                _window.ShowOutcome(OverlayState.Typed, null);
+                break;
+            case "TYPEDWITHOUTCLEANUP":
+                _window.ShowOutcome(OverlayState.TypedWithoutCleanup, arg);
+                break;
+            case "NOTHINGTYPED":
+                _window.ShowOutcome(OverlayState.NothingTyped, arg);
+                break;
+            case "PARTLYTYPED":
+                _window.ShowOutcome(OverlayState.PartlyTyped, arg);
                 break;
             case "FAILED":
                 _window.ShowFailed(arg);

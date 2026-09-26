@@ -22,12 +22,13 @@ namespace Scribe.App.Overlay;
 /// All pipe/process work is serialised onto a single background thread fed by a command queue: public
 /// methods only enqueue, so the UI thread never blocks on process launch or pipe I/O, and commands are
 /// delivered in order. The live input-level meter is smoothed here (matching the old WPF curve) and
-/// throttled before being sent as integer <c>METER</c> commands to avoid flooding the pipe.
+/// throttled before being sent as integer <c>METER</c> commands to avoid flooding the pipe. Every line
+/// is built by <see cref="OverlayPipeProtocol"/>, whose verbs the overlay parses (a test keeps the two equal).
 ///
 /// That consumer also carries out the helper's lifetime, and only carries it out: when to wake, whether
 /// an idle helper is suspended, whether a command launches the helper or waits out a cooldown after
-/// failures, how a lost helper is judged, and what shutdown ends are all decided by
-/// <see cref="OverlayHelperLifetime"/>, and position previews are sequenced by
+/// failures, how a lost helper is judged, how long a dictation's outcome keeps it, and what shutdown ends
+/// are all decided by <see cref="OverlayHelperLifetime"/>, and position previews are sequenced by
 /// <see cref="OverlayPreviewGate"/>, both in Scribe.Core where they are tested against a scripted clock.
 /// Due work runs between commands on this same thread and the wait for it is the queue wait itself, so
 /// nothing here sleeps, an EXIT is never held up, and stale commands never pile up behind a wait.
@@ -97,7 +98,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         _consumer.Start();
     }
 
-    public void Warmup() => Enqueue("WARMUP", ensureAlive: true);
+    public void Warmup() => Enqueue(OverlayPipeProtocol.Warmup, ensureAlive: true);
 
     public void ShowRecording()
     {
@@ -105,16 +106,15 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Subscribe();
         _meterLevel = 0f;
         _desired = DesiredState.Recording;
-        Enqueue("RECORDING", ensureAlive: true);
+        Enqueue(OverlayPipeProtocol.Recording, ensureAlive: true);
     }
 
     public void ShowRecordingWarning(string? reason)
     {
         CancelPreview();
         Subscribe();
-        var clean = (reason ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
         _desired = DesiredState.Recording;
-        Enqueue($"WARNING {clean}", ensureAlive: true);
+        Enqueue(OverlayPipeProtocol.WarningLine(reason), ensureAlive: true);
     }
 
     public void ShowProcessing(bool aiPolishing)
@@ -126,14 +126,23 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue(desired.Line, ensureAlive: true);
     }
 
+    public void ShowOutcome(PillOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        CancelPreview();
+        Unsubscribe();
+        var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);
+        _desired = desired;
+        Enqueue(desired.Line, ensureAlive: true, showsFor: outcome.OnScreen);
+    }
+
     public void ShowFailed(string? reason)
     {
         CancelPreview();
         Unsubscribe();
-        var clean = (reason ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
-        var desired = new DesiredState($"FAILED {clean}", OverlayDemand.Transient);
+        var desired = new DesiredState(OverlayPipeProtocol.FailedLine(reason), OverlayDemand.Transient);
         _desired = desired;
-        Enqueue(desired.Line, ensureAlive: true);
+        Enqueue(desired.Line, ensureAlive: true, showsFor: PillTiming.NoticeHold + PillTiming.FadeOut);
     }
 
     public void HideOverlay()
@@ -142,7 +151,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Unsubscribe();
         _desired = DesiredState.Hidden;
         // The engine's hide cancels a pending relaunch retry; a preview's cosmetic end does not.
-        Enqueue("HIDE", ensureAlive: false, cancelsRetry: true);
+        Enqueue(OverlayPipeProtocol.Hide, ensureAlive: false, cancelsRetry: true);
     }
 
     public void SetPosition(OverlayPosition position)
@@ -150,8 +159,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         CancelPreview();
         _position = position;
         // Don't launch the helper just to move it; a relaunch replays the anchor from _position.
-        Enqueue("POSITION " + position, ensureAlive: false);
-        Enqueue(_desired.Line, ensureAlive: false);
+        Enqueue(OverlayPipeProtocol.PositionLine(position), ensureAlive: false);
+        Enqueue(_desired.ReplayLine, ensureAlive: false);
     }
 
     public void SetKeepWarm(int minutes)
@@ -170,8 +179,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         var generation = _preview.BeginPreview();
 
-        EnqueuePreview(generation, OverlayPreviewRole.Anchor, "POSITION " + position, ensureAlive: true);
-        EnqueuePreview(generation, OverlayPreviewRole.Step, "RECORDING", ensureAlive: true);
+        EnqueuePreview(generation, OverlayPreviewRole.Anchor, OverlayPipeProtocol.PositionLine(position), ensureAlive: true);
+        EnqueuePreview(generation, OverlayPreviewRole.Step, OverlayPipeProtocol.Recording, ensureAlive: true);
 
         _ = Task.Run(async () =>
         {
@@ -191,7 +200,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                     EnqueuePreview(
                         generation,
                         OverlayPreviewRole.Step,
-                        "METER " + ((int)(level * 1000)).ToString(CultureInfo.InvariantCulture),
+                        OverlayPipeProtocol.MeterLine((int)(level * 1000)),
                         ensureAlive: false);
                 }
 
@@ -253,8 +262,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     // ---- Command queue plumbing -----------------------------------------------------------------
 
-    private void Enqueue(string text, bool ensureAlive, bool cancelsRetry = false) =>
-        EnqueueStamped(new Command(CommandKind.State, text, ensureAlive, cancelsRetry));
+    private void Enqueue(string text, bool ensureAlive, bool cancelsRetry = false, TimeSpan showsFor = default) =>
+        EnqueueStamped(new Command(
+            CommandKind.State, text, ensureAlive, cancelsRetry, ShowsForMs: (long)showsFor.TotalMilliseconds));
 
     private void EnqueuePreview(long generation, OverlayPreviewRole role, string text, bool ensureAlive) =>
         EnqueueStamped(new Command(CommandKind.State, text, ensureAlive, Role: role, Generation: generation));
@@ -400,7 +410,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
         catch (Exception ex)
         {
-            // The command word only: a FAILED or WARNING argument is user-facing text.
+            // The command word only: a FAILED, WARNING or outcome argument is user-facing text.
             TryLog(LogLevel.Warning, ex, "Overlay command {Command} failed; tearing down for relaunch.", item.Verb);
             RecoverFromFailedWrite();
         }
@@ -427,7 +437,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         var nowMs = Environment.TickCount64;
         var helper = ObserveHelper(nowMs);
         var action = _lifetime.OnStateCommand(
-            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper);
+            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, item.ShowsForMs);
         if (!Prepare(action, helper, nowMs))
         {
             return;
@@ -454,7 +464,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         var helper = ObserveHelper(nowMs);
         if (Prepare(_lifetime.OnMeter(nowMs, _desired.Demand, helper), helper, nowMs))
         {
-            WriteWithTimeout("METER " + Volatile.Read(ref _latestMeter).ToString(CultureInfo.InvariantCulture));
+            WriteWithTimeout(OverlayPipeProtocol.MeterLine(Volatile.Read(ref _latestMeter)));
         }
     }
 
@@ -524,7 +534,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
     }
 
-    private string AppliedAnchorLine => "POSITION " + _position;
+    private string AppliedAnchorLine => OverlayPipeProtocol.PositionLine(_position);
 
     // A preview ends by handing the pill back to what the engine wants: a sustained state it covered comes
     // back at the applied anchor; otherwise the pill hides first and moves back while hidden.
@@ -538,7 +548,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
         else
         {
-            WriteWithTimeout("HIDE");
+            WriteWithTimeout(OverlayPipeProtocol.Hide);
             WriteWithTimeout(AppliedAnchorLine);
         }
     }
@@ -780,9 +790,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
             // A fresh process starts at the built-in default anchor; replay the applied position so
             // relaunches (crash recovery, lazy launch) come up where the user chose and in the latest
-            // visible state rather than waiting for a future dictation transition.
-            writer.WriteLine("POSITION " + _position);
-            writer.WriteLine(_desired.Line);
+            // visible state rather than waiting for a future dictation transition. A dictation's outcome is
+            // not replayed (see DesiredState.ReplayLine): its own command, written after this, shows it.
+            writer.WriteLine(OverlayPipeProtocol.PositionLine(_position));
+            writer.WriteLine(_desired.ReplayLine);
         }
         catch (OperationCanceledException) when (_closing.IsCancellationRequested)
         {
@@ -875,7 +886,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     // itself, with the kill as the backstop.
     private void EndHelper()
     {
-        var sentExit = IsAlive && TryWrite("EXIT");
+        var sentExit = IsAlive && TryWrite(OverlayPipeProtocol.Exit);
         KillProcess(graceful: sentExit);
     }
 
@@ -1135,7 +1146,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         bool CancelsRetry = false,
         long Stamp = 0,
         OverlayPreviewRole Role = OverlayPreviewRole.None,
-        long Generation = 0)
+        long Generation = 0,
+        long ShowsForMs = 0)
     {
         public static Command Exit { get; } = new(CommandKind.Exit);
 
@@ -1145,11 +1157,14 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         /// <summary>Unstamped and valueless: the consumer reads the latest pushed period; a setting is not activity.</summary>
         public static Command KeepWarmChanged { get; } = new(CommandKind.KeepWarm);
 
-        /// <summary>The command word alone, for the log. A FAILED or WARNING argument is user-facing text.</summary>
+        /// <summary>
+        /// The command word alone, for the log. A FAILED, WARNING or outcome argument is user-facing text: a reason, or a
+        /// next step that can name a microphone.
+        /// </summary>
         public string Verb => Kind switch
         {
-            CommandKind.Meter => "METER",
-            CommandKind.Exit => "EXIT",
+            CommandKind.Meter => OverlayPipeProtocol.Meter,
+            CommandKind.Exit => OverlayPipeProtocol.Exit,
             CommandKind.KeepWarm => "KEEPWARM",
             CommandKind.Release => "RELEASE",
             _ when Role == OverlayPreviewRole.End => "PREVIEW-END",
@@ -1160,10 +1175,17 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     /// <summary>The latest state the engine asked for: the pipe line that shows it, and what it needs from the helper.</summary>
     private sealed record DesiredState(string Line, OverlayDemand Demand)
     {
-        public static DesiredState Hidden { get; } = new("HIDE", OverlayDemand.None);
-        public static DesiredState Recording { get; } = new("RECORDING", OverlayDemand.Sustained);
-        public static DesiredState Transcribing { get; } = new("PROCESSING 0", OverlayDemand.Sustained);
-        public static DesiredState Polishing { get; } = new("PROCESSING 1", OverlayDemand.Sustained);
+        public static DesiredState Hidden { get; } = new(OverlayPipeProtocol.Hide, OverlayDemand.None);
+        public static DesiredState Recording { get; } = new(OverlayPipeProtocol.Recording, OverlayDemand.Sustained);
+        public static DesiredState Transcribing { get; } = new(OverlayPipeProtocol.ProcessingLine(aiCleanup: false), OverlayDemand.Sustained);
+        public static DesiredState Polishing { get; } = new(OverlayPipeProtocol.ProcessingLine(aiCleanup: true), OverlayDemand.Sustained);
+
+        /// <summary>
+        /// What a relaunched helper, or one being moved, is told to show: the state itself, unless it hides itself (a
+        /// dictation's outcome, or the failure flash). That is shown once, by its own command; replayed, a settings save
+        /// minutes after a dictation would flash its "Typed" again.
+        /// </summary>
+        public string ReplayLine => Demand == OverlayDemand.Transient ? OverlayPipeProtocol.Hide : Line;
     }
 
     /// <summary>
