@@ -13,8 +13,10 @@ namespace Scribe.Core.Libraries;
 /// <para>
 /// Each retry only asks for a pass (storage maintenance's coalesced trigger: due no sooner than its trigger delay after
 /// the request and its minimum spacing after the previous pass), and the pass's library step runs the recovery on the
-/// maintenance thread, so nothing here does file work, and nothing on <see cref="ILibraryVocabularySource.Current"/>,
-/// <see cref="ILibraryVocabularySource.TryHandOff"/>, the keyboard hook or dictation admission waits on it.
+/// maintenance thread, under the library lock. So the retry itself does no file work, and takes no lock a published
+/// <see cref="ILibraryVocabularySource.Current"/>, <see cref="ILibraryVocabularySource.TryHandOff"/>, the keyboard hook or
+/// dictation admission takes (a first read of <c>Current</c> before any publication loads the catalog under the library
+/// lock, but a retry exists only after a publication).
 /// </para>
 /// <para>
 /// A request storage maintenance cannot take yet is kept, not dropped: the app publishes its first vocabulary when

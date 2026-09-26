@@ -19,9 +19,12 @@ namespace Scribe.Core.Libraries;
 /// the rules alone, rebuilt at every start and Save, 6 ms, 71 ms and 0.79 s. Below 10,000 terms none of it is noticeable
 /// beside speech recognition; past it every cost grows faster than the vocabulary, which is where the notice goes. One
 /// library at the row cap costs, by interpolation, about 0.6 s from its Save to the next dictation and about 30 ms a
-/// dictation, all off the dispatcher. Staging a Save read, hashed and wrote a 100,000-term file (about 3 MB) in 90 ms, so
-/// an import at the byte cap stays within a few hundred milliseconds. The field cap was not measured separately; it
-/// bounds one rule's pattern and the Term details editor, and stays far above the glossary's own 100.
+/// dictation. Not all of it is off the dispatcher yet: until the vocabulary publication stream (W-V) lands,
+/// <c>DictationController.Start</c> and every Settings Save's settings application load the catalog and compile the rules
+/// synchronously on it, through release 0.4.4's library seam. Staging a Save read, hashed and wrote a 100,000-term file
+/// (about 3 MB) in 90 ms, so an import at the byte cap stays within a few hundred milliseconds. The field cap was not
+/// measured separately; it bounds one rule's pattern and the Term details editor, and stays far above the glossary's own
+/// 100.
 /// </para>
 /// </remarks>
 public static class LibraryLimits

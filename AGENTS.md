@@ -1108,7 +1108,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   the next adoption in the same process; after a restart before that, it is simply a word pack that is off.
 - **The vocabulary and its admission point.** `ILibraryVocabularySource.Current` is published after every commit, load
   and recovery that changes it, possibly at the same generation, so a consumer never skips a publication because the
-  generation matches. Every outbound cleanup request is handed over only through `TryHandOff` with the scope it was
+  generation matches. Once a vocabulary is published, `Current` is a lock-free read; before that, its first read loads
+  the catalog synchronously (file I/O under the library lock), so it is not I/O-free, and what keeps that load off the
+  dispatcher is W-V's first generation built on a worker (to verify when W-V merges). Until W-V lands, the dispatcher
+  still does library work: `DictationController.Start` and every Settings Save's `ApplySettings` load the catalog and
+  compile the rules synchronously through release 0.4.4's seam (the first load and the rule compile measured about 4.5 ms
+  and 6.2 ms at 1,549 terms, 21 ms and 71 ms at 10,000, at High priority). Every outbound cleanup request is handed over
+  only through `TryHandOff` with the scope it was
   admitted under. Committed content that cannot be read right now is held back (no rows, no hash), and dictation runs on
   the personal dictionary alone until a recovery can read it again: `LibraryRecoveryRetry` asks storage maintenance for a
   pass right away, then again 30 s later doubling to 5 minutes while the hold-back lasts, and stops when content is back or
@@ -1126,9 +1132,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **Release gate: no release contains this library model without W-V's vocabulary publication.** Until W-V lands,
   dictation still selects word packs through release 0.4.4's seam (`GetEnabledLibraryEntries(ids)` with the document's
   list, which is now the projection), so an enabled word pack kept from AI cleanup, or a remapped twin, is not applied on
-  this PC. Before any release from a line carrying the integration, check that W-V's merge is an ancestor of the release
-  head too. The Store build's journal (the redirected `LocalCache` folder, native and checked replace) is unverified until
-  the desktop gate exercises it.
+  this PC. That seam also filters by the ids its caller passes, never by the current AI permission: the controller keeps
+  the list it loaded, and the AI glossary (`DictationController.BuildGlossary`) composes whatever those ids name as the
+  files hold it now, so a word pack whose permission was withdrawn since (a file changed outside Scribe) can still reach
+  the glossary until the settings are applied again. So a build carrying the integration without W-V must not be used to
+  exercise remote AI cleanup. Before any release from a line carrying the integration, check that W-V's merge is an
+  ancestor of the release head too. The Store build's journal (the redirected `LocalCache` folder, native and checked
+  replace) is unverified until the desktop gate exercises it.
 - **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
   import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
   `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
