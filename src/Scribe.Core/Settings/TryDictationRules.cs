@@ -1,3 +1,5 @@
+using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 
@@ -50,7 +52,6 @@ public static class InjectionMethodLabel
         addedSpace ? $"{label}, then a space" : label;
 }
 
-
 public static class TryDictationTiming
 {
     public static TimeSpan ProcessingDuration(
@@ -100,4 +101,138 @@ public static class TryDictationChangeList
             : DictionaryOrWordPackSource;
         return $"\"{replacement.Pattern}\" became \"{replacement.Replacement}\" ({source})";
     }
+}
+
+public enum TryDictationSummaryAction
+{
+    None,
+    OpenSoundSettings,
+    OpenAiCleanup,
+}
+
+public sealed record TryDictationResultView(
+    TryDictationSummaryInput Summary,
+    bool ShowHeard,
+    bool ShowTyped,
+    bool ShowChanges,
+    bool ShowTimingDetails,
+    TryDictationSummaryAction Action)
+{
+    public static TryDictationResultView For(TryDictationResultViewInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (TryDictationReportClassifier.IsNoSpeech(input.FailureStage, input.FailureReason))
+        {
+            return new(new(false, NoSpeech: true), false, false, false, true, TryDictationSummaryAction.None);
+        }
+
+        if (TryDictationReportClassifier.IsMicrophoneProblem(input.FailureStage))
+        {
+            return new(new(false, MicrophoneProblem: true), false, false, false, true, TryDictationSummaryAction.OpenSoundSettings);
+        }
+
+        if (input.CleanupFailed)
+        {
+            return new(new(false, CleanupFailed: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenAiCleanup);
+        }
+
+        if (input.CleanupNotReady)
+        {
+            return new(new(false, CleanupNotReady: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenAiCleanup);
+        }
+
+        if (TryDictationReportClassifier.StageFrom(input.FailureStage) is { } stopped)
+        {
+            return new(new(false, StoppedAt: stopped, Reason: input.FailureReason), !string.IsNullOrWhiteSpace(input.RawText), false, false, true, TryDictationSummaryAction.None);
+        }
+
+        var success = input.InjectionSucceeded == true;
+        if (!success)
+        {
+            return new(new(false, StoppedAt: FailureStage.TextInsertion), !string.IsNullOrWhiteSpace(input.RawText), false, false, true, TryDictationSummaryAction.None);
+        }
+
+        return new(
+            new(true, input.ProcessingSeconds, input.AiCleanupEnabled, input.CleanupPhrase),
+            true,
+            true,
+            true,
+            true,
+            TryDictationSummaryAction.None);
+    }
+}
+
+public sealed record TryDictationResultViewInput(
+    string? FailureStage,
+    string? FailureReason,
+    string? RawText,
+    bool? InjectionSucceeded,
+    double ProcessingSeconds,
+    bool AiCleanupEnabled,
+    string? CleanupPhrase,
+    bool CleanupFailed = false,
+    bool CleanupNotReady = false,
+    string? CleanupReason = null);
+
+public static class TryDictationReportClassifier
+{
+    public const string StageAudioCapture = "Audio capture";
+    public const string StageVoiceActivityDetection = "Voice activity detection";
+    public const string StageSpeechRecognition = "Speech recognition";
+    public const string StageDictionaryAndSnippets = "Dictionary and snippets";
+    public const string StageTextInsertion = "Text insertion";
+    public const string NoSpeechDetected = "No speech was detected.";
+    public const string NoSpeechRecognized = "No speech was recognized.";
+
+    public static FailureStage? StageFrom(string? stage) => stage switch
+    {
+        StageAudioCapture => FailureStage.AudioCapture,
+        StageVoiceActivityDetection => FailureStage.VoiceActivityDetection,
+        StageSpeechRecognition => FailureStage.SpeechRecognition,
+        StageDictionaryAndSnippets => FailureStage.DictionaryAndSnippets,
+        StageTextInsertion => FailureStage.TextInsertion,
+        _ => null,
+    };
+
+    public static bool IsNoSpeech(string? stage, string? reason) =>
+        (string.Equals(stage, StageVoiceActivityDetection, StringComparison.Ordinal) && string.Equals(reason, NoSpeechDetected, StringComparison.Ordinal)) ||
+        (string.Equals(stage, StageSpeechRecognition, StringComparison.Ordinal) && string.Equals(reason, NoSpeechRecognized, StringComparison.Ordinal));
+
+    public static bool IsMicrophoneProblem(string? stage) =>
+        string.Equals(stage, StageAudioCapture, StringComparison.Ordinal);
+}
+
+public static class TryDictationTimingDetail
+{
+    public const string SilenceTrimmingUnavailable = "Off, silence trimming isn't available";
+
+    public static string Cleanup(CleanupResult? cleanup, bool enabled)
+    {
+        if (!enabled)
+        {
+            return "Off in settings";
+        }
+
+        return cleanup?.Outcome switch
+        {
+            CleanupOutcome.Cleaned => "Cleaned",
+            CleanupOutcome.Unchanged => "Ran, no changes needed",
+            CleanupOutcome.Failed => "Didn't finish",
+            CleanupOutcome.Skipped when cleanup.SkippedUnexpectedly => "Not ready",
+            CleanupOutcome.Skipped => "Skipped",
+            _ => "Not reached",
+        };
+    }
+
+    public static string ChangeCount(int count) => count switch
+    {
+        0 => "No changes",
+        1 => "1 change",
+        _ => $"{count:N0} changes",
+    };
+}
+
+public static class TryDictationCleanupPhrase
+{
+    public static string For(CleanupOptions options) => CleanupActivationMessage.TryDictationPhrase(options);
 }

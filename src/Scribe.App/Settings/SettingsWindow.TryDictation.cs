@@ -18,7 +18,6 @@ namespace Scribe.App.Settings;
 
 public partial class SettingsWindow
 {
-    private static readonly TextPostProcessingResult EmptyTryDictationResult = new(string.Empty, []);
     private string? _tryDictationRunningModelId;
     private int? _tryDictationRunningDecodeThreads;
 
@@ -61,6 +60,9 @@ public partial class SettingsWindow
         ShowTryDictationEmptyResult();
     }
 
+    private void TryDictationOpenAiCleanup_Click(object sender, RoutedEventArgs e) =>
+        ShowPage(SettingsPage.AiCleanup);
+
     private void UpdateTryDictationPage()
     {
         if (TryDictationPrimaryInstruction is null)
@@ -71,9 +73,9 @@ public partial class SettingsWindow
         var primary = _pendingBinding with { Mode = SelectedMode };
         TryDictationPrimaryInstruction.Text = TryDictationInstruction(primary, primaryShortcut: true);
 
-        var secondary = _pendingDictationOnlyBinding is null
-            ? null
-            : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
+        var secondary = _settings.EnableAiCleanup && _pendingDictationOnlyBinding is not null
+            ? _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }
+            : null;
         if (secondary is null)
         {
             TryDictationSecondaryInstruction.Visibility = Visibility.Collapsed;
@@ -103,7 +105,8 @@ public partial class SettingsWindow
         var restartNeeded = !changes.IsDirty && TryDictationNeedsRestart();
         TryDictationUnsavedBar.Message = SettingsChangeTracker.TryDictationUnsavedNotice;
         TryDictationUnsavedBar.IsOpen = changes.IsDirty;
-        TryDictationUnsavedBar.Visibility = changes.IsDirty ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationUnsavedHost.Visibility = changes.IsDirty ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationSaveNowButton.Visibility = changes.IsDirty ? Visibility.Visible : Visibility.Collapsed;
         TryDictationRestartBar.Message = SettingsChangeTracker.TryDictationRestartNotice;
         TryDictationRestartBar.IsOpen = restartNeeded;
         TryDictationRestartBar.Visibility = restartNeeded ? Visibility.Visible : Visibility.Collapsed;
@@ -212,52 +215,71 @@ public partial class SettingsWindow
             : $"Hold {shortcut} to try it without AI cleanup.";
     }
 
-    private void ShowTryDictationPipeline(DictationPipelineReport report)
+    private void RenderTryDictationReport(DictationPipelineReport report)
     {
-        var targetHandle = new WindowInteropHelper(this).Handle;
-        var hwndFreeRender = targetHandle == 0 && report.TargetWindow == 0;
-        if ((!hwndFreeRender && !IsVisible) ||
-            SectionTryDictation.Visibility != Visibility.Visible ||
-            (!hwndFreeRender && targetHandle != report.TargetWindow))
-        {
-            return;
-        }
-
         UpdateTryDictationPage();
         TryDictationEmptyText.Visibility = Visibility.Collapsed;
         TryDictationResultPanel.Visibility = Visibility.Visible;
 
-        TryDictationHeardText.Text = report.RawText ?? string.Empty;
         var displayedText = report.FinalText ?? report.PostProcessing?.Text ?? report.CleanedText ?? report.RawText ?? string.Empty;
         var displayedResult = report.PostProcessing is { } postProcessing &&
             string.Equals(postProcessing.Text, displayedText, StringComparison.Ordinal)
                 ? postProcessing
                 : new TextPostProcessingResult(displayedText, []);
-        RenderTryDictationTypedText(displayedResult);
-
         var processing = TryDictationTiming.ProcessingDuration(
             report.VadEnabled ? report.VadDuration : TimeSpan.Zero,
             report.DecodeDuration,
             report.CleanupEnabled ? report.CleanupDuration : TimeSpan.Zero,
             report.PostProcessingEnabled ? report.PostProcessingDuration : TimeSpan.Zero,
             report.Injection is null ? TimeSpan.Zero : report.InjectionDuration);
-        var summaryInput = BuildTryDictationSummaryInput(report, processing);
-        TryDictationSummaryText.Text = TryDictationSummary.Describe(summaryInput);
-        TryDictationSoundSettingsButton.Visibility = summaryInput.MicrophoneProblem ? Visibility.Visible : Visibility.Collapsed;
-        SetTryDictationSummaryIcon(summaryInput);
+        var cleanupFailed = report.Cleanup?.Outcome == CleanupOutcome.Failed;
+        var cleanupNotReady = report.Cleanup?.Outcome == CleanupOutcome.Skipped && report.Cleanup.SkippedUnexpectedly;
+        var cleanupReason = cleanupFailed
+            ? report.Cleanup?.DisplayDetail ?? report.Cleanup?.FailureReason
+            : cleanupNotReady ? report.Cleanup?.DisplayDetail : null;
+        var view = TryDictationResultView.For(new TryDictationResultViewInput(
+            report.FailureStage,
+            report.FailureReason,
+            report.RawText,
+            report.Injection?.Succeeded,
+            processing.TotalSeconds,
+            report.CleanupEnabled,
+            TryDictationCleanupPhrase.For(BuildTryDictationCleanupOptions()),
+            cleanupFailed,
+            cleanupNotReady,
+            cleanupReason));
+
+        TryDictationSummaryText.Text = TryDictationSummary.Describe(view.Summary);
+        TryDictationSoundSettingsButton.Visibility = view.Action == TryDictationSummaryAction.OpenSoundSettings ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationAiCleanupButton.Visibility = view.Action == TryDictationSummaryAction.OpenAiCleanup ? Visibility.Visible : Visibility.Collapsed;
+        SetTryDictationSummaryIcon(TryDictationSummary.ToneFor(view.Summary));
         AnnounceTryDictationSummary();
+
+        TryDictationHeardSection.Visibility = view.ShowHeard ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationHeardText.Text = view.ShowHeard ? report.RawText ?? string.Empty : string.Empty;
+        TryDictationTypedSection.Visibility = view.ShowTyped ? Visibility.Visible : Visibility.Collapsed;
+        if (view.ShowTyped)
+        {
+            RenderTryDictationTypedText(displayedResult);
+        }
+        else
+        {
+            TryDictationTypedText.Inlines.Clear();
+        }
 
         var cleanupChanged = report.Cleanup?.Changed == true ||
             (report.CleanedText is { } cleaned && report.RawText is { } raw && !string.Equals(cleaned, raw, StringComparison.Ordinal));
         var changes = TryDictationChangeList.Describe(displayedResult.Replacements, cleanupChanged);
-        TryDictationChangesTitle.Text = $"Changes ({changes.Count})";
+        TryDictationChangesSection.Visibility = view.ShowChanges ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationChangesTitle.Text = changes.Count == 0 ? "Changes" : $"Changes ({changes.Count})";
         TryDictationChangesList.ItemsSource = changes.Count == 0 ? ["No changes."] : changes;
+        TryDictationTimingExpander.Visibility = view.ShowTimingDetails ? Visibility.Visible : Visibility.Collapsed;
 
         PlaygroundCaptureDuration.Text = TryFormatDuration(report.CaptureDuration);
         PlaygroundCaptureDetail.Text = $"{report.SpeechDuration.TotalSeconds:N1} seconds of speech kept";
         PlaygroundVadDuration.Text = report.VadEnabled ? TryFormatDuration(report.VadDuration) : "Skipped";
         PlaygroundVadDetail.Text = report.VadEnabled
-            ? report.VadAvailable ? "Trimmed" : "Off, VAD model unavailable"
+            ? report.VadAvailable ? "Trimmed" : TryDictationTimingDetail.SilenceTrimmingUnavailable
             : "Off in settings";
         PlaygroundDecodeDuration.Text = report.DecodeDuration > TimeSpan.Zero ? TryFormatDuration(report.DecodeDuration) : "Not run";
         var speed = TryDictationTiming.SpeedLabel(report.RealTimeFactor);
@@ -265,10 +287,10 @@ public partial class SettingsWindow
             ? "Not reached"
             : string.IsNullOrEmpty(speed) ? $"{report.RawText.Length:N0} characters" : $"{report.RawText.Length:N0} characters, {speed}";
         PlaygroundAiDuration.Text = report.CleanupEnabled ? TryFormatDuration(report.CleanupDuration) : "Skipped";
-        PlaygroundAiDetail.Text = report.Cleanup is { } cleanup ? DescribeTryDictationCleanup(cleanup, report.CleanupEnabled) : "Not reached";
+        PlaygroundAiDetail.Text = TryDictationTimingDetail.Cleanup(report.Cleanup, report.CleanupEnabled);
         PlaygroundPostDuration.Text = report.PostProcessingEnabled ? TryFormatDuration(report.PostProcessingDuration) : "Skipped";
         PlaygroundPostDetail.Text = report.PostProcessing is { } processed
-            ? $"{processed.Replacements.Count:N0} changes"
+            ? TryDictationTimingDetail.ChangeCount(processed.Replacements.Count)
             : "Not reached";
         PlaygroundInjectionDuration.Text = report.Injection is null ? "Not run" : TryFormatDuration(report.InjectionDuration);
         PlaygroundInjectionDetail.Text = report.Injection is { } injection
@@ -278,107 +300,28 @@ public partial class SettingsWindow
         PlaygroundTotalDetail.Text = string.Empty;
     }
 
-    private TryDictationSummaryInput BuildTryDictationSummaryInput(DictationPipelineReport report, TimeSpan processing)
-    {
-        if (IsNoSpeech(report))
-        {
-            return new TryDictationSummaryInput(false, NoSpeech: true);
-        }
-
-        if (IsMicrophoneProblem(report))
-        {
-            return new TryDictationSummaryInput(false, MicrophoneProblem: true);
-        }
-
-        if (report.Cleanup?.Outcome == CleanupOutcome.Failed)
-        {
-            return new TryDictationSummaryInput(
-                false,
-                CleanupFailed: true,
-                Reason: report.Cleanup.DisplayDetail ?? report.Cleanup.FailureReason ?? "Try again, or turn AI cleanup off.");
-        }
-
-        if (StageFrom(report.FailureStage) is { } stopped)
-        {
-            return new TryDictationSummaryInput(false, StoppedAt: stopped);
-        }
-
-        return new TryDictationSummaryInput(
-            Success: report.Injection?.Succeeded != false,
-            ProcessingSeconds: processing.TotalSeconds,
-            AiCleanupEnabled: report.CleanupEnabled,
-            Model: TryDictationModelName(report.CleanupEnabled),
-            Where: TryDictationModelLocation());
-    }
-
-    private static bool IsNoSpeech(DictationPipelineReport report) =>
-        report.FailureStage is "Voice activity detection" or "Speech recognition" &&
-        (report.FailureReason?.Contains("speech", StringComparison.OrdinalIgnoreCase) == true ||
-         report.FailureReason?.Contains("silence", StringComparison.OrdinalIgnoreCase) == true);
-
-    private static bool IsMicrophoneProblem(DictationPipelineReport report) =>
-        string.Equals(report.FailureStage, "Audio capture", StringComparison.Ordinal);
-
-    private static FailureStage? StageFrom(string? stage) => stage switch
-    {
-        "Audio capture" => FailureStage.AudioCapture,
-        "Voice activity detection" => FailureStage.VoiceActivityDetection,
-        "Speech recognition" => FailureStage.SpeechRecognition,
-        "Dictionary and snippets" => FailureStage.DictionaryAndSnippets,
-        "Text insertion" => FailureStage.TextInsertion,
-        _ => null,
-    };
-
-    private static string DescribeTryDictationCleanup(CleanupResult cleanup, bool enabled)
-    {
-        if (!enabled)
-        {
-            return "Skipped";
-        }
-
-        return cleanup.Outcome switch
-        {
-            CleanupOutcome.Cleaned => "Cleaned",
-            CleanupOutcome.Unchanged => "Ran, no changes needed",
-            CleanupOutcome.Failed => "Failed, raw text kept",
-            _ => "Skipped",
-        };
-    }
+    private CleanupOptions BuildTryDictationCleanupOptions() => new(
+        _settings.EnableAiCleanup,
+        _settings.AiCleanupProvider,
+        _settings.AiCleanupModel,
+        _settings.AiCleanupAzureEndpoint,
+        _settings.AiCleanupAzureDeployment,
+        _settings.AiCleanupAzureApiKey,
+        _settings.AiCleanupAzureTenantId,
+        CustomEndpoint: _settings.AiCleanupCustomEndpoint,
+        CustomModel: _settings.AiCleanupCustomModel,
+        CustomApiKey: _settings.AiCleanupCustomApiKey,
+        AzureAuthMode: _settings.AiCleanupAzureAuthMode,
+        AzureClientId: _settings.AiCleanupAzureClientId,
+        AzureClientSecret: _settings.AiCleanupAzureClientSecret,
+        CopilotModel: _settings.AiCleanupCopilotModel);
 
     private static string TryFormatDuration(TimeSpan elapsed) =>
         elapsed.TotalMilliseconds < 1 ? "<1 ms" : $"{elapsed.TotalMilliseconds:N0} ms";
 
-    private string TryDictationModelName(bool cleanupEnabled)
-    {
-        if (!cleanupEnabled)
-        {
-            return string.Empty;
-        }
-
-        return _settings.AiCleanupProvider switch
-        {
-            CleanupProvider.FoundryLocal => StripRecommendation(CleanupModelCatalog.Resolve(_settings.AiCleanupModel).DisplayName),
-            CleanupProvider.AzureFoundry => NullIfBlank(_settings.AiCleanupAzureDeployment) ?? "configured model",
-            CleanupProvider.OpenAiCompatible => NullIfBlank(_settings.AiCleanupCustomModel) ?? "configured model",
-            CleanupProvider.GitHubCopilot => NullIfBlank(_settings.AiCleanupCopilotModel) ?? "GitHub Copilot",
-            _ => "configured model",
-        };
-    }
-
-    private string TryDictationModelLocation() =>
-        _settings.AiCleanupProvider == CleanupProvider.FoundryLocal ? "on this PC" : "online";
-
-    private static string StripRecommendation(string displayName)
-    {
-        const string suffix = " (recommended)";
-        return displayName.EndsWith(suffix, StringComparison.Ordinal)
-            ? displayName[..^suffix.Length]
-            : displayName;
-    }
-
     private void RenderTryDictationTypedText(TextPostProcessingResult result)
     {
-        var paragraph = new Paragraph { Margin = new Thickness(0) };
+        TryDictationTypedText.Inlines.Clear();
         var position = 0;
         foreach (var replacement in result.Replacements.OrderBy(r => r.Start))
         {
@@ -387,23 +330,16 @@ public partial class SettingsWindow
                 continue;
             }
 
-            AppendTryDictationText(paragraph, result.Text[position..replacement.Start], highlight: false);
+            AppendTryDictationText(TryDictationTypedText, result.Text[position..replacement.Start], highlight: false);
             var length = Math.Min(replacement.Length, result.Text.Length - replacement.Start);
-            AppendTryDictationText(paragraph, result.Text.Substring(replacement.Start, length), highlight: true);
+            AppendTryDictationText(TryDictationTypedText, result.Text.Substring(replacement.Start, length), highlight: true);
             position = replacement.Start + length;
         }
 
-        AppendTryDictationText(paragraph, result.Text[position..], highlight: false);
-        PlaygroundOutput.Document = new FlowDocument(paragraph)
-        {
-            PagePadding = new Thickness(0),
-            FontFamily = PlaygroundOutput.FontFamily,
-            FontSize = PlaygroundOutput.FontSize,
-            Foreground = PlaygroundOutput.Foreground,
-        };
+        AppendTryDictationText(TryDictationTypedText, result.Text[position..], highlight: false);
     }
 
-    private static void AppendTryDictationText(Paragraph paragraph, string text, bool highlight)
+    private static void AppendTryDictationText(TextBlock textBlock, string text, bool highlight)
     {
         var start = 0;
         for (var index = 0; index < text.Length; index++)
@@ -413,8 +349,8 @@ public partial class SettingsWindow
                 continue;
             }
 
-            AppendTryDictationRun(paragraph, text[start..index], highlight);
-            paragraph.Inlines.Add(new LineBreak());
+            AppendTryDictationRun(textBlock, text[start..index], highlight);
+            textBlock.Inlines.Add(new LineBreak());
             if (text[index] == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
             {
                 index++;
@@ -423,10 +359,10 @@ public partial class SettingsWindow
             start = index + 1;
         }
 
-        AppendTryDictationRun(paragraph, text[start..], highlight);
+        AppendTryDictationRun(textBlock, text[start..], highlight);
     }
 
-    private static void AppendTryDictationRun(Paragraph paragraph, string text, bool highlight)
+    private static void AppendTryDictationRun(TextBlock textBlock, string text, bool highlight)
     {
         if (text.Length == 0)
         {
@@ -440,7 +376,7 @@ public partial class SettingsWindow
             run.TextDecorations = TextDecorations.Underline;
         }
 
-        paragraph.Inlines.Add(run);
+        textBlock.Inlines.Add(run);
     }
 
     private void ShowTryDictationEmptyResult()
@@ -448,33 +384,22 @@ public partial class SettingsWindow
         TryDictationEmptyText.Visibility = Visibility.Visible;
         TryDictationResultPanel.Visibility = Visibility.Collapsed;
         TryDictationHeardText.Text = string.Empty;
-        RenderTryDictationTypedText(EmptyTryDictationResult);
+        TryDictationTypedText.Inlines.Clear();
         TryDictationChangesList.ItemsSource = null;
         TryDictationTimingExpander.IsExpanded = false;
     }
 
-    private void SetTryDictationSummaryIcon(TryDictationSummaryInput input)
+    private void SetTryDictationSummaryIcon(TryDictationSummaryTone tone)
     {
-        if (input.Success || input.CleanupFailed)
+        var (symbol, brush) = tone switch
         {
-            TryDictationSummaryIcon.Symbol = Wpf.Ui.Controls.SymbolRegular.CheckmarkCircle24;
-            TryDictationSummaryIcon.Foreground = (Brush)FindResource("SystemFillColorSuccessBrush");
-            return;
-        }
-
-        if (input.NoSpeech)
-        {
-            TryDictationSummaryIcon.Symbol = Wpf.Ui.Controls.SymbolRegular.Info24;
-            TryDictationSummaryIcon.Foreground = (Brush)FindResource("TextFillColorSecondaryBrush");
-            return;
-        }
-
-        TryDictationSummaryIcon.Symbol = input.MicrophoneProblem
-            ? Wpf.Ui.Controls.SymbolRegular.ErrorCircle24
-            : Wpf.Ui.Controls.SymbolRegular.Warning24;
-        TryDictationSummaryIcon.Foreground = (Brush)FindResource(input.MicrophoneProblem
-            ? "SystemFillColorCriticalBrush"
-            : "SystemFillColorCautionBrush");
+            TryDictationSummaryTone.Information => (Wpf.Ui.Controls.SymbolRegular.Info24, "TextFillColorSecondaryBrush"),
+            TryDictationSummaryTone.Caution => (Wpf.Ui.Controls.SymbolRegular.Warning24, "SystemFillColorCautionBrush"),
+            TryDictationSummaryTone.Critical => (Wpf.Ui.Controls.SymbolRegular.ErrorCircle24, "SystemFillColorCriticalBrush"),
+            _ => (Wpf.Ui.Controls.SymbolRegular.CheckmarkCircle24, "SystemFillColorSuccessBrush"),
+        };
+        TryDictationSummaryIcon.Symbol = symbol;
+        TryDictationSummaryIcon.Foreground = (Brush)FindResource(brush);
     }
 
     private void AnnounceTryDictationSummary()

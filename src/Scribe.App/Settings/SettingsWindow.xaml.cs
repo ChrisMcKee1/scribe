@@ -682,8 +682,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Try dictation ------------------------------------------------------------------------
 
-    internal void ShowPlaygroundPipeline(DictationPipelineReport report) =>
-        ShowTryDictationPipeline(report);
+    internal void ShowPlaygroundPipeline(DictationPipelineReport report)
+    {
+        if (!IsVisible ||
+            SectionTryDictation.Visibility != Visibility.Visible ||
+            new WindowInteropHelper(this).Handle != report.TargetWindow)
+        {
+            return;
+        }
+
+        RenderTryDictationReport(report);
+    }
 
     // --- Navigation rail -------------------------------------------------------------------
 
@@ -726,6 +735,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         else if (page == SettingsPage.Usage)
         {
             LoadUsage();
+        }
+        else if (page == SettingsPage.TryDictation)
+        {
+            UpdateTryDictationPage();
         }
 
         if (!string.IsNullOrWhiteSpace(focusName) && FindName(focusName) is IInputElement target)

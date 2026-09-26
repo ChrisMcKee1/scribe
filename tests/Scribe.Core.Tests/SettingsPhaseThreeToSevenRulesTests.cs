@@ -1,4 +1,5 @@
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
@@ -290,6 +291,131 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             "\"sig\" became \"Best regards\" (snippet)",
             "AI cleanup rewrote the text.",
         ], lines);
+    }
+
+    [Fact]
+    public void Try_dictation_result_view_hides_empty_sections_for_failures()
+    {
+        var noSpeech = TryDictationResultView.For(new TryDictationResultViewInput(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.NoSpeechRecognized,
+            null,
+            null,
+            0,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.False(noSpeech.ShowHeard);
+        Assert.False(noSpeech.ShowTyped);
+        Assert.False(noSpeech.ShowChanges);
+        Assert.True(noSpeech.ShowTimingDetails);
+        Assert.Equal(TryDictationSummaryTone.Information, TryDictationSummary.ToneFor(noSpeech.Summary));
+
+        var microphone = TryDictationResultView.For(new TryDictationResultViewInput(
+            TryDictationReportClassifier.StageAudioCapture,
+            "The microphone produced no audio.",
+            null,
+            null,
+            0,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.False(microphone.ShowHeard);
+        Assert.Equal(TryDictationSummaryAction.OpenSoundSettings, microphone.Action);
+
+        var typing = TryDictationResultView.For(new TryDictationResultViewInput(
+            TryDictationReportClassifier.StageTextInsertion,
+            "Text could not be inserted.",
+            "hello",
+            false,
+            0.4,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.True(typing.ShowHeard);
+        Assert.False(typing.ShowTyped);
+        Assert.False(typing.ShowChanges);
+        Assert.Equal(FailureStage.TextInsertion, typing.Summary.StoppedAt);
+    }
+
+    [Fact]
+    public void Try_dictation_result_view_shows_all_sections_for_success_and_cleanup_cautions()
+    {
+        var success = TryDictationResultView.For(new TryDictationResultViewInput(
+            null,
+            null,
+            "raw",
+            true,
+            1.1,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.True(success.Summary.Success);
+        Assert.True(success.ShowHeard);
+        Assert.True(success.ShowTyped);
+        Assert.True(success.ShowChanges);
+
+        var notReady = TryDictationResultView.For(new TryDictationResultViewInput(
+            null,
+            null,
+            "raw",
+            true,
+            1.1,
+            true,
+            "AI cleanup: on, Qwen3 on this PC.",
+            CleanupNotReady: true));
+        Assert.True(notReady.ShowTyped);
+        Assert.True(notReady.Summary.CleanupNotReady);
+        Assert.Equal(TryDictationSummaryAction.OpenAiCleanup, notReady.Action);
+    }
+
+    [Fact]
+    public void Try_dictation_report_classifier_matches_exact_controller_text()
+    {
+        Assert.True(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageVoiceActivityDetection,
+            TryDictationReportClassifier.NoSpeechDetected));
+        Assert.True(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.NoSpeechRecognized));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            "The speech recognizer crashed."));
+        Assert.Equal(FailureStage.TextInsertion, TryDictationReportClassifier.StageFrom(TryDictationReportClassifier.StageTextInsertion));
+        Assert.True(TryDictationReportClassifier.IsMicrophoneProblem(TryDictationReportClassifier.StageAudioCapture));
+    }
+
+    [Fact]
+    public void Try_dictation_timing_details_use_plain_words()
+    {
+        Assert.Equal("Off in settings", TryDictationTimingDetail.Cleanup(null, enabled: false));
+        Assert.Equal("Didn't finish", TryDictationTimingDetail.Cleanup(new CleanupResult("raw", CleanupOutcome.Failed), enabled: true));
+        Assert.Equal("Not ready", TryDictationTimingDetail.Cleanup(CleanupResult.Skip("raw", "Still loading"), enabled: true));
+        Assert.Equal("Skipped", TryDictationTimingDetail.Cleanup(CleanupResult.Skip("raw"), enabled: true));
+        Assert.Equal("No changes", TryDictationTimingDetail.ChangeCount(0));
+        Assert.Equal("1 change", TryDictationTimingDetail.ChangeCount(1));
+        Assert.Equal("2 changes", TryDictationTimingDetail.ChangeCount(2));
+    }
+
+    [Fact]
+    public void Dictation_controller_pipeline_stage_strings_stay_in_sync_with_try_dictation_classifier()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Dictation", "DictationController.cs"));
+
+        Assert.Contains("report.Fail(\"Voice activity detection\", \"No speech was detected.\")", source, StringComparison.Ordinal);
+        Assert.Contains("report.Fail(\"Speech recognition\", \"No speech was recognized.\")", source, StringComparison.Ordinal);
+        Assert.Contains("report.Fail(\"Audio capture\"", source, StringComparison.Ordinal);
+        Assert.Contains("report.Fail(\"Voice activity detection\"", source, StringComparison.Ordinal);
+        Assert.Contains("report.Fail(\"Speech recognition\"", source, StringComparison.Ordinal);
+        Assert.Contains("report.Fail(\"Dictionary and snippets\"", source, StringComparison.Ordinal);
+        Assert.Contains("report.Fail(\"Text insertion\"", source, StringComparison.Ordinal);
+    }
+
+    private static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Scribe.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new InvalidOperationException("Could not find the repository root.");
     }
 
     [Fact]
