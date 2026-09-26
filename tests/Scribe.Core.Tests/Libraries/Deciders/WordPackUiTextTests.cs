@@ -62,6 +62,27 @@ public sealed class WordPackUiTextTests
         Assert.DoesNotContain("SectionWordPacks.ActualHeight", layout, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Word_pack_import_dialog_choice_reaches_the_workspace()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.WordPacks.cs"));
+
+        Assert.Contains("accepted.Choice", source, StringComparison.Ordinal);
+        Assert.Contains("ImportConflictChoice.UseFilesVersion", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ApplyImport(accepted.Plan, ImportConflictChoice.KeepMine)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_word_pack_notice_action_has_a_page_handler()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.WordPacks.cs"));
+
+        foreach (var action in Enum.GetValues<WordPackNoticeAction>())
+        {
+            Assert.Contains($"case WordPackNoticeAction.{action}:", source, StringComparison.Ordinal);
+        }
+    }
+
     private static string Body(string source, string signature)
     {
         var start = source.IndexOf(signature, StringComparison.Ordinal);

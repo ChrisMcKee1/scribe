@@ -77,7 +77,7 @@ public sealed class WordPackSaveProtocol
                         session.Rebase(await _store.LoadCatalogAsync().ConfigureAwait(true));
                     }
 
-                    return FromNotice(WordPackNotices.FromPrepare(prepared));
+                    return FromNotice(WordPackNotices.FromPrepare(prepared), success: false);
                 }
 
                 session.PreparedBy(prepared);
@@ -238,7 +238,7 @@ public sealed class WordPackSaveProtocol
             case LibrarySaveStatus.CommitUnknown:
                 _pending = session;
                 _pendingGeneration = session.PreparedGeneration;
-                return FromNotice(WordPackNotices.FromSaveStatus(outcome.Status));
+                return FromNotice(WordPackNotices.FromSaveStatus(outcome.Status), success: false);
 
             case LibrarySaveStatus.Superseded:
                 session.Rebase(await _store.LoadCatalogAsync().ConfigureAwait(true));
@@ -343,12 +343,14 @@ public sealed class WordPackSaveProtocol
         _pendingGeneration = 0;
     }
 
-    private static WordPackSaveProtocolResult FromNotice(WordPackNotice notice) =>
+    private static WordPackSaveProtocolResult FromNotice(WordPackNotice notice, bool success = true) =>
         notice.Severity switch
         {
-            WordPackNoticeSeverity.Error => WordPackSaveProtocolResult.Error(notice.Text),
-            WordPackNoticeSeverity.Warning => WordPackSaveProtocolResult.Warning(notice.Text),
-            _ => WordPackSaveProtocolResult.SuccessResult(notice.Text),
+            WordPackNoticeSeverity.Error => WordPackSaveProtocolResult.Error(notice.Text, notice.Actions),
+            WordPackNoticeSeverity.Warning => WordPackSaveProtocolResult.Warning(notice.Text, notice.Actions),
+            _ => success
+                ? WordPackSaveProtocolResult.SuccessResult(notice.Text, notice.Actions)
+                : new WordPackSaveProtocolResult(false, notice.Text, WordPackSaveProtocolSeverity.Info, notice.Actions),
         };
 
     private static WordPackSaveProtocolResult Unfinished() =>
@@ -376,16 +378,20 @@ public sealed record WordPackSaveProtocolRequest(
     Action? OnSettingsCommitted = null,
     Action? OnWordPacksChanged = null);
 
-public sealed record WordPackSaveProtocolResult(bool Success, string? Message, WordPackSaveProtocolSeverity Severity)
+public sealed record WordPackSaveProtocolResult(
+    bool Success,
+    string? Message,
+    WordPackSaveProtocolSeverity Severity,
+    IReadOnlyList<WordPackNoticeAction>? Actions = null)
 {
-    public static WordPackSaveProtocolResult SuccessResult(string? message = null) =>
-        new(true, message, WordPackSaveProtocolSeverity.Info);
+    public static WordPackSaveProtocolResult SuccessResult(string? message = null, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
+        new(true, message, WordPackSaveProtocolSeverity.Info, actions);
 
-    public static WordPackSaveProtocolResult Warning(string message) =>
-        new(false, message, WordPackSaveProtocolSeverity.Warning);
+    public static WordPackSaveProtocolResult Warning(string message, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
+        new(false, message, WordPackSaveProtocolSeverity.Warning, actions);
 
-    public static WordPackSaveProtocolResult Error(string message) =>
-        new(false, message, WordPackSaveProtocolSeverity.Error);
+    public static WordPackSaveProtocolResult Error(string message, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
+        new(false, message, WordPackSaveProtocolSeverity.Error, actions);
 }
 
 public enum WordPackSaveProtocolSeverity

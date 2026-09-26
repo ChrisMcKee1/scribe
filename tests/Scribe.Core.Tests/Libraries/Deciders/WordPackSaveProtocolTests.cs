@@ -341,7 +341,7 @@ public sealed class WordPackSaveProtocolTests
                 Assert.False(result.Success);
                 Assert.False(harness.Workspace.HasUnsavedChanges);
                 Assert.Single(harness.Trace, step => step == "apply");
-                Assert.Contains("Close the word pack file", result.Message, StringComparison.Ordinal);
+                Assert.Contains("Scribe will finish saving it after you close it there", result.Message, StringComparison.Ordinal);
             }
             else
             {
