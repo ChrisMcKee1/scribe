@@ -62,8 +62,11 @@ public sealed class SectionSignatureTests
         Assert.NotEqual(Sign(twoEntries), Sign(oneEntry));
 
         // The libraries' rows are framed the same way, although today's ids (slugs, or a file name, which cannot hold '|')
-        // could not collide.
+        // could not collide: two lists of the same length whose joined ids and switches read alike.
         Assert.NotEqual(Sign([("a|True", true)]), Sign([("a", true), ("", true)]));
+        Assert.Equal("a|Trueb|Truec|True", string.Concat(new[] { ("a", true), ("b|Truec", true) }.Select(row => $"{row.Item1}|{row.Item2}")));
+        Assert.Equal("a|Trueb|Truec|True", string.Concat(new[] { ("a|Trueb", true), ("c", true) }.Select(row => $"{row.Item1}|{row.Item2}")));
+        Assert.NotEqual(Sign([("a", true), ("b|Truec", true)]), Sign([("a|Trueb", true), ("c", true)]));
         Assert.NotEqual(Sign([("team", true)]), Sign([("team", false)]));
         Assert.NotEqual(Sign([("a", true), ("b", false)]), Sign([("b", false), ("a", true)]));
     }
