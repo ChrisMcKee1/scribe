@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
+using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 
@@ -16,7 +18,12 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     private CompiledRule[] _rules = [];
     private SnippetRule[] _snippetRules = [];
-    private bool _loaded;
+
+    // Two flags because a caller that brings its own dictionary rules (a vocabulary generation) needs only the snippets:
+    // loading this post-processor's own rules would read the libraries for nothing.
+    private bool _rulesLoaded;
+    private bool _snippetsLoaded;
+    private long _reloads;
 
     // The library selection of the settings dictation runs on, as the last Reload(ids) named it. Null until an owner
     // names one. Read and written under _gate.
@@ -36,6 +43,8 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     public string Process(string text) => ProcessDetailed(text).Text;
 
+    public event Action<long>? Reloaded;
+
     /// <summary>
     /// When true (the default), a source identical to the text is not normalized a second time, and
     /// a normalized source identical to the dictionary pass input is not rescanned: the source pass
@@ -53,7 +62,23 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         }
 
         EnsureLoaded();
+        return ProcessWith(text, sourceText, Volatile.Read(ref _rules));
+    }
 
+    public TextPostProcessingResult ProcessDetailed(string text, string? sourceText, CompiledDictionaryRules rules)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return new TextPostProcessingResult(string.Empty, []);
+        }
+
+        EnsureSnippetsLoaded();
+        return ProcessWith(text, sourceText, rules.Rules);
+    }
+
+    private TextPostProcessingResult ProcessWith(string text, string? sourceText, CompiledRule[] rules)
+    {
         // Normalize only dictated text. Snippet templates are literal user content and may
         // intentionally contain tabs, indentation, aligned columns, or repeated spaces.
         var normalized = NormalizeWhitespace(text);
@@ -78,7 +103,6 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             snippetApplications,
             TextReplacementKind.Snippet);
 
-        var rules = Volatile.Read(ref _rules);
         var replacements = new List<TextReplacement>();
         var output = ApplySinglePass(
             dictionaryInput,
@@ -130,36 +154,91 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     public void Reload()
     {
+        long reload;
         lock (_gate)
         {
             _rules = BuildRules();
             _snippetRules = BuildSnippets();
-            _loaded = true;
+            Volatile.Write(ref _rulesLoaded, true);
+            Volatile.Write(ref _snippetsLoaded, true);
+            reload = ++_reloads;
         }
+
+        RaiseReloaded(reload);
     }
 
     public void Reload(IReadOnlyCollection<string> enabledLibraryIds)
     {
         ArgumentNullException.ThrowIfNull(enabledLibraryIds);
+        long reload;
         lock (_gate)
         {
             // A copy, so a caller changing its own list later cannot change the selection the rules were built from.
             _libraryIds = [.. enabledLibraryIds];
             _rules = BuildRules();
             _snippetRules = BuildSnippets();
-            _loaded = true;
+            Volatile.Write(ref _rulesLoaded, true);
+            Volatile.Write(ref _snippetsLoaded, true);
+            reload = ++_reloads;
+        }
+
+        RaiseReloaded(reload);
+    }
+
+    public void ReloadSnippets()
+    {
+        lock (_gate)
+        {
+            _snippetRules = BuildSnippets();
+            Volatile.Write(ref _snippetsLoaded, true);
         }
     }
 
+    public CompiledDictionaryRules Compile(
+        IReadOnlyList<DictionaryEntry> dictionary, IReadOnlyList<DictionaryEntry> libraryEntries)
+    {
+        ArgumentNullException.ThrowIfNull(dictionary);
+        ArgumentNullException.ThrowIfNull(libraryEntries);
+
+        // Exactly BuildRules' merge, so a generation's rules and this post-processor's own agree for the same entries.
+        var effective = libraryEntries.Count == 0
+            ? dictionary
+            : DictionaryLibraryComposer.Merge(dictionary, libraryEntries);
+        return new CompiledDictionaryRules(Build(effective));
+    }
+
+    // Outside _gate, so a subscriber that compiles rules of its own can never wait on this post-processor's lock.
+    private void RaiseReloaded(long reload) =>
+        ResilientEvent.InvokeAll(Reloaded, reload, ex =>
+            _logger.LogWarning("A post-processor reload subscriber failed ({Failure}).", FailureShape.Describe(ex)));
+
     private void EnsureLoaded()
     {
-        if (Volatile.Read(ref _loaded)) return;
+        if (Volatile.Read(ref _rulesLoaded) && Volatile.Read(ref _snippetsLoaded)) return;
         lock (_gate)
         {
-            if (_loaded) return;
-            _rules = BuildRules();
+            if (!_rulesLoaded)
+            {
+                _rules = BuildRules();
+                Volatile.Write(ref _rulesLoaded, true);
+            }
+
+            if (!_snippetsLoaded)
+            {
+                _snippetRules = BuildSnippets();
+                Volatile.Write(ref _snippetsLoaded, true);
+            }
+        }
+    }
+
+    private void EnsureSnippetsLoaded()
+    {
+        if (Volatile.Read(ref _snippetsLoaded)) return;
+        lock (_gate)
+        {
+            if (_snippetsLoaded) return;
             _snippetRules = BuildSnippets();
-            _loaded = true;
+            Volatile.Write(ref _snippetsLoaded, true);
         }
     }
 
@@ -193,7 +272,10 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to load enabled dictionary libraries; using the base dictionary only.");
+            // By shape: a library file's I/O failure names its path, and the path is a slug of the library's name.
+            _logger.LogWarning(
+                "Failed to load enabled dictionary libraries; using the base dictionary only ({Failure}).",
+                FailureShape.Describe(ex));
             return [];
         }
     }
@@ -407,7 +489,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     private static bool IsTightPunctuation(char value) => value is ',' or '.' or '!' or '?' or ';' or ':';
 
-    private sealed record ReplacementCandidate(
+    internal sealed record ReplacementCandidate(
         int Index,
         int Length,
         string Replacement,
@@ -448,7 +530,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     internal const RegexOptions DictionaryMatchOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
 
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
-    private sealed class CompiledRule
+    internal sealed class CompiledRule
     {
         private readonly Regex _regex;
         private readonly string _pattern;
