@@ -1115,7 +1115,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `scheduleReconcilePass` seam, on the thread that schedules, and a test runs them on its own thread
   (`RunReconcilePasses`), so no in-memory test waits on the pool (review round 3, item 6: a 10 s wait for the pool's pass
   failed under load) and no harness pass runs after its test; production keeps `Task.Run` and the 25 ms settle, and the
-  `Start_` tests that wait for it there say whether it was never scheduled or scheduled and never finished.
+  `Start_` tests that wait for it there say whether it was never scheduled or scheduled and never finished. The mouse
+  filter's tests read what it asks for on the asking thread (the signal's `RepairRequests` and `SyncRequestsForTests`, and
+  the word its hold keeps), so only the signal's own tests wait for its pool delivery. Nothing a pass throws leaves the
+  signal's pool callback (`HotkeyReconcileSignal.RunPass`): an exception escaping a pool callback ends the process, which a
+  test's disposed recorder once did to the whole test host.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
