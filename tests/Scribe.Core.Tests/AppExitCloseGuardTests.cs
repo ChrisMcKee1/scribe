@@ -74,7 +74,29 @@ public sealed class AppExitCloseGuardTests
         Assert.Contains("private Task? _appExitOperation;", source, StringComparison.Ordinal);
         Assert.Contains("if (_appExitOperation is { IsCompleted: false } existing)", source, StringComparison.Ordinal);
         Assert.Contains("return existing;", source, StringComparison.Ordinal);
-        Assert.Contains("_appExitOperation = RunReservedAsync();", source, StringComparison.Ordinal);
+
+        // Reserved before the operation runs: its prompts are modal and pump messages, so a request made during one must
+        // find the reservation already there.
+        var reserve = source.IndexOf("_appExitOperation = reservation.Task;", StringComparison.Ordinal);
+        var run = source.IndexOf("_ = RunReservedAsync();", StringComparison.Ordinal);
+        Assert.True(reserve >= 0 && run > reserve, "The exit is reserved before its operation starts.");
+    }
+
+    [Fact]
+    public void About_s_update_judges_Add_to_dictionary_against_the_stored_dictionary_after_a_discard()
+    {
+        // With Discard chosen, Settings stays open to own the update's UI; its draft must no longer block a correction.
+        var app = File.ReadAllText(FindRepoFile("src", "Scribe.App", "App.xaml.cs"));
+        Assert.Contains("_settingsWindow is { IsDraftDiscardedForAppExit: false } window ? window : null;", app, StringComparison.Ordinal);
+        Assert.Contains("liveSettings.IsDraftDiscardedForAppExit = false;", app, StringComparison.Ordinal);
+
+        var close = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.AppClose.cs"));
+        Assert.Contains("IsDraftDiscardedForAppExit = true;", close, StringComparison.Ordinal);
+
+        // A Save and close that finished during the wait leaves no owner for the update's UI.
+        var wait = close[close.IndexOf("while (_saveInProgress)", StringComparison.Ordinal)..];
+        wait = wait[..wait.IndexOf("CommitPendingGridEdits();", StringComparison.Ordinal)];
+        Assert.Contains("return SettingsUpdateRestartGuardResult.Canceled;", wait, StringComparison.Ordinal);
     }
 
     [Fact]

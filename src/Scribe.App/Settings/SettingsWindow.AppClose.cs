@@ -15,6 +15,12 @@ public partial class SettingsWindow
 {
     public bool HasAppCloseSaveInProgress => _saveInProgress;
 
+    /// <summary>
+    /// The user chose Discard changes for an update while this window stays open to own the update's UI. Until the window
+    /// closes, its unsaved dictionary rows no longer count as the dictionary Add to dictionary checks against.
+    /// </summary>
+    public bool IsDraftDiscardedForAppExit { get; set; }
+
     public bool HasAppCloseChanges(CloseTrigger trigger)
     {
         CommitPendingGridEdits();
@@ -48,7 +54,8 @@ public partial class SettingsWindow
             await Task.Delay(100);
             if (_closed)
             {
-                return SettingsUpdateRestartGuardResult.ProceedKeepOpen;
+                // A Save and close finished meanwhile: this window can't own the update's UI any more.
+                return SettingsUpdateRestartGuardResult.Canceled;
             }
         }
 
@@ -113,9 +120,13 @@ public partial class SettingsWindow
                 }
             }
 
-            return result == Wpf.Ui.Controls.MessageBoxResult.Secondary
-                ? SettingsUpdateRestartGuardResult.ProceedCloseAfterAction
-                : SettingsUpdateRestartGuardResult.Canceled;
+            if (result == Wpf.Ui.Controls.MessageBoxResult.Secondary)
+            {
+                IsDraftDiscardedForAppExit = true;
+                return SettingsUpdateRestartGuardResult.ProceedCloseAfterAction;
+            }
+
+            return SettingsUpdateRestartGuardResult.Canceled;
         }
         finally
         {
