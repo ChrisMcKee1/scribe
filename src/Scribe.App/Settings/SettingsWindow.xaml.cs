@@ -119,6 +119,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly HistoryReadGeneration _historyMutationGeneration = new();
     private CancellationTokenSource? _historySearchDelay;
     private long _historySearchTicket;
+    private bool _historyLeaveHooked;
+    private bool _historyShowsFailure;
     private long _historyOlderTicket;
     private bool _historyLoadedOlder;
     private bool _historyMayHaveOlder;

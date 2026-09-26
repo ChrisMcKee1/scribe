@@ -21,6 +21,7 @@ public partial class SettingsWindow
 
     private async void LoadHistory(int retry = 0)
     {
+        HookHistoryLeave();
         if (!_historyLoad.TryBegin(null, out var ticket))
         {
             return;
@@ -75,6 +76,19 @@ public partial class SettingsWindow
             return;
         }
 
+        if (completion == HistoryReadCompletion.Drop && requestStillCurrent)
+        {
+            // Still the current request, but a deletion or rating made it stale while rows were already shown. Those
+            // rows were brought up to date as each change arrived, so they stand: finish this request as loaded
+            // (never leave it Loading with nothing running) and carry on as a successful load would.
+            if (_historyLoad.Publish(ticket, string.Empty))
+            {
+                ContinueWithShownHistory(SelectedHistory?.Id);
+            }
+
+            return;
+        }
+
         if (completion == HistoryReadCompletion.Drop || !_historyLoad.Publish(ticket, string.Empty))
         {
             return;
@@ -92,6 +106,11 @@ public partial class SettingsWindow
             _historyPagedRows.Add(RowFromEntry(entry));
         }
 
+        ContinueWithShownHistory(selectedId);
+    }
+
+    private void ContinueWithShownHistory(long? selectedId)
+    {
         if (IsHistorySearchActive())
         {
             StartHistorySearch(debounce: false);
@@ -100,6 +119,27 @@ public partial class SettingsWindow
         {
             ShowPagedHistoryRows(selectedId);
         }
+    }
+
+    // Leaving History ends its searches: one waiting to retry would otherwise resume on the next visit, beside the fresh
+    // load that showing the page starts. Hooked on first use so the History code stays in this file. IsVisibleChanged
+    // never fires offscreen (the render harness has no presentation source), where nothing navigates anyway.
+    private void HookHistoryLeave()
+    {
+        if (_historyLeaveHooked)
+        {
+            return;
+        }
+
+        _historyLeaveHooked = true;
+        SectionHistory.IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is false)
+            {
+                Interlocked.Increment(ref _historySearchTicket);
+                _historySearchDelay?.Cancel();
+            }
+        };
     }
 
     private HistoryRow? SelectedHistory => HistoryGrid.SelectedItem as HistoryRow;
@@ -155,6 +195,15 @@ public partial class SettingsWindow
         HistoryEmptyHint.Text = HistoryRowFormat.LoadingText;
         HistoryInlineStatusText.Text = HistoryRowFormat.LoadingText;
         ApplyHistoryLoadState(loadFailed: false, loading: true);
+
+        // A failed search retries the search itself, with a fresh retry budget: going through the recent load could
+        // drop that load as stale (rows are already shown) and never search again.
+        if (IsHistorySearchActive() && _historyLoad.IsLoaded)
+        {
+            StartHistorySearch(debounce: false);
+            return;
+        }
+
         LoadHistory();
     }
 
@@ -374,10 +423,13 @@ public partial class SettingsWindow
             : Visibility.Visible;
     }
 
-    private void UpdateHistorySearchStatus() => ApplyHistoryLoadState(loadFailed: false);
+    private void UpdateHistorySearchStatus() => ApplyHistoryLoadState(loadFailed: _historyShowsFailure);
 
+    // Remembers whether the page shows a failure, so a change that only reconciles rows (a deletion, a rating) keeps the
+    // failure and its Try again on screen; only a new read's outcome, Try again or a new search replaces it.
     private void ApplyHistoryLoadState(bool loadFailed, bool loading = false)
     {
+        _historyShowsFailure = loadFailed;
         var searchActive = IsHistorySearchActive();
         var hasPagedRows = _historyPagedRows.Count > 0;
         var hasShownRows = _historyRows.Count > 0;
@@ -651,7 +703,7 @@ public partial class SettingsWindow
             HistoryGrid.SelectedItem = _historyRows[reselectAt];
         }
 
-        ApplyHistoryLoadState(loadFailed: false);
+        ApplyHistoryLoadState(loadFailed: _historyShowsFailure);
         UpdateHistorySelection();
     }
 

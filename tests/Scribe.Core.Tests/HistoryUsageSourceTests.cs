@@ -55,10 +55,11 @@ public sealed class HistoryUsageSourceTests
         Assert.Contains("HistoryGrid.SelectedItem = replacement;", replace, StringComparison.Ordinal);
 
         var load = Body(history, "private async void LoadHistory(int retry = 0)");
+        var readSelection = load.IndexOf("var selectedId = SelectedHistory?.Id;", StringComparison.Ordinal);
         Assert.True(
-            load.IndexOf("var selectedId = SelectedHistory?.Id;", StringComparison.Ordinal) <
-            load.IndexOf("ShowPagedHistoryRows(selectedId);", StringComparison.Ordinal),
+            readSelection >= 0 && readSelection < load.IndexOf("ContinueWithShownHistory(selectedId);", StringComparison.Ordinal),
             "LoadHistory must read the selection before it replaces the rows.");
+        Assert.Contains("ShowPagedHistoryRows(selectedId);", Body(history, "private void ContinueWithShownHistory("), StringComparison.Ordinal);
         var setRows = Body(history, "private void SetHistoryRows(");
         Assert.Contains("HistoryGrid.SelectedItem = _historyRows[reselectAt];", setRows, StringComparison.Ordinal);
     }
@@ -134,6 +135,47 @@ public sealed class HistoryUsageSourceTests
             search.IndexOf("_history.Search(query", StringComparison.Ordinal),
             "A search that waited (debounce or retry) must check it is still current before it reads.");
         Assert.Matches(new Regex(@"private bool IsCurrentHistorySearch\([^)]*\) =>[^;]*IsHistoryPageShown\(\) &&"), history);
+    }
+
+    [Fact]
+    public void A_shown_failure_survives_changes_that_only_reconcile_rows()
+    {
+        // A search that gave up showed its failure and Try again; the next deletion hid both and left the old matches
+        // under the new query.
+        var history = Read("SettingsWindow.History.cs");
+        Assert.Contains("ApplyHistoryLoadState(loadFailed: _historyShowsFailure);", Body(history, "private void ApplyHistoryDeletion("), StringComparison.Ordinal);
+        Assert.Contains("private void UpdateHistorySearchStatus() => ApplyHistoryLoadState(loadFailed: _historyShowsFailure);", history, StringComparison.Ordinal);
+        Assert.Contains("_historyShowsFailure = loadFailed;", Body(history, "private void ApplyHistoryLoadState("), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Try_again_after_a_failed_search_searches_again()
+    {
+        var retry = Body(Read("SettingsWindow.History.cs"), "private void HistoryRetryButton_Click(");
+        Assert.True(
+            retry.IndexOf("if (IsHistorySearchActive() && _historyLoad.IsLoaded)", StringComparison.Ordinal) <
+            retry.IndexOf("StartHistorySearch(debounce: false);", StringComparison.Ordinal),
+            "A failed search must retry the search itself, not only the recent load.");
+    }
+
+    [Fact]
+    public void A_current_load_made_stale_while_rows_are_shown_finishes_as_loaded()
+    {
+        // Dropping it left the section Loading with nothing running, and no search started.
+        var load = Body(Read("SettingsWindow.History.cs"), "private async void LoadHistory(int retry = 0)");
+        var drop = load.IndexOf("completion == HistoryReadCompletion.Drop && requestStillCurrent", StringComparison.Ordinal);
+        Assert.True(drop >= 0, "The current stale load must be handled.");
+        Assert.True(load.IndexOf("ContinueWithShownHistory(SelectedHistory?.Id);", drop, StringComparison.Ordinal) > drop);
+    }
+
+    [Fact]
+    public void Leaving_History_ends_its_searches()
+    {
+        var history = Read("SettingsWindow.History.cs");
+        Assert.Contains("HookHistoryLeave();", Body(history, "private async void LoadHistory(int retry = 0)"), StringComparison.Ordinal);
+        var hook = Body(history, "private void HookHistoryLeave(");
+        Assert.Contains("Interlocked.Increment(ref _historySearchTicket);", hook, StringComparison.Ordinal);
+        Assert.Contains("_historySearchDelay?.Cancel();", hook, StringComparison.Ordinal);
     }
 
     [Fact]
