@@ -5,6 +5,8 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
@@ -34,6 +36,7 @@ internal sealed class TrayIconHost : IDisposable
     private bool _disposed;
     private System.Drawing.Icon? _currentIcon;
     private System.Drawing.Icon? _retiredIcon;
+    private int _currentIconSize;
     private DictationState _state = DictationState.Idle;
     private bool _aiCleanupEnabled;
     private bool _updateReady;
@@ -85,8 +88,11 @@ internal sealed class TrayIconHost : IDisposable
         ApplyMenuTheme();
         ApplicationThemeManager.Changed += OnApplicationThemeChanged;
         _menu.Opened += (_, _) => RebuildMenu();
+        SystemEvents.DisplaySettingsChanged += OnTrayIconSizeMayHaveChanged;
+        SystemEvents.UserPreferenceChanged += OnTrayIconSizeMayHaveChanged;
 
-        _currentIcon = TrayIcons.CreateIdle();
+        _currentIconSize = TrayIcons.GetPreferredSize();
+        _currentIcon = TrayIcons.CreateIdle(_currentIconSize);
         _icon = new TaskbarIcon
         {
             ToolTipText = ComposeToolTip(),
@@ -126,6 +132,8 @@ internal sealed class TrayIconHost : IDisposable
             ApplyMenuTheme();
             RebuildMenu();
         });
+
+    private void OnTrayIconSizeMayHaveChanged(object? sender, EventArgs e) => Dispatch(ReloadIconIfSizeChanged);
 
     private void ApplyMenuTheme()
     {
@@ -477,16 +485,12 @@ internal sealed class TrayIconHost : IDisposable
 """;
         return (ControlTemplate)XamlReader.Parse(xaml);
     }
+
     public void SetState(DictationState state) => Dispatch(() =>
     {
         _state = state;
-        var icon = state switch
-        {
-            DictationState.Recording => TrayIcons.CreateRecording(),
-            DictationState.Processing => TrayIcons.CreateProcessing(),
-            DictationState.Paused => TrayIcons.CreatePaused(),
-            _ => TrayIcons.CreateIdle(),
-        };
+        _currentIconSize = TrayIcons.GetPreferredSize();
+        var icon = CreateIconForState(state, _currentIconSize);
 
         var previous = _currentIcon;
         _currentIcon = icon;
@@ -498,6 +502,50 @@ internal sealed class TrayIconHost : IDisposable
             RebuildMenu();
         }
     });
+
+    private void ReloadIconIfSizeChanged()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var size = TrayIcons.GetPreferredSize();
+        if (size == _currentIconSize)
+        {
+            return;
+        }
+
+        var previousSize = _currentIconSize;
+        _currentIconSize = size;
+        var icon = CreateIconForState(_state, size);
+        var previous = _currentIcon;
+        _currentIcon = icon;
+        _icon.Icon = icon;
+        RetireIcon(previous);
+        TryLogIconSizeChange(previousSize, size);
+    }
+
+    private static System.Drawing.Icon CreateIconForState(DictationState state, int size) => state switch
+    {
+        DictationState.Recording => TrayIcons.CreateRecording(size),
+        DictationState.Processing => TrayIcons.CreateProcessing(size),
+        DictationState.Paused => TrayIcons.CreatePaused(size),
+        _ => TrayIcons.CreateIdle(size),
+    };
+
+    private static void TryLogIconSizeChange(int previousSize, int size)
+    {
+        try
+        {
+            App.LogSink?.CreateLogger(nameof(TrayIconHost))
+                .LogInformation("Tray icon size changed from {PreviousSize} px to {Size} px.", previousSize, size);
+        }
+        catch
+        {
+            // A diagnostics failure must never break the tray icon.
+        }
+    }
 
     public void SetShortcutSentence(string? shortcutSentence, HotkeyMode mode) => Dispatch(() =>
     {
@@ -565,6 +613,8 @@ internal sealed class TrayIconHost : IDisposable
     {
         _disposed = true;
         ApplicationThemeManager.Changed -= OnApplicationThemeChanged;
+        SystemEvents.DisplaySettingsChanged -= OnTrayIconSizeMayHaveChanged;
+        SystemEvents.UserPreferenceChanged -= OnTrayIconSizeMayHaveChanged;
         _icon.Dispose();
         _retiredIcon?.Dispose();
         _retiredIcon = null;
@@ -580,5 +630,3 @@ internal sealed class TrayIconHost : IDisposable
         public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
     }
 }
-
-
