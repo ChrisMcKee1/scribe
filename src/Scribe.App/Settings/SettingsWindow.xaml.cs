@@ -1621,8 +1621,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Once the library state is stored, a settings-only save keeps the stored library list, so this page can't store a
     // switch (LegacyLibraryPageContainment). The On column only shows the committed selection: read-only, so neither a
-    // click nor Space starts its edit, and its box disabled, so UI Automation can't toggle it either. The page says so
-    // under its subtitle, and the tip and the Remove button's tooltip stop advising a switch.
+    // click nor Space starts its edit, and its box disabled, so UI Automation can't toggle it either. The subtitle stops
+    // asking for a switch and a Save, a notice under it says why, and the tip and the Remove button's tooltip stop
+    // advising a switch.
     private void ContainLibrarySwitches()
     {
         var on = LibraryGrid.Columns.OfType<DataGridCheckBoxColumn>().Single();
@@ -1633,6 +1634,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (LibrariesPageTitle.Parent is Panel header)
         {
+            // The subtitle has no name of its own: it is the title's next sibling in the page's header.
+            var title = header.Children.IndexOf(LibrariesPageTitle);
+            if (title + 1 < header.Children.Count && header.Children[title + 1] is TextBlock subtitle)
+            {
+                subtitle.Text = LegacyLibraryPageContainment.PageSubtitle;
+            }
+
             header.Children.Add(new TextBlock
             {
                 Text = LegacyLibraryPageContainment.PageNotice,

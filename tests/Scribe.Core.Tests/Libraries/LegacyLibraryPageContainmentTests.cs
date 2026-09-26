@@ -232,6 +232,15 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
         Assert.Contains("can't change them", LegacyLibraryPageContainment.PageNotice, StringComparison.Ordinal);
         Assert.Contains("Word packs page", LegacyLibraryPageContainment.PageNotice, StringComparison.Ordinal);
 
+        // The subtitle describes the packs without asking for a switch or a Save that this page can't store.
+        const string Subtitle = LegacyLibraryPageContainment.PageSubtitle;
+        Assert.StartsWith("Ready-made vocabulary packs", Subtitle, StringComparison.Ordinal);
+        Assert.Contains("Import a CSV to add your own.", Subtitle, StringComparison.Ordinal);
+        foreach (var advice in new[] { "Turn on", "turn on", "save", "Save", "Changes apply" })
+        {
+            Assert.DoesNotContain(advice, Subtitle, StringComparison.Ordinal);
+        }
+
         Assert.Equal(
             "Imported \"Team\" with 3 terms. It is stored and switched off: switching libraries on comes with the new Word packs page.",
             LegacyLibraryPageContainment.Imported("Team", 3));
@@ -260,7 +269,7 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
             .GetFields(BindingFlags.Public | BindingFlags.Static)
             .Select(field => (string)field.GetValue(null)!)
             .ToList();
-        Assert.Equal(5, constants.Count);
+        Assert.Equal(6, constants.Count);
         string[] built =
         [
             LegacyLibraryPageContainment.Imported("x", 2),
@@ -391,6 +400,17 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
             "The stored list is not read after the catalog load and taken before the rows are built.");
         Assert.Single(Regex.Matches(code, Regex.Escape("_libraryContainment.CatalogLoaded(")));
         Assert.Single(Regex.Matches(code, Regex.Escape("LegacyLibraryPageContainment.StoredIds(")));
+
+        // The subtitle takes the containment's text. It has no name of its own, so it is the title's next sibling, which
+        // the XAML still makes it.
+        var contain = Body(code, "private void ContainLibrarySwitches()");
+        Assert.Contains("header.Children.IndexOf(LibrariesPageTitle)", contain, StringComparison.Ordinal);
+        Assert.Contains("subtitle.Text = LegacyLibraryPageContainment.PageSubtitle;", contain, StringComparison.Ordinal);
+        var xaml = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        var title = xaml.IndexOf("<TextBlock x:Name=\"LibrariesPageTitle\"", StringComparison.Ordinal);
+        Assert.True(title >= 0, "The Libraries page's title is gone.");
+        var next = xaml.IndexOf('<', xaml.IndexOf("/>", title, StringComparison.Ordinal));
+        Assert.StartsWith("<TextBlock Style=\"{StaticResource PageSubtitle}\"", xaml[next..], StringComparison.Ordinal);
     }
 
     // A member's text, from its signature to the closing brace at its own indentation.

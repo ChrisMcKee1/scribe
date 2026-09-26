@@ -1108,8 +1108,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   catalog load, whose adoption turns a pack changed outside Scribe off, left the prompt judging the list the window
   opened with). `LegacyLibraryPageContainment` holds the decision and the window uses it
   (`LegacyLibraryPageContainmentTests` runs both scenarios over the real parts and pins the window's source): the On
-  column is read-only, its box disabled so UI Automation cannot toggle it either, with a notice under the page's
-  subtitle; the Save prompt removes nothing a library covers, and asks nothing (the badges still show the
+  column is read-only, its box disabled so UI Automation cannot toggle it either, with the subtitle set from the type and
+  a notice under it; the Save prompt removes nothing a library covers, and asks nothing (the badges still show the
   overlap); the Dictionary page's badges and the glossary count are judged against the committed selection, never the
   rows: the stored list read when the page's catalog load finishes, then the one each Save hands back. That selection
   only draws figures and is not what the next Save uses: an adoption later in the window's life (a file replaced,

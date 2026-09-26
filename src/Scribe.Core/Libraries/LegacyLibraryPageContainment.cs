@@ -27,6 +27,12 @@ namespace Scribe.Core.Libraries;
 /// </remarks>
 public sealed class LegacyLibraryPageContainment
 {
+    /// <summary>The page's subtitle, without the advice to turn packs on and save.</summary>
+    public const string PageSubtitle =
+        "Ready-made vocabulary packs help Scribe spell technical terms the way you say them: 'a p i m' becomes 'APIM', "
+        + "'gpt five six terra' becomes 'GPT-5.6-Terra'. The two AI packs are on by default and the rest are opt-in. Libraries "
+        + "that are on layer on top of your dictionary, and your own entries always win. Import a CSV to add your own.";
+
     /// <summary>The line the page shows under its subtitle.</summary>
     public const string PageNotice =
         "In this version the On column shows which libraries are switched on but can't change them: switching libraries on "
