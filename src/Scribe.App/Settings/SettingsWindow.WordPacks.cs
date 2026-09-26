@@ -47,6 +47,7 @@ public partial class SettingsWindow
     private long? _wordDetailsRowId;
     private string? _renamingLibraryId;
     private string? _noticeLibraryId;
+    private string? _activeLoadNoticeKey;
     private readonly WordPackSaveProtocol _wordPackSaveProtocol;
     private void TryRunWordPackAccelerator(KeyEventArgs e)
     {
@@ -282,6 +283,7 @@ public partial class SettingsWindow
 
         // Coverage badges and the glossary count depend on which libraries are on.
         RefreshDictionaryStatus();
+        ShowCurrentWordPackLoadNotice();
     }
 
     private void LibraryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -857,6 +859,7 @@ public partial class SettingsWindow
             }
         }
 
+        var beforeRows = _wordPackWorkspace.RowsOf(_selectedLibraryId).Select(row => row.RowId).ToHashSet();
         var result = _wordPackWorkspace.AddTerm(_selectedLibraryId, new TermValues(spoken ?? string.Empty, string.Empty), removalIntent: false);
         if (!result.Applied)
         {
@@ -871,7 +874,11 @@ public partial class SettingsWindow
 
         RefreshTermRows(_selectedLibraryId);
         UpdateSelectedLibraryDirtyState();
-        if (_libraryTermRows.LastOrDefault() is { } row)
+        var addedId = _wordPackWorkspace.RowsOf(_selectedLibraryId).FirstOrDefault(row => !beforeRows.Contains(row.RowId))?.RowId;
+        var row = addedId is null
+            ? _libraryTermRows.LastOrDefault()
+            : _libraryTermRows.FirstOrDefault(candidate => candidate.RowId == addedId.Value);
+        if (row is not null)
         {
             LibraryTermsGrid.SelectedItem = row;
             LibraryTermsGrid.ScrollIntoView(row);
@@ -1287,8 +1294,11 @@ public partial class SettingsWindow
         _updatingLibraryTerms = false;
         LibraryDetailEmptyPanel.Visibility = _libraryTermRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         LibraryDetailEmpty.Text = SearchNoMatchesText(libraryId);
-        LibraryEmptyActionButton.Content = _librarySearchResult?.IsActive == true ? $"Add \"{_librarySearchResult.Query}\" to this word pack" : "Add first word";
-        LibraryEmptyActionButton.Visibility = _wordPackWorkspace.CanEditContent(libraryId) ? Visibility.Visible : Visibility.Collapsed;
+        var addFromSearch = _librarySearchResult?.IsActive == true && _librarySearchResult.TotalMatches == 0;
+        LibraryEmptyActionButton.Content = addFromSearch ? $"Add \"{_librarySearchResult!.Query}\" to this word pack" : "Add first word";
+        LibraryEmptyActionButton.Visibility = _wordPackWorkspace.CanEditContent(libraryId) && (_librarySearchResult?.IsActive != true || addFromSearch)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         RefreshSearchLinks(libraryId);
         UpdateLibraryTermCount(rows.Count);
         RefreshWordDetails();
@@ -1303,7 +1313,8 @@ public partial class SettingsWindow
             return;
         }
 
-        foreach (var match in _librarySearchResult.FoundElsewhere(libraryId).Take(5))
+        var matches = _librarySearchResult.FoundElsewhere(libraryId).ToList();
+        foreach (var match in matches.Take(5))
         {
             if (_wordPackWorkspace.Draft.Find(match.LibraryId) is not { } pack)
             {
@@ -1326,6 +1337,16 @@ public partial class SettingsWindow
             };
             LibrarySearchLinksPanel.Children.Add(button);
         }
+
+        if (matches.Count > 5)
+        {
+            LibrarySearchLinksPanel.Children.Add(new TextBlock
+            {
+                Text = $"and {matches.Count - 5:N0} more",
+                Style = (Style)FindResource("CardDescription"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+        }
     }
 
     private string SearchNoMatchesText(string libraryId)
@@ -1336,21 +1357,12 @@ public partial class SettingsWindow
         }
 
         var selected = _wordPackWorkspace.Draft.Find(libraryId)?.Content.Name ?? "this word pack";
-        var elsewhere = _librarySearchResult.FoundElsewhere(libraryId)
-            .Select(match => _wordPackWorkspace.Draft.Find(match.LibraryId) is { } pack
-                ? $"{pack.Content.Name} ({match.Count})"
-                : null)
-            .Where(text => text is not null)
-            .Take(5)
-            .ToList();
         if (_librarySearchResult.TotalMatches == 0)
         {
             return $"No words match \"{_librarySearchResult.Query}\" in any word pack.";
         }
 
-        return elsewhere.Count == 0
-            ? $"No matches in {selected}."
-            : $"No matches in {selected}. Found in: {string.Join(", ", elsewhere)}";
+        return $"No matches in {selected}. Found in:";
     }
 
     private void LibraryTermRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -1571,6 +1583,8 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         LibraryTermSpokenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermWrittenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermActionColumn.Width = new DataGridLength(_wordPackLayout.ActionColumnWidth);
+        var rowHeight = (20 * Math.Max(1, SystemFonts.MessageFontSize / 12.0)) + 8;
+        LibraryTermsGrid.MinHeight = (32 * Math.Max(1, SystemFonts.MessageFontSize / 12.0)) + rowHeight * LibraryLayoutPlanner.MinimumRows;
         WordPacksIntroText.Visibility = _wordPackLayout.Short ? Visibility.Collapsed : Visibility.Visible;
         WordPacksIntroInfoButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
         WordDetailsBackButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
@@ -1605,6 +1619,16 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         LibraryAddWordButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
         LibrarySortButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
         LibraryTermCountText.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryDescriptionPanel.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryDetailDescFull.Visibility = detailsSubpage ? Visibility.Collapsed : LibraryDetailDescFull.Visibility;
+        LibraryUseCheck.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryAiCheck.Visibility = detailsSubpage ? Visibility.Collapsed : (AiCleanupCheck?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed);
+        LibraryAiHelpText.Visibility = detailsSubpage ? Visibility.Collapsed : (AiCleanupCheck?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed);
+        LibraryExportButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryDetailMoreButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryOffLine.Visibility = detailsSubpage ? Visibility.Collapsed : LibraryOffLine.Visibility;
+        WordPackNoticeBar.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        WordPackNoticeActionsPanel.Visibility = detailsSubpage ? Visibility.Collapsed : WordPackNoticeActionsPanel.Visibility;
     }
 
     private void ShowWordPackListPage()
@@ -1731,7 +1755,15 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         _updatingLibraryRows = false;
         if (selectId is not null)
         {
-            LibraryGrid.SelectedItem = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, selectId, StringComparison.OrdinalIgnoreCase));
+            var selected = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, selectId, StringComparison.OrdinalIgnoreCase));
+            LibraryGrid.SelectedItem = selected;
+            if (selected is null)
+            {
+                _selectedLibraryId = null;
+                _libraryTermRows.Clear();
+                WordDetailsPanel.Visibility = Visibility.Collapsed;
+                UpdateLibraryDetail(null);
+            }
         }
     }
 
@@ -2111,6 +2143,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             RefreshWordPackList();
             RefreshWordPackRowsFromWorkspace();
             RefreshDictionaryStatus();
+            ShowCurrentWordPackLoadNotice();
         }
     }
 
@@ -2127,7 +2160,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             WordPackSaveProtocolSeverity.Warning => Wpf.Ui.Controls.InfoBarSeverity.Warning,
             _ => Wpf.Ui.Controls.InfoBarSeverity.Informational,
         };
-        ShowWordPackNotice("Word packs", result.Message, severity, result.Actions ?? []);
+        ShowWordPackNotice("Word packs", result.Message, severity, result.Actions ?? [], result.TargetLibraryIds?.FirstOrDefault());
     }
 
     private void ShowWordPackNotice(string title, string message, Wpf.Ui.Controls.InfoBarSeverity severity) =>
@@ -2149,6 +2182,42 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         AnnounceFrom(WordPackNoticeBar, message);
         ApplyWordPackLayout();
     }
+
+    private void ShowCurrentWordPackLoadNotice()
+    {
+        if (_wordPackCatalog is null)
+        {
+            return;
+        }
+
+        var candidate = WordPackLoadNotices.Select(_wordPackCatalog, BuildLibraryCompositionPreview());
+        if (candidate?.Key == _activeLoadNoticeKey)
+        {
+            return;
+        }
+
+        _activeLoadNoticeKey = candidate?.Key;
+        if (candidate is null)
+        {
+            return;
+        }
+
+        var actions = candidate.Notice.Actions;
+        if (!candidate.RestorePreviousAvailable)
+        {
+            actions = actions.Where(action => action != WordPackNoticeAction.RestorePreviousCopy).ToList();
+        }
+
+        ShowWordPackNotice("Word packs", candidate.Notice.Text, SeverityOf(candidate.Notice.Severity), actions, candidate.LibraryId);
+    }
+
+    private static Wpf.Ui.Controls.InfoBarSeverity SeverityOf(WordPackNoticeSeverity severity) =>
+        severity switch
+        {
+            WordPackNoticeSeverity.Error => Wpf.Ui.Controls.InfoBarSeverity.Error,
+            WordPackNoticeSeverity.Warning => Wpf.Ui.Controls.InfoBarSeverity.Warning,
+            _ => Wpf.Ui.Controls.InfoBarSeverity.Informational,
+        };
 
     private void RenderWordPackNoticeActions(IReadOnlyList<WordPackNoticeAction> actions)
     {
@@ -2187,7 +2256,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
                 await ReloadSavedWordPackAsync();
                 break;
             case WordPackNoticeAction.SaveDraftAsNew:
-                SaveWordPackDraftAsNew();
+                await SaveWordPackDraftAsNewAsync();
                 break;
             case WordPackNoticeAction.RestorePreviousCopy:
                 RecoverBuiltInWordPack(BuiltInEditsRecovery.RestorePrevious);
@@ -2222,6 +2291,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             return;
         }
 
+        await RebaseWordPacksFromCurrentCatalogAsync();
         _wordPackWorkspace.DiscardLibrary(row.Id);
         RefreshWordPackList(row.Id);
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
@@ -2230,7 +2300,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         WordPackNoticeActionsPanel.Visibility = Visibility.Collapsed;
     }
 
-    private void SaveWordPackDraftAsNew()
+    private async Task SaveWordPackDraftAsNewAsync()
     {
         if (NoticeLibraryRow() is not { } row || _wordPackWorkspace is null)
         {
@@ -2238,11 +2308,24 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         }
 
         var copyId = _wordPackWorkspace.Duplicate(row.Id);
+        await RebaseWordPacksFromCurrentCatalogAsync();
         _wordPackWorkspace.DiscardLibrary(row.Id);
         RefreshWordPackList(copyId);
         RefreshDictionaryStatus();
         WordPackNoticeBar.IsOpen = false;
         WordPackNoticeActionsPanel.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task RebaseWordPacksFromCurrentCatalogAsync()
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var catalog = await Task.Run(_libraryStore.LoadCatalog);
+        _wordPackCatalog = catalog;
+        _wordPackWorkspace.Rebase(catalog);
     }
 
     private async Task BackUpAndResetBuiltInWordPackAsync()

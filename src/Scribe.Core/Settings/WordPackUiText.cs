@@ -17,7 +17,7 @@ public static class WordPackUiText
             text += ", Unsaved";
         }
 
-        if (matches is { } count)
+        if (matches is > 0 and var count)
         {
             text += $", {MatchCount(count)}";
         }

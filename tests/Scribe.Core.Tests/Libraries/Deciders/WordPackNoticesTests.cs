@@ -93,4 +93,37 @@ public sealed class WordPackNoticesTests
     {
         Assert.Equal(label, WordPackNotices.Label(action));
     }
+
+    [Fact]
+    public void Load_notice_selector_picks_highest_priority_state_and_filters_previous_copy()
+    {
+        var catalog = DeciderFixture.Catalog(
+            [
+                DeciderFixture.BuiltIn(DeciderFixture.GitHubId, state: LibraryFileState.Unreadable, previousEdits: false),
+                DeciderFixture.BuiltIn(DeciderFixture.AzureId, state: LibraryFileState.PartlyReadable),
+            ],
+            enabled: [DeciderFixture.GitHubId]);
+
+        var notice = WordPackLoadNotices.Select(catalog);
+
+        Assert.NotNull(notice);
+        Assert.Equal(DeciderFixture.GitHubId, notice.LibraryId);
+        Assert.False(notice.RestorePreviousAvailable);
+        Assert.Contains(WordPackNoticeAction.BackUpAndReset, notice.Notice.Actions);
+    }
+
+    [Fact]
+    public void Load_notice_selector_reports_ai_loss_before_informational_notices()
+    {
+        var catalog = DeciderFixture.Catalog(
+            [DeciderFixture.BuiltIn(DeciderFixture.GitHubId)],
+            lost: true,
+            notice: [DeciderFixture.GitHubId]);
+
+        var notice = WordPackLoadNotices.Select(catalog);
+
+        Assert.NotNull(notice);
+        Assert.Equal("aiPermissionsLost", notice.Key);
+        Assert.Equal(WordPackNoticeSeverity.Warning, notice.Notice.Severity);
+    }
 }

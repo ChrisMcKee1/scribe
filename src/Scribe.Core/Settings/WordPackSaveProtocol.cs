@@ -79,7 +79,7 @@ public sealed class WordPackSaveProtocol
                         request.OnWordPacksChanged?.Invoke(catalog);
                     }
 
-                    return FromNotice(WordPackNotices.FromPrepare(prepared), success: false);
+                    return FromNotice(WordPackNotices.FromPrepare(prepared), success: false, targetLibraryIds: prepared.OutsideEditIds);
                 }
 
                 session.PreparedBy(prepared);
@@ -354,14 +354,17 @@ public sealed class WordPackSaveProtocol
         _pendingGeneration = 0;
     }
 
-    private static WordPackSaveProtocolResult FromNotice(WordPackNotice notice, bool success = true) =>
+    private static WordPackSaveProtocolResult FromNotice(
+        WordPackNotice notice,
+        bool success = true,
+        IReadOnlyList<string>? targetLibraryIds = null) =>
         notice.Severity switch
         {
-            WordPackNoticeSeverity.Error => WordPackSaveProtocolResult.Error(notice.Text, notice.Actions),
-            WordPackNoticeSeverity.Warning => WordPackSaveProtocolResult.Warning(notice.Text, notice.Actions),
+            WordPackNoticeSeverity.Error => WordPackSaveProtocolResult.Error(notice.Text, notice.Actions, targetLibraryIds),
+            WordPackNoticeSeverity.Warning => WordPackSaveProtocolResult.Warning(notice.Text, notice.Actions, targetLibraryIds),
             _ => success
-                ? WordPackSaveProtocolResult.SuccessResult(notice.Text, notice.Actions)
-                : new WordPackSaveProtocolResult(false, notice.Text, WordPackSaveProtocolSeverity.Info, notice.Actions),
+                ? WordPackSaveProtocolResult.SuccessResult(notice.Text, notice.Actions, targetLibraryIds)
+                : new WordPackSaveProtocolResult(false, notice.Text, WordPackSaveProtocolSeverity.Info, notice.Actions, targetLibraryIds),
         };
 
     private static WordPackSaveProtocolResult Unfinished() =>
@@ -393,16 +396,26 @@ public sealed record WordPackSaveProtocolResult(
     bool Success,
     string? Message,
     WordPackSaveProtocolSeverity Severity,
-    IReadOnlyList<WordPackNoticeAction>? Actions = null)
+    IReadOnlyList<WordPackNoticeAction>? Actions = null,
+    IReadOnlyList<string>? TargetLibraryIds = null)
 {
-    public static WordPackSaveProtocolResult SuccessResult(string? message = null, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
-        new(true, message, WordPackSaveProtocolSeverity.Info, actions);
+    public static WordPackSaveProtocolResult SuccessResult(
+        string? message = null,
+        IReadOnlyList<WordPackNoticeAction>? actions = null,
+        IReadOnlyList<string>? targetLibraryIds = null) =>
+        new(true, message, WordPackSaveProtocolSeverity.Info, actions, targetLibraryIds);
 
-    public static WordPackSaveProtocolResult Warning(string message, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
-        new(false, message, WordPackSaveProtocolSeverity.Warning, actions);
+    public static WordPackSaveProtocolResult Warning(
+        string message,
+        IReadOnlyList<WordPackNoticeAction>? actions = null,
+        IReadOnlyList<string>? targetLibraryIds = null) =>
+        new(false, message, WordPackSaveProtocolSeverity.Warning, actions, targetLibraryIds);
 
-    public static WordPackSaveProtocolResult Error(string message, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
-        new(false, message, WordPackSaveProtocolSeverity.Error, actions);
+    public static WordPackSaveProtocolResult Error(
+        string message,
+        IReadOnlyList<WordPackNoticeAction>? actions = null,
+        IReadOnlyList<string>? targetLibraryIds = null) =>
+        new(false, message, WordPackSaveProtocolSeverity.Error, actions, targetLibraryIds);
 }
 
 public enum WordPackSaveProtocolSeverity
