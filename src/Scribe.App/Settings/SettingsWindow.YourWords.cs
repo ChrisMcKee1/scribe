@@ -570,7 +570,7 @@ public partial class SettingsWindow
 
             AddSuggestionRows(suggestions.Select(s => (s.Pattern, s.Replacement)));
             ShowInfo(
-                $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
+                $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "word" : "words")} " +
                 "your AI model inferred from recent dictations. Review them in the grid, delete any you " +
                 "don't want, then save.");
         }
@@ -610,17 +610,17 @@ public partial class SettingsWindow
             ShowThemedMessage(
                 "Nothing to suggest",
                 aiRanFirst
-                    ? "Your AI model and the history scan didn't find any new terms to add. Keep " +
+                    ? "Your AI model and the history scan didn't find any new words to add. Keep " +
                       "dictating and try again later."
-                    : "No recurring technical terms found in your recent dictations yet.\n\n" +
-                      "Suggestions appear once a term shows up in three or more dictations, so keep " +
+                    : "No recurring technical words found in your recent dictations yet.\n\n" +
+                      "Suggestions appear once a word shows up in three or more dictations, so keep " +
                       "dictating and try again later.");
             return;
         }
 
         AddSuggestionRows(suggestions.Select(s => (s.Pattern, s.Replacement)));
         ShowInfo(
-            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
+            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "word" : "words")} " +
             "from your recent dictations. Review them in the grid, delete any you don't want, then save.");
     }
 
@@ -722,7 +722,7 @@ public partial class SettingsWindow
 
         if (!report.HasEnoughEvidence || !report.HasFindings)
         {
-            ShowThemedMessage("Clean up unused terms", report.Summary);
+            ShowThemedMessage("Clean up unused words", report.Summary);
             return;
         }
 
@@ -754,7 +754,7 @@ public partial class SettingsWindow
         }
 
         if (choice.Delete && targets.Count > 0 && !await ConfirmRiskyAsync(
-                "Delete these entries?",
+                "Delete selected words?",
                 $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} will be removed from your "
                 + "dictionary when you save. This cannot be undone once saved. Turning them off instead "
                 + "keeps them in the list so you can switch them back on later.",
@@ -872,7 +872,7 @@ public partial class SettingsWindow
 
         var (added, updated, unchanged) = MergeImportedEntries(parsed.Entries);
         var summary = new StringBuilder();
-        summary.Append($"Imported {added} new {(added == 1 ? "entry" : "entries")}");
+        summary.Append($"Imported {added} new {(added == 1 ? "word" : "words")}");
         if (updated > 0)
         {
             summary.Append($", updated {updated}");

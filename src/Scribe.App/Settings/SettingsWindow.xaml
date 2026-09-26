@@ -1430,28 +1430,27 @@
                                         <ui:Button x:Name="DictionaryTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
                                     </Grid>
                                     <Grid Grid.Row="1" Margin="0,0,0,10">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="260"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <WrapPanel Grid.Column="0" Orientation="Horizontal">
-                                            <ui:Button x:Name="DictionaryAddButton" Content="Add word"
+                                            <ui:Button x:Name="DictionaryAddButton" Padding="8,5" Content="Add word"
                                                        Icon="{ui:SymbolIcon Add24}"
-                                                       Margin="0,0,8,0" Click="DictionaryAddButton_Click"
+                                                       Margin="0,0,4,0" Click="DictionaryAddButton_Click"
                                                        ToolTip="Add a blank word and start editing it."/>
-                                            <ui:Button x:Name="DictionarySuggestButton" Content="Learn from history"
+                                            <ui:Button x:Name="DictionarySuggestButton" Padding="8,5" Content="Learn from history"
                                                        Icon="{ui:SymbolIcon Lightbulb24}"
-                                                       Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
+                                                       Margin="0,0,4,0" Click="DictionarySuggestButton_Click"
                                                        ToolTip="Suggests words from your recent dictations. If AI cleanup uses an online service, Scribe asks before sending anything."/>
-                                            <ui:Button x:Name="DictionaryCleanupButton" Content="Clean up unused words..."
+                                            <ui:Button x:Name="DictionaryCleanupButton" Padding="8,5" Content="Clean up unused words..."
                                                        Icon="{ui:SymbolIcon Broom24}"
-                                                       Margin="0,0,8,0" Click="DictionaryCleanupButton_Click"
+                                                       Margin="0,0,4,0" Click="DictionaryCleanupButton_Click"
                                                        ToolTip="Finds words and word packs you haven't used, so you can turn them off. You review every change."/>
-                                            <ui:Button x:Name="DictionaryMoreButton" Content="More"
-                                                       Icon="{ui:SymbolIcon MoreHorizontal24}"
-                                                       Margin="0,0,8,0" Click="DictionaryMoreButton_Click"
-                                                       ToolTip="More dictionary actions"/>
                                             <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
                                                         Margin="12,0,0,0" VerticalAlignment="Center"
                                                         Visibility="Collapsed">
@@ -1471,7 +1470,14 @@
                                                            Margin="8,0,0,0" VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </WrapPanel>
-                                        <ui:TextBox x:Name="DictionarySearchBox" Grid.Column="2"
+                                        <ui:Button x:Name="DictionaryMoreButton" Grid.Row="1" Padding="8,5" Content="More"
+                                                   Icon="{ui:SymbolIcon MoreHorizontal24}"
+                                                   Margin="0,4,0,0" HorizontalAlignment="Left"
+                                                   Click="DictionaryMoreButton_Click"
+                                                   ToolTip="More dictionary actions"/>
+                                        <ui:TextBox x:Name="DictionarySearchBox" Grid.Column="1" Grid.RowSpan="2"
+                                                    MinWidth="180" Width="180" MaxWidth="260"
+                                                    HorizontalAlignment="Right"
                                                     PlaceholderText="Find a word"
                                                     AutomationProperties.Name="Find a word"
                                                     TextChanged="DictionarySearchBox_TextChanged"/>
@@ -1501,7 +1507,7 @@
                                                             <DataTemplate>
                                                                 <TextBlock Text="{Binding ReplacementDisplay}" TextWrapping="Wrap">
                                                                     <TextBlock.Style>
-                                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource CardDescription}">
+                                                                        <Style TargetType="TextBlock">
                                                                             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
                                                                             <Style.Triggers>
                                                                                 <DataTrigger Binding="{Binding ReplacementIsPlaceholder}" Value="True">
@@ -1569,7 +1575,7 @@
                                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440">
                                                 <TextBlock x:Name="DictionaryStateText" Style="{StaticResource CardTitle}" TextAlignment="Center" TextWrapping="Wrap"/>
                                                 <StackPanel x:Name="DictionaryStateActions" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
-                                                    <ui:Button x:Name="DictionaryEmptyAddButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="DictionaryAddButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryEmptyAddButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,4,0" Click="DictionaryAddButton_Click"/>
                                                     <ui:Button x:Name="DictionaryEmptyLearnButton" Content="Learn from history" Icon="{ui:SymbolIcon Lightbulb24}" Click="DictionarySuggestButton_Click"/>
                                                     <ui:Button x:Name="DictionaryRetryButton" Content="Try again" Visibility="Collapsed" Click="DictionaryRetryButton_Click"/>
                                                     <ui:Button x:Name="DictionaryClearSearchButton" Content="Clear search" Visibility="Collapsed" Click="DictionaryClearSearchButton_Click"/>

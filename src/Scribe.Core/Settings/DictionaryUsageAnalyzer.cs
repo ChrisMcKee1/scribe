@@ -99,7 +99,7 @@ public static partial class DictionaryUsageAnalyzer
                 Summary: "Not enough dictation history yet to safely recommend a cleanup. You have "
                     + $"{usable.Count:N0} of {minimumTranscripts:N0} dictations and about {words:N0} of "
                     + $"{minimumWords:N0} words. Keep dictating and run this again. You can still turn "
-                    + "libraries off by hand on the Libraries page.");
+                    + "word packs off by hand on the Word packs tab.");
         }
 
         // One corpus, joined on newlines. A dictionary pattern can never usefully contain a newline
@@ -218,42 +218,42 @@ public static partial class DictionaryUsageAnalyzer
         var libraryTerms = libraries.Sum(l => l.UnusedCount);
         if (unusedCount == 0 && libraryTerms == 0)
         {
-            return $"Every term in your dictionary turned up in your last {transcripts:N0} dictations. "
+            return $"Every word in your dictionary turned up in your last {transcripts:N0} dictations. "
                 + "Nothing to clean up.";
         }
 
         var parts = new List<string>();
         if (unusedCount > 0)
         {
-            // One of your own entries: the noun stays plural whatever the count.
-            parts.Add($"{unusedCount:N0} of your own entries");
+            // One of your own words: the noun stays plural whatever the count.
+            parts.Add($"{unusedCount:N0} of your own words");
         }
 
         if (libraries.Count > 0)
         {
-            parts.Add($"{libraryTerms:N0} {(libraryTerms == 1 ? "term" : "terms")} across "
-                + $"{libraries.Count:N0} {(libraries.Count == 1 ? "library" : "libraries")}");
+            parts.Add($"{libraryTerms:N0} {(libraryTerms == 1 ? "word" : "words")} across "
+                + $"{libraries.Count:N0} {(libraries.Count == 1 ? "word pack" : "word packs")}");
         }
 
-        var headline = $"Checked {examined:N0} {(examined == 1 ? "term" : "terms")} against your last "
+        var headline = $"Checked {examined:N0} {(examined == 1 ? "word" : "words")} against your last "
             + $"{transcripts:N0} dictations. {string.Join(" and ", parts)} did not appear.";
 
         // The glossary cap only bites once the dictionary is bigger than it, so the number is only
         // worth raising when it is actually costing the user something.
         var summary = examined > Cleanup.CleanupPrompt.MaxGlossaryTermsLocal
             ? headline + " Turning them off frees room in the vocabulary list Scribe sends to a local "
-                + $"AI model, which fits {Cleanup.CleanupPrompt.MaxGlossaryTermsLocal} terms."
+                + $"AI model, which fits {Cleanup.CleanupPrompt.MaxGlossaryTermsLocal} words."
             : headline;
 
-        // A library kept from AI cleanup must not have its terms moved into the dictionary, which every AI cleanup
-        // request carries, so switching it off drops the terms it still uses, and the user has to know that first.
+        // A word pack kept from AI cleanup must not have its words moved into the dictionary, which every AI cleanup
+        // request carries, so turning it off drops the words it still uses, and the user has to know that first.
         var excluded = libraries.Count(l => l.AiExcluded && l.KeepTerms.Count > 0);
         return excluded == 0
             ? summary
-            : summary + $" {excluded:N0} {(excluded == 1 ? "library is" : "libraries are")} kept from AI cleanup, so the "
-                + $"terms {(excluded == 1 ? "it" : "they")} still use{(excluded == 1 ? "s" : string.Empty)} are not copied "
-                + "into your dictionary, which AI cleanup always receives. Switching "
-                + $"{(excluded == 1 ? "it" : "them")} off stops applying those terms.";
+            : summary + $" {excluded:N0} {(excluded == 1 ? "word pack is" : "word packs are")} kept from AI cleanup, so the "
+                + $"words {(excluded == 1 ? "it" : "they")} still use{(excluded == 1 ? "s" : string.Empty)} are not copied "
+                + "into your dictionary, which AI cleanup always receives. Turning "
+                + $"{(excluded == 1 ? "it" : "them")} off stops applying those words.";
     }
 }
 
