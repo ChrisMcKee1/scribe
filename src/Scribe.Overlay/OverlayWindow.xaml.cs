@@ -1,12 +1,14 @@
-﻿using System;
+using System;
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Scribe.Overlay.Interop;
 using Scribe.Overlay.Logging;
 using Windows.Graphics;
+using Windows.UI.ViewManagement;
 
 namespace Scribe.Overlay;
 
@@ -21,30 +23,51 @@ public sealed partial class OverlayWindow : Window
     // Logical (DIP) design size, matching the WPF overlay. Converted to physical pixels per-monitor.
     private const double LogicalWidth = 264;
     private const double LogicalHeight = 110;
-    private const double MeterTrackWidth = 140;
 
-    // The red "intelligence failed" flash holds the pill on screen briefly so the user can read it,
-    // then hides itself. A Hide that arrives during the hold (the Idle-state hide right after
-    // processing) is ignored until the hold elapses; ported from the WPF overlay's behaviour.
-    private static readonly TimeSpan FailedHold = TimeSpan.FromMilliseconds(1300);
+    // The level bars' heights at full level, as fractions of 16 DIP: the icon's proportions. Each bar is laid out 16 DIP
+    // tall and scaled to the larger of the 4 DIP floor and its proportion of the level, so a level update is five
+    // render-transform writes and never a layout pass (the old meter's width change laid out 40 times a second).
+    private static readonly double[] BarProportions = [0.26, 0.56, 1.0, 0.56, 0.26];
+    private const double BarFloor = 4.0 / 16.0;
+
+    // How long each state stays on screen. The overlay cannot reference Scribe.Core, so these copy
+    // Scribe.Core.Overlay.PillTiming, and a test keeps them equal; the storyboards' durations are checked the same way.
+    // An outcome holds the pill on screen: a Hide that arrives during the hold (the app's own hide after processing) is
+    // ignored until the hold elapses. A new recording or processing state replaces it at once.
+    private static readonly TimeSpan TypedHold = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan NoticeHold = TimeSpan.FromMilliseconds(1300);
     private static readonly TimeSpan RecordingWarningHold = TimeSpan.FromMilliseconds(1800);
+
+    private const string ProcessingStoryboardKey = "ProcessingStoryboard";
+    private const string FadeInStoryboardKey = "FadeInStoryboard";
+    private const string FadeOutStoryboardKey = "FadeOutStoryboard";
 
     private readonly IntPtr _hwnd;
     private readonly WindowId _windowId;
     private readonly AppWindow _appWindow;
+    private readonly ScaleTransform[] _barScales;
 
     private OverlayState _state = OverlayState.Hidden;
     private OverlayAnchor _anchor = OverlayAnchor.BottomCenter;
     private bool _shownOnce;
 
-    private DispatcherQueueTimer? _failedTimer;
+    // Windows' "Animation effects" and contrast theme, read in this process at each show.
+    private UISettings? _uiSettings;
+    private AccessibilitySettings? _accessibility;
+    private bool _animate;
+    private bool _contrast;
+    private bool _displaySettingsFailed;
+
+    private bool _fadingOut;
+    private DispatcherQueueTimer? _outcomeTimer;
     private DispatcherQueueTimer? _recordingWarningTimer;
-    private DateTime _failedHoldUntil = DateTime.MinValue;
+    private DateTime _outcomeHoldUntil = DateTime.MinValue;
 
     public OverlayWindow()
     {
         OverlayLog.Write("OverlayWindow.ctor enter");
         InitializeComponent();
+        _barScales = [Bar1Scale, Bar2Scale, Bar3Scale, Bar4Scale, Bar5Scale];
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _windowId = Win32Interop.GetWindowIdFromWindow(_hwnd);
@@ -66,6 +89,12 @@ public sealed partial class OverlayWindow : Window
         }
 
         SizeAndPosition();
+
+        // The fade out ends in the hide. Without the storyboard the pill hides at once instead.
+        if (FindStoryboard(FadeOutStoryboardKey) is { } fadeOut)
+        {
+            fadeOut.Completed += OnFadeOutCompleted;
+        }
 
         // Lifecycle tracing: the whole point of the rebuild is to see every transition.
         Activated += OnActivated;
@@ -211,7 +240,10 @@ public sealed partial class OverlayWindow : Window
         }
     });
 
-    /// <summary>Switches the visible content panel and shows/hides the window. UI-thread marshalled.</summary>
+    /// <summary>
+    /// Switches the visible content, edge and motion for <paramref name="state"/> and shows or hides the window.
+    /// UI-thread marshalled. Windows' animation and contrast settings are read here, at each show.
+    /// </summary>
     public void ShowState(OverlayState state)
     {
         if (!DispatcherQueue.HasThreadAccess)
@@ -227,38 +259,41 @@ public sealed partial class OverlayWindow : Window
 
         if (state == OverlayState.Hidden)
         {
-            StopStoryboard("PulseStoryboard");
-            StopStoryboard("ProcessingStoryboard");
-            _appWindow.Hide();
-            LogState("ShowState.hidden");
-            OverlayLog.Write($"OverlayWindow.ShowState exit hidden (was {previous})");
+            HidePill(previous);
             return;
         }
 
-        ListeningContent.Visibility = state == OverlayState.Listening ? Visibility.Visible : Visibility.Collapsed;
-        ProcessingContent.Visibility = state == OverlayState.Processing ? Visibility.Visible : Visibility.Collapsed;
-        FailedContent.Visibility = state == OverlayState.Failed ? Visibility.Visible : Visibility.Collapsed;
-        FailedTint.Visibility = state == OverlayState.Failed ? Visibility.Visible : Visibility.Collapsed;
-        OuterGlow.Visibility = state == OverlayState.Failed ? Visibility.Collapsed : Visibility.Visible;
-        OuterGlowInner.Visibility = state == OverlayState.Failed ? Visibility.Collapsed : Visibility.Visible;
-        OuterGlowFailed.Visibility = state == OverlayState.Failed ? Visibility.Visible : Visibility.Collapsed;
+        var error = IsError(state);
+        ListeningContent.Visibility = VisibleIf(state == OverlayState.Listening);
+        ProcessingContent.Visibility = VisibleIf(state == OverlayState.Processing);
+        TypedContent.Visibility = VisibleIf(state == OverlayState.Typed);
+        NoticeContent.Visibility = VisibleIf(IsNotice(state));
+        CautionIcon.Visibility = VisibleIf(state == OverlayState.TypedWithoutCleanup);
+        ErrorIcon.Visibility = VisibleIf(error);
+        NoticeTitle.Text = NoticeTitleFor(state);
+        ListeningEdge.Visibility = VisibleIf(state == OverlayState.Listening);
+        ErrorEdge.Visibility = VisibleIf(error);
+        NeutralEdge.Visibility = VisibleIf(state != OverlayState.Listening && !error);
+
+        ReadDisplaySettings();
+
+        // A fade that was taking the pill away gives it back at full opacity; it never left the screen.
+        var appearing = !_appWindow.IsVisible;
+        CancelFadeOut();
+        if (appearing && _animate)
+        {
+            StartStoryboard(FadeInStoryboardKey); // begun before the show, so the first frame is already transparent
+        }
 
         EnsureShown();
 
-        if (state == OverlayState.Listening)
+        if (state == OverlayState.Processing && _animate)
         {
-            StopStoryboard("ProcessingStoryboard");
-            StartStoryboard("PulseStoryboard");
-        }
-        else if (state == OverlayState.Processing)
-        {
-            StopStoryboard("PulseStoryboard");
-            StartStoryboard("ProcessingStoryboard");
+            StartStoryboard(ProcessingStoryboardKey);
         }
         else
         {
-            StopStoryboard("PulseStoryboard");
-            StopStoryboard("ProcessingStoryboard");
+            StopStoryboard(ProcessingStoryboardKey); // with Animation effects off the dots stand still
         }
 
         LogState($"ShowState.{state}");
@@ -267,20 +302,20 @@ public sealed partial class OverlayWindow : Window
 
     // ---- High-level command surface (driven by the WPF engine over IPC) --------------------------
 
-    /// <summary>Listening: pulsing record dot + live input-level meter (reset to empty).</summary>
+    /// <summary>Listening: the listening edge and the level bars, back at their floor.</summary>
     public void ShowRecording() => RunOnUi(() =>
     {
-        ClearFailedHold();
+        ClearOutcomeHold();
         _recordingWarningTimer?.Stop();
         StatusText.Text = "Listening…";
-        MeterFill.Width = 0;
+        SetBars(0);
         ShowState(OverlayState.Listening);
     });
 
-    /// <summary>Brief warning text that preserves the active recording state and live meter.</summary>
+    /// <summary>Brief warning text that preserves the active recording state and live level bars.</summary>
     public void ShowRecordingWarning(string? reason) => RunOnUi(() =>
     {
-        ClearFailedHold();
+        ClearOutcomeHold();
         StatusText.Text = string.IsNullOrWhiteSpace(reason) ? "Microphone muted" : reason.Trim();
         ShowState(OverlayState.Listening);
 
@@ -290,50 +325,66 @@ public sealed partial class OverlayWindow : Window
         OverlayLog.Write($"OverlayWindow.ShowRecordingWarning hold={RecordingWarningHold.TotalMilliseconds:0}ms reasonLength={ReasonLength(reason)}");
     });
 
-    /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
+    /// <summary>Processing: three dots, and the words say whether it is transcribing or AI cleanup.</summary>
     public void ShowProcessing(bool aiPolishing) => RunOnUi(() =>
     {
-        ClearFailedHold();
+        ClearOutcomeHold();
         ProcessingText.Text = aiPolishing ? "AI polishing…" : "Transcribing…";
         ShowState(OverlayState.Processing);
     });
 
-    /// <summary>Brief red "intelligence failed" flash, then self-hides after the hold elapses.</summary>
-    public void ShowFailed(string? reason) => RunOnUi(() =>
+    /// <summary>
+    /// A finished dictation's outcome (<see cref="OverlayState.Typed"/>, <see cref="OverlayState.TypedWithoutCleanup"/>,
+    /// <see cref="OverlayState.NothingTyped"/> or <see cref="OverlayState.PartlyTyped"/>), held on screen for its hold and
+    /// then hidden. <paramref name="detail"/> is the second line of a notice: the reason, or the next step.
+    /// </summary>
+    public void ShowOutcome(OverlayState state, string? detail) => RunOnUi(() =>
     {
-        if (!string.IsNullOrWhiteSpace(reason))
+        if (!IsOutcome(state))
         {
-            FailedReasonText.Text = reason!.Trim();
+            OverlayLog.Warn($"OverlayWindow.ShowOutcome refused state={state}");
+            return;
         }
 
-        ShowState(OverlayState.Failed);
+        _recordingWarningTimer?.Stop();
+        NoticeDetail.Text = IsNotice(state) ? (detail ?? string.Empty).Trim() : string.Empty;
+        ShowState(state);
 
-        _failedHoldUntil = DateTime.UtcNow + FailedHold;
-        _failedTimer ??= CreateFailedTimer();
-        _failedTimer.Stop();
-        _failedTimer.Start();
-        OverlayLog.Write($"OverlayWindow.ShowFailed hold={FailedHold.TotalMilliseconds:0}ms reasonLength={ReasonLength(reason)}");
+        var hold = state == OverlayState.Typed ? TypedHold : NoticeHold;
+        _outcomeHoldUntil = DateTime.UtcNow + hold;
+        _outcomeTimer ??= CreateOutcomeTimer();
+        _outcomeTimer.Stop();
+        _outcomeTimer.Interval = hold;
+        _outcomeTimer.Start();
+        OverlayLog.Write($"OverlayWindow.ShowOutcome state={state} hold={hold.TotalMilliseconds:0}ms reasonLength={ReasonLength(detail)}");
     });
 
+    /// <summary>
+    /// The AI cleanup failure flash the outcomes replace, drawn like an error. Only the app shell still sends it, from its
+    /// cleanup failure and error handlers; it goes once the shell shows outcomes.
+    /// </summary>
+    public void ShowFailed(string? reason) =>
+        ShowOutcome(OverlayState.Failed, string.IsNullOrWhiteSpace(reason) ? "Used raw transcription" : reason);
+
     // The reason is display text composed by the engine and can carry user configuration, such as a
-    // custom cleanup endpoint's host inside a failure detail. The pill shows it; the shared log only
-    // records how long it was. The wire protocol carries no fixed category to log instead.
+    // microphone's name or a custom cleanup endpoint's host inside a failure detail. The pill shows it; the
+    // shared log only records how long it was. The wire protocol carries no fixed category to log instead.
     private static int ReasonLength(string? reason) =>
         string.IsNullOrWhiteSpace(reason) ? 0 : reason.Trim().Length;
 
-    /// <summary>Hides the pill, unless the red failure flash is still holding on screen.</summary>
+    /// <summary>Hides the pill, unless an outcome is still holding on screen.</summary>
     public void Hide() => RunOnUi(() =>
     {
-        if (DateTime.UtcNow < _failedHoldUntil)
+        if (DateTime.UtcNow < _outcomeHoldUntil)
         {
-            OverlayLog.Write("OverlayWindow.Hide ignored (failed hold active)");
+            OverlayLog.Write("OverlayWindow.Hide ignored (outcome hold active)");
             return;
         }
 
         ShowState(OverlayState.Hidden);
     });
 
-    /// <summary>Sets the live input-level meter width (0..1). No-op unless listening.</summary>
+    /// <summary>Scales the level bars to the live input level (0..1). No-op unless listening.</summary>
     public void SetMeter(double level) => RunOnUi(() =>
     {
         if (_state != OverlayState.Listening)
@@ -341,9 +392,35 @@ public sealed partial class OverlayWindow : Window
             return;
         }
 
-        var clamped = level < 0 ? 0 : level > 1 ? 1 : level;
-        MeterFill.Width = MeterTrackWidth * clamped;
+        SetBars(level < 0 ? 0 : level > 1 ? 1 : level);
     });
+
+    private void SetBars(double level)
+    {
+        for (var i = 0; i < _barScales.Length; i++)
+        {
+            _barScales[i].ScaleY = Math.Max(BarFloor, BarProportions[i] * level);
+        }
+    }
+
+    private static bool IsOutcome(OverlayState state) => state is OverlayState.Typed || IsNotice(state);
+
+    private static bool IsNotice(OverlayState state) =>
+        state is OverlayState.TypedWithoutCleanup || IsError(state);
+
+    private static bool IsError(OverlayState state) =>
+        state is OverlayState.NothingTyped or OverlayState.PartlyTyped or OverlayState.Failed;
+
+    private static string NoticeTitleFor(OverlayState state) => state switch
+    {
+        OverlayState.TypedWithoutCleanup => "Typed without AI cleanup",
+        OverlayState.NothingTyped => "Nothing typed",
+        OverlayState.PartlyTyped => "Not all of it was typed",
+        OverlayState.Failed => "Intelligence failed",
+        _ => string.Empty,
+    };
+
+    private static Visibility VisibleIf(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
     private void RunOnUi(Action action)
     {
@@ -357,24 +434,99 @@ public sealed partial class OverlayWindow : Window
         }
     }
 
-    private void ClearFailedHold()
+    // Read at each show, in this process. Motion is decoration, so without an answer the pill stays still; the contrast
+    // theme is WinUI's to apply (the HighContrast brushes in App.xaml) and is read here for the state line.
+    private void ReadDisplaySettings()
     {
-        _failedHoldUntil = DateTime.MinValue;
-        _failedTimer?.Stop();
+        try
+        {
+            _uiSettings ??= new UISettings();
+            _accessibility ??= new AccessibilitySettings();
+            _animate = _uiSettings.AnimationsEnabled;
+            _contrast = _accessibility.HighContrast;
+        }
+        catch (Exception ex)
+        {
+            _animate = false;
+            if (!_displaySettingsFailed)
+            {
+                _displaySettingsFailed = true;
+                OverlayLog.Warn($"OverlayWindow.ReadDisplaySettings failed ({ex.GetType().Name} 0x{ex.HResult:X8}); no motion");
+            }
+        }
     }
 
-    private DispatcherQueueTimer CreateFailedTimer()
+    // Nothing runs while the pill is hidden: the dots and both timers stop here, and a fade out ends in the hide.
+    private void HidePill(OverlayState previous)
+    {
+        StopStoryboard(ProcessingStoryboardKey);
+        _outcomeTimer?.Stop();
+        _recordingWarningTimer?.Stop();
+        _outcomeHoldUntil = DateTime.MinValue;
+
+        if (_fadingOut)
+        {
+            OverlayLog.Write($"OverlayWindow.ShowState exit already fading out (was {previous})");
+            return;
+        }
+
+        StopStoryboard(FadeInStoryboardKey);
+        if (_animate && _appWindow.IsVisible && FindStoryboard(FadeOutStoryboardKey) is not null)
+        {
+            _fadingOut = true;
+            StartStoryboard(FadeOutStoryboardKey);
+            LogState("ShowState.fadingOut");
+            OverlayLog.Write($"OverlayWindow.ShowState exit fading out (was {previous})");
+            return;
+        }
+
+        _appWindow.Hide();
+        LogState("ShowState.hidden");
+        OverlayLog.Write($"OverlayWindow.ShowState exit hidden (was {previous})");
+    }
+
+    private void OnFadeOutCompleted(object? sender, object e)
+    {
+        if (!_fadingOut)
+        {
+            return; // a new state took the pill back first
+        }
+
+        _fadingOut = false;
+        _appWindow.Hide();
+        StopStoryboard(FadeOutStoryboardKey); // full opacity again for the next show, while hidden
+        LogState("FadeOut.completed");
+        OverlayLog.Write("OverlayWindow.FadeOut completed; window hidden");
+    }
+
+    private void CancelFadeOut()
+    {
+        if (!_fadingOut)
+        {
+            return;
+        }
+
+        _fadingOut = false;
+        StopStoryboard(FadeOutStoryboardKey);
+    }
+
+    private void ClearOutcomeHold()
+    {
+        _outcomeHoldUntil = DateTime.MinValue;
+        _outcomeTimer?.Stop();
+    }
+
+    private DispatcherQueueTimer CreateOutcomeTimer()
     {
         var timer = DispatcherQueue.CreateTimer();
-        timer.Interval = FailedHold;
         timer.IsRepeating = false;
         timer.Tick += (_, _) =>
         {
             timer.Stop();
-            _failedHoldUntil = DateTime.MinValue;
-            OverlayLog.Write("OverlayWindow.FailedTimer.Tick");
+            _outcomeHoldUntil = DateTime.MinValue;
+            OverlayLog.Write($"OverlayWindow.OutcomeTimer.Tick state={_state}");
             // Only hide if a fresh dictation hasn't already taken the pill over.
-            if (_state == OverlayState.Failed)
+            if (IsOutcome(_state))
             {
                 ShowState(OverlayState.Hidden);
             }
@@ -454,9 +606,12 @@ public sealed partial class OverlayWindow : Window
         OverlayLog.Write($"OverlayWindow.AssertTopMost SetWindowPos(HWND_TOPMOST) ok={ok}");
     }
 
+    private Storyboard? FindStoryboard(string key) =>
+        RootGrid.Resources.TryGetValue(key, out var res) && res is Storyboard sb ? sb : null;
+
     private void StartStoryboard(string key)
     {
-        if (RootGrid.Resources.TryGetValue(key, out var res) && res is Storyboard sb)
+        if (FindStoryboard(key) is { } sb)
         {
             sb.Begin();
             OverlayLog.Write($"OverlayWindow.StartStoryboard {key} begun");
@@ -467,13 +622,7 @@ public sealed partial class OverlayWindow : Window
         }
     }
 
-    private void StopStoryboard(string key)
-    {
-        if (RootGrid.Resources.TryGetValue(key, out var res) && res is Storyboard sb)
-        {
-            sb.Stop();
-        }
-    }
+    private void StopStoryboard(string key) => FindStoryboard(key)?.Stop();
 
     private void OnActivated(object sender, WindowActivatedEventArgs args)
     {
@@ -519,7 +668,8 @@ public sealed partial class OverlayWindow : Window
                 $"overlay[{phase}] state={_state} isVisible={_appWindow.IsVisible} " +
                 $"rect=({pos.X},{pos.Y},{size.Width},{size.Height}) dpi={DpiScale:0.##} " +
                 $"ex=0x{ex:X} layered={layered} transparent={transparent} noactivate={noactivate} " +
-                $"backdrop={(SystemBackdrop is null ? "null" : SystemBackdrop.GetType().Name)}");
+                $"backdrop={(SystemBackdrop is null ? "null" : SystemBackdrop.GetType().Name)} " +
+                $"animations={_animate} contrast={_contrast}");
         }
         catch (Exception e)
         {

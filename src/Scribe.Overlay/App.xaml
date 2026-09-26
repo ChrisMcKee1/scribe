@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Application
     x:Class="Scribe.Overlay.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -8,6 +8,83 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- The recording pill's brushes. In Signal On (palette decision, section 5) the pill is the same in both app
+                 themes and never follows the Windows accent, so Default and Light hold the same values, every one of them
+                 a Scribe.Core.Appearance.PillPalette colour (OverlayPillSourceTests checks both). In a contrast theme WinUI
+                 picks HighContrast itself: system colours only, fully opaque, a 2 DIP WindowText edge in every state,
+                 Highlight for the level bars and the processing dots, and WindowText for the icons, whose shapes and words
+                 carry each state. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <LinearGradientBrush x:Key="PillFaceBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#1A2744" Offset="0" />
+                        <GradientStop Color="#0E1830" Offset="1" />
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="PillSheenBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#14FFFFFF" Offset="0" />
+                        <GradientStop Color="#00FFFFFF" Offset="0.45" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PillListeningEdgeBrush" Color="#71ADFF" />
+                    <SolidColorBrush x:Key="PillNeutralEdgeBrush" Color="#8A9BB5" />
+                    <SolidColorBrush x:Key="PillErrorEdgeBrush" Color="#FF99A4" />
+                    <Thickness x:Key="PillListeningEdgeThickness">1.5</Thickness>
+                    <Thickness x:Key="PillQuietEdgeThickness">1</Thickness>
+                    <SolidColorBrush x:Key="PillTextBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="PillSecondaryTextBrush" Color="#C5FFFFFF" />
+                    <LinearGradientBrush x:Key="PillLevelBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#93C0FE" Offset="0" />
+                        <GradientStop Color="#549DFF" Offset="1" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PillDotBrush" Color="#93C0FE" />
+                    <SolidColorBrush x:Key="PillSuccessBrush" Color="#6CCB5F" />
+                    <SolidColorBrush x:Key="PillCautionBrush" Color="#FCE100" />
+                    <SolidColorBrush x:Key="PillErrorBrush" Color="#FF99A4" />
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="Light">
+                    <LinearGradientBrush x:Key="PillFaceBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#1A2744" Offset="0" />
+                        <GradientStop Color="#0E1830" Offset="1" />
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="PillSheenBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#14FFFFFF" Offset="0" />
+                        <GradientStop Color="#00FFFFFF" Offset="0.45" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PillListeningEdgeBrush" Color="#71ADFF" />
+                    <SolidColorBrush x:Key="PillNeutralEdgeBrush" Color="#8A9BB5" />
+                    <SolidColorBrush x:Key="PillErrorEdgeBrush" Color="#FF99A4" />
+                    <Thickness x:Key="PillListeningEdgeThickness">1.5</Thickness>
+                    <Thickness x:Key="PillQuietEdgeThickness">1</Thickness>
+                    <SolidColorBrush x:Key="PillTextBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="PillSecondaryTextBrush" Color="#C5FFFFFF" />
+                    <LinearGradientBrush x:Key="PillLevelBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#93C0FE" Offset="0" />
+                        <GradientStop Color="#549DFF" Offset="1" />
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PillDotBrush" Color="#93C0FE" />
+                    <SolidColorBrush x:Key="PillSuccessBrush" Color="#6CCB5F" />
+                    <SolidColorBrush x:Key="PillCautionBrush" Color="#FCE100" />
+                    <SolidColorBrush x:Key="PillErrorBrush" Color="#FF99A4" />
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="PillFaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="PillSheenBrush" Color="Transparent" />
+                    <SolidColorBrush x:Key="PillListeningEdgeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PillNeutralEdgeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PillErrorEdgeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <Thickness x:Key="PillListeningEdgeThickness">2</Thickness>
+                    <Thickness x:Key="PillQuietEdgeThickness">2</Thickness>
+                    <SolidColorBrush x:Key="PillTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PillSecondaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PillLevelBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="PillDotBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="PillSuccessBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PillCautionBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PillErrorBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

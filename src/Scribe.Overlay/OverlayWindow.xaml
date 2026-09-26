@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Scribe.Overlay.OverlayWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6,11 +6,9 @@
 
     <Grid x:Name="RootGrid" Background="Transparent">
         <Grid.Resources>
-            <Storyboard x:Key="PulseStoryboard" RepeatBehavior="Forever" AutoReverse="True">
-                <DoubleAnimation Storyboard.TargetName="RecDot"
-                                 Storyboard.TargetProperty="Opacity"
-                                 From="1.0" To="0.25" Duration="0:0:0.7"/>
-            </Storyboard>
+            <!-- Motion, all of it gated on Windows "Animation effects" (UISettings.AnimationsEnabled, read at each show):
+                 the processing dots, and a fade in and out. With it off the dots stand still and the pill simply appears
+                 and goes; the level bars follow the level either way, because that is information. -->
             <Storyboard x:Key="ProcessingStoryboard">
                 <DoubleAnimation Storyboard.TargetName="Dot1Transform" Storyboard.TargetProperty="Y"
                                  From="0" To="-5" Duration="0:0:0.45" AutoReverse="True"
@@ -28,126 +26,137 @@
                     <DoubleAnimation.EasingFunction><QuadraticEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
                 </DoubleAnimation>
             </Storyboard>
+            <Storyboard x:Key="FadeInStoryboard">
+                <DoubleAnimation Storyboard.TargetName="Pill" Storyboard.TargetProperty="Opacity"
+                                 From="0" To="1" Duration="0:0:0.12"/>
+            </Storyboard>
+            <Storyboard x:Key="FadeOutStoryboard">
+                <DoubleAnimation Storyboard.TargetName="Pill" Storyboard.TargetProperty="Opacity"
+                                 From="1" To="0" Duration="0:0:0.15"/>
+            </Storyboard>
         </Grid.Resources>
 
-        <!-- Faux outer bloom: two translucent rounded rings behind the card give a soft glow rim
-             without a blur effect (WinUI has no WPF-style DropShadowEffect; a real composition
-             DropShadow glow lands in Phase 1). Null/!HitTest so they never block clicks. -->
-        <Border x:Name="OuterGlow" Margin="21" CornerRadius="23" BorderThickness="6"
-                BorderBrush="#268FB2FF" IsHitTestVisible="False"/>
-        <Border x:Name="OuterGlowInner" Margin="25" CornerRadius="21" BorderThickness="3"
-                BorderBrush="#598FB2FF" IsHitTestVisible="False"/>
-        <Border x:Name="OuterGlowFailed" Margin="21" CornerRadius="23" BorderThickness="6"
-                BorderBrush="#33E5484D" IsHitTestVisible="False" Visibility="Collapsed"/>
+        <!-- The pill (Signal On, palette decision section 5): an opaque face, a sheen over its top 45% and one edge, drawn
+             inside it, for the state. No plate, no bloom, no glow and no red wash. Every brush is a theme resource from
+             App.xaml, so a contrast theme draws it in system colours. -->
+        <Grid x:Name="Pill" Margin="27" IsHitTestVisible="False">
+            <Border CornerRadius="18" Background="{ThemeResource PillFaceBrush}"/>
+            <Border CornerRadius="18" Background="{ThemeResource PillSheenBrush}"/>
+            <Border x:Name="ListeningEdge" CornerRadius="18"
+                    BorderBrush="{ThemeResource PillListeningEdgeBrush}"
+                    BorderThickness="{ThemeResource PillListeningEdgeThickness}"/>
+            <Border x:Name="NeutralEdge" CornerRadius="18" Visibility="Collapsed"
+                    BorderBrush="{ThemeResource PillNeutralEdgeBrush}"
+                    BorderThickness="{ThemeResource PillQuietEdgeThickness}"/>
+            <Border x:Name="ErrorEdge" CornerRadius="18" Visibility="Collapsed"
+                    BorderBrush="{ThemeResource PillErrorEdgeBrush}"
+                    BorderThickness="{ThemeResource PillQuietEdgeThickness}"/>
 
-        <Border x:Name="Card" Margin="27" CornerRadius="18" BorderThickness="1">
-            <Border.Background>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#802B2F38" Offset="0.0"/>
-                    <GradientStop Color="#73191C22" Offset="1.0"/>
-                </LinearGradientBrush>
-            </Border.Background>
-            <Border.BorderBrush>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#4DFFFFFF" Offset="0.0"/>
-                    <GradientStop Color="#0DFFFFFF" Offset="1.0"/>
-                </LinearGradientBrush>
-            </Border.BorderBrush>
-            <Grid>
-                <!-- Specular sheen across the top so the panel reads like glass -->
-                <Border CornerRadius="18,18,0,0" VerticalAlignment="Top" Height="27" IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#1AFFFFFF" Offset="0.0"/>
-                            <GradientStop Color="#00FFFFFF" Offset="1.0"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
+            <Grid Margin="16,9">
+                <!-- Listening: five level bars in the icon's proportions. Each is laid out 16 DIP tall and scaled by the
+                     level (ScaleY), so a level update never runs a layout pass; 0.25 is the 4 DIP floor. -->
+                <Grid x:Name="ListeningContent">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-                <!-- Red wash over the card face during the brief AI-failure flash -->
-                <Border x:Name="FailedTint" CornerRadius="18" Visibility="Collapsed" IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#E6B3261A" Offset="0.0"/>
-                            <GradientStop Color="#D98C1410" Offset="1.0"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Margin="0,0,3,0"
+                                   Fill="{ThemeResource PillLevelBrush}" RenderTransformOrigin="0.5,0.5">
+                            <Rectangle.RenderTransform><ScaleTransform x:Name="Bar1Scale" ScaleY="0.25"/></Rectangle.RenderTransform>
+                        </Rectangle>
+                        <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Margin="0,0,3,0"
+                                   Fill="{ThemeResource PillLevelBrush}" RenderTransformOrigin="0.5,0.5">
+                            <Rectangle.RenderTransform><ScaleTransform x:Name="Bar2Scale" ScaleY="0.25"/></Rectangle.RenderTransform>
+                        </Rectangle>
+                        <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Margin="0,0,3,0"
+                                   Fill="{ThemeResource PillLevelBrush}" RenderTransformOrigin="0.5,0.5">
+                            <Rectangle.RenderTransform><ScaleTransform x:Name="Bar3Scale" ScaleY="0.25"/></Rectangle.RenderTransform>
+                        </Rectangle>
+                        <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Margin="0,0,3,0"
+                                   Fill="{ThemeResource PillLevelBrush}" RenderTransformOrigin="0.5,0.5">
+                            <Rectangle.RenderTransform><ScaleTransform x:Name="Bar4Scale" ScaleY="0.25"/></Rectangle.RenderTransform>
+                        </Rectangle>
+                        <Rectangle Width="3" Height="16" RadiusX="1.5" RadiusY="1.5"
+                                   Fill="{ThemeResource PillLevelBrush}" RenderTransformOrigin="0.5,0.5">
+                            <Rectangle.RenderTransform><ScaleTransform x:Name="Bar5Scale" ScaleY="0.25"/></Rectangle.RenderTransform>
+                        </Rectangle>
+                    </StackPanel>
 
-                <Grid Margin="14,9">
-                    <!-- Listening: pulsing record dot + input-level meter -->
-                    <Grid x:Name="ListeningContent">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="StatusText" Grid.Column="1" Margin="11,0,0,0" VerticalAlignment="Center"
+                               Text="Listening…" Foreground="{ThemeResource PillTextBrush}"
+                               FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                </Grid>
 
-                        <Ellipse x:Name="RecDot" Grid.Column="0" Width="10" Height="10"
-                                 Margin="2,0,10,0" Fill="#E5484D" VerticalAlignment="Center"/>
+                <!-- Processing: three dots, the same for transcribing and for AI cleanup; the words say which. -->
+                <Grid x:Name="ProcessingContent" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
 
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock x:Name="StatusText" Text="Listening…"
-                                       Foreground="#FFFFFFFF" FontSize="12" FontWeight="SemiBold"/>
-                            <Border Margin="0,6,0,0" Width="140" Height="5" CornerRadius="3"
-                                    Background="#26FFFFFF" HorizontalAlignment="Left">
-                                <Border x:Name="MeterFill" HorizontalAlignment="Left" Width="70" CornerRadius="3">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                            <GradientStop Color="#34D399" Offset="0.0"/>
-                                            <GradientStop Color="#FBBF24" Offset="0.7"/>
-                                            <GradientStop Color="#E5484D" Offset="1.0"/>
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                </Border>
-                            </Border>
-                        </StackPanel>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse Width="7" Height="7" Margin="0,0,4,0" Fill="{ThemeResource PillDotBrush}">
+                            <Ellipse.RenderTransform><TranslateTransform x:Name="Dot1Transform"/></Ellipse.RenderTransform>
+                        </Ellipse>
+                        <Ellipse Width="7" Height="7" Margin="0,0,4,0" Fill="{ThemeResource PillDotBrush}">
+                            <Ellipse.RenderTransform><TranslateTransform x:Name="Dot2Transform"/></Ellipse.RenderTransform>
+                        </Ellipse>
+                        <Ellipse Width="7" Height="7" Fill="{ThemeResource PillDotBrush}">
+                            <Ellipse.RenderTransform><TranslateTransform x:Name="Dot3Transform"/></Ellipse.RenderTransform>
+                        </Ellipse>
+                    </StackPanel>
+
+                    <TextBlock x:Name="ProcessingText" Grid.Column="1" Margin="13,0,0,0" VerticalAlignment="Center"
+                               Text="Transcribing…" Foreground="{ThemeResource PillTextBrush}"
+                               FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                </Grid>
+
+                <!-- Typed: all of the text arrived, the space after it included. A check, briefly. -->
+                <Grid x:Name="TypedContent" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Path Grid.Column="0" Width="13" Height="10" VerticalAlignment="Center"
+                          Data="M1,5 L5,9 L12,1" Stroke="{ThemeResource PillSuccessBrush}" StrokeThickness="2"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+
+                    <TextBlock Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
+                               Text="Typed" Foreground="{ThemeResource PillTextBrush}"
+                               FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                </Grid>
+
+                <!-- A notice with a second line: "Typed without AI cleanup" and the reason (a caution triangle on the
+                     neutral edge), or "Nothing typed" / "Not all of it was typed" and the next step (an error icon on
+                     the error edge). -->
+                <Grid x:Name="NoticeContent" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Grid Grid.Column="0" Width="14" Height="14" VerticalAlignment="Center">
+                        <Path x:Name="CautionIcon"
+                              Data="M7,1.5 L13,12.5 L1,12.5 Z M7,5.5 L7,8.5 M7,10.6 L7,10.7"
+                              Stroke="{ThemeResource PillCautionBrush}" StrokeThickness="1.4"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                        <Path x:Name="ErrorIcon" Visibility="Collapsed"
+                              Data="M2,2 L12,12 M12,2 L2,12"
+                              Stroke="{ThemeResource PillErrorBrush}" StrokeThickness="1.6"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                     </Grid>
 
-                    <!-- Processing: bouncing dots while transcribing / AI polishing -->
-                    <Grid x:Name="ProcessingContent" Visibility="Collapsed">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Grid.Column="0" Orientation="Horizontal"
-                                    VerticalAlignment="Center" Margin="2,0,10,0">
-                            <Ellipse Width="7" Height="7" Margin="0,0,4,0" Fill="#8AB4F8">
-                                <Ellipse.RenderTransform><TranslateTransform x:Name="Dot1Transform"/></Ellipse.RenderTransform>
-                            </Ellipse>
-                            <Ellipse Width="7" Height="7" Margin="0,0,4,0" Fill="#8AB4F8">
-                                <Ellipse.RenderTransform><TranslateTransform x:Name="Dot2Transform"/></Ellipse.RenderTransform>
-                            </Ellipse>
-                            <Ellipse Width="7" Height="7" Fill="#8AB4F8">
-                                <Ellipse.RenderTransform><TranslateTransform x:Name="Dot3Transform"/></Ellipse.RenderTransform>
-                            </Ellipse>
-                        </StackPanel>
-
-                        <TextBlock x:Name="ProcessingText" Grid.Column="1" Text="Transcribing…"
-                                   VerticalAlignment="Center" Foreground="#FFFFFFFF"
-                                   FontSize="12" FontWeight="SemiBold"/>
-                    </Grid>
-
-                    <!-- AI cleanup failed: brief red notice while falling back to raw text -->
-                    <Grid x:Name="FailedContent" Visibility="Collapsed">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0" Text="&#x26A0;" VerticalAlignment="Center"
-                                   Margin="2,0,10,0" FontSize="16" Foreground="#FFFFFFFF"/>
-
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock Text="Intelligence failed" Foreground="#FFFFFFFF"
-                                       FontSize="12" FontWeight="SemiBold"/>
-                            <TextBlock x:Name="FailedReasonText" Text="Used raw transcription"
-                                       Foreground="#D6FFFFFF" FontSize="10" Margin="0,2,0,0"
-                                       TextTrimming="CharacterEllipsis"/>
-                        </StackPanel>
-                    </Grid>
+                    <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="NoticeTitle" Foreground="{ThemeResource PillTextBrush}"
+                                   FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="NoticeDetail" Margin="0,2,0,0" Foreground="{ThemeResource PillSecondaryTextBrush}"
+                                   FontSize="12" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
                 </Grid>
             </Grid>
-        </Border>
+        </Grid>
     </Grid>
 </Window>
