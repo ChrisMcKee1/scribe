@@ -1069,6 +1069,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             LoadDurationChoices(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, _settings.HistoryRetentionDays);
             LoadDurationChoices(MaxDictationCombo, MaxDictationCustomBox, DurationChoiceKind.MaxDictation, _settings.MaxDictationMinutes);
             LoadDurationChoices(IdleReleaseCombo, IdleReleaseCustomBox, DurationChoiceKind.IdleRelease, _settings.ReleaseModelsAfterIdleMinutes);
+            UpdateAdvancedSectionHeaders();
             HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
 
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
@@ -1092,6 +1093,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _loadingUi = false;
         }
+    }
+
+    private void UpdateAdvancedSectionHeaders()
+    {
+        AdvancedSpeechHeader.Text = SectionHeaderText("Speech recognition", AdvancedSection.SpeechRecognition);
+        AdvancedRecordingHeader.Text = SectionHeaderText("Recording", AdvancedSection.Recording);
+        AdvancedTypingHeader.Text = SectionHeaderText("Typing into apps", AdvancedSection.TypingIntoApps);
+        AdvancedTextChangesHeader.Text = SectionHeaderText("Text changes", AdvancedSection.TextChanges);
+        AdvancedAppearanceHeader.Text = SectionHeaderText("Appearance", AdvancedSection.Appearance);
+    }
+
+    private string SectionHeaderText(string title, AdvancedSection section)
+    {
+        var suffix = AdvancedDefaults.SectionHeader(section, _settings);
+        return string.IsNullOrEmpty(suffix) ? title : $"{title}  {suffix}";
     }
 
     // Runs on Loaded and on every activation, so coming back from Windows Settings > Apps > Startup
@@ -2558,7 +2574,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             (installed ? "Ready." : "Not installed.");
         TranscriptionModelInstallButton.Visibility = model.IsBundled ? Visibility.Collapsed : Visibility.Visible;
         TranscriptionModelInstallButton.IsEnabled = !installed && !_transcriptionModelOp;
-        TranscriptionModelInstallButton.Content = installed ? "Installed" : "Install";
+        TranscriptionModelInstallButton.Content = installed ? "Downloaded" : "Download";
     }
 
     private async void TranscriptionModelInstallButton_Click(object sender, RoutedEventArgs e)

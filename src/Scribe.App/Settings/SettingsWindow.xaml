@@ -40,6 +40,7 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
             <Setter Property="MaxWidth" Value="720"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="SectionHeader">
             <Setter Property="FontSize" Value="14"/>
@@ -604,7 +605,8 @@
                                        Text="Your microphone, your shortcuts, and what you see while you dictate."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                            <StackPanel Width="960" MaxWidth="1000" HorizontalAlignment="Left">
+                                <TextBlock Text="Microphone" Style="{StaticResource SectionHeader}" Margin="1,4,0,8"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock Text="Microphone" Style="{StaticResource CardTitle}"/>
@@ -621,6 +623,7 @@
                                     </StackPanel>
                                 </ui:Card>
 
+                                <TextBlock Text="Shortcuts" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock x:Name="HotkeyTitle" Text="Dictation shortcut" Style="{StaticResource CardTitle}"/>
@@ -681,6 +684,18 @@
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
+                                        <CheckBox x:Name="AutoStopCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}">
+                                                <TextBlock x:Name="AutoStopTitle" Text="Stop when I stop talking" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="AutoStopDescription" Style="{StaticResource CardDescription}" Text="Scribe stops after a few seconds of silence. A noisy room can stop it early."/>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <TextBlock Text="Typing" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
                                         <CheckBox x:Name="SpaceAfterDictationCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}">
@@ -689,6 +704,8 @@
                                         <TextBlock Margin="28,2,0,0" x:Name="SpaceAfterDictationHint" Style="{StaticResource CardDescription}" Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
                                     </StackPanel>
                                 </ui:Card>
+
+                                <TextBlock Text="Recording indicator" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <CheckBox x:Name="OverlayCheck" Style="{StaticResource SettingCheckBox}"
@@ -699,44 +716,6 @@
                                         <TextBlock Margin="28,2,0,0" x:Name="OverlayDescription" Style="{StaticResource CardDescription}" Text="A small bar with a live sound level appears while Scribe listens."/>
                                     </StackPanel>
                                 </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <CheckBox x:Name="AutoStopCheck" Style="{StaticResource SettingCheckBox}"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
-                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}">
-                                                <TextBlock x:Name="AutoStopTitle" Text="Stop when I stop talking" Style="{StaticResource CardTitle}"/>
-                                        </CheckBox>
-                                        <TextBlock Margin="28,2,0,0" x:Name="AutoStopDescription" Style="{StaticResource CardDescription}" Text="Scribe stops after a few seconds of silence. A noisy room can stop it early."/>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock Text="Start with Windows" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="LaunchStatusText" Style="{StaticResource CardDescription}"
-                                                       Text="Checking the Windows startup setting..."/>
-                                            <ui:Button Content="Open Windows startup settings"
-                                                       HorizontalAlignment="Left" Margin="0,8,0,0"
-                                                       Click="StartupSettings_Click"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <ui:ToggleSwitch x:Name="LaunchCheck" HorizontalAlignment="Right"
-                                                             IsEnabled="False" AutomationProperties.Name="Start with Windows"
-                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LaunchStatusText}"
-                                                             Checked="LaunchCheck_Changed" Unchecked="LaunchCheck_Changed"/>
-                                            <!-- Every other switch on this page waits for Save; this one does not. -->
-                                            <TextBlock Text="Applies immediately." Style="{StaticResource CardDescription}"
-                                                       HorizontalAlignment="Right"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </ui:Card>
-                                <!-- Updates: Store packages defer to Microsoft; Velopack installs use GitHub releases. -->
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock Text="Where it appears" Style="{StaticResource CardTitle}"/>
@@ -802,6 +781,33 @@
                                         </Grid>
                                     </StackPanel>
                                 </ui:Card>
+
+                                <TextBlock Text="Startup" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Start with Windows" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock x:Name="LaunchStatusText" Style="{StaticResource CardDescription}"
+                                                       Text="Checking the Windows startup setting..."/>
+                                            <ui:Button Content="Open Windows startup settings"
+                                                       HorizontalAlignment="Left" Margin="0,8,0,0"
+                                                       Click="StartupSettings_Click"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <ui:ToggleSwitch x:Name="LaunchCheck" HorizontalAlignment="Right"
+                                                             IsEnabled="False" AutomationProperties.Name="Start with Windows"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LaunchStatusText}"
+                                                             Checked="LaunchCheck_Changed" Unchecked="LaunchCheck_Changed"/>
+                                            <!-- Every other switch on this page waits for Save; this one does not. -->
+                                            <TextBlock Text="Applies immediately." Style="{StaticResource CardDescription}"
+                                                       HorizontalAlignment="Right"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -839,7 +845,7 @@
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
-                                <TextBlock Text="Speech recognition" Style="{StaticResource SectionHeader}" Margin="1,4,0,8"/>
+                                <TextBlock x:Name="AdvancedSpeechHeader" Text="Speech recognition" Style="{StaticResource SectionHeader}" Margin="1,4,0,8"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -878,19 +884,19 @@
                                         <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource CardDescription}"
                                                    Margin="0,6,0,0" TextWrapping="Wrap"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Install"
+                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Download"
                                                        MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>
                                             <ProgressBar x:Name="TranscriptionModelProgress" Width="220" Height="8"
                                                          Margin="12,0,0,0" VerticalAlignment="Center"
                                                          Minimum="0" Maximum="100" Visibility="Collapsed"
-                                                         AutomationProperties.Name="Speech model install progress"/>
+                                                         AutomationProperties.Name="Speech model download progress"/>
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                    Text="Changing the speech model takes effect after restarting Scribe. If the selected model is unavailable, Scribe falls back to Parakeet when it is installed."/>
                                     </StackPanel>
                                 </ui:Card>
 
-                                <TextBlock Text="Capture" Style="{StaticResource SectionHeader}" Margin="2,4,0,10"/>
+                                <TextBlock x:Name="AdvancedRecordingHeader" Text="Recording" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <CheckBox x:Name="VadCheck" Style="{StaticResource SettingCheckBox}"
@@ -934,7 +940,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Free memory when Scribe isn't used" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Style="{StaticResource CardDescription}"
-                                                       Text="After this many minutes without a dictation, Scribe unloads the speech models to free about 700 MB of memory. The next dictation reloads them with a short warm-up of a second or two. The recording pill's helper also closes after this idle time. Set to 0 to keep the models loaded forever."/>
+                                                       Text="Unloads the speech model after this long without a dictation, freeing memory. The next dictation takes a second or two longer to start."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ComboBox x:Name="IdleReleaseCombo" Width="240" DisplayMemberPath="Label"
@@ -949,6 +955,7 @@
                                         </StackPanel>
                                     </Grid>
                                 </ui:Card>
+                                <TextBlock x:Name="AdvancedTextChangesHeader" Text="Text changes" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <CheckBox x:Name="PostCheck" Style="{StaticResource SettingCheckBox}"
@@ -961,12 +968,12 @@
                                     </StackPanel>
                                 </ui:Card>
 
-                                <TextBlock Text="Text insertion" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock x:Name="AdvancedTypingHeader" Text="Typing into apps" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <TextBlock x:Name="InjectionTitle" Text="How text gets inserted" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="InjectionTitle" Text="Typing method" Style="{StaticResource CardTitle}"/>
                                         <TextBlock Style="{StaticResource CardDescription}"
-                                                   Text="Type it in enters your text one keystroke at a time, like you typed it yourself. It works in the widest range of apps and never touches your clipboard. Paste it in copies the text and presses Ctrl+V, which is quicker for long dictations but replaces what you had copied and is blocked by some apps."/>
+                                                   Text="Typing works in almost every app and doesn't use your clipboard. Pasting is faster for long text: Scribe uses the clipboard for a moment and puts back what you had copied when it can. Some apps block pasting."/>
                                         <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=InjectionTitle}"/>
                                     </StackPanel>
@@ -975,7 +982,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="NewlineTitle" Text="Line breaks" Style="{StaticResource CardTitle}"/>
                                         <TextBlock Style="{StaticResource CardDescription}"
-                                                   Text="Terminals treat a line break as Enter, so a long dictation with paragraphs can send several partial messages. Smart replaces line breaks with spaces only in terminals."/>
+                                                   Text="In command windows such as Terminal, a line break works like Enter and can send text early."/>
                                         <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=NewlineTitle}"/>
                                     </StackPanel>
@@ -987,11 +994,11 @@
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=ShiftEnterDescription}">
                                                 <TextBlock x:Name="ShiftEnterTitle" Text="Don't send chat messages early" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
-                                        <TextBlock Margin="28,2,0,0" x:Name="ShiftEnterDescription" Style="{StaticResource CardDescription}" Text="Chat apps like Teams, Slack, and Discord send a message when you press Enter, so a dictation with paragraphs used to send itself on the first break. This types line breaks as Shift+Enter instead, which starts a new line without sending. Turn it off only if an app you use does something else with Shift+Enter."/>
+                                        <TextBlock Margin="28,2,0,0" x:Name="ShiftEnterDescription" Style="{StaticResource CardDescription}" Text="Types line breaks as Shift+Enter, so apps like Teams and Slack start a new line instead of sending. Turn it off if an app uses Shift+Enter for something else."/>
                                     </StackPanel>
                                 </ui:Card>
 
-                                <TextBlock Text="Appearance" Style="{StaticResource SectionHeader}"/>
+                                <TextBlock x:Name="AdvancedAppearanceHeader" Text="Appearance" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <CheckBox x:Name="AccentSourceCheck" Style="{StaticResource SettingCheckBox}"
@@ -1941,16 +1948,17 @@
                             <TextBlock x:Name="HistoryPageTitle" Text="History" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Find, copy or delete your recent dictations."/>
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
+                            <ui:Card x:Name="HistorySettingsCard" Style="{StaticResource SettingsCard}" Margin="0,12,0,4">
+                                <StackPanel>
+                                    <TextBlock Text="History settings" Style="{StaticResource CardTitle}"/>
+                                    <Grid Margin="0,10,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock Text="Keep dictation history for" Style="{StaticResource CardTitle}"/>
-                                            <!-- Text comes from StorageRetentionPolicy.TextRetentionHint. -->
-                                            <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource CardDescription}"/>
+                                            <TextBlock Text="Keep dictations" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource CardDescription}" Text="Older dictations are deleted automatically."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ComboBox x:Name="HistoryRetentionCombo" Width="240" DisplayMemberPath="Label"
@@ -1964,21 +1972,16 @@
                                                           AutomationProperties.Name="Keep dictations custom days"/>
                                         </StackPanel>
                                     </Grid>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
+                                    <StackPanel Margin="0,14,0,0">
                                         <CheckBox x:Name="StoreAudioCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}">
-                                                <TextBlock x:Name="StoreAudioTitle" Text="Save a recording with each dictation" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock x:Name="StoreAudioTitle" Text="Save a recording with each dictation" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
-                                        <!-- Text comes from StorageRetentionPolicy.StoredAudioHint so it always
-                                                                                         names the limits maintenance actually enforces. -->
-                                        <TextBlock Margin="28,2,0,0" x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}"/>
+                                        <TextBlock Margin="28,2,0,0" x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}" Text="Keeps the audio of each dictation on this PC for up to 7 days (250 MB in total), then deletes it. Scribe doesn't play recordings back."/>
                                     </StackPanel>
-                                </ui:Card>
-
+                                </StackPanel>
+                            </ui:Card>
                         </StackPanel>
                         <ui:Card Grid.Row="1" Padding="0" Style="{StaticResource PanelCard}">
                             <Grid>
@@ -2767,4 +2770,3 @@
         </Grid>
     </Grid>
 </ui:FluentWindow>
-
