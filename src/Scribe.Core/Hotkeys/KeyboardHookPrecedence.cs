@@ -28,8 +28,10 @@ namespace Scribe.Core.Hotkeys;
 /// window published since the last decision (a count the notice carries, since notices coalesce), does not start the
 /// sequence over; a notice or a tick older than the newest decision changes nothing (review round 2, items 3 to 5); and a
 /// tick in flight when a newer notice is decided cannot apply what it judged before (review round 3, item 2). While no step
-/// is scheduled, the watchdog hands the window in front on once a period, as a notice, so a sequence lost while a client
-/// stayed in front is restored at the next upkeep. The moves themselves, the rule that a move waits while a key whose
+/// is scheduled, the watchdog's recovery poll (<see cref="RecoverIfIdle"/>) looks at what is in front once a period and
+/// starts the sequence for a remote client there, so a sequence lost while a client stayed in front is restored at the next
+/// upkeep; it publishes no notice, so it can neither overrule a newer notice nor drop a move (review round 4, item 1). The
+/// moves themselves, the rule that a move waits while a key whose
 /// press Scribe swallowed is held or while every kept registration is inside its grace, and the rules for an event on its
 /// way to a replaced registration are the hook thread's (<c>HotkeyService.HookInstallation</c>). Nothing here waits for the
 /// hook thread: a request is a posted thread message. Nothing thrown here reaches the pool thread, which would end the
@@ -114,9 +116,8 @@ internal sealed class KeyboardHookPrecedence : IDisposable
     }
 
     /// <summary>
-    /// Pool thread: the foreground window changed to <paramref name="window"/>, or a hook installed with it in front, or the
-    /// watchdog handed on the window in front while no step was scheduled, as the notice published with
-    /// <paramref name="revision"/> and <paramref name="changes"/> (<see cref="ForegroundPublication"/>). A remote client
+    /// Pool thread: the foreground window changed to <paramref name="window"/>, or a hook installed with it in front, as the
+    /// notice published with <paramref name="revision"/> and <paramref name="changes"/> (<see cref="ForegroundPublication"/>). A remote client
     /// starts the sequence over; any other window cancels a move not made yet and the keep-ahead moves, and keeps the release
     /// due if a move was made. The notice's pool callbacks can overlap (.NET re-arms a registered wait before it runs its
     /// callback), and the lookup runs before the gate, so a slow lookup can finish after a newer notice was decided: a
@@ -183,19 +184,75 @@ internal sealed class KeyboardHookPrecedence : IDisposable
         }
         catch (Exception)
         {
-            // A process that went away, or a logger that failed: the next notice or the watchdog makes up for it.
+            // A process that went away, or a logger that failed: the next notice or the watchdog's recovery makes up for it.
         }
     }
 
-    /// <summary>Any thread but the hook thread (it takes the gate): whether no step is scheduled or in flight.</summary>
-    public bool IsIdle
+    /// <summary>Any thread but the hook thread (it takes the gate), for tests: the newest foreground revision decided.</summary>
+    internal long DecidedRevisionForTests
     {
         get
         {
             lock (_gate)
             {
-                return _step == Idle;
+                return _decided;
             }
+        }
+    }
+
+    /// <summary>
+    /// The watchdog's thread, once a period (never the hook thread: it takes the gate and looks a process up): the recovery
+    /// poll for a sequence that ended while a remote client stayed in front, which no notice starts over until the
+    /// foreground changes (a step that read the foreground as the client was losing activation, when Windows has none).
+    /// While no step is scheduled it reads the foreground revision, then the window in front, and when a remote client is
+    /// there it starts the sequence for it as a notice would; but only if, under the gate at that moment, still no step is
+    /// scheduled and no notice was published since that revision (review round 4, item 1). It publishes nothing: it neither
+    /// takes the notice's one window slot, which would hide a real notice from the pool, nor advances the revision, which
+    /// would drop a move judged on it. A notice published before that revision and still undecided is older than the
+    /// window it read, so the sequence it starts decides that revision, and the late notice changes nothing. Nothing thrown
+    /// here leaves it.
+    /// </summary>
+    public void RecoverIfIdle()
+    {
+        try
+        {
+            lock (_gate)
+            {
+                if (_disposed || _step != Idle)
+                {
+                    return;
+                }
+            }
+
+            // The revision before the window, as a step reads them: the window is at least as new as every notice up to it.
+            var revision = _publishedRevision();
+            var window = _foregroundWindow();
+            var name = window == 0 ? null : _processNameOfWindow(window);
+            if (!RemoteClientProcesses.IsRemoteClient(name))
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (_disposed || _step != Idle || _publishedRevision() != revision)
+                {
+                    return;
+                }
+
+                _decided = Math.Max(_decided, revision);
+                _client = window;
+                Arm(FirstMoveDue, FirstMoveDelay);
+            }
+
+            _logger.LogInformation(
+                "Remote desktop client {App} is in front with no move scheduled; a move of the keyboard hook ahead of its " +
+                "hook is scheduled, and repeated while it stays in front.",
+                name);
+        }
+        catch (Exception)
+        {
+            // A window or process that went away mid-lookup, or a logger that failed: the next period looks again.
         }
     }
 

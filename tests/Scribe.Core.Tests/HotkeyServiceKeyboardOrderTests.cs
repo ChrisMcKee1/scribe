@@ -380,8 +380,9 @@ public partial class HotkeyServiceTests
         // Review round 3, item 2 (A7): the watchdog retried only a move that waited, and never looked at what is in front
         // again, so a sequence lost while a remote client stayed in front was not restored until the foreground changed.
         // Here the first move's tick reads the window in front while R is losing activation and Windows has none, which ends
-        // the sequence, and no notice follows (R regaining activation publishes no change). The watchdog's upkeep hands the
-        // window in front to the notice again while the sequence is idle, and the sequence starts over.
+        // the sequence, and no notice follows (R regaining activation publishes no change). The watchdog's upkeep runs the
+        // pool side's recovery poll, which finds R in front with nothing scheduled and starts the sequence over, on the
+        // upkeep's own thread and publishing no notice (review round 4, item 1).
         var inFront = ScriptedRemoteWindow;
         var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
         using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
@@ -397,14 +398,12 @@ public partial class HotkeyServiceTests
 
         var published = service.ForegroundNoticesPublishedForTests;
         service.MaintainKeyboardHookNow();
-        Assert.Equal(published + 1, service.ForegroundNoticesPublishedForTests);
-        Assert.True(
-            SpinWait.SpinUntil(() => clock.Timer.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
-            "The watchdog's upkeep did not restore the sequence.");
+        Assert.Equal(published, service.ForegroundNoticesPublishedForTests);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, clock.Timer.Due);
         clock.Timer.Fire();
         Assert.True(SpinWait.SpinUntil(() => service.KeyboardHookMoves == 1, HookTimeout), "The restored sequence moved nothing.");
 
-        // Mid-sequence, the upkeep publishes nothing: the next step stays as scheduled.
+        // Mid-sequence, the upkeep changes nothing: the next step stays as scheduled.
         Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, clock.Timer.Due);
         published = service.ForegroundNoticesPublishedForTests;
         service.MaintainKeyboardHookNow();
@@ -415,6 +414,155 @@ public partial class HotkeyServiceTests
     // Window handles of the test's own, never real windows, named by the scripted process lookup below.
     private const nint ScriptedRemoteWindow = 0x1111;
     private const nint ScriptedLocalWindow = 0x2222;
+
+    [Fact]
+    public void Start_keeps_a_sequence_a_real_notice_started_while_the_watchdog_s_upkeep_was_sampling_the_foreground()
+    {
+        // Review round 4, item 1 (A8), Astra's sequence: the upkeep found no step scheduled and sampled the local window in
+        // front; before it went on, the remote client came to the front and its real notice started the sequence. The upkeep
+        // then published its old sample as a newer notice, which cancelled the client's first move (and took the notice's
+        // one window slot, which could hide the real notice from the pool altogether). The upkeep now publishes nothing, and
+        // starts a sequence only if none was started and no notice was published while it looked. The notice is published as
+        // the WinEvent callback publishes it, with no lock of the service's: the upkeep holds the service's lock throughout.
+        var inFront = ScriptedLocalWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var sampled = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        Thread? upkeep = null;
+        using var service = ScriptedForegroundService(clock, () => SampleHeldOnThread(ref inFront, upkeep, sampled, resume));
+        service.Start();
+        var (notify, published, decided) = service.ForegroundNoticeForTests!.Value;
+        AwaitDecided(decided, published());
+        upkeep = new Thread(service.MaintainKeyboardHookNow) { IsBackground = true, Name = "test-watchdog-upkeep" };
+        upkeep.Start(); // assigned first, so the scripted foreground knows the upkeep's thread
+        Assert.True(sampled.Wait(HookTimeout), "The upkeep never sampled the window in front.");
+
+        Volatile.Write(ref inFront, ScriptedRemoteWindow);
+        var before = published();
+        notify(ScriptedRemoteWindow); // the client's real WinEvent
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.Timer.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The client's notice scheduled no move.");
+
+        resume.Set();
+        Assert.True(upkeep.Join(HookTimeout), "The upkeep never finished.");
+        Assert.Equal(before + 1, published()); // the client's notice, and nothing of the upkeep's
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, clock.Timer.Due);
+        clock.Timer.Fire();
+        Assert.True(SpinWait.SpinUntil(() => service.KeyboardHookMoves == 1, HookTimeout), "The client's first move was not made.");
+    }
+
+    [Fact]
+    public void Start_starts_nothing_for_a_client_the_upkeep_sampled_when_another_window_s_notice_came_while_it_looked()
+    {
+        // Review round 4, item 1 (A8): the upkeep sampled the remote client while its sequence was lost, and before it went on
+        // a local window came to the front and its real notice was decided. The upkeep's sample is older than that notice: it
+        // must start nothing. It used to publish the client as a newer notice, which scheduled a first move with the local
+        // window in front.
+        var inFront = ScriptedRemoteWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var sampled = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        Thread? upkeep = null;
+        using var service = ScriptedForegroundService(clock, () => SampleHeldOnThread(ref inFront, upkeep, sampled, resume));
+        service.Start();
+        var (notify, published, decided) = service.ForegroundNoticeForTests!.Value;
+        LoseTheSequence(clock, ref inFront);
+        upkeep = new Thread(service.MaintainKeyboardHookNow) { IsBackground = true, Name = "test-watchdog-upkeep" };
+        upkeep.Start(); // assigned first, so the scripted foreground knows the upkeep's thread
+        Assert.True(sampled.Wait(HookTimeout), "The upkeep never sampled the window in front.");
+
+        Volatile.Write(ref inFront, ScriptedLocalWindow);
+        var before = published();
+        notify(ScriptedLocalWindow); // the local window's real WinEvent, decided on the pool
+        AwaitDecided(decided, before + 1);
+
+        resume.Set();
+        Assert.True(upkeep.Join(HookTimeout), "The upkeep never finished.");
+        Assert.Equal(before + 1, published());
+        Assert.Null(clock.Timer.Due);
+    }
+
+    [Fact]
+    public void Start_makes_a_move_judged_on_the_newest_revision_whatever_the_upkeep_sampled_meanwhile()
+    {
+        // Review round 4, item 1 (A8): the upkeep sampled the remote client while its sequence was lost; meanwhile the client's
+        // own notice started it again and its first move was posted, judged on that notice's revision. The upkeep's
+        // publication of its sample then advanced the revision, and the hook thread dropped the move as judged on an older
+        // foreground. The upkeep now publishes nothing, so the move is made.
+        var inFront = ScriptedRemoteWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var sampled = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        using var atMove = new ManualResetEventSlim(false);
+        using var proceed = new ManualResetEventSlim(false);
+        Thread? upkeep = null;
+        using var service = ScriptedForegroundService(clock, () => SampleHeldOnThread(ref inFront, upkeep, sampled, resume));
+        service.Start();
+        var (notify, published, _) = service.ForegroundNoticeForTests!.Value;
+        LoseTheSequence(clock, ref inFront);
+        upkeep = new Thread(service.MaintainKeyboardHookNow) { IsBackground = true, Name = "test-watchdog-upkeep" };
+        upkeep.Start(); // assigned first, so the scripted foreground knows the upkeep's thread
+        Assert.True(sampled.Wait(HookTimeout), "The upkeep never sampled the window in front.");
+
+        var before = published();
+        notify(ScriptedRemoteWindow); // the client's own notice starts the sequence again
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.Timer.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The client's notice scheduled no move.");
+        service.BeforeKeyboardMoveForTests = () =>
+        {
+            atMove.Set();
+            proceed.Wait(HookTimeout);
+        };
+        clock.Timer.Fire(); // the first move, posted with the notice's revision
+        Assert.True(atMove.Wait(HookTimeout), "The hook thread never took the move.");
+
+        resume.Set();
+        Assert.True(upkeep.Join(HookTimeout), "The upkeep never finished.");
+        proceed.Set();
+        AwaitQuiet(service);
+
+        Assert.Equal(before + 1, published());
+        Assert.Equal(0, service.KeyboardHookMovesDropped);
+        Assert.Equal(1, service.KeyboardHookMoves);
+    }
+
+    // The remote client in front when the hook installed gets its first move scheduled; that move's tick then reads the
+    // window in front while the client is losing activation and Windows has none, which ends the sequence, and the client is
+    // in front again with no notice after it: the state the watchdog's upkeep recovers from.
+    private static void LoseTheSequence(KeyboardHookPrecedenceTests.OneTimerClock clock, ref nint inFront)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.MadeTimer?.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The remote client in front when the hook installed scheduled no move.");
+        Volatile.Write(ref inFront, 0);
+        clock.Timer.Fire();
+        Assert.Null(clock.Timer.Due);
+        Volatile.Write(ref inFront, ScriptedRemoteWindow);
+    }
+
+    // The scripted window in front, read as Windows would answer; on the upkeep's own thread, the first read is held after it
+    // is taken, as a sample the upkeep has made and not yet acted on.
+    private static nint SampleHeldOnThread(
+        ref nint inFront, Thread? upkeep, ManualResetEventSlim sampled, ManualResetEventSlim resume)
+    {
+        var window = Volatile.Read(ref inFront);
+        if (upkeep is not null && ReferenceEquals(Thread.CurrentThread, upkeep) && !sampled.IsSet)
+        {
+            sampled.Set();
+            resume.Wait(HookTimeout);
+        }
+
+        return window;
+    }
+
+    // The pool side has decided the notice published with the given revision (a notice for a local window schedules
+    // nothing, so the wait is on the decision itself).
+    private static void AwaitDecided(Func<long> decided, long revision) =>
+        Assert.True(
+            SpinWait.SpinUntil(() => decided() >= revision, HookTimeout),
+            $"The pool side never decided revision {revision} (decided: {decided()}).");
 
     [Fact]
     public void Start_drops_a_move_when_another_window_came_to_the_front_before_its_notice_reached_the_hook_thread()

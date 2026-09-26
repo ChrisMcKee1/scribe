@@ -14,6 +14,7 @@ public class KeyboardHookPrecedenceTests
     private const nint RemoteWindow = 0x1111;
     private const nint OtherRemoteWindow = 0x1122;
     private const nint LocalWindow = 0x2222;
+    private const nint OtherLocalWindow = 0x2233;
 
     [Fact]
     public void A_remote_client_in_front_gets_two_moves_after_it_registers_and_then_a_release()
@@ -618,17 +619,255 @@ public class KeyboardHookPrecedenceTests
     }
 
     [Fact]
-    public void The_sequence_says_whether_it_is_idle()
+    public void The_recovery_starts_the_sequence_for_a_remote_client_left_in_front_with_nothing_scheduled()
+    {
+        // Review round 3, item 2, as round 4 (item 1, A8) remade it: the watchdog's recovery poll finds the client in front
+        // with no step scheduled (its first move's tick read no window in front, as the client was losing activation, and no
+        // notice followed) and starts the sequence itself. It publishes nothing: the revision the moves are judged on stays.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Foreground = 0;
+        rig.Time.Timer.Fire();
+        Assert.Null(rig.Time.Timer.Due);
+        rig.Foreground = RemoteWindow;
+        var revision = rig.PublishedRevision;
+
+        rig.Recover();
+
+        Assert.Equal(revision, rig.PublishedRevision);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        Assert.StartsWith(
+            "Information: Remote desktop client msrdc is in front with no move scheduled; a move of the keyboard hook ahead " +
+            "of its hook is scheduled, and repeated while it stays in front.",
+            rig.Log.Entries[^1]);
+        rig.Time.Timer.Fire();
+        Assert.Equal([(revision, RemoteWindow)], rig.Moves);
+    }
+
+    [Theory]
+    [InlineData(0x2222)] // LocalWindow
+    [InlineData(0)]
+    public void The_recovery_starts_nothing_for_any_other_window_in_front_and_publishes_nothing(int window)
+    {
+        var rig = new Rig { Foreground = window };
+        rig.Notice(window);
+        var revision = rig.PublishedRevision;
+
+        rig.Recover();
+
+        Assert.Equal(revision, rig.PublishedRevision);
+        Assert.Null(rig.Time.Timer.Due);
+        Assert.Empty(rig.Log.Entries);
+    }
+
+    [Fact]
+    public void The_recovery_changes_nothing_while_a_step_is_scheduled()
     {
         var rig = new Rig { Foreground = RemoteWindow };
-        Assert.True(rig.Precedence.IsIdle);
-
         rig.Notice(RemoteWindow);
-        Assert.False(rig.Precedence.IsIdle);
+        rig.Time.Timer.Fire();
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+        var revision = rig.PublishedRevision;
+
+        rig.Recover();
+
+        Assert.Equal(revision, rig.PublishedRevision);
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+        Assert.Single(rig.Log.Entries);
+    }
+
+    [Fact]
+    public void A_real_notice_decided_while_the_recovery_samples_the_foreground_keeps_the_sequence_it_started()
+    {
+        // Review round 4, item 1 (A8), Astra's sequence: the recovery found no step scheduled and sampled the local window in
+        // front; before it went on, the client came to the front and its real notice started the sequence. The recovery's
+        // old sample must neither cancel that sequence nor advance the revision its moves are judged on.
+        var rig = new Rig { Foreground = LocalWindow };
+        rig.Notice(LocalWindow);
+        using var sampled = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        var recovery = new Thread(rig.Recover) { IsBackground = true };
+        rig.AfterForegroundRead = window =>
+        {
+            if (ReferenceEquals(Thread.CurrentThread, recovery) && !sampled.IsSet)
+            {
+                sampled.Set();
+                resume.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        recovery.Start();
+        Assert.True(sampled.Wait(TimeSpan.FromSeconds(10)), "The recovery never sampled the window in front.");
+
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+        var revision = rig.PublishedRevision;
+        resume.Set();
+        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+
+        Assert.Equal(revision, rig.PublishedRevision);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal([(revision, RemoteWindow)], rig.Moves);
+    }
+
+    [Fact]
+    public void A_notice_published_while_the_recovery_looks_the_client_up_decides_instead_of_it()
+    {
+        // The recovery sampled the client and is looking its process up when a local window comes to the front and its real
+        // notice is decided. At its commit the published revision has moved, so the recovery's sample is older than a
+        // notice, and it starts nothing.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Foreground = 0;
+        rig.Time.Timer.Fire();
+        rig.Foreground = RemoteWindow;
+        using var looking = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        var recovery = new Thread(rig.Recover) { IsBackground = true };
+        rig.BeforeLookup = window =>
+        {
+            if (ReferenceEquals(Thread.CurrentThread, recovery) && window == RemoteWindow && !looking.IsSet)
+            {
+                looking.Set();
+                resume.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        recovery.Start();
+        Assert.True(looking.Wait(TimeSpan.FromSeconds(10)), "The recovery never looked the client up.");
 
         rig.Foreground = LocalWindow;
         rig.Notice(LocalWindow);
-        Assert.True(rig.Precedence.IsIdle);
+        resume.Set();
+        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+
+        Assert.Null(rig.Time.Timer.Due);
+        Assert.Empty(rig.Moves);
+    }
+
+    [Fact]
+    public void An_older_notice_decided_after_the_recovery_cannot_cancel_the_sequence_it_started()
+    {
+        // A local window's notice was published before the recovery read the revision, and its handler is still looking the
+        // window up; meanwhile the client came to the front (its own notice not published yet). The recovery samples the
+        // client and starts the sequence: its sample is newer than that notice, so the notice, decided late, changes nothing.
+        var rig = new Rig { Foreground = LocalWindow };
+        rig.Notice(LocalWindow);
+        using var looking = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        var handler = new Thread(rig.Deliver) { IsBackground = true };
+        rig.BeforeLookup = window =>
+        {
+            if (ReferenceEquals(Thread.CurrentThread, handler) && !looking.IsSet)
+            {
+                looking.Set();
+                resume.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        rig.Publish(OtherLocalWindow);
+        handler.Start();
+        Assert.True(looking.Wait(TimeSpan.FromSeconds(10)), "The notice's handler never looked the window up.");
+
+        rig.Foreground = RemoteWindow;
+        rig.Recover();
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        resume.Set();
+        Assert.True(handler.Join(TimeSpan.FromSeconds(10)), "The notice's handler never finished.");
+
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move"], rig.Requests);
+    }
+
+    [Fact]
+    public void A_failing_lookup_in_the_recovery_never_escapes_and_starts_nothing()
+    {
+        var rig = new Rig { Foreground = RemoteWindow, ThrowFromQuery = true };
+
+        rig.Recover();
+
+        Assert.Null(rig.Time.Timer.Due);
+        Assert.Empty(rig.Requests);
+    }
+
+    [Fact]
+    public void A_notice_published_after_the_recovery_sampled_the_client_decides_instead_of_it()
+    {
+        // The recovery reads the revision before the window: here it has sampled the client (held right after the read) when
+        // a local window comes to the front and its notice is decided. Read the other way round, the revision would already
+        // include that notice, and the recovery would start a sequence for a client no longer in front.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Foreground = 0;
+        rig.Time.Timer.Fire();
+        rig.Foreground = RemoteWindow;
+        using var sampled = new ManualResetEventSlim(false);
+        using var resume = new ManualResetEventSlim(false);
+        var recovery = new Thread(rig.Recover) { IsBackground = true };
+        rig.AfterForegroundRead = _ =>
+        {
+            if (ReferenceEquals(Thread.CurrentThread, recovery) && !sampled.IsSet)
+            {
+                sampled.Set();
+                resume.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        recovery.Start();
+        Assert.True(sampled.Wait(TimeSpan.FromSeconds(10)), "The recovery never sampled the window in front.");
+
+        rig.Foreground = LocalWindow;
+        rig.Notice(LocalWindow);
+        resume.Set();
+        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+
+        Assert.Null(rig.Time.Timer.Due);
+    }
+
+    [Fact]
+    public void A_notice_decided_while_the_recovery_looks_keeps_the_step_its_sequence_reached()
+    {
+        // The client's own notice was published before the recovery read the revision, and is decided while the recovery
+        // looks the client up: its sequence starts, and its first move is made. The recovery's commit finds a step scheduled
+        // and leaves it: restarting from the first move would add moves the sequence did not ask for.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Foreground = 0;
+        rig.Time.Timer.Fire();
+        rig.Foreground = RemoteWindow;
+        using var handlerLooking = new ManualResetEventSlim(false);
+        using var handlerResume = new ManualResetEventSlim(false);
+        using var recoveryLooking = new ManualResetEventSlim(false);
+        using var recoveryResume = new ManualResetEventSlim(false);
+        var handler = new Thread(rig.Deliver) { IsBackground = true };
+        var recovery = new Thread(rig.Recover) { IsBackground = true };
+        rig.BeforeLookup = _ =>
+        {
+            if (ReferenceEquals(Thread.CurrentThread, handler) && !handlerLooking.IsSet)
+            {
+                handlerLooking.Set();
+                handlerResume.Wait(TimeSpan.FromSeconds(10));
+            }
+            else if (ReferenceEquals(Thread.CurrentThread, recovery) && !recoveryLooking.IsSet)
+            {
+                recoveryLooking.Set();
+                recoveryResume.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        rig.Publish(RemoteWindow);
+        handler.Start();
+        Assert.True(handlerLooking.Wait(TimeSpan.FromSeconds(10)), "The notice's handler never looked the client up.");
+        recovery.Start();
+        Assert.True(recoveryLooking.Wait(TimeSpan.FromSeconds(10)), "The recovery never looked the client up.");
+
+        handlerResume.Set();
+        Assert.True(handler.Join(TimeSpan.FromSeconds(10)), "The notice's handler never finished.");
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+        recoveryResume.Set();
+        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+        Assert.Equal(["move"], rig.Requests);
     }
 
     private sealed class Rig
@@ -639,13 +878,7 @@ public class KeyboardHookPrecedenceTests
         public Rig()
         {
             Precedence = new KeyboardHookPrecedence(
-                () =>
-                {
-                    BeforeForegroundRead?.Invoke();
-                    var window = Foreground;
-                    AfterForegroundRead?.Invoke(window);
-                    return window;
-                },
+                ReadForeground,
                 window =>
                 {
                     BeforeLookup?.Invoke(window);
@@ -659,6 +892,7 @@ public class KeyboardHookPrecedenceTests
                         RemoteWindow => "msrdc",
                         OtherRemoteWindow => "vmconnect",
                         LocalWindow => "notepad",
+                        OtherLocalWindow => "explorer",
                         _ => null,
                     };
                 },
@@ -674,6 +908,15 @@ public class KeyboardHookPrecedenceTests
         }
 
         public nint Foreground { get; set; }
+
+        // The window in front as the precedence reads it, for every step and for the recovery, with the test's hooks around it.
+        private nint ReadForeground()
+        {
+            BeforeForegroundRead?.Invoke();
+            var window = Foreground;
+            AfterForegroundRead?.Invoke(window);
+            return window;
+        }
 
         public bool ThrowFromQuery { get; set; }
 
@@ -715,6 +958,12 @@ public class KeyboardHookPrecedenceTests
             var (window, revision, changes) = _publication.Read();
             Precedence.OnForegroundChanged(window, revision, changes);
         }
+
+        /// <summary>How many notices have been published: the revision a handler reading now would be handed.</summary>
+        public long PublishedRevision => _publication.Revision;
+
+        /// <summary>The watchdog's recovery poll, run on this thread.</summary>
+        public void Recover() => Precedence.RecoverIfIdle();
 
         /// <summary>A foreground notice for <paramref name="window"/>, published and handled on this thread.</summary>
         public void Notice(nint window)

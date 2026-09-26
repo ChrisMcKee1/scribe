@@ -374,6 +374,15 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>How many foreground notices the current installation has published (its notice's revision); for tests.</summary>
     internal long ForegroundNoticesPublishedForTests => CurrentInstallation?.ForegroundNoticesPublished ?? 0;
 
+    /// <summary>
+    /// The current installation's foreground notice as the WinEvent callback reaches it, with no lock of the service's, and
+    /// its published and decided revisions; for tests that publish while the watchdog's upkeep holds the service's lock.
+    /// </summary>
+    internal (Action<nint> Notify, Func<long> Published, Func<long> Decided)? ForegroundNoticeForTests =>
+        CurrentInstallation is { } installation
+            ? (installation.NoticeForeground, () => installation.ForegroundNoticesPublished, () => installation.ForegroundNoticesDecided)
+            : null;
+
     /// <summary>Test seam, null in production: run on the hook thread as it takes a move ahead, before it judges it.</summary>
     internal Action? BeforeKeyboardMoveForTests { get; set; }
 
@@ -920,8 +929,8 @@ public sealed class HotkeyService : IHotkeyService
     // found already gone when it was released means Windows removed it, so for a while no registration may have seen the
     // keys, and the key state is no longer to be trusted: the hook is reinstalled with a fresh engine, as for one that
     // stopped receiving events. Replaced registrations whose grace is over are released (the moves' own sequence
-    // normally does it first), and while no step of the moves is scheduled, the window in front is handed to the pool side
-    // again, so a sequence that ended while a remote client stayed in front starts over. Callers hold _sync.
+    // normally does it first), and while no step of the moves is scheduled, the pool side looks at what is in front again,
+    // so a sequence that ended while a remote client stayed in front starts over. Callers hold _sync.
     private void MaintainKeyboardHookLocked()
     {
         if (_installation is not { } installation)
@@ -989,8 +998,9 @@ public sealed class HotkeyService : IHotkeyService
         // trigger could not deliver (a timer Windows refused, a posted message lost). Judged afresh on the hook thread.
         installation.RetryDeferredMoveAhead();
 
-        // And a sequence of moves that ended while a remote client stayed in front is started over (review round 3, item 2).
-        installation.RenoticeForegroundIfIdle();
+        // And a sequence of moves that ended while a remote client stayed in front is started over (review round 3, item 2), by
+        // the pool side's recovery poll, which publishes nothing (review round 4, item 1).
+        installation.RecoverMovesAheadIfIdle();
     }
 
     // A marker-tagged key-up for the unassigned VK 0xFF is inert for every app but still traverses
@@ -1560,18 +1570,17 @@ public sealed class HotkeyService : IHotkeyService
         public void NoticeForegroundNow() => _foregroundNotice.Notify(_service._foregroundWindow());
 
         /// <summary>
-        /// The watchdog, once a period, never the hook thread (the check takes the pool side's gate): while no step of the
-        /// moves ahead is scheduled, hands the window in front to the pool side again, as a foreground notice would (review
-        /// round 3, item 2). A sequence can end while a remote client stays in front, when a step reads the foreground at a
-        /// moment Windows has none (a window losing activation) and no notice follows, and nothing else would start it over
-        /// until the foreground changed. Mid-sequence it publishes nothing, so no move judged on the current revision is
-        /// dropped for it. Never waits for the hook thread.
+        /// The watchdog, once a period, never the hook thread (the pool side's recovery takes its gate and looks a process up):
+        /// restores a sequence of moves ahead that ended while a remote client stayed in front (review round 3, item 2). The
+        /// pool side owns the whole of it (<see cref="KeyboardHookPrecedence.RecoverIfIdle"/>), deciding under its gate and
+        /// publishing no foreground notice, so a real notice the watchdog's look overlaps keeps its decision, and a move
+        /// judged on the newest revision is still made (review round 4, item 1). Never waits for the hook thread.
         /// </summary>
-        public void RenoticeForegroundIfIdle()
+        public void RecoverMovesAheadIfIdle()
         {
-            if (!_engine.IsRetired && _precedence.IsIdle)
+            if (!_engine.IsRetired)
             {
-                _foregroundNotice.Notify(_service._foregroundWindow());
+                _precedence.RecoverIfIdle();
             }
         }
 
@@ -1584,6 +1593,9 @@ public sealed class HotkeyService : IHotkeyService
 
         /// <summary>Any thread, for tests: how many foreground notices this installation has published.</summary>
         public long ForegroundNoticesPublished => _foregroundNotice.PublishedRevision;
+
+        /// <summary>Any thread but the hook thread, for tests: the newest foreground revision the pool side has decided.</summary>
+        public long ForegroundNoticesDecided => _precedence.DecidedRevisionForTests;
 
         /// <summary>A move asked for by a test: made without the foreground check.</summary>
         public const long ForcedMove = -1;
