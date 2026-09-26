@@ -2,11 +2,21 @@ using System.Collections.Concurrent;
 using Scribe.Core.Libraries;
 using Scribe.Core.Settings;
 using Scribe.Core.Vocabulary;
+using HangGuard = Scribe.Core.Tests.Concurrency.HangGuard;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Scribe.Core.Tests.Libraries.Deciders;
 
 public sealed class WordPackSaveProtocolTests
 {
+    // A hang guard, never the verdict: work that was told to hold always reaches its hold (stream TR round 7).
+    private static readonly TimeSpan HoldBound = TimeSpan.FromSeconds(30);
+
+    // The pump's hang guard (stream TR round 7b): an owner thread that has run nothing for this long while its test still
+    // waits is stuck. Twice the hold guard, so that a save that never reaches its hold fails there first, naming the hold;
+    // this one ends a test stuck anywhere else, such as in an await of the save itself.
+    private static readonly TimeSpan PumpIdleBound = HoldBound + HoldBound;
+
     public static TheoryData<string> ValidationFailures => new()
     {
         "dictionary", "snippet", "hotkey", "duration", "provider", "word pack",
@@ -177,7 +187,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.EditPack();
             harness.Hold(hold);
             var saveTask = harness.SaveAsync();
@@ -214,7 +224,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.UseProductionSignature = true;
             if (operation == "restore")
             {
@@ -279,7 +289,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.EditPack();
             harness.Hold("complete");
             var save = harness.SaveAsync();
@@ -299,7 +309,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.EditPack();
             harness.Store.Status = LibrarySaveStatus.CommitUnknown;
             Assert.False((await harness.SaveAsync()).Success);
@@ -487,7 +497,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             var original = harness.Workspace.CreateLibrary();
             harness.Workspace.AddTerm(original, new TermValues("ga", "general availability"));
             var copy = harness.Workspace.Duplicate(original);
@@ -579,7 +589,7 @@ public sealed class WordPackSaveProtocolTests
         Assert.DoesNotContain("string.IsNullOrEmpty(row.Replacement)", wordPackEditor, StringComparison.Ordinal);
     }
 
-    private sealed class ProtocolHarness
+    private sealed class ProtocolHarness : IDisposable
     {
         private readonly int _owner;
         private readonly Dictionary<string, Hold> _holds = new(StringComparer.OrdinalIgnoreCase);
@@ -591,6 +601,7 @@ public sealed class WordPackSaveProtocolTests
             Workspace = DeciderFixture.Workspace(Catalog);
             Store = new TraceStore(this, Catalog);
             Protocol = new WordPackSaveProtocol(Store);
+            PumpContext.DisposeAtExit(this);
         }
 
         public LibraryCatalog Catalog { get; set; }
@@ -675,17 +686,31 @@ public sealed class WordPackSaveProtocolTests
 
         public void Hold(string name) => _holds[name] = new Hold();
 
+        // Fails the test, naming the hold, when the work never reaches it. Going on after a timeout, as a 5 s wait whose
+        // result was ignored once did, would judge a save that had not got there yet, as if it had.
         public async Task WaitForHoldAsync(string name)
         {
             if (_holds.TryGetValue(name, out var hold))
             {
-                await Task.WhenAny(hold.Hit.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+                Assert.True(await HangGuard.Completes(hold.Hit.Task, HoldBound), $"The work never reached its \"{name}\" hold.");
             }
         }
 
         public void Release(string name)
         {
             if (_holds.TryGetValue(name, out var hold))
+            {
+                hold.Release.TrySetResult();
+            }
+        }
+
+        // Opens every hold, so work parked at one, or the pool thread the catalog load blocks there, never outlives its test.
+        // Called by a test that declares the harness with using, on its way out, and by the pump the harness was made under,
+        // when it ends, which covers a test the pump gave up on while it was still pending (stream TR round 7c). Opening a
+        // hold twice does nothing.
+        public void Dispose()
+        {
+            foreach (var hold in _holds.Values)
             {
                 hold.Release.TrySetResult();
             }
@@ -807,33 +832,74 @@ public sealed class WordPackSaveProtocolTests
     private sealed class PumpContext : SynchronizationContext
     {
         private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = [];
+        private readonly ConcurrentQueue<IDisposable> _atExit = new();
 
+        // Has what a test sets up on the owner thread disposed when the pump ends, however it ends. The test's own using
+        // cannot cover the pump giving up on it: its task is still pending then, and never reaches its way out.
+        public static void DisposeAtExit(IDisposable owned)
+        {
+            if (Current is PumpContext pump)
+            {
+                pump._atExit.Enqueue(owned);
+            }
+        }
+
+        // Runs the owner's posted work until the test's task completes. A test whose owner thread has run nothing for
+        // PumpIdleBound while the test is still waiting fails, instead of pumping for ever and stopping the run. On every way
+        // out, that one included, the pump itself lets go of what the test left held, closes its queue, so nothing posted
+        // later waits in it for a pump that has stopped, and gives the owner thread its own context back (stream TR round 7c).
         public static async Task RunAsync(Func<int, Task> action)
         {
             var previous = Current;
             var context = new PumpContext();
             SetSynchronizationContext(context);
-            var owner = Environment.CurrentManagedThreadId;
-            var task = action(owner);
-            _ = task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
-            while (!task.IsCompleted || context._queue.Count > 0)
+            Task task;
+            try
             {
-                if (context._queue.TryTake(out var work, 50))
+                var owner = Environment.CurrentManagedThreadId;
+                task = action(owner);
+                _ = task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
+                var lastRan = Stopwatch.GetTimestamp();
+                while (!task.IsCompleted || context._queue.Count > 0)
                 {
-                    SetSynchronizationContext(context);
-                    work.Callback(work.State);
+                    if (context._queue.TryTake(out var work, 50))
+                    {
+                        SetSynchronizationContext(context);
+                        work.Callback(work.State);
+                        lastRan = Stopwatch.GetTimestamp();
+                    }
+                    else if (!task.IsCompleted && Stopwatch.GetElapsedTime(lastRan) > PumpIdleBound)
+                    {
+                        Assert.Fail(
+                            $"The test never finished: nothing ran on its owner thread for {PumpIdleBound.TotalSeconds:0} s " +
+                            "while it was still waiting.");
+                    }
                 }
             }
+            finally
+            {
+                while (context._atExit.TryDequeue(out var owned))
+                {
+                    owned.Dispose();
+                }
 
-            SetSynchronizationContext(previous);
+                context._queue.CompleteAdding();
+                SetSynchronizationContext(previous);
+            }
+
             await task;
         }
 
         public override void Post(SendOrPostCallback d, object? state)
         {
-            if (!_queue.IsAddingCompleted)
+            try
             {
                 _queue.Add((d, state));
+            }
+            catch (InvalidOperationException)
+            {
+                // The pump has ended with its test, so this work has nowhere to run. Post is called from whatever thread
+                // completed the awaited task, often the pool's, where a throw would end the test host (stream TR round 7).
             }
         }
     }

@@ -131,6 +131,10 @@ public sealed class CleanupTestConnectionTests
             throw new OperationCanceledException(ct);
         }));
         var svc = harness.Service;
+
+        // The check below that disposal still waits races nothing: the drain keeps production's 5 s, on a clock only the
+        // test moves, which it never does (stream TR round 7). Every gate this test shuts opens in the finally.
+        harness.DrainOnManualClock();
         try
         {
             var test = svc.TestAsync(Custom());
