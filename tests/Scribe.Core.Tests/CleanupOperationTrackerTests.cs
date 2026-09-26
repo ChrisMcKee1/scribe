@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Scribe.Core.Cleanup;
+using Xunit.Abstractions;
 
 namespace Scribe.Core.Tests;
 
@@ -7,7 +9,7 @@ namespace Scribe.Core.Tests;
 /// The admission counter disposal waits on. An operation is either admitted before close, and so
 /// waited for, or refused, and so never touches anything shared.
 /// </summary>
-public sealed class CleanupOperationTrackerTests
+public sealed class CleanupOperationTrackerTests(ITestOutputHelper output)
 {
     // A hang guard, never the verdict: every wait below is for something certain to happen.
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
@@ -97,19 +99,37 @@ public sealed class CleanupOperationTrackerTests
         // barrier (an admission check made outside the lock was caught 20 of 20 times with these racers, 17 of 20 with a
         // thread for each round, and 20 of 20 on the pool).
         //
-        // A failure on either side ends the race cleanly (stream TR round 5, A7). The racers start inside the try, and its
-        // finally calls the race off and joins every racer that started before the barriers and the token source are
-        // disposed: a racer that reached a disposed one would throw on a thread of its own, which ends the test host and
-        // hides the failure. Anything else a racer throws is recorded, calls the race off, and is reported here.
+        // A failure on either side ends the race cleanly (stream TR round 5, A7, and round 6, A11), because an exception on a
+        // racer's own thread ends the test host and hides the failure. The racers start inside the try, each tracked only
+        // once its start returned, so the finally never joins a thread that was never started. The finally calls the race
+        // off and joins every racer, all within one bound of calling it off, and disposes the barriers and the token source
+        // only once every racer has ended: a racer still running may yet reach one of them, so otherwise they are left to
+        // process exit, on a test that has already failed. Anything a racer throws is recorded and calls the race off, and
+        // calling it off never throws.
         const int Workers = 8;
         const int Rounds = 50;
         var trackers = new CleanupOperationTracker[Rounds];
         var admitted = new CleanupOperationTracker.Lease?[Rounds, Workers];
         var racerFailures = new ConcurrentQueue<Exception>();
-        var racers = new List<Thread>(Workers);
-        using var start = new Barrier(Workers + 1);
-        using var finish = new Barrier(Workers + 1);
-        using var abandon = new CancellationTokenSource();
+        var racers = new List<Thread>(Workers); // room for every racer, so tracking one once it started cannot fail
+        var start = new Barrier(Workers + 1);
+        var finish = new Barrier(Workers + 1);
+        var abandon = new CancellationTokenSource();
+
+        void CallOff()
+        {
+            try
+            {
+                abandon.Cancel();
+            }
+            catch (Exception ex)
+            {
+                // It is never disposed while a racer may run, and nothing registered on it throws; recorded all the same,
+                // never rethrown.
+                racerFailures.Enqueue(ex);
+            }
+        }
+
         try
         {
             for (var i = 0; i < Workers; i++)
@@ -133,15 +153,15 @@ public sealed class CleanupOperationTrackerTests
                     catch (Exception ex)
                     {
                         racerFailures.Enqueue(ex);
-                        abandon.Cancel(); // recorded first, so whoever sees the race called off also sees why
+                        CallOff(); // recorded first, so whoever sees the race called off also sees why
                     }
                 })
                 {
                     IsBackground = true,
                     Name = "test-admission-racer",
                 };
-                racers.Add(thread);
                 thread.Start();
+                racers.Add(thread);
             }
 
             for (var round = 0; round < Rounds; round++)
@@ -173,13 +193,29 @@ public sealed class CleanupOperationTrackerTests
         }
         finally
         {
-            abandon.Cancel();
-            foreach (var racer in racers)
+            CallOff();
+            var calledOff = Stopwatch.GetTimestamp();
+            var everyRacerEnded = true;
+            for (var i = 0; i < racers.Count; i++)
             {
-                if (!racer.Join(Bound))
+                var left = Bound - Stopwatch.GetElapsedTime(calledOff);
+                if (!racers[i].Join(left > TimeSpan.Zero ? left : TimeSpan.Zero))
                 {
-                    racerFailures.Enqueue(new TimeoutException($"Racer {racer.ManagedThreadId} never ended."));
+                    everyRacerEnded = false;
+                    var stillRunning = $"Racer {i} was still running {Bound.TotalSeconds:0} s after the race was called off; "
+                        + "the barriers and the token source are left to process exit.";
+                    racerFailures.Enqueue(new TimeoutException(stillRunning));
+
+                    // Also written out: when the test already failed on its own thread, that failure is the one reported.
+                    output.WriteLine(stillRunning);
                 }
+            }
+
+            if (everyRacerEnded)
+            {
+                start.Dispose();
+                finish.Dispose();
+                abandon.Dispose();
             }
         }
 
