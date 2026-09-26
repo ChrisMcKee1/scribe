@@ -98,7 +98,6 @@ public partial class App : Application
         // Before any window exists, the already-running notice below included.
         TitleBarButtonNames.Apply(Resources);
         ButtonLabelContrast.Apply(Resources);
-        TextScaleControlStyles.Apply(Resources);
         _textScale = new TextScaleService(Dispatcher);
         _textScale.Start();
 

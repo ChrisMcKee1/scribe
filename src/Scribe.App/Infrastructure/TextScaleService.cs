@@ -96,5 +96,6 @@ public sealed class TextScaleService : IDisposable
         resources["TitleBarThemeFontSize"] = TextScale.Apply(12, factor);
         resources["InfoBarTitleThemeFontSize"] = TextScale.Apply(14, factor);
         resources["InfoBarMessageThemeFontSize"] = TextScale.Apply(14, factor);
+        TextScaleControlStyles.Apply(resources, factor);
     }
 }

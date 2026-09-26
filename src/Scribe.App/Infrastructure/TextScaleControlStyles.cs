@@ -7,9 +7,13 @@ namespace Scribe.App.Infrastructure;
 
 internal static class TextScaleControlStyles
 {
-    public static void Apply(ResourceDictionary applicationResources)
+    public static void Apply(ResourceDictionary applicationResources, double factor)
     {
         ArgumentNullException.ThrowIfNull(applicationResources);
+        if (factor <= 1)
+        {
+            return;
+        }
 
         Replace<DataGrid>(applicationResources);
         Replace<DataGridCell>(applicationResources);

@@ -33,6 +33,11 @@ public partial class SettingsWindow
     private void TextScale_Changed(object? sender, EventArgs e)
     {
         ApplyWindowFit(GetWindowMonitor(), center: false);
+        if (Content is FrameworkElement rootContent)
+        {
+            ApplyRailWidth(rootContent.ActualWidth);
+        }
+
         UpdateProfileLayout();
         UpdateUsageMetricLayout();
         ApplyWordPackLayout();

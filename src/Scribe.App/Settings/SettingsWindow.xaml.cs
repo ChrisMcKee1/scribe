@@ -332,7 +332,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         InitializeNavigation();
         if (Content is FrameworkElement rootContent)
         {
-            rootContent.SizeChanged += (_, _) => ApplyWordPackLayout();
+            rootContent.SizeChanged += (_, _) =>
+            {
+                ApplyRailWidth(rootContent.ActualWidth);
+                ApplyWordPackLayout();
+            };
         }
 
         InitializeFooterAndClose();
@@ -449,6 +453,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 $"{stranded}. Your settings and history have been carried across to the paths below.";
             AboutDataPathWarning.Visibility = Visibility.Visible;
         }
+    }
+
+    private void ApplyRailWidth(double windowWidth)
+    {
+        if (windowWidth <= 0)
+        {
+            return;
+        }
+
+        const double baseWidth = 232;
+        const double minimumContent = 708;
+        var scaled = baseWidth * TextScaleService.CurrentFactor;
+        var max = Math.Max(baseWidth, windowWidth - minimumContent);
+        RailColumn.Width = new GridLength(Math.Min(scaled, max));
     }
 
     // --- Updates card (General) --------------------------------------------------------------
