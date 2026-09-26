@@ -40,6 +40,38 @@ public class HistoryRowFormatTests
         Assert.Equal("Not recorded", HistoryRowFormat.CleanupTime(null));
     }
 
+    [Fact]
+    public void Range_line_appears_only_at_the_recent_limit()
+    {
+        Assert.Null(HistoryRowFormat.RangeLine(199, 200));
+        Assert.Equal("Showing your latest 200 dictations.", HistoryRowFormat.RangeLine(200, 200));
+    }
+
+    [Fact]
+    public void Empty_state_uses_the_current_shortcut_action()
+    {
+        Assert.Equal(
+            "No dictations yet. Hold Page Down in any app and speak.",
+            HistoryRowFormat.EmptyState("Hold", "Page Down"));
+        Assert.Equal(
+            "No dictations yet. Press Page Down in any app and speak.",
+            HistoryRowFormat.EmptyState("Press", "Page Down"));
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false, false)]
+    [InlineData(true, false, false, false, true)]
+    [InlineData(true, true, true, true, true)]
+    public void Toolbar_state_depends_on_rows_and_selection(
+        bool hasRows,
+        bool hasSelection,
+        bool copy,
+        bool delete,
+        bool deleteAll)
+    {
+        Assert.Equal(new HistoryToolbarState(copy, delete, deleteAll), HistoryRowFormat.Toolbar(hasRows, hasSelection));
+    }
+
     [Theory]
     [InlineData(412, "412 ms")]
     [InlineData(3412, "3,412 ms")]

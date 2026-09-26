@@ -223,11 +223,35 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Usage_period_state_keeps_old_period_while_loading_or_failed()
     {
+        Assert.Equal("Counting your dictations...", UsagePeriodState.Describe(null, UsagePeriod.Last30Days, false).StatusText);
+        Assert.Equal("Usage isn't available right now.", UsagePeriodState.Describe(null, UsagePeriod.Last30Days, true).StatusText);
         Assert.Equal("Showing Last 7 days. Loading Last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);
         Assert.Equal("All kept history", UsagePeriodState.Label(UsagePeriod.AllKeptHistory));
         var failed = UsagePeriodState.Describe(UsagePeriod.Last90Days, null, true);
         Assert.Equal("Showing Last 90 days. Usage isn't available right now.", failed.StatusText);
         Assert.True(failed.ShowRetry);
+    }
+
+    [Fact]
+    public void Usage_trend_axis_labels_match_granularity()
+    {
+        var daily = UsagePeriodState.AxisLabels(
+            [
+                new(new DateOnly(2026, 9, 1), 1, 10),
+                new(new DateOnly(2026, 9, 2), 2, 20),
+            ],
+            UsageAnalyzer.TrendGranularity.Daily);
+        Assert.Equal(["Sep 1", "Sep 2", "Sep 2"], daily);
+
+        var weekly = UsagePeriodState.AxisLabels(
+            [
+                new(new DateOnly(2026, 9, 1), 1, 10),
+                new(new DateOnly(2026, 9, 8), 2, 20),
+                new(new DateOnly(2026, 9, 15), 3, 30),
+            ],
+            UsageAnalyzer.TrendGranularity.Weekly);
+        Assert.Equal(["Week of Sep 1", "Week of Sep 8", "Week of Sep 15"], weekly);
+        Assert.Equal(["Sep 1", "Sep 1", "Sep 1"], UsagePeriodState.AxisLabels([new(new DateOnly(2026, 9, 1), 1, 10)], UsageAnalyzer.TrendGranularity.Daily));
     }
 
     [Fact]
@@ -247,6 +271,9 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.False(insight.IsEnabled);
         Assert.Equal("AI cleanup isn't ready yet.", insight.DisabledReason);
         Assert.Contains("GitHub Copilot", insight.Description, StringComparison.Ordinal);
+        Assert.Contains("Foundry Local on this PC", UsageInsightAvailability.Describe(true, true, CleanupProvider.FoundryLocal).Description, StringComparison.Ordinal);
+        Assert.Contains("your AI service", UsageInsightAvailability.Describe(true, true, CleanupProvider.OpenAiCompatible).Description, StringComparison.Ordinal);
+        Assert.Equal("Couldn't get a summary. Try again.", UsageSummaryText.Exception);
     }
 
     [Fact]

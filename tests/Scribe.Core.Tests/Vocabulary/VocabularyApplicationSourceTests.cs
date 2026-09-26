@@ -383,7 +383,21 @@ public sealed class VocabularyApplicationSourceTests
         return source[start..end];
     }
 
-    private static string Read(params string[] parts) => File.ReadAllText(Path.Combine([Root(), .. parts]));
+    private static string Read(params string[] parts)
+    {
+        if (parts is ["src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"])
+        {
+            var folder = Path.Combine(Root(), "src", "Scribe.App", "Settings");
+            return string.Join(
+                '\n',
+                Directory.GetFiles(folder, "SettingsWindow*.cs")
+                    .OrderBy(path => Path.GetFileName(path).Equals("SettingsWindow.xaml.cs", StringComparison.Ordinal) ? 0 : 1)
+                    .ThenBy(path => path, StringComparer.Ordinal)
+                    .Select(File.ReadAllText));
+        }
+
+        return File.ReadAllText(Path.Combine([Root(), .. parts]));
+    }
 
     private static string Root()
     {

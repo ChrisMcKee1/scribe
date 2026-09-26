@@ -54,13 +54,15 @@ public sealed class UsageReportTests
         {
             Entry(1, Now.AddHours(-1), "one", audioMilliseconds: 1000, targetApp: "WINWORD.exe"),
             Entry(2, Now.AddHours(-2), "two", audioMilliseconds: 2500, targetApp: "ms-teams"),
+            Entry(3, Now.AddHours(-3), "three", audioMilliseconds: 1200, targetApp: "Teams"),
         };
 
         var result = Build(history, periodDays: 7);
 
         Assert.Equal(TimeSpan.FromMilliseconds(2500), result.Snapshot.LongestDictation);
         Assert.Contains(result.Snapshot.TopApps, app => app.Name == "Word");
-        Assert.Contains(result.Snapshot.TopApps, app => app.Name == "Teams");
+        Assert.Contains(result.Snapshot.TopApps, app => app is { Name: "Teams", Dictations: 2 });
+        Assert.Equal(2, result.Snapshot.TopApps.Count);
     }
 
     [Fact]

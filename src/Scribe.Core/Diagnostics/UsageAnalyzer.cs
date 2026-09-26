@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
-using Scribe.Core.Settings;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -97,12 +97,10 @@ public static partial class UsageAnalyzer
 
         var apps = selected
             .GroupBy(
-                entry => string.IsNullOrWhiteSpace(entry.TargetApp) ? "Unknown app" : entry.TargetApp.Trim(),
+                entry => string.IsNullOrWhiteSpace(entry.TargetApp) ? "Unknown app" : AppDisplayName.For(entry.TargetApp.Trim()),
                 StringComparer.OrdinalIgnoreCase)
             .Select(group => new AppUsage(
-                string.IsNullOrWhiteSpace(group.First().TargetApp)
-                    ? "Unknown app"
-                    : AppDisplayName.For(group.OrderBy(entry => entry.TargetApp, StringComparer.Ordinal).First().TargetApp!.Trim()),
+                group.Key,
                 group.Count(),
                 group.Sum(entry => wordCounts[entry.Id])))
             .OrderByDescending(app => app.Dictations)

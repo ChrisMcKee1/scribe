@@ -14,7 +14,10 @@ public static class HistoryRowFormat
 {
     /// <summary>Shown when a value does not apply, matching the target-app column's convention.</summary>
     public const string NotApplicable = "n/a";
+    /// <summary>Shown when AI cleanup did not leave a duration for this entry.</summary>
     public const string NotRecorded = "Not recorded";
+
+    public const int RecentLimit = 200;
 
     /// <summary>
     /// Spoken length, in seconds to one decimal. Sub-100 ms clips would render as "0.0 s", so they
@@ -42,8 +45,22 @@ public static class HistoryRowFormat
     /// </param>
     public static string Latency(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? $"{value:N0} ms" : NotApplicable;
+    /// <summary>AI cleanup duration for the History column, in seconds, or the not-recorded state.</summary>
     public static string CleanupTime(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? Seconds(value) : NotRecorded;
+
+    public static string? RangeLine(int shownCount, int limit) =>
+        shownCount >= limit ? $"Showing your latest {limit:N0} dictations." : null;
+
+    public static string EmptyState(string verb, string shortcut) =>
+        $"No dictations yet. {verb} {shortcut} in any app and speak.";
+
+    public const string NoSearchMatches = "No shown dictations match your search.";
+
+    public const string ClearSearch = "Clear search";
+
+    public static HistoryToolbarState Toolbar(bool hasRows, bool hasSelection) =>
+        new(CanCopy: hasSelection, CanDelete: hasSelection, CanDeleteAll: hasRows);
 
     public static string Details(int audioMilliseconds, int decodeMilliseconds, int? cleanupMilliseconds)
     {
@@ -66,3 +83,5 @@ public static class HistoryRowFormat
         return seconds < 0.1 ? "0.1 s" : $"{seconds:0.0} s";
     }
 }
+
+public sealed record HistoryToolbarState(bool CanCopy, bool CanDelete, bool CanDeleteAll);

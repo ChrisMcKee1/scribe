@@ -69,6 +69,17 @@ public class AiContentReportTests
     }
 
     [Fact]
+    public void Report_explanation_matches_attribution()
+    {
+        Assert.Equal(
+            "The report contains the AI result, the AI service and model, and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.",
+            AiContentReport.Explanation(hasAttribution: true));
+        Assert.Equal(
+            "The report contains the AI result and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.",
+            AiContentReport.Explanation(hasAttribution: false));
+    }
+
+    [Fact]
     public void The_mailto_escapes_the_body_so_a_client_cannot_truncate_it()
     {
         // An unescaped newline or ampersand ends the URI early, and the failure is silent: the user

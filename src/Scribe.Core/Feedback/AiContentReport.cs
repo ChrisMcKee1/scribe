@@ -33,6 +33,11 @@ public static class AiContentReport
     /// <summary>Where reports go. Not a GitHub URL: Store certification rejected that explicitly.</summary>
     public const string SupportAddress = "support@mckeesolutions.ai";
     public const string UnrecordedAttribution = "The AI service and model for this dictation weren't recorded.";
+    public const string ExplanationWithAttribution = "The report contains the AI result, the AI service and model, and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.";
+    public const string ExplanationWithoutAttribution = "The report contains the AI result and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.";
+
+    public static string Explanation(bool hasAttribution) =>
+        hasAttribution ? ExplanationWithAttribution : ExplanationWithoutAttribution;
 
     /// <summary>
     /// Composes the report body.
