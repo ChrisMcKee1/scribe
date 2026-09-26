@@ -87,36 +87,76 @@ public sealed class CleanupOperationTrackerTests
     [Fact]
     public async Task Racing_admission_against_close_never_loses_an_operation()
     {
-        for (var round = 0; round < 50; round++)
+        // Eight racers on threads of their own, as every other barrier race in this project uses, made once and met at a
+        // barrier to start each round and another to finish it. On the thread pool a round could start only once eight
+        // pool threads were free at the same time, and the racers already at the barrier held theirs until it did, so on
+        // a loaded machine a round waited for as long as the pool took to grow, with every other test's pool work queued
+        // behind it (stream TR round 4: a 37 s stall in a full run). Made once, not for each round: a thread's start is
+        // slow to be scheduled on a loaded machine, and one just started meets Close less often than one parked at the
+        // barrier (an admission check made outside the lock was caught 20 of 20 times with these racers, 17 of 20 with a
+        // thread for each round, and 20 of 20 on the pool).
+        const int Workers = 8;
+        const int Rounds = 50;
+        var trackers = new CleanupOperationTracker[Rounds];
+        var admitted = new CleanupOperationTracker.Lease?[Rounds, Workers];
+        using var start = new Barrier(Workers + 1);
+        using var finish = new Barrier(Workers + 1);
+        using var abandon = new CancellationTokenSource();
+        var racers = Enumerable.Range(0, Workers).Select(i => new Thread(() =>
         {
-            var tracker = new CleanupOperationTracker();
-            const int Workers = 8;
-            using var start = new Barrier(Workers + 1);
-            var admitted = new CleanupOperationTracker.Lease?[Workers];
-
-            var workers = Enumerable.Range(0, Workers).Select(i => Task.Run(() =>
+            try
             {
-                start.SignalAndWait();
-                admitted[i] = tracker.TryEnter();
-            })).ToArray();
-
-            start.SignalAndWait();
-            var drained = tracker.Close();
-            await Task.WhenAll(workers);
-
-            // Whatever was admitted is still outstanding, so the drain cannot have completed unless
-            // nothing was admitted at all.
-            var outstanding = admitted.Count(lease => lease is not null);
-            Assert.Equal(outstanding, tracker.ActiveCount);
-            Assert.Equal(outstanding == 0, drained.IsCompleted);
-            Assert.Null(tracker.TryEnter());
-
-            foreach (var lease in admitted)
-            {
-                lease?.Dispose();
+                for (var round = 0; round < Rounds; round++)
+                {
+                    start.SignalAndWait(abandon.Token);
+                    admitted[round, i] = trackers[round].TryEnter();
+                    finish.SignalAndWait(abandon.Token);
+                }
             }
-
-            await drained.WaitAsync(Bound);
+            catch (OperationCanceledException)
+            {
+                // The test failed and let the racers go.
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "test-admission-racer",
+        }).ToArray();
+        foreach (var racer in racers)
+        {
+            racer.Start();
         }
+
+        try
+        {
+            for (var round = 0; round < Rounds; round++)
+            {
+                var tracker = trackers[round] = new CleanupOperationTracker();
+                Assert.True(start.SignalAndWait(Bound), "The racers never reached the start.");
+                var drained = tracker.Close();
+                Assert.True(finish.SignalAndWait(Bound), "A racer never finished its round.");
+
+                // Whatever was admitted is still outstanding, so the drain cannot have completed unless
+                // nothing was admitted at all.
+                var leases = Enumerable.Range(0, Workers).Select(i => admitted[round, i]).ToArray();
+                var outstanding = leases.Count(lease => lease is not null);
+                Assert.Equal(outstanding, tracker.ActiveCount);
+                Assert.Equal(outstanding == 0, drained.IsCompleted);
+                Assert.Null(tracker.TryEnter());
+
+                foreach (var lease in leases)
+                {
+                    lease?.Dispose();
+                }
+
+                await drained.WaitAsync(Bound);
+            }
+        }
+        finally
+        {
+            abandon.Cancel();
+        }
+
+        Assert.All(racers, racer => Assert.True(racer.Join(Bound), "A racer never ended."));
     }
 }
