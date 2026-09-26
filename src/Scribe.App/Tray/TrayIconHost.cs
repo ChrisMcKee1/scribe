@@ -376,53 +376,107 @@ internal sealed class TrayIconHost : IDisposable
         item.Template = hasSubmenu ? _submenuHeaderTemplate : _menuItemTemplate;
     }
 
+    // Adapted from WPF-UI 4.3.0's SubmenuItemTemplateKey and SubmenuHeaderTemplateKey (Controls/Menu/MenuItem.xaml): the
+    // same margins, highlight, pressed and disabled resources, flyout and passive scroll viewer, with ONE change: WPF-UI
+    // gives a checkable item a check box in its own leading column and every other item no column at all, so labels
+    // started at two different x positions. Here every item and header reserves one leading column, which shows a
+    // check mark only while the item is checked. IsCheckable stays on the item, so UI Automation still reports it.
     private static ControlTemplate CreateMenuItemTemplate(bool hasSubmenu)
     {
-        var arrowColumn = hasSubmenu ? "<ColumnDefinition Width=\"20\"/>" : string.Empty;
-        var arrow = hasSubmenu
-            ? "<TextBlock Grid.Column=\"2\" Text=\"›\" VerticalAlignment=\"Center\" HorizontalAlignment=\"Center\" Foreground=\"{DynamicResource TextFillColorSecondaryBrush}\"/>"
+        var chevronColumn = hasSubmenu ? "<ColumnDefinition Width=\"Auto\"/>" : string.Empty;
+        var chevron = hasSubmenu
+            ? """
+                            <ui:SymbolIcon x:Name="Chevron" Grid.Column="2" Margin="0,3,0,0" VerticalAlignment="Center"
+                                           FontSize="{TemplateBinding FontSize}" Symbol="ChevronRight20"/>
+"""
             : string.Empty;
         var popup = hasSubmenu
             ? """
-                        <Popup x:Name="PART_Popup" AllowsTransparency="True" Focusable="False" IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" Placement="Right" PopupAnimation="Fade">
-                            <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="4">
-                                <ScrollViewer CanContentScroll="True">
-                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
-                                </ScrollViewer>
-                            </Border>
-                        </Popup>
+                <Popup x:Name="Popup" Grid.Row="1" AllowsTransparency="True" Focusable="False"
+                       IsOpen="{TemplateBinding IsSubmenuOpen}" Placement="Right"
+                       PlacementTarget="{Binding ElementName=MenuItemContent}" PopupAnimation="None" VerticalOffset="-20">
+                    <Grid>
+                        <Border x:Name="SubmenuBorder" Margin="12,10,12,30" Padding="0,3,0,3"
+                                Background="{DynamicResource FlyoutBackground}" BorderBrush="{DynamicResource FlyoutBorderBrush}"
+                                BorderThickness="1" CornerRadius="8" SnapsToDevicePixels="True">
+                            <ui:PassiveScrollViewer CanContentScroll="True" Style="{DynamicResource UiMenuItemScrollViewer}">
+                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                            </ui:PassiveScrollViewer>
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="20" Direction="270" Opacity="0.135" ShadowDepth="10" Color="#202020"/>
+                            </Border.Effect>
+                        </Border>
+                    </Grid>
+                </Popup>
+"""
+            : string.Empty;
+        var disabledChevron = hasSubmenu
+            ? """
+                        <Setter TargetName="Chevron" Property="Foreground">
+                            <Setter.Value>
+                                <SolidColorBrush Color="{DynamicResource TextFillColorDisabled}"/>
+                            </Setter.Value>
+                        </Setter>
 """
             : string.Empty;
         var xaml = $$"""
             <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                              TargetType="{x:Type MenuItem}">
-                <Border x:Name="Border" Margin="4,1,4,1" Background="Transparent" CornerRadius="4">
-                    <Grid Margin="8,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="24"/>
-                            <ColumnDefinition Width="*"/>{{arrowColumn}}
-                        </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="CheckGlyph" Text="✓" Visibility="Collapsed" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                        <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" Margin="4,0,16,0" VerticalAlignment="Center"/>{{arrow}}{{popup}}
-                    </Grid>
-                </Border>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Border x:Name="Border" Grid.Row="1" Margin="4,1,4,1" Background="Transparent" CornerRadius="4">
+                        <Grid x:Name="MenuItemContent" Margin="8,6,8,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="26"/>
+                                <ColumnDefinition Width="*"/>{{chevronColumn}}
+                            </Grid.ColumnDefinitions>
+                            <ui:SymbolIcon x:Name="CheckGlyph" Grid.Column="0" Symbol="Checkmark20" FontSize="16"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed"/>
+                            <ContentPresenter x:Name="Header" Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True"
+                                              Margin="0,0,16,0" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>{{chevron}}
+                        </Grid>
+                    </Border>{{popup}}
+                </Grid>
                 <ControlTemplate.Triggers>
                     <Trigger Property="IsHighlighted" Value="True">
-                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
                     </Trigger>
-                    <Trigger Property="IsEnabled" Value="False">
-                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorDisabledBrush}"/>
-                    </Trigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="IsMouseOver" Value="True"/>
+                            <Condition Property="IsPressed" Value="False"/>
+                        </MultiTrigger.Conditions>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
+                    </MultiTrigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="IsMouseOver" Value="True"/>
+                            <Condition Property="IsPressed" Value="True"/>
+                        </MultiTrigger.Conditions>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundPressed}"/>
+                        <Setter TargetName="Header" Property="TextElement.Foreground" Value="{DynamicResource MenuBarItemTextForegroundPressed}"/>
+                    </MultiTrigger>
                     <Trigger Property="IsChecked" Value="True">
                         <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible"/>
+                    </Trigger>
+                    <Trigger Property="IsEnabled" Value="False">
+                        <Setter Property="Foreground">
+                            <Setter.Value>
+                                <SolidColorBrush Color="{DynamicResource TextFillColorDisabled}"/>
+                            </Setter.Value>
+                        </Setter>{{disabledChevron}}
                     </Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate>
 """;
         return (ControlTemplate)XamlReader.Parse(xaml);
     }
-
     public void SetState(DictationState state) => Dispatch(() =>
     {
         _state = state;

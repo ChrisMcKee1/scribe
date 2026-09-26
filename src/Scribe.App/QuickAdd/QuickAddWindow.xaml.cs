@@ -688,13 +688,15 @@ public partial class QuickAddWindow : FluentWindow
 
     private void ScheduleStatusAnnouncement(string? text)
     {
+        // Cleared first, so an input emptied before the delay never announces the correction it no longer shows.
+        _announcementTimer.Stop();
+        _pendingAnnouncementText = null;
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
         _pendingAnnouncementText = text;
-        _announcementTimer.Stop();
         _announcementTimer.Start();
     }
 

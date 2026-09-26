@@ -193,7 +193,7 @@
                             <ItemsControl x:Name="WordsList"
                                           Focusable="False"
                                           IsTabStop="False"
-                                          KeyboardNavigation.TabNavigation="Once"
+                                          KeyboardNavigation.TabNavigation="Continue"
                                           AutomationProperties.Name="Words in this dictation"
                                           AutomationProperties.HelpText="Arrow keys move between words. Space selects a word. Shift and an arrow key select several."
                                           PreviewKeyDown="WordsList_PreviewKeyDown"
