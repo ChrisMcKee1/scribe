@@ -3,45 +3,36 @@ using Scribe.Core.Libraries;
 namespace Scribe.Core.Settings;
 
 /// <summary>
-/// Owns the Word packs Save sequence so the window only supplies the settings transaction.
+/// Holds the exact word-pack change set a Save captured and exposes separate dispatcher and worker steps.
 /// </summary>
 /// <remarks>
-/// The important bit is the captured <see cref="LibraryChangeSet"/>. It is held across prepare, the settings commit,
-/// completion and any unknown outcome, then passed back to <see cref="LibraryWorkspace.MarkSaved(LibraryChangeSet, LibraryCatalog)"/>
-/// only when the library Save stands.
+/// <see cref="LibraryWorkspace"/> is not thread-safe. This type touches it only in the dispatcher methods
+/// (<see cref="Capture"/>, <see cref="MarkSaved"/>, <see cref="Rebase"/> and <see cref="CaptureReferenceRepairs"/>).
+/// Store I/O is isolated in static worker helpers that use immutable change sets and preparations.
 /// </remarks>
 public sealed class WordPackSaveSession
 {
-    private readonly LibraryWorkspace _workspace;
-    private readonly ILibraryCatalogStore _store;
-    private readonly LibraryChangeSet _changes;
-    private readonly PreparedLibrarySave _prepared;
-    private bool _completed;
-
-    private WordPackSaveSession(
-        LibraryWorkspace workspace,
-        ILibraryCatalogStore store,
-        LibraryChangeSet changes,
-        PreparedLibrarySave prepared)
+    private WordPackSaveSession(LibraryWorkspace workspace, LibraryChangeSet changes)
     {
-        _workspace = workspace;
-        _store = store;
-        _changes = changes;
-        _prepared = prepared;
+        Workspace = workspace;
+        Changes = changes;
     }
 
-    /// <summary>The payload to commit with the settings document.</summary>
-    public LibrarySavePayload Payload => _prepared.Payload;
+    public LibraryWorkspace Workspace { get; }
 
-    /// <summary>The change set this session is holding until the Save settles.</summary>
-    public LibraryChangeSet Changes => _changes;
+    public LibraryChangeSet Changes { get; }
 
-    /// <summary>Capture and prepare a library Save, or return the reason a Save cannot start.</summary>
-    public static WordPackSaveBeginResult Begin(LibraryWorkspace workspace, ILibraryCatalogStore store)
+    public PreparedLibrarySave? Prepared { get; private set; }
+
+    public long PreparedGeneration => Prepared?.Generation ?? Changes.BaseGeneration + 1;
+
+    public LibrarySavePayload Payload =>
+        Prepared?.Payload ?? throw new InvalidOperationException("The word pack Save was not prepared.");
+
+    /// <summary>Dispatcher step: validate and capture the workspace without any file I/O.</summary>
+    public static WordPackSaveBeginResult Capture(LibraryWorkspace workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        ArgumentNullException.ThrowIfNull(store);
-
         if (!workspace.HasUnsavedChanges)
         {
             return WordPackSaveBeginResult.NoChanges();
@@ -53,157 +44,86 @@ public sealed class WordPackSaveSession
             return WordPackSaveBeginResult.ValidationFailed(capture.Issues);
         }
 
-        var prepare = store.PrepareSave(capture.ChangeSet);
-        return prepare.Status switch
-        {
-            LibraryPrepareStatus.Prepared when prepare.Save is not null =>
-                WordPackSaveBeginResult.Prepared(new WordPackSaveSession(workspace, store, capture.ChangeSet, prepare.Save)),
-            LibraryPrepareStatus.NothingToSave => WordPackSaveBeginResult.NoChanges(),
-            LibraryPrepareStatus.Stale => RebaseAndReport(workspace, store, prepare),
-            _ => WordPackSaveBeginResult.NotPrepared(prepare),
-        };
+        return WordPackSaveBeginResult.Captured(new WordPackSaveSession(workspace, capture.ChangeSet));
     }
 
-    /// <summary>
-    /// Complete the prepared library Save after the settings transaction has either committed the payload or failed.
-    /// </summary>
-    /// <param name="settingsCommitted">Whether the settings transaction returned successfully.</param>
-    /// <param name="commitFollowUp">
-    /// Commits a reference-repair payload after a standing Save. It must use the same settings transaction path as the
-    /// user's Save, but without recapturing the user's later edits.
-    /// </param>
-    public WordPackSaveCompletion Complete(bool settingsCommitted, Action<LibrarySavePayload> commitFollowUp)
+    /// <summary>Worker step: prepare immutable files and manifest.</summary>
+    public static LibraryPrepareResult Prepare(ILibraryCatalogStore store, LibraryChangeSet changes)
     {
-        ArgumentNullException.ThrowIfNull(commitFollowUp);
-        if (_completed)
-        {
-            throw new InvalidOperationException("This word pack Save session was already completed.");
-        }
-
-        _completed = true;
-        var outcome = _store.CompleteSave(_prepared);
-        if (!settingsCommitted)
-        {
-            return WordPackSaveCompletion.FromOutcome(outcome);
-        }
-
-        switch (outcome.Status)
-        {
-            case LibrarySaveStatus.Applied:
-            case LibrarySaveStatus.AppliedAwaitingRelease:
-                var catalog = _store.LoadCatalog();
-                _workspace.MarkSaved(_changes, catalog);
-                return CompleteReferenceRepairs(commitFollowUp, outcome);
-
-            case LibrarySaveStatus.Superseded:
-                _workspace.Rebase(_store.LoadCatalog());
-                return WordPackSaveCompletion.FromOutcome(outcome);
-
-            case LibrarySaveStatus.NotCommitted:
-            case LibrarySaveStatus.CommitUnknown:
-            default:
-                return WordPackSaveCompletion.FromOutcome(outcome);
-        }
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(changes);
+        return store.PrepareSave(changes);
     }
 
-    private static WordPackSaveBeginResult RebaseAndReport(
-        LibraryWorkspace workspace,
-        ILibraryCatalogStore store,
-        LibraryPrepareResult prepare)
+    /// <summary>Dispatcher step: attach a successful preparation to the captured change set.</summary>
+    public void PreparedBy(LibraryPrepareResult result)
     {
-        workspace.Rebase(store.LoadCatalog());
-        return WordPackSaveBeginResult.NotPrepared(prepare);
-    }
-
-    private WordPackSaveCompletion CompleteReferenceRepairs(
-        Action<LibrarySavePayload> commitFollowUp,
-        LibrarySaveOutcome original)
-    {
-        while (_workspace.HasPendingReferenceRepairs)
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.Status != LibraryPrepareStatus.Prepared || result.Save is null)
         {
-            var capture = _workspace.CaptureReferenceRepairs();
-            if (capture.Issues.Count > 0 || capture.ChangeSet is null)
-            {
-                return WordPackSaveCompletion.RepairPending(original, capture.Issues);
-            }
-
-            var prepare = _store.PrepareSave(capture.ChangeSet);
-            if (prepare.Status != LibraryPrepareStatus.Prepared || prepare.Save is null)
-            {
-                return WordPackSaveCompletion.RepairPending(original, prepare);
-            }
-
-            var committed = false;
-            LibrarySaveOutcome? repairOutcome = null;
-            try
-            {
-                commitFollowUp(prepare.Save.Payload);
-                committed = true;
-            }
-            finally
-            {
-                repairOutcome = _store.CompleteSave(prepare.Save);
-            }
-
-            if (committed && repairOutcome.Status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
-            {
-                _workspace.MarkSaved(capture.ChangeSet, _store.LoadCatalog());
-            }
-            else
-            {
-                return WordPackSaveCompletion.RepairPending(original, repairOutcome);
-            }
+            throw new InvalidOperationException("Only a prepared library Save can be attached.");
         }
 
-        return WordPackSaveCompletion.FromOutcome(original);
+        Prepared = result.Save;
+    }
+
+    /// <summary>Worker step: complete exactly one successful preparation.</summary>
+    public static LibrarySaveOutcome Complete(ILibraryCatalogStore store, PreparedLibrarySave prepared)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(prepared);
+        return store.CompleteSave(prepared);
+    }
+
+    /// <summary>Worker step: load the latest catalog.</summary>
+    public static LibraryCatalog LoadCatalog(ILibraryCatalogStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        return store.LoadCatalog();
+    }
+
+    /// <summary>Dispatcher step: mark this exact captured change set saved against a committed catalog.</summary>
+    public void MarkSaved(LibraryCatalog catalog) => Workspace.MarkSaved(Changes, catalog);
+
+    /// <summary>Dispatcher step: rebase the live draft onto a committed catalog.</summary>
+    public void Rebase(LibraryCatalog catalog) => Workspace.Rebase(catalog);
+
+    /// <summary>Dispatcher step: capture the follow-up reference repairs only.</summary>
+    public WordPackSaveBeginResult CaptureReferenceRepairs()
+    {
+        if (!Workspace.HasPendingReferenceRepairs)
+        {
+            return WordPackSaveBeginResult.NoChanges();
+        }
+
+        var capture = Workspace.CaptureReferenceRepairs();
+        if (capture.Issues.Count > 0 || capture.ChangeSet is null)
+        {
+            return WordPackSaveBeginResult.ValidationFailed(capture.Issues);
+        }
+
+        return WordPackSaveBeginResult.Captured(new WordPackSaveSession(Workspace, capture.ChangeSet));
     }
 }
 
 public sealed record WordPackSaveBeginResult(
     WordPackSaveBeginStatus Status,
     WordPackSaveSession? Session,
-    LibraryPrepareResult? PrepareResult,
     IReadOnlyList<LibraryValidationIssue> Issues)
 {
-    public static WordPackSaveBeginResult Prepared(WordPackSaveSession session) =>
-        new(WordPackSaveBeginStatus.Prepared, session, null, []);
+    public static WordPackSaveBeginResult Captured(WordPackSaveSession session) =>
+        new(WordPackSaveBeginStatus.Captured, session, []);
 
     public static WordPackSaveBeginResult NoChanges() =>
-        new(WordPackSaveBeginStatus.NoChanges, null, null, []);
+        new(WordPackSaveBeginStatus.NoChanges, null, []);
 
     public static WordPackSaveBeginResult ValidationFailed(IReadOnlyList<LibraryValidationIssue> issues) =>
-        new(WordPackSaveBeginStatus.ValidationFailed, null, null, issues);
-
-    public static WordPackSaveBeginResult NotPrepared(LibraryPrepareResult result) =>
-        new(WordPackSaveBeginStatus.NotPrepared, null, result, []);
+        new(WordPackSaveBeginStatus.ValidationFailed, null, issues);
 }
 
 public enum WordPackSaveBeginStatus
 {
-    Prepared,
+    Captured,
     NoChanges,
     ValidationFailed,
-    NotPrepared,
-}
-
-public sealed record WordPackSaveCompletion(
-    LibrarySaveOutcome Outcome,
-    bool ReferenceRepairPending,
-    LibraryPrepareResult? RepairPrepareResult = null,
-    LibrarySaveOutcome? RepairOutcome = null,
-    IReadOnlyList<LibraryValidationIssue>? RepairIssues = null)
-{
-    public static WordPackSaveCompletion FromOutcome(LibrarySaveOutcome outcome) =>
-        new(outcome, ReferenceRepairPending: false);
-
-    public static WordPackSaveCompletion RepairPending(LibrarySaveOutcome original, LibraryPrepareResult prepare) =>
-        new(original, ReferenceRepairPending: true, RepairPrepareResult: prepare);
-
-    public static WordPackSaveCompletion RepairPending(LibrarySaveOutcome original, LibrarySaveOutcome repairOutcome) =>
-        new(original, ReferenceRepairPending: true, RepairOutcome: repairOutcome);
-
-    public static WordPackSaveCompletion RepairPending(
-        LibrarySaveOutcome original,
-        IReadOnlyList<LibraryValidationIssue> issues) =>
-        new(original, ReferenceRepairPending: true, RepairIssues: issues);
 }

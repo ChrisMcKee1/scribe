@@ -134,18 +134,20 @@ public sealed class VocabularyApplicationSourceTests
         // The draft is taken after the settings document is stored and after the word pack journal is completed. New
         // awaits in this region must not store another draft or close the window before the acknowledgement compares it.
         var signatures = save.IndexOf("var dictionarySignature = DictionarySignature();", StringComparison.Ordinal);
+        var capture = save.IndexOf("var savedDraftSignature = SaveDraftSignature();", StringComparison.Ordinal);
         var read = save.IndexOf("_externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);", StringComparison.Ordinal);
         var store = save.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
         var apply = save.IndexOf("var applying = _applySettings(_settings);", StringComparison.Ordinal);
         var watch = save.IndexOf(
-            "var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);",
+            "var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftForAcknowledgement);",
             StringComparison.Ordinal);
         var awaited = save.IndexOf("var outcome = await acknowledgement.CompleteAsync();", StringComparison.Ordinal);
         Assert.True(
-            signatures > 0 && signatures < read && read < store && store < apply && apply < watch && watch < awaited,
-            "The Save does not take its draft between storing it and awaiting its generation.");
-        Assert.DoesNotContain("_settingsRepository.", save[store..watch].Replace("_settingsRepository.SaveBundle(", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
-        Assert.Contains("wordPackSave.Complete(settingsCommitted: true", save[store..watch], StringComparison.Ordinal);
+            signatures > 0 && signatures < capture && capture < read && read < store && store < apply && apply < watch && watch < awaited,
+            "The Save does not capture its draft before the first await that can follow validation.");
+        Assert.DoesNotMatch(@"\bawait\b", save[signatures..capture]);
+        Assert.Contains("return savedDraftSignature;", save[capture..watch], StringComparison.Ordinal);
+        Assert.Contains("return SaveDraftSignature();", save[capture..watch], StringComparison.Ordinal);
 
         // A change while waiting is reported and the Save returns false; only an unchanged draft in use returns true.
         var tail = save[awaited..];

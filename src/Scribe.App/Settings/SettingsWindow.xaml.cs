@@ -104,6 +104,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private LibrarySearchResult? _librarySearchResult;
     private LibraryTermSortOrder _libraryTermSortOrder = LibraryTermSortOrder.SavedOrder;
     private string? _selectedLibraryId;
+    private WordPackSaveSession? _pendingWordPackSettlement;
+    private long _pendingWordPackGeneration;
+    private bool _settlingWordPackSave;
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
@@ -268,6 +271,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
         _libraryVocabulary = libraryVocabulary;
+        _libraryVocabulary.Changed += OnLibraryVocabularyChanged;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -5258,6 +5262,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
+        _libraryVocabulary.Changed -= OnLibraryVocabularyChanged;
         if (_updates is not null)
         {
             _updates.UpdateReady -= OnUpdateReady;
@@ -5528,33 +5533,84 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _ => "Couldn't save your changes. Your edits are still here.",
         };
 
-    private bool ApplyWordPackSaveOutcome(WordPackSaveCompletion completion)
+    private void OnLibraryVocabularyChanged(long generation) =>
+        Dispatcher.BeginInvoke(new Action(async () => await TrySettlePendingWordPackSaveAsync()));
+
+    private async Task TrySettlePendingWordPackSaveAsync()
     {
-        if (completion.ReferenceRepairPending)
+        if (_pendingWordPackSettlement is null || _settlingWordPackSave || _closed)
         {
-            ShowInfo(
-                "Saved, but a word pack reference still needs to be updated.",
-                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
         }
 
-        switch (completion.Outcome.Status)
+        _settlingWordPackSave = true;
+        try
+        {
+            var catalog = await Task.Run(() => WordPackSaveSession.LoadCatalog(_libraryStore));
+            if (_pendingWordPackSettlement is null)
+            {
+                return;
+            }
+
+            if (catalog.Generation == _pendingWordPackGeneration)
+            {
+                _pendingWordPackSettlement.MarkSaved(catalog);
+                _pendingWordPackSettlement = null;
+                _pendingWordPackGeneration = 0;
+                RefreshWordPackList();
+                RefreshWordPackRowsFromWorkspace();
+                RefreshDictionaryStatus();
+            }
+            else if (catalog.Generation > _pendingWordPackGeneration)
+            {
+                _pendingWordPackSettlement = null;
+                _pendingWordPackGeneration = 0;
+                ShowInfo(
+                    "Your word pack changes weren't saved. Your edits are still here.",
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not settle an unknown word pack save.");
+        }
+        finally
+        {
+            _settlingWordPackSave = false;
+        }
+    }
+
+    private async Task<bool> ApplyWordPackSaveOutcomeAsync(WordPackSaveSession session, LibrarySaveOutcome outcome, Exception? transactionError)
+    {
+        switch (outcome.Status)
         {
             case LibrarySaveStatus.Applied:
-                RefreshWordPackRowsFromWorkspace();
-                return true;
             case LibrarySaveStatus.AppliedAwaitingRelease:
+                session.MarkSaved(await Task.Run(() => WordPackSaveSession.LoadCatalog(_libraryStore)));
                 RefreshWordPackRowsFromWorkspace();
-                ShowInfo(
-                    "Saved. Close the word pack file in the other app so Scribe can finish.",
-                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
-                return true;
+                if (transactionError is not null)
+                {
+                    ShowInfo("Saved, but Settings hit an error after the word pack save. Your word pack changes are saved.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                    return false;
+                }
+
+                if (outcome.Status == LibrarySaveStatus.AppliedAwaitingRelease)
+                {
+                    ShowInfo(
+                        "Saved. Close the word pack file in the other app so Scribe can finish.",
+                        Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                }
+
+                return await SavePendingReferenceRepairsAsync(session);
             case LibrarySaveStatus.CommitUnknown:
+                _pendingWordPackSettlement = session;
+                _pendingWordPackGeneration = session.PreparedGeneration;
                 ShowInfo(
                     "Scribe couldn't confirm that your word pack changes were saved. It will finish saving them, and your edits stay here until it has.",
                     Wpf.Ui.Controls.InfoBarSeverity.Warning);
                 return false;
             case LibrarySaveStatus.Superseded:
-                RefreshWordPackRowsFromWorkspace();
+                session.Rebase(await Task.Run(() => WordPackSaveSession.LoadCatalog(_libraryStore)));
                 ShowInfo(
                     "Your word pack changes weren't saved. Your edits are still here.",
                     Wpf.Ui.Controls.InfoBarSeverity.Warning);
@@ -5565,6 +5621,55 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     Wpf.Ui.Controls.InfoBarSeverity.Error);
                 return false;
         }
+    }
+
+    private async Task<bool> SavePendingReferenceRepairsAsync(WordPackSaveSession completed)
+    {
+        while (completed.Workspace.HasPendingReferenceRepairs)
+        {
+            var begin = completed.CaptureReferenceRepairs();
+            if (begin.Status != WordPackSaveBeginStatus.Captured || begin.Session is null)
+            {
+                ShowInfo("Saved, but a word pack reference still needs to be updated.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                return false;
+            }
+
+            var repair = begin.Session;
+            var prepare = await Task.Run(() => WordPackSaveSession.Prepare(_libraryStore, repair.Changes));
+            if (prepare.Status != LibraryPrepareStatus.Prepared || prepare.Save is null)
+            {
+                ShowInfo("Saved, but a word pack reference still needs to be updated.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                return false;
+            }
+
+            repair.PreparedBy(prepare);
+            LibrarySaveOutcome repairOutcome;
+            try
+            {
+                CommitWordPackRepair(repair.Payload);
+            }
+            finally
+            {
+                repairOutcome = await Task.Run(() => WordPackSaveSession.Complete(_libraryStore, prepare.Save!));
+            }
+
+            if (repairOutcome.Status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
+            {
+                repair.MarkSaved(await Task.Run(() => WordPackSaveSession.LoadCatalog(_libraryStore)));
+                continue;
+            }
+
+            if (repairOutcome.Status == LibrarySaveStatus.CommitUnknown)
+            {
+                _pendingWordPackSettlement = repair;
+                _pendingWordPackGeneration = repair.PreparedGeneration;
+            }
+
+            ShowInfo("Saved, but a word pack reference still needs to be updated.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return false;
+        }
+
+        return true;
     }
 
     private void RefreshWordPackRowsFromWorkspace()
@@ -5614,6 +5719,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        if (_pendingWordPackSettlement is not null)
+        {
+            ShowInfo(
+                "Scribe is still finishing an earlier save. Try again in a moment.",
+                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return false;
+        }
+
         // Commit any in-progress grid edit first so validation sees the latest input.
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
         LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
@@ -5622,24 +5735,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Pre-existing bad data in an untouched section (e.g. a duplicate entry that was loaded
         // from disk) must never block saving a change made on a different page. A section whose
         // rows have not loaded yet has no changes by definition and is passed as null.
-        WordPackSaveSession? wordPackSave = null;
-        if (_wordPackWorkspace?.HasUnsavedChanges == true)
-        {
-            var begin = await Task.Run(() => WordPackSaveSession.Begin(_wordPackWorkspace, _libraryStore));
-            switch (begin.Status)
-            {
-                case WordPackSaveBeginStatus.Prepared:
-                    wordPackSave = begin.Session;
-                    break;
-                case WordPackSaveBeginStatus.ValidationFailed:
-                    ShowThemedMessage("Couldn't save your changes", "Fix the highlighted word pack problem, then save again.");
-                    return false;
-                case WordPackSaveBeginStatus.NotPrepared:
-                    ShowThemedMessage("Couldn't save your changes", WordPackPrepareMessage(begin.PrepareResult));
-                    return false;
-            }
-        }
-
         var dictionarySignature = DictionarySignature();
         var snippetSignature = SnippetSignature();
         var dictionaryDirty = _dictionaryLoad.HasChanges(dictionarySignature);
@@ -5743,6 +5838,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        WordPackSaveSession? wordPackSave = null;
+        if (_wordPackWorkspace?.HasUnsavedChanges == true)
+        {
+            var begin = WordPackSaveSession.Capture(_wordPackWorkspace);
+            switch (begin.Status)
+            {
+                case WordPackSaveBeginStatus.Captured:
+                    wordPackSave = begin.Session;
+                    break;
+                case WordPackSaveBeginStatus.ValidationFailed:
+                    ShowThemedMessage("Couldn't save your changes", "Fix the highlighted word pack problem, then save again.");
+                    return false;
+            }
+        }
+
+        var savedDraftSignature = SaveDraftSignature();
+
         try
         {
             // A tray change still waiting on the open list is newer than what the picker shows, so it is what is saved.
@@ -5838,33 +5950,66 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // one, its stored value is kept and _settings takes it, so the window shows what is stored rather than a value
             // the settings no longer hold.
             var intents = new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision);
-            try
-            {
-                _settingsRepository.SaveBundle(
-                    _settings,
-                    entries,
-                    snippets,
-                    intents,
-                    wordPackSave?.Payload);
-            }
-            catch
-            {
-                if (wordPackSave is not null)
-                {
-                    await Task.Run(() => wordPackSave.Complete(settingsCommitted: false, CommitWordPackRepair));
-                }
-
-                throw;
-            }
-
+            LibraryPrepareResult? preparedWordPacks = null;
             if (wordPackSave is not null)
             {
-                var wordPackOutcome = await Task.Run(() => wordPackSave.Complete(settingsCommitted: true, CommitWordPackRepair));
-                if (!ApplyWordPackSaveOutcome(wordPackOutcome))
+                preparedWordPacks = await Task.Run(() => WordPackSaveSession.Prepare(_libraryStore, wordPackSave.Changes));
+                if (preparedWordPacks.Status != LibraryPrepareStatus.Prepared || preparedWordPacks.Save is null)
+                {
+                    if (preparedWordPacks.Status == LibraryPrepareStatus.Stale)
+                    {
+                        wordPackSave.Rebase(await Task.Run(() => WordPackSaveSession.LoadCatalog(_libraryStore)));
+                    }
+
+                    ShowThemedMessage("Couldn't save your changes", WordPackPrepareMessage(preparedWordPacks));
+                    return false;
+                }
+
+                wordPackSave.PreparedBy(preparedWordPacks);
+            }
+
+            Exception? transactionError = null;
+            LibrarySaveOutcome? wordPackOutcome = null;
+            try
+            {
+                try
+                {
+                    _settingsRepository.SaveBundle(
+                        _settings,
+                        entries,
+                        snippets,
+                        intents,
+                        wordPackSave?.Payload);
+                }
+                catch (Exception ex)
+                {
+                    transactionError = ex;
+                    if (wordPackSave is null)
+                    {
+                        throw;
+                    }
+                }
+            }
+            finally
+            {
+                if (preparedWordPacks?.Save is not null)
+                {
+                    wordPackOutcome = await Task.Run(() => WordPackSaveSession.Complete(_libraryStore, preparedWordPacks.Save));
+                }
+            }
+
+            if (wordPackSave is not null && wordPackOutcome is not null)
+            {
+                if (!await ApplyWordPackSaveOutcomeAsync(wordPackSave, wordPackOutcome, transactionError))
                 {
                     return false;
                 }
             }
+            else if (transactionError is not null)
+            {
+                throw transactionError;
+            }
+
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
@@ -5914,7 +6059,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // is taken now, when nothing since the controls were read could have taken an edit, and compared once the
             // answer is in: an edit made while waiting is not in what was stored, so the Save is not reported complete and
             // Save and close does not close over it. That edit stays in the window, unsaved, for the next Save.
-            var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);
+            var firstDraftRead = true;
+            string SaveDraftForAcknowledgement()
+            {
+                if (firstDraftRead)
+                {
+                    firstDraftRead = false;
+                    return savedDraftSignature;
+                }
+
+                return SaveDraftSignature();
+            }
+
+            var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftForAcknowledgement);
             var outcome = await acknowledgement.CompleteAsync();
             if (_closed)
             {
@@ -6005,6 +6162,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
         draft.Part("profiles").Profiles(BuildProfiles());
         draft.Part("libraries").LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds);
+        draft.Part("word-pack-workspace")
+            .Number(_wordPackWorkspace?.Revision)
+            .Flag(_wordPackWorkspace?.HasUnsavedChanges);
         draft.Part("rows")
             .Flag(_dictionaryLoad.HasChanges(DictionarySignature()))
             .Flag(_snippetLoad.HasChanges(SnippetSignature()))

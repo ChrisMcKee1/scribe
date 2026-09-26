@@ -13,13 +13,16 @@ public sealed class WordPackSaveSessionTests
         workspace.SetEnabled(DeciderFixture.AzureId, true);
         var store = new FakeStore(catalog, LibrarySaveStatus.Applied);
 
-        var begin = WordPackSaveSession.Begin(workspace, store);
-        Assert.Equal(WordPackSaveBeginStatus.Prepared, begin.Status);
+        var begin = WordPackSaveSession.Capture(workspace);
+        Assert.Equal(WordPackSaveBeginStatus.Captured, begin.Status);
         Assert.True(workspace.HasUnsavedChanges);
 
-        var completion = begin.Session!.Complete(settingsCommitted: true, _ => { });
+        var prepare = WordPackSaveSession.Prepare(store, begin.Session!.Changes);
+        begin.Session.PreparedBy(prepare);
+        var outcome = WordPackSaveSession.Complete(store, prepare.Save!);
+        begin.Session.MarkSaved(store.LoadCatalog());
 
-        Assert.Equal(LibrarySaveStatus.Applied, completion.Outcome.Status);
+        Assert.Equal(LibrarySaveStatus.Applied, outcome.Status);
         Assert.False(workspace.HasUnsavedChanges);
         Assert.Single(store.Prepared);
         Assert.Single(store.Completed);
@@ -35,10 +38,12 @@ public sealed class WordPackSaveSessionTests
         workspace.SetEnabled(DeciderFixture.AzureId, true);
         var store = new FakeStore(catalog, status);
 
-        var begin = WordPackSaveSession.Begin(workspace, store);
-        var completion = begin.Session!.Complete(settingsCommitted: true, _ => { });
+        var begin = WordPackSaveSession.Capture(workspace);
+        var prepare = WordPackSaveSession.Prepare(store, begin.Session!.Changes);
+        begin.Session.PreparedBy(prepare);
+        var outcome = WordPackSaveSession.Complete(store, prepare.Save!);
 
-        Assert.Equal(status, completion.Outcome.Status);
+        Assert.Equal(status, outcome.Status);
         Assert.True(workspace.HasUnsavedChanges);
     }
 
@@ -54,9 +59,11 @@ public sealed class WordPackSaveSessionTests
             PrepareStatus = LibraryPrepareStatus.Stale,
         };
 
-        var begin = WordPackSaveSession.Begin(workspace, store);
+        var begin = WordPackSaveSession.Capture(workspace);
+        var prepare = WordPackSaveSession.Prepare(store, begin.Session!.Changes);
+        begin.Session.Rebase(store.LoadCatalog());
 
-        Assert.Equal(WordPackSaveBeginStatus.NotPrepared, begin.Status);
+        Assert.Equal(LibraryPrepareStatus.Stale, prepare.Status);
         Assert.False(workspace.HasUnsavedChanges);
         Assert.Equal(4, workspace.Draft.BaseGeneration);
     }
