@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Interop;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Settings;
 
 namespace Scribe.App.Onboarding;
@@ -85,3 +86,4 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 }
+
