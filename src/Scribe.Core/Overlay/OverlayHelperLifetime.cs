@@ -122,10 +122,11 @@ public readonly record struct OverlayHelperLoss(long? LivedMs, long? CooldownMs)
 /// may launch the helper), and never replayed, so relaunching for it later would show nothing.
 /// </para>
 /// <para>
-/// An outcome keeps the helper in use while it is on screen (its hold and fade out, passed with its command):
-/// the idle deadline never falls before it has hidden, and a pause release that arrives while it is on screen
-/// waits for it, then commits if nothing vetoed it meanwhile. It is timed from when it was actually written,
-/// which after a launch is when the launch completed, and one that could not be shown keeps nothing.
+/// An outcome keeps the helper in use while it is on screen (its hold and fade out): the idle deadline never falls
+/// before it has hidden, and a pause release that arrives while it is on screen waits for it, then commits if nothing
+/// vetoed it meanwhile. It is timed from when its write to the helper returned (<see cref="OnShown"/>), after a launch
+/// too: a pipe write can take up to the client's timeout and still succeed, and the overlay starts its own hold only
+/// once it has the line. One whose write failed, or that was never written, keeps nothing.
 /// </para>
 /// <para>
 /// Threading: <see cref="IssueStamp"/> is called by producers on any thread, before they queue a command.
@@ -146,9 +147,6 @@ public sealed class OverlayHelperLifetime
     // A pause release that waits for the outcome on screen to hide: its stamp, and when it falls due.
     private long _releaseStamp;
     private long? _releaseDueAtMs;
-
-    // How long the command that asked for the launch in progress stays on screen once written, or 0.
-    private long _launchShowsForMs;
 
     /// <summary>Uses the default schedule: 1 s cooldown doubling to 60 s, and a 10 s stable window.</summary>
     public OverlayHelperLifetime()
@@ -240,13 +238,11 @@ public sealed class OverlayHelperLifetime
     /// A stamped state command was taken from the queue at <paramref name="nowMs"/>. It restarts the idle
     /// period. <paramref name="ensureAlive"/> marks a command that needs the helper running (a state the
     /// pill must show, the startup warmup, a preview); <paramref name="cancelsRetry"/> marks the engine's
-    /// hide, which drops a pending retry. <paramref name="showsForMs"/> is how long a pill that hides itself
-    /// (an outcome) stays on screen once written, its fade out included, or 0: it keeps the helper in use for
-    /// that long from the write, which after a launch is when the launch completes.
+    /// hide, which drops a pending retry. An outcome the command shows keeps the helper once its write has
+    /// returned (<see cref="OnShown"/>), not from here: the write, after a launch or not, may still take a while.
     /// </summary>
     public OverlayCommandAction OnStateCommand(
-        long nowMs, long stamp, bool ensureAlive, bool cancelsRetry, OverlayDemand demand, OverlayHelperObservation helper,
-        long showsForMs = 0)
+        long nowMs, long stamp, bool ensureAlive, bool cancelsRetry, OverlayDemand demand, OverlayHelperObservation helper)
     {
         if (_exited)
         {
@@ -259,20 +255,7 @@ public sealed class OverlayHelperLifetime
             _backoff.CancelRetry();
         }
 
-        var action = Decide(nowMs, ensureAlive, demand, helper);
-        if (showsForMs > 0)
-        {
-            if (action == OverlayCommandAction.Write)
-            {
-                _idle.NoteShownUntil(nowMs + showsForMs);
-            }
-            else if (action == OverlayCommandAction.Launch)
-            {
-                _launchShowsForMs = showsForMs; // written only if the launch succeeds (OnLaunchCompleted)
-            }
-        }
-
-        return action;
+        return Decide(nowMs, ensureAlive, demand, helper);
     }
 
     /// <summary>
@@ -340,17 +323,28 @@ public sealed class OverlayHelperLifetime
     public long? ReleaseDueAtMs => _releaseDueAtMs;
 
     /// <summary>
+    /// An outcome's write to the running helper returned at <paramref name="nowMs"/>, a fresh reading taken after the
+    /// write: it is on screen for <paramref name="showsForMs"/> from then (its hold and fade out), and until then the helper
+    /// is not ended. The overlay starts its own hold once it has read and shown the line, a moment after the write
+    /// returns; the fade out allowance covers that.
+    /// </summary>
+    public void OnShown(long nowMs, long showsForMs)
+    {
+        if (!_exited && showsForMs > 0)
+        {
+            _idle.NoteShownUntil(nowMs + showsForMs);
+        }
+    }
+
+    /// <summary>
     /// A launch this type asked for (<see cref="OverlayCommandAction.Launch"/> or
     /// <see cref="OverlayDueWork.Retry"/>) ended at <paramref name="nowMs"/>. Pass the demand read after the
-    /// attempt, since the state may have moved on while it blocked. A success resets the backoff, and an outcome
-    /// that asked for the launch is on screen from now, since the caller writes it next; a failure starts the next
-    /// cooldown and, when the latest state keeps the pill on screen, schedules the one retry; an attempt abandoned
-    /// by shutdown changes nothing.
+    /// attempt, since the state may have moved on while it blocked. A success resets the backoff; a failure
+    /// starts the next cooldown and, when the latest state keeps the pill on screen, schedules the one retry;
+    /// an attempt abandoned by shutdown changes nothing.
     /// </summary>
     public void OnLaunchCompleted(long nowMs, OverlayLaunchResult result, OverlayDemand demand)
     {
-        var showsForMs = _launchShowsForMs;
-        _launchShowsForMs = 0;
         if (_exited)
         {
             return;
@@ -360,11 +354,6 @@ public sealed class OverlayHelperLifetime
         {
             case OverlayLaunchResult.Launched:
                 _backoff.OnLaunchSucceeded(nowMs);
-                if (showsForMs > 0)
-                {
-                    _idle.NoteShownUntil(nowMs + showsForMs);
-                }
-
                 break;
             case OverlayLaunchResult.Failed:
                 _backoff.OnLaunchFailed(nowMs, demand);

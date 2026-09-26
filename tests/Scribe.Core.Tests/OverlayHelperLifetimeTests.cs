@@ -714,19 +714,100 @@ public sealed class OverlayHelperLifetimeTests
     }
 
     [Fact]
-    public void An_outcome_that_launched_the_helper_is_on_screen_from_the_launch()
+    public void An_outcome_that_launched_the_helper_is_on_screen_from_its_write()
     {
+        // The launch takes 2 s and the write that follows it 300 ms: the overlay has the line, and starts its hold, only then.
         var consumer = new Consumer();
         consumer.NextLaunch(OverlayLaunchResult.Launched, takesMs: 2_000);
+        consumer.NextWrite(takesMs: 300);
 
         consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
         consumer.RequestRelease();
         consumer.Drain();
 
-        Assert.Equal([2_000L], consumer.At("Write TYPED"));
-        Assert.Equal(2_000 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Equal([2_300L], consumer.At("Write TYPED"));
+        Assert.Equal(2_300 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs);
         consumer.AdvanceTo(10_000);
-        Assert.Equal([2_000 + TypedOnScreen], consumer.At("Release"));
+        Assert.Equal([2_300 + TypedOnScreen], consumer.At("Release"));
+    }
+
+    [Fact]
+    public void A_slow_write_starts_the_outcome_s_hold_when_it_returns()
+    {
+        // Astra's sequence: pausing a recording queues its TYPED, then the release. The write succeeds in 1 s, inside the
+        // client's 1.5 s timeout, so the overlay starts its 400 ms hold at 6 s; a hold counted from 5 s would have let the
+        // release end the helper at 6 s, before the check was ever seen.
+        var consumer = new Consumer();
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.AdvanceTo(5_000);
+
+        consumer.NextWrite(takesMs: 1_000);
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        Assert.Equal([6_000L], consumer.At("Write TYPED"));
+        Assert.Empty(consumer.At("Release"));
+        Assert.Equal(6_000 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs);
+
+        consumer.AdvanceTo(20_000);
+        Assert.Equal([6_000 + TypedOnScreen], consumer.At("Release"));
+    }
+
+    [Fact]
+    public void A_slow_write_starts_a_notice_s_hold_when_it_returns()
+    {
+        var consumer = new Consumer();
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.AdvanceTo(3_000);
+
+        consumer.NextWrite(takesMs: 1_400);
+        consumer.Show("NOTHINGTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        consumer.AdvanceTo(4_400 + NoticeOnScreen - 1);
+        Assert.Empty(consumer.At("Release"));
+        consumer.AdvanceTo(4_400 + NoticeOnScreen);
+        Assert.Equal([4_400 + NoticeOnScreen], consumer.At("Release"));
+    }
+
+    [Fact]
+    public void The_idle_suspend_counts_an_outcome_s_hold_from_its_write()
+    {
+        var consumer = new Consumer(idleMs: 300);
+        consumer.Show("WARMUP", OverlayDemand.None);
+        consumer.Drain();
+
+        consumer.NextWrite(takesMs: 1_000);
+        consumer.Show("NOTHINGTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.Drain();
+
+        consumer.AdvanceTo(1_000 + NoticeOnScreen - 1);
+        Assert.Empty(consumer.At("Suspend"));
+        consumer.AdvanceTo(10_000);
+        Assert.Equal([1_000 + NoticeOnScreen], consumer.At("Suspend"));
+    }
+
+    [Fact]
+    public void An_outcome_whose_write_failed_keeps_nothing_on_screen()
+    {
+        var consumer = new Consumer();
+        consumer.Show("WARMUP", OverlayDemand.None);
+        consumer.Drain();
+        consumer.AdvanceTo(20_000); // stable, so the loss starts no cooldown
+
+        consumer.NextWrite(takesMs: 200, fails: true);
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        Assert.Equal([20_200L], consumer.At("Write failed TYPED"));
+        Assert.Null(consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+        Assert.Equal([0L], consumer.At("Launch")); // an outcome never brings a lost helper back
     }
 
     [Fact]
@@ -846,6 +927,7 @@ public sealed class OverlayHelperLifetimeTests
     {
         private readonly Queue<Pending> _queue = new();
         private readonly Queue<(OverlayLaunchResult Result, long TakesMs)> _launches = new();
+        private readonly Queue<(long TakesMs, bool Fails)> _writes = new();
         private readonly List<(long AtMs, string What)> _events = [];
         private OverlayHelperStatus _helper = OverlayHelperStatus.Absent;
         private long? _crashedAtMs;
@@ -877,6 +959,12 @@ public sealed class OverlayHelperLifetimeTests
         }
 
         public void NextLaunch(OverlayLaunchResult result, long takesMs = 0) => _launches.Enqueue((result, takesMs));
+
+        /// <summary>
+        /// Scripts the next write of a command to the helper: a pipe write can take up to the client's 1.5 s timeout and
+        /// still succeed, or fail, which loses the helper. Unscripted writes take no time and succeed.
+        /// </summary>
+        public void NextWrite(long takesMs = 0, bool fails = false) => _writes.Enqueue((takesMs, fails));
 
         // ---- Producers ----------------------------------------------------------------------------
 
@@ -928,8 +1016,8 @@ public sealed class OverlayHelperLifetimeTests
 
                 var helper = Observe();
                 var action = Lifetime.OnStateCommand(
-                    NowMs, pending.Stamp, pending.EnsureAlive, pending.CancelsRetry, Demand, helper, pending.ShowsForMs);
-                Carry(action, helper, pending.Line);
+                    NowMs, pending.Stamp, pending.EnsureAlive, pending.CancelsRetry, Demand, helper);
+                Carry(action, helper, pending);
             }
         }
 
@@ -937,7 +1025,7 @@ public sealed class OverlayHelperLifetimeTests
         public void Meter()
         {
             var helper = Observe();
-            Carry(Lifetime.OnMeter(NowMs, Demand, helper), helper, "METER");
+            Carry(Lifetime.OnMeter(NowMs, Demand, helper), helper, new Pending(PendingKind.State, "METER", 0, false, false, 0));
         }
 
         /// <summary>A stamped command taken and dropped without being carried out.</summary>
@@ -1004,18 +1092,18 @@ public sealed class OverlayHelperLifetimeTests
             }
         }
 
-        private void Carry(OverlayCommandAction action, OverlayHelperObservation helper, string line)
+        private void Carry(OverlayCommandAction action, OverlayHelperObservation helper, Pending pending)
         {
             DiscardIfLost(helper);
             switch (action)
             {
                 case OverlayCommandAction.Write:
-                    Record("Write " + line);
+                    Deliver(pending);
                     break;
                 case OverlayCommandAction.Launch:
                     if (Launch())
                     {
-                        Record("Write " + line);
+                        Deliver(pending);
                     }
 
                     break;
@@ -1025,6 +1113,36 @@ public sealed class OverlayHelperLifetimeTests
                 default:
                     Record("Drop");
                     break;
+            }
+        }
+
+        // As OverlayProcessClient.HandleState after Prepare: the write takes the time the script gives it, an outcome is on
+        // screen from when its write returns, and a write that fails loses the helper (RecoverFromFailedWrite).
+        private void Deliver(Pending pending)
+        {
+            var (takesMs, fails) = _writes.Count > 0 ? _writes.Dequeue() : (0L, false);
+            NowMs += takesMs; // the consumer is blocked in the write meanwhile
+            if (fails)
+            {
+                Record("Write failed " + pending.Line);
+                var action = Lifetime.OnWriteFailed(NowMs, NowMs, Demand);
+                _helper = OverlayHelperStatus.Absent;
+                if (action == OverlayCommandAction.Launch)
+                {
+                    Launch();
+                }
+                else if (action == OverlayCommandAction.Hold)
+                {
+                    Record("Hold");
+                }
+
+                return;
+            }
+
+            Record("Write " + pending.Line);
+            if (pending.ShowsForMs > 0)
+            {
+                Lifetime.OnShown(NowMs, pending.ShowsForMs);
             }
         }
 

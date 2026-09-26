@@ -16,7 +16,7 @@ public enum OverlayDemand
     /// when the helper can be reached at once, so its own command may launch it, but it is never replayed, never
     /// brings a lost helper back and never earns a deferred relaunch: by then the moment it described has
     /// passed. While it is on screen the helper is not ended: an idle suspend waits for it, and so does a pause
-    /// release (see <see cref="OverlayHelperLifetime.OnStateCommand"/>).
+    /// release, both counted from when its write returned (see <see cref="OverlayHelperLifetime.OnShown"/>).
     /// </summary>
     Transient,
 

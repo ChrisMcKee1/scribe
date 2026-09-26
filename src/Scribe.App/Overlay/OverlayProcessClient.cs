@@ -428,7 +428,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         var nowMs = Environment.TickCount64;
         var helper = ObserveHelper(nowMs);
         var action = _lifetime.OnStateCommand(
-            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, item.ShowsForMs);
+            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper);
         if (!Prepare(action, helper, nowMs))
         {
             return;
@@ -446,6 +446,13 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         else
         {
             WriteWithTimeout(item.Text);
+
+            // Timed from a fresh reading once the write has returned: it can take up to the write timeout and still
+            // succeed, and the overlay starts its own hold only once it has the line.
+            if (item.ShowsForMs > 0)
+            {
+                _lifetime.OnShown(Environment.TickCount64, item.ShowsForMs);
+            }
         }
     }
 

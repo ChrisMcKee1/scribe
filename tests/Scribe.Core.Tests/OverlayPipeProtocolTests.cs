@@ -121,13 +121,18 @@ public sealed class OverlayPipeProtocolTests
         Assert.DoesNotContain("writer.WriteLine(_desired.Line);", client, StringComparison.Ordinal);
         Assert.DoesNotContain("Enqueue(_desired.Line", client, StringComparison.Ordinal);
 
-        // The outcome is transient, needs the helper, and keeps it for its hold.
+        // The outcome is transient and needs the helper; it keeps the helper from when its write returns, never from when
+        // it was taken (a write can take up to its timeout and still succeed).
         Assert.Matches(new Regex(@"new DesiredState\(OverlayPipeProtocol\.OutcomeLine\(outcome\), OverlayDemand\.Transient\)"), client);
         Assert.Matches(new Regex(@"Enqueue\(desired\.Line, ensureAlive: true, showsFor: outcome\.OnScreen\)"), client);
         Assert.Contains(
-            "_lifetime.OnStateCommand(\n            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, item.ShowsForMs);",
+            "_lifetime.OnStateCommand(\n            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper);",
             client.ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
+        Assert.Matches(
+            new Regex(@"WriteWithTimeout\([^;]+\);\s*if \(item\.ShowsForMs > 0\)\s*\{\s*_lifetime\.OnShown\(Environment\.TickCount64, item\.ShowsForMs\);"),
+            client);
+        Assert.Single(Regex.Matches(client, Regex.Escape("_lifetime.OnShown(")));
     }
 
     [Fact]
