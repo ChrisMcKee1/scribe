@@ -73,6 +73,7 @@ public partial class App : Application
     private ILogger? _appLog;
     private int _learningFromHistory;
     private readonly TrayFeedbackPolicy _trayFeedback = new();
+    private readonly QuickAddOpenGate _quickAddOpenGate = new();
     private TrayCondition _trayCondition;
     private bool _foundryDownloadedModel;
     private readonly FoundryModelCacheRefresh _foundryRefresh = new();
@@ -1896,14 +1897,25 @@ public partial class App : Application
     /// </summary>
     private void ShowQuickAdd()
     {
-        _ = ShowQuickAddAsync();
+        _ = _quickAddOpenGate.RunAsync(ShowQuickAddAsync, FocusQuickAddWhenOpenAsync);
+    }
+
+    private Task FocusQuickAddWhenOpenAsync()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(FocusQuickAddWhenOpenAsync).Task.Unwrap();
+        }
+
+        _quickAddWindow?.Activate();
+        return Task.CompletedTask;
     }
 
     private async Task ShowQuickAddAsync()
     {
         if (!Dispatcher.CheckAccess())
         {
-            _ = Dispatcher.BeginInvoke(new Action(ShowQuickAdd));
+            await Dispatcher.InvokeAsync(ShowQuickAdd);
             return;
         }
         if (_host is null || _tray is null)
@@ -1937,6 +1949,11 @@ public partial class App : Application
                 // would look like it worked while "copy last dictation" still returned the mistake.
                 await SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
                 recent = store.GetRecentEntries();
+                if (_quickAddWindow is not null)
+                {
+                    _quickAddWindow.Activate();
+                    return;
+                }
             }
 
             var window = new QuickAdd.QuickAddWindow(
@@ -1993,7 +2010,11 @@ public partial class App : Application
             window.Closed += (_, _) =>
             {
                 window.Saved -= OnQuickAddSaved;
-                _quickAddWindow = null;
+                if (ReferenceEquals(_quickAddWindow, window))
+                {
+                    _quickAddWindow = null;
+                }
+
                 scope.Dispose();
             };
 

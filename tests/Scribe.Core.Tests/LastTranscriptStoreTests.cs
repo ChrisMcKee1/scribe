@@ -421,6 +421,35 @@ public sealed class LastTranscriptStoreTests
     }
 
     [Fact]
+    public void Repeated_dictation_after_clear_commit_survives_late_clear_notice()
+    {
+        var revision = 0L;
+        var store = new LastTranscriptStore(() => revision);
+        store.Set("repeat");
+        revision = 1;
+        store.Set("repeat");
+
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.Clear, Revision: 1));
+
+        Assert.Equal(["repeat"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Repeated_seeded_dictation_uses_live_time_for_retention()
+    {
+        var store = new LastTranscriptStore();
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-5);
+        store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow.AddDays(-10), "repeat", 1, 1),
+        ], 0, () => 0);
+
+        store.Set("repeat");
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoff, Revision: 1));
+
+        Assert.Equal(["repeat"], store.GetRecent());
+    }
+
+    [Fact]
     public void Update_matches_case_sensitively_so_a_casing_fix_is_not_mistaken_for_a_no_op()
     {
         var store = new LastTranscriptStore();

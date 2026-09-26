@@ -304,15 +304,15 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             command.Parameters.AddWithValue("$id", id);
             changes = command.ExecuteNonQuery();
             transaction.Commit();
+            if (changes > 0 && deleted is not null)
+            {
+                PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.Entry, deleted));
+            }
         }
 
         if (changes > 0)
         {
             _database.NotifyStorageChanged(StorageChange.HistoryEntryDeleted);
-            if (deleted is not null)
-            {
-                _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.Entry, deleted));
-            }
         }
     }
 
@@ -330,6 +330,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             entries = command.ExecuteNonQuery();
             recordings = ListStoredAudio(connection);
             transaction.Commit();
+            if (entries > 0)
+            {
+                PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.Clear));
+            }
         }
 
         /*
@@ -363,10 +367,6 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             if (entries > 0 || recordingsDeleted > 0)
             {
                 _database.NotifyStorageChanged(StorageChange.HistoryCleared);
-                if (entries > 0)
-                {
-                    _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.Clear));
-                }
             }
         }
     }
@@ -393,11 +393,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
                 DeleteUnreferencedAudio(connection, unreferenced, cutoffUtc);
 
                 transaction.Commit();
-            }
-
-            if (removed > 0)
-            {
-                _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+                if (removed > 0)
+                {
+                    PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+                }
             }
 
             return removed;
@@ -417,15 +416,24 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         using (_database.EnterWriteScope())
         {
             using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
             removed = DeleteEntriesOlderThan(connection, cutoffUtc);
-        }
-
-        if (removed > 0)
-        {
-            _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+            transaction.Commit();
+            if (removed > 0)
+            {
+                PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+            }
         }
 
         return removed;
+    }
+
+    private void PublishCommittedDeletion(HistoryDeletion deletion)
+    {
+        // A dictation can still finish in the few instructions after commit and before this revision bump.
+        // Closing that window would put a database-side lock on the dictation path, so this publishes at
+        // the first non-throwing point after a successful commit and accepts that tiny race.
+        _deletions.Notify(deletion);
     }
 
     public int ClearAudioOlderThan(DateTimeOffset cutoffUtc)

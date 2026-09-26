@@ -44,7 +44,7 @@ public sealed class HistoryDeletionNotifierTests
     }
 
     [Fact]
-    public void Delayed_clear_notice_keeps_later_dictations()
+    public async Task Clear_publishes_revision_before_storage_callbacks_run()
     {
         using var folder = new TempDirectory();
         using var database = new ScribeDatabase(new AppPaths(folder.Path), NullLogger<ScribeDatabase>.Instance);
@@ -52,22 +52,32 @@ public sealed class HistoryDeletionNotifierTests
         var repo = new HistoryRepository(database, notifier);
         var store = new LastTranscriptStore(notifier);
         store.SeedHistory([repo.Add(Entry("before", DateTimeOffset.UtcNow))], notifier.Revision, () => notifier.Revision);
-        using var entered = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-        using var delivered = new ManualResetEventSlim();
+        using var storageCallbackEntered = new ManualResetEventSlim();
+        using var releaseStorageCallback = new ManualResetEventSlim();
+        using var releaseDeletionDelivery = new ManualResetEventSlim();
+        using var deletionDelivered = new ManualResetEventSlim();
+        database.StorageChanged += change =>
+        {
+            if (change == StorageChange.HistoryCleared)
+            {
+                storageCallbackEntered.Set();
+                Assert.True(releaseStorageCallback.Wait(TimeSpan.FromSeconds(5)));
+            }
+        };
         notifier.Deleted += deletion =>
         {
-            entered.Set();
-            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(releaseDeletionDelivery.Wait(TimeSpan.FromSeconds(5)));
             store.ApplyDeletion(deletion);
-            delivered.Set();
+            deletionDelivered.Set();
         };
 
-        repo.Clear();
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        var clearTask = Task.Run(repo.Clear);
+        Assert.True(storageCallbackEntered.Wait(TimeSpan.FromSeconds(5)));
         store.Set("after");
-        release.Set();
-        Assert.True(delivered.Wait(TimeSpan.FromSeconds(5)));
+        releaseDeletionDelivery.Set();
+        Assert.True(deletionDelivered.Wait(TimeSpan.FromSeconds(5)));
+        releaseStorageCallback.Set();
+        await clearTask.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(["after"], store.GetRecent());
     }

@@ -50,11 +50,12 @@ public sealed class LastTranscriptStore
 
         lock (_gate)
         {
-            // Re-dictating identical text must not burn ring slots on adjacent duplicates: the
-            // transcript is already recoverable at the top of the list, so keep it there and
-            // preserve the older, distinct entries beneath it.
+            // Re-dictating identical text still represents a new capture. Keep one top slot for adjacent
+            // duplicates, but refresh its deletion revision and timestamp so a late history notice for the
+            // earlier capture cannot remove the new tray copy.
             if (_entries.Count > 0 && string.Equals(_entries[0].Current, text, StringComparison.Ordinal))
             {
+                _entries[0] = new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, _currentRevision());
                 return;
             }
 
