@@ -118,30 +118,39 @@ public class KeyboardHookFilterTests
         Assert.False(passOn.IsEcho(new KeyEventIdentity(0, 0, 0, 0)));
     }
 
-    [Fact]
-    public void The_callback_s_decisions_before_the_engine_allocate_nothing()
+    // In the collection that runs alone (stream TR, item 1): no other test runs while it measures.
+    [Collection(AllocationMeasurementCollection.Name)]
+    public sealed class Allocations
     {
-        using var message = new KeyMessage(new NativeMethods.KBDLLHOOKSTRUCT { vkCode = 0x83, scanCode = 0x6B, time = 9 });
-        var passOn = new KeyEventPassOn();
-
-        // Warm the JIT for every call measured below.
-        Run(message.Pointer, passOn);
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var echoes = Run(message.Pointer, passOn);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
-        Assert.Equal(1, echoes);
-
-        static int Run(nint lParam, KeyEventPassOn passOn)
+        [Fact]
+        public void The_callback_s_decisions_before_the_engine_allocate_nothing()
         {
-            var identity = KeyboardHookFilter.Identity(lParam);
-            var probe = KeyboardHookFilter.IsProbe(identity.VirtualKey, isUp: true, SyntheticInputMarker.Value);
-            passOn.Enter(identity);
-            var echo = passOn.IsEcho(KeyboardHookFilter.Identity(lParam));
-            passOn.Leave();
-            return (echo ? 1 : 0) + (probe ? 10 : 0);
+            using var message = new KeyMessage(new NativeMethods.KBDLLHOOKSTRUCT { vkCode = 0x83, scanCode = 0x6B, time = 9 });
+            var passOn = new KeyEventPassOn();
+
+            // Warm the JIT for every call measured below, and the readings around the window.
+            Run(message.Pointer, passOn);
+            _ = RuntimeWork.Now().Since(RuntimeWork.Now());
+
+            var work = RuntimeWork.Now();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var echoes = Run(message.Pointer, passOn);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            var during = RuntimeWork.Now().Since(work);
+
+            AllocationMeasurement.AssertZero(
+                allocated, during, "The callback's decisions before the engine", () => Run(message.Pointer, passOn));
+            Assert.Equal(1, echoes);
+
+            static int Run(nint lParam, KeyEventPassOn passOn)
+            {
+                var identity = KeyboardHookFilter.Identity(lParam);
+                var probe = KeyboardHookFilter.IsProbe(identity.VirtualKey, isUp: true, SyntheticInputMarker.Value);
+                passOn.Enter(identity);
+                var echo = passOn.IsEcho(KeyboardHookFilter.Identity(lParam));
+                passOn.Leave();
+                return (echo ? 1 : 0) + (probe ? 10 : 0);
+            }
         }
     }
 

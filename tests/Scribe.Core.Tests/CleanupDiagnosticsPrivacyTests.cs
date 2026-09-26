@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Tests.CleanupLogging;
 using Scribe.Core.Infrastructure;
+using ManualTimeProvider = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
 
 namespace Scribe.Core.Tests;
 
@@ -69,6 +70,20 @@ internal sealed class CleanupHarness : IAsyncDisposable
     public CapturingLogger<TextCleanupService> Log { get; } = new();
 
     public TextCleanupService Service { get; }
+
+    /// <summary>
+    /// Runs the disposal drain on a clock only the test moves, keeping production's timeout. A test that expects the drain to
+    /// end because the work in flight stopped then waits for that however long a loaded machine takes to unwind it, instead
+    /// of racing the real timeout; the work still has to stop within the test's own bound. Nothing ever times that drain
+    /// out, so a test that uses this opens every gate it shut in a finally, before this harness disposes the service: work
+    /// left parked behind a gate after a failed wait or assertion would otherwise hold the teardown for ever.
+    /// </summary>
+    public ManualTimeProvider DrainOnManualClock()
+    {
+        var clock = new ManualTimeProvider();
+        Service.DisposalDrainClock = clock;
+        return clock;
+    }
 
     public static CleanupOptions FoundryOn(string alias = FoundryAlias) =>
         new(true, CleanupProvider.FoundryLocal, alias, null, null);

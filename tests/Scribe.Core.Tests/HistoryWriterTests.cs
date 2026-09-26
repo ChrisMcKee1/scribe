@@ -24,8 +24,12 @@ public sealed class HistoryWriterTests
     [Fact]
     public void Writes_commit_exactly_as_queued_and_in_call_order()
     {
+        // Six writes pass the writer's two slots, so a producer waits for the consumer, which starts on the pool. With
+        // production's 5 s bound that wait raced the pool: in a loaded full run the consumer started late and a write was
+        // refused (stream TR, round 2). The bound is not what this test is about; it is pinned with one of its own in
+        // A_producer_that_finds_no_room_within_the_bound_drops_only_its_own_entry.
         var history = new FakeHistory();
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>());
+        using var writer = Unbounded(history, new CapturingLogger<HistoryWriter>());
         var queued = Enumerable.Range(1, 6).Select(Entry).ToList();
 
         foreach (var entry in queued)

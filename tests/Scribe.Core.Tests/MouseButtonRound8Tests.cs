@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Runtime.Loader;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
@@ -151,23 +150,23 @@ public sealed class MouseButtonRound8Tests
     // work for the P/Invokes, so the in-process measurement stayed green with either cost restored. Here the scenario runs
     // in a load context of its own, with fresh copies of this assembly and Scribe.Core from the output folder (everything
     // else, xunit included, comes from the default context), so what it measures is cold in every run, alone or not.
-    [Fact]
-    public void The_cold_hook_callback_path_allocates_nothing_in_a_fresh_load()
+    // In the collection that runs alone (stream TR, item 1): no other test runs while it measures.
+    [Collection(AllocationMeasurementCollection.Name)]
+    public sealed class Allocations
     {
-        var folder = Path.GetDirectoryName(typeof(MouseButtonRound8Tests).Assembly.Location)!;
-        var context = new FreshCopies(folder);
-        var tests = context.LoadFromAssemblyName(typeof(MouseButtonRound8Tests).Assembly.GetName());
-        var scenario = tests.GetType(typeof(MouseColdPathScenario).FullName!, throwOnError: true)!;
+        [Fact]
+        public void The_cold_hook_callback_path_allocates_nothing_in_a_fresh_load()
+        {
+            var (result, _) = ColdPathMeasurement.RunFresh("mouse-cold-path", typeof(MouseColdPathScenario));
 
-        var measured = (long[])scenario.GetMethod(nameof(MouseColdPathScenario.Run))!.Invoke(null, null)!;
-
-        // Both copies are this context's own, loaded apart from the ones the rest of the run uses.
-        var core = context.Assemblies.Single(assembly => assembly.GetName().Name == "Scribe.Core");
-        Assert.NotSame(typeof(MouseButtonRound8Tests).Assembly, tests);
-        Assert.NotSame(typeof(HotkeyService).Assembly, core);
-        Assert.Equal(
-            new long[] { 0, 0, 0, 0, 1, 1, 1, 1, 0, 0 },
-            measured);
+            ColdPathMeasurement.AssertAsExpected(
+                [0, 0, 0, 0, 1, 1, 1, 1, 0, 0],
+                result,
+                ["MouseHookFilter's first read", "the fast path for a move", "an unbound key down and up",
+                    "an owed release"],
+                "mouse-cold-path",
+                typeof(MouseColdPathScenario));
+        }
     }
 
     // The signal's one word (A9): a sync-only request runs a pass that repairs nothing, a repair request one that repairs,
@@ -253,14 +252,6 @@ public sealed class MouseButtonRound8Tests
 
         var createRouter = typeof(HotkeyService).GetMethod("CreateRouter", Any)!;
         Assert.DoesNotContain(MouseButtonRound7Tests.Callees(createRouter), callee => callee.Name == "Invoke");
-    }
-
-    private sealed class FreshCopies(string folder) : AssemblyLoadContext("mouse-cold-path")
-    {
-        protected override Assembly? Load(AssemblyName name) =>
-            name.Name is "Scribe.Core" or "Scribe.Core.Tests"
-                ? LoadFromAssemblyPath(Path.Combine(folder, name.Name + ".dll"))
-                : null;
     }
 
     private static HotkeyEngineHarness Harness(HotkeyBinding binding, HashSet<uint> windowsKeys, List<uint> injected) =>

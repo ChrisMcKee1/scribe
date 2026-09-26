@@ -9,6 +9,7 @@ using Scribe.Core.Settings;
 using Scribe.Core.Tests.CleanupLogging;
 using Scribe.Core.Vocabulary;
 using static Scribe.Core.Tests.Vocabulary.TestVocabularies;
+using ManualClock = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
 
 namespace Scribe.Core.Tests.Vocabulary;
 
@@ -160,19 +161,26 @@ public sealed class VocabularyPublisherTests
             release.Wait(Bound);
         };
 
-        var before = publisher.RefreshAsync();
-        await reading.Task.WaitAsync(Bound);
-        dictionary.Entries = [Entry("lantern", "Lantern")];
-        var during = publisher.RefreshAsync();
-        release.Set();
+        try
+        {
+            var before = publisher.RefreshAsync();
+            await reading.Task.WaitAsync(Bound);
+            dictionary.Entries = [Entry("lantern", "Lantern")];
+            var during = publisher.RefreshAsync();
+            release.Set();
 
-        var answeredBefore = (await before.WaitAsync(Bound)).Generation;
-        var answeredDuring = await during.WaitAsync(Bound);
-        Assert.Empty(answeredBefore.Dictionary);
-        Assert.Equal(VocabularyRefreshOutcome.Applied, answeredDuring.Outcome);
-        Assert.Equal(["lantern"], answeredDuring.Generation.Dictionary.Select(entry => entry.Pattern));
-        Assert.True(answeredDuring.Generation.Number > answeredBefore.Number);
-        Assert.Same(answeredDuring.Generation, publisher.Current);
+            var answeredBefore = (await before.WaitAsync(Bound)).Generation;
+            var answeredDuring = await during.WaitAsync(Bound);
+            Assert.Empty(answeredBefore.Dictionary);
+            Assert.Equal(VocabularyRefreshOutcome.Applied, answeredDuring.Outcome);
+            Assert.Equal(["lantern"], answeredDuring.Generation.Dictionary.Select(entry => entry.Pattern));
+            Assert.True(answeredDuring.Generation.Number > answeredBefore.Number);
+            Assert.Same(answeredDuring.Generation, publisher.Current);
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     [Fact]
@@ -197,25 +205,32 @@ public sealed class VocabularyPublisherTests
             reading.TrySetResult();
             release.Wait(Bound);
         };
-        var running = Task.Run(builder);
-        await reading.Task.WaitAsync(Bound);
+        try
+        {
+            var running = Task.Run(builder);
+            await reading.Task.WaitAsync(Bound);
 
-        dictionary.Entries = [Entry("lantern", "Lantern")];
-        var starting = publisher.StartAsync();
-        Assert.Empty(queued);
-        Assert.False(starting.IsCompleted);
-        Assert.Equal(1, source.CurrentReads);
-        release.Set();
-        await running.WaitAsync(Bound);
+            dictionary.Entries = [Entry("lantern", "Lantern")];
+            var starting = publisher.StartAsync();
+            Assert.Empty(queued);
+            Assert.False(starting.IsCompleted);
+            Assert.Equal(1, source.CurrentReads);
+            release.Set();
+            await running.WaitAsync(Bound);
 
-        var earlyAnswer = await early.WaitAsync(Bound);
-        var startAnswer = await starting.WaitAsync(Bound);
-        Assert.Equal(["harbour"], earlyAnswer.Generation.Dictionary.Select(entry => entry.Pattern));
-        Assert.Equal(VocabularyRefreshOutcome.Applied, startAnswer.Outcome);
-        Assert.Equal(["lantern"], startAnswer.Generation.Dictionary.Select(entry => entry.Pattern));
-        Assert.True(startAnswer.Generation.Number > earlyAnswer.Generation.Number);
-        Assert.Same(startAnswer.Generation, publisher.Current);
-        Assert.Equal(2, source.CurrentReads);
+            var earlyAnswer = await early.WaitAsync(Bound);
+            var startAnswer = await starting.WaitAsync(Bound);
+            Assert.Equal(["harbour"], earlyAnswer.Generation.Dictionary.Select(entry => entry.Pattern));
+            Assert.Equal(VocabularyRefreshOutcome.Applied, startAnswer.Outcome);
+            Assert.Equal(["lantern"], startAnswer.Generation.Dictionary.Select(entry => entry.Pattern));
+            Assert.True(startAnswer.Generation.Number > earlyAnswer.Generation.Number);
+            Assert.Same(startAnswer.Generation, publisher.Current);
+            Assert.Equal(2, source.CurrentReads);
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     [Fact]
@@ -329,37 +344,44 @@ public sealed class VocabularyPublisherTests
             between.TrySetResult();
             release.Wait(Bound);
         };
-        var straddling = publisher.RefreshAsync();
-        await between.Task.WaitAsync(Bound);
+        try
+        {
+            var straddling = publisher.RefreshAsync();
+            await between.Task.WaitAsync(Bound);
 
-        // The commit lands between the two reads, and each source asks for a generation after it, as it does in the app.
-        source.Publish(newLibraries);
-        dictionary.Entries = [Entry("harbour", "Harbour"), Entry("lan tern", "Lantern")];
-        var saved = publisher.RefreshAsync();
-        release.Set();
+            // The commit lands between the two reads, and each source asks for a generation after it, as it does in the app.
+            source.Publish(newLibraries);
+            dictionary.Entries = [Entry("harbour", "Harbour"), Entry("lan tern", "Lantern")];
+            var saved = publisher.RefreshAsync();
+            release.Set();
 
-        // The build that straddled the commit is a transient mix: the old libraries, the new dictionary. It is whole in
-        // itself, and its glossary and the scope that judges it come from one snapshot, the old one, whose content the
-        // published vocabulary no longer covers: AI cleanup stays bound to the content that snapshot permitted.
-        var mixed = (await straddling.WaitAsync(Bound)).Generation;
-        Assert.Same(oldLibraries, mixed.Libraries);
-        Assert.Equal(["harbour", "lan tern"], mixed.Dictionary.Select(entry => entry.Pattern));
-        Assert.Same(oldLibraries.AiScope, mixed.Cleanup.Scope);
-        Assert.Contains("Kestrel (transcribed as", mixed.Cleanup.GlossaryFor(CleanupPrompt.MaxGlossaryTermsCloud), StringComparison.Ordinal);
-        Assert.False(source.Current.AiScope.Covers(mixed.AiScope));
-        Assert.False(source.TryHandOff(mixed.AiScope, () => Assert.Fail("A request of the mixed generation was handed over.")));
+            // The build that straddled the commit is a transient mix: the old libraries, the new dictionary. It is whole in
+            // itself, and its glossary and the scope that judges it come from one snapshot, the old one, whose content the
+            // published vocabulary no longer covers: AI cleanup stays bound to the content that snapshot permitted.
+            var mixed = (await straddling.WaitAsync(Bound)).Generation;
+            Assert.Same(oldLibraries, mixed.Libraries);
+            Assert.Equal(["harbour", "lan tern"], mixed.Dictionary.Select(entry => entry.Pattern));
+            Assert.Same(oldLibraries.AiScope, mixed.Cleanup.Scope);
+            Assert.Contains("Kestrel (transcribed as", mixed.Cleanup.GlossaryFor(CleanupPrompt.MaxGlossaryTermsCloud), StringComparison.Ordinal);
+            Assert.False(source.Current.AiScope.Covers(mixed.AiScope));
+            Assert.False(source.TryHandOff(mixed.AiScope, () => Assert.Fail("A request of the mixed generation was handed over.")));
 
-        // The mix never persists: the next generation, the one the save's acknowledgement names, reads both new.
-        var consistent = await saved.WaitAsync(Bound);
-        Assert.Equal(VocabularyRefreshOutcome.Applied, consistent.Outcome);
-        Assert.True(consistent.Generation.Number > mixed.Number);
-        Assert.Same(newLibraries, consistent.Generation.Libraries);
-        Assert.Equal(["harbour", "lan tern"], consistent.Generation.Dictionary.Select(entry => entry.Pattern));
-        Assert.Same(newLibraries.AiScope, consistent.Generation.Cleanup.Scope);
-        Assert.Same(consistent.Generation, publisher.Current);
-        Assert.Equal(
-            "Kestrelsaved at the Harbour Lantern",
-            Processor(dictionary).ProcessDetailed("kes trel at the harbour lan tern", null, consistent.Generation.Rules).Text);
+            // The mix never persists: the next generation, the one the save's acknowledgement names, reads both new.
+            var consistent = await saved.WaitAsync(Bound);
+            Assert.Equal(VocabularyRefreshOutcome.Applied, consistent.Outcome);
+            Assert.True(consistent.Generation.Number > mixed.Number);
+            Assert.Same(newLibraries, consistent.Generation.Libraries);
+            Assert.Equal(["harbour", "lan tern"], consistent.Generation.Dictionary.Select(entry => entry.Pattern));
+            Assert.Same(newLibraries.AiScope, consistent.Generation.Cleanup.Scope);
+            Assert.Same(consistent.Generation, publisher.Current);
+            Assert.Equal(
+                "Kestrelsaved at the Harbour Lantern",
+                Processor(dictionary).ProcessDetailed("kes trel at the harbour lan tern", null, consistent.Generation.Rules).Text);
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     [Fact]
@@ -582,9 +604,12 @@ public sealed class VocabularyPublisherTests
         Assert.Throws<ArgumentException>(() => VocabularyNotice.SavedButNotApplied(" "));
     }
 
+    // The deadlines run on a clock only the test moves. Every test here expects a build to answer, and a build held across
+    // real time on a loaded machine was once answered by the 15 s refresh deadline first (stream TR's loops); the deadlines
+    // themselves are VocabularyPublicationDeadlineTests'. A test that holds a build lets it go in a finally as well.
     private static VocabularyPublisher Publisher(
         ILibraryVocabularySource source, IDictionaryRepository dictionary, ITextPostProcessor processor, Action<Action> schedule) =>
-        new(source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, schedule);
+        new(source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, schedule, new ManualClock());
 
     // Starts a publisher whose builds the test runs: the first build is queued like any other, run here, and its generation
     // returned with the queue left empty.
