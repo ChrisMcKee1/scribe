@@ -790,9 +790,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   newer one. A decision that keeps the step (the same window, or another window at the release, the one step it leaves
   in place) re-arms that step to run at once when its tick was taken and is still in flight, so a tick that read the
   foreground before the notice cannot apply what it judged then (round 3, item 2). And while no step is scheduled, the
-  watchdog hands the window in front to the pool again once a period (`RenoticeForegroundIfIdle`), so a sequence that
-  ended while a client stayed in front (a step that read the foreground as a window was losing activation, when Windows
-  has none) starts over within 30 s; mid-sequence it publishes nothing. Each move carries the foreground
+  watchdog's recovery poll (`KeyboardHookPrecedence.RecoverIfIdle`, from `MaintainKeyboardHookLocked`) looks at what is
+  in front once a period, so a sequence that ended while a client stayed in front (a step that read the foreground as a
+  window was losing activation, when Windows has none) starts over within 30 s. It publishes no notice: a publication takes
+  the notice's one window slot and advances the revision, which let a late watchdog sample cancel a real notice's sequence
+  or drop a move judged on it (round 4, item 1). It reads the revision, then the window, and starts the sequence only if,
+  under the gate, still no step is scheduled and no notice was published since; it then decides that revision, so a notice
+  published before its look and decided late changes nothing. Each move carries the foreground
   revision and the window its step judged (`WM_HOTKEY_MOVE_AHEAD`'s wParam and lParam), and the hook thread drops it,
   right before registering, unless no notice was published since and that window is still in front (one
   `GetForegroundWindow` through the service's delegate, between messages, which also covers a change whose WinEvent the
@@ -801,7 +805,7 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `WM_HOTKEY_MOVE_RETRY`, `WM_HOTKEY_RELEASE_RETIRED`); nothing waits for the hook thread. No new setting: it is automatic,
   and `KeyboardHookPrecedenceTests` drives it on a clock the test owns. Each time a sequence starts for a remote client,
   one Information line records, by its process name, that the client is in front and a move is scheduled (not that one
-  was made); the watchdog reports a refused move (Warning) and a move that waited or was dropped (Debug) by count.
+  was made), and says so with "no move scheduled" when the recovery poll started it; the watchdog reports a refused move (Warning) and a move that waited or was dropped (Debug) by count.
 - **A move does not strand a keystroke that a hook ahead of Scribe's may have seen begin.** Such a hook may have forwarded
   the press into a remote session; if Scribe swallowed the rest of that keystroke after moving ahead, the session would
   keep the key down, and pressing it again would not help, because Scribe swallows that key (for a push-to-talk Right

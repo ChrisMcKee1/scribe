@@ -217,8 +217,10 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
 > **Upgrading?** Your hotkeys stay as they were (Right Ctrl, unless you changed it). To switch to
 > Page Down and Page Up, choose **Restore default hotkeys** in Settings, General, then Save. While
 > they are bound, Page Down and Page Up pressed on their own no longer page through documents in
-> other apps, and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held
-> they work there as before. Pick any other key or chord in Settings if you would rather keep them,
+> other apps (except the few presses Scribe lets through around a Remote Desktop or virtual machine
+> window, described in [Remote Desktop and virtual machines](#remote-desktop-and-virtual-machines)),
+> and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held they work there
+> as before. Pick any other key or chord in Settings if you would rather keep them,
 > or if you present.
 
 ## 🎛️ How it works
@@ -249,12 +251,14 @@ Scribe moves is left alone, even if you change Scribe's hotkey settings meanwhil
 its release go where its press went, as long as its next repeat reaches Scribe within the time your
 keyboard's repeat settings allow (under a second with the Windows defaults, a second and a half at
 most). A key whose repeat comes later than that, or a keystroke a program sends stamped with a time
-in the future, is taken as a new press. Text is always typed into a remote window, never pasted,
-even when you chose Paste it in, because a remote session reads the clipboard only when it pastes,
-which can be after Scribe has put back what you had copied. It is typed in small batches with a
-short pause between them, never hundreds of keystrokes at once, which adds about a quarter of a
-second to a 180-character dictation and about a second to a 770-character one. And the keys Scribe
-presses for you (Shift+Enter for a line break) carry the real key codes remote clients forward.
+in the future, is taken as a new press. And if you let go of a key Scribe is letting through where
+Scribe cannot see it, on the lock screen for example, its next press goes through once, whole, too.
+Text is always typed into a remote window, never pasted, even when you chose Paste it in, because a
+remote session reads the clipboard only when it pastes, which can be after Scribe has put back what
+you had copied. It is typed in small batches with a short pause between them, never hundreds of
+keystrokes at once, which adds about a quarter of a second to a 180-character dictation and about a
+second to a 770-character one. And the keys Scribe presses for you (Shift+Enter for a line break)
+carry the real key codes remote clients forward.
 
 ## 📚 The full feature catalog
 
