@@ -159,6 +159,89 @@ public sealed class OverlayPreviewGateTests
         Assert.False(pill.Gate.IsCurrent(preview));
     }
 
+    // ---- Superseded after the gate passed it (Astra's A4) --------------------------------------------------------------
+
+    [Fact]
+    public void A_preview_step_superseded_after_the_gate_passed_it_is_not_written_and_the_engine_restores_the_anchor()
+    {
+        // The recording look passes the gate, then the client's Prepare blocks in a launch while the engine asks for
+        // processing. Written after that, the look would put the pill back to Listening over Processing.
+        var pill = new Pill();
+        pill.StartPreview("TopLeft");
+        pill.TakeNext();
+        pill.TakeNext(beforeWrite: () => pill.Engine("PROCESSING 0"));
+        pill.TakeAll();
+
+        Assert.Equal(["POSITION TopLeft", "POSITION applied", "PROCESSING 0"], pill.Written);
+        Assert.Equal(1, pill.Skipped);
+        Assert.False(pill.ShowsCandidate);
+    }
+
+    [Fact]
+    public void A_preview_anchor_superseded_after_the_gate_passed_it_is_not_written()
+    {
+        // Astra's simpler variant: the candidate anchor's own launch gives the new helper the applied anchor, and the
+        // engine asks for a recording meanwhile. The candidate must not follow; the look behind it is dropped.
+        var pill = new Pill();
+        pill.StartPreview("TopLeft");
+        pill.TakeNext(beforeWrite: () => pill.Engine("RECORDING"));
+        pill.TakeAll();
+
+        Assert.DoesNotContain("POSITION TopLeft", pill.Written);
+        Assert.Equal(["POSITION applied", "RECORDING"], pill.Written); // the restore is redundant here, and harmless
+        Assert.False(pill.ShowsCandidate);
+    }
+
+    [Fact]
+    public void A_preview_end_superseded_after_the_gate_passed_it_leaves_the_restore_to_the_engine_command()
+    {
+        // The end would have written the applied anchor; skipped, it leaves that to the command that superseded it, or
+        // the candidate anchor would stay under the new recording.
+        var pill = new Pill();
+        var preview = pill.StartPreview("TopLeft");
+        pill.TakeAll();
+        pill.End(preview);
+        pill.TakeNext(beforeWrite: () => pill.Engine("RECORDING"));
+        pill.TakeAll();
+
+        Assert.Equal(["POSITION TopLeft", "RECORDING", "POSITION applied", "RECORDING"], pill.Written);
+        Assert.Equal(1, pill.Skipped);
+        Assert.False(pill.ShowsCandidate);
+        Assert.False(pill.Hidden);
+    }
+
+    [Fact]
+    public void Only_a_superseded_preview_command_is_turned_away_at_the_write_and_only_an_end_owes_a_restore()
+    {
+        var gate = new OverlayPreviewGate();
+        Assert.True(gate.ConfirmWrite(OverlayPreviewRole.None, 0));
+
+        // A preview still current is written whole, and an end that was written leaves nothing to restore.
+        var preview = gate.BeginPreview();
+        Assert.Equal(OverlayPreviewVerdict.Deliver, gate.OnCommand(OverlayPreviewRole.Anchor, preview));
+        Assert.True(gate.ConfirmWrite(OverlayPreviewRole.Anchor, preview));
+        Assert.Equal(OverlayPreviewVerdict.Deliver, gate.OnCommand(OverlayPreviewRole.End, preview));
+        Assert.True(gate.ConfirmWrite(OverlayPreviewRole.End, preview));
+        Assert.True(gate.ConfirmWrite(OverlayPreviewRole.None, 0));
+        Assert.Equal(OverlayPreviewVerdict.Deliver, gate.OnCommand(OverlayPreviewRole.None, 0));
+
+        // A step turned away after the gate moved nothing, so it leaves nothing to restore either.
+        var second = gate.BeginPreview();
+        Assert.Equal(OverlayPreviewVerdict.Deliver, gate.OnCommand(OverlayPreviewRole.Step, second));
+        gate.Supersede();
+        Assert.False(gate.ConfirmWrite(OverlayPreviewRole.Step, second));
+        Assert.True(gate.ConfirmWrite(OverlayPreviewRole.None, 0));
+        Assert.Equal(OverlayPreviewVerdict.Deliver, gate.OnCommand(OverlayPreviewRole.None, 0));
+
+        // An end turned away after the gate owes the anchor its write would have put back.
+        var third = gate.BeginPreview();
+        Assert.Equal(OverlayPreviewVerdict.Deliver, gate.OnCommand(OverlayPreviewRole.End, third));
+        var fourth = gate.BeginPreview(); // a newer preview supersedes it as an engine command would
+        Assert.False(gate.ConfirmWrite(OverlayPreviewRole.End, third));
+        Assert.True(gate.IsCurrent(fourth));
+        Assert.Equal(OverlayPreviewVerdict.RestoreAnchorThenDeliver, gate.OnCommand(OverlayPreviewRole.None, 0));
+    }
+
     /// <summary>The client's queue, its consumer, and what the helper was told.</summary>
     private sealed class Pill
     {
@@ -169,6 +252,9 @@ public sealed class OverlayPreviewGateTests
         public List<string> Written { get; } = [];
 
         public int Dropped { get; private set; }
+
+        /// <summary>Commands the gate passed that were turned away at the write, after something newer superseded them.</summary>
+        public int Skipped { get; private set; }
 
         public bool ShowsCandidate { get; private set; }
 
@@ -196,24 +282,40 @@ public sealed class OverlayPreviewGateTests
 
         public void TakeAll()
         {
-            while (_queue.TryDequeue(out var command))
+            while (_queue.Count > 0)
             {
-                switch (Gate.OnCommand(command.Role, command.Generation))
-                {
-                    case OverlayPreviewVerdict.Drop:
-                        Dropped++;
-                        break;
-
-                    case OverlayPreviewVerdict.RestoreAnchorThenDeliver:
-                        Write("POSITION applied", candidate: false);
-                        Deliver(command.Role, command.Line);
-                        break;
-
-                    default:
-                        Deliver(command.Role, command.Line);
-                        break;
-                }
+                TakeNext();
             }
+        }
+
+        /// <summary>
+        /// Takes one command as the client's consumer does. <paramref name="beforeWrite"/> runs once the gate has passed it
+        /// and before its write, where the client's Prepare can block in a launch while the engine asks for something
+        /// newer; the command is judged again there (<see cref="OverlayPreviewGate.ConfirmWrite"/>).
+        /// </summary>
+        public void TakeNext(Action? beforeWrite = null)
+        {
+            var command = _queue.Dequeue();
+            var verdict = Gate.OnCommand(command.Role, command.Generation);
+            if (verdict == OverlayPreviewVerdict.Drop)
+            {
+                Dropped++;
+                return;
+            }
+
+            beforeWrite?.Invoke();
+            if (!Gate.ConfirmWrite(command.Role, command.Generation))
+            {
+                Skipped++;
+                return;
+            }
+
+            if (verdict == OverlayPreviewVerdict.RestoreAnchorThenDeliver)
+            {
+                Write("POSITION applied", candidate: false);
+            }
+
+            Deliver(command.Role, command.Line);
         }
 
         private void Deliver(OverlayPreviewRole role, string line)

@@ -50,9 +50,10 @@ public enum OverlayPreviewVerdict
 /// </para>
 /// <para>
 /// Threading: <see cref="BeginPreview"/>, <see cref="Supersede"/> and <see cref="IsCurrent"/> are called on
-/// any thread. <see cref="OnCommand"/> belongs to the single command consumer, which sees commands in queue
-/// order; staleness is judged when the consumer takes a command, not when it was queued, so a preview step
-/// queued before a superseding command but taken after the supersede is dropped too. Restoring the anchor
+/// any thread. <see cref="OnCommand"/> and <see cref="ConfirmWrite"/> belong to the single command consumer, which sees
+/// commands in queue order; staleness is judged when the consumer takes a command, not when it was queued, so a preview
+/// step queued before a superseding command but taken after the supersede is dropped too, and judged again right before
+/// its write, so one superseded while the consumer was blocked in a launch is not written either. Restoring the anchor
 /// when it was not actually moved costs one redundant POSITION line and is harmless.
 /// </para>
 /// </remarks>
@@ -102,5 +103,29 @@ public sealed class OverlayPreviewGate
         }
 
         return OverlayPreviewVerdict.Deliver;
+    }
+
+    /// <summary>
+    /// Consumer only. Judges a command <see cref="OnCommand"/> passed again right before it is written, once anything that
+    /// could block since has returned: the client's launch can take seconds and gives the new helper the latest engine
+    /// state, and a preview step superseded meanwhile would otherwise be written over that state (the recording look over
+    /// Processing, the candidate anchor over the applied one). Returns false for a preview command whose preview is no
+    /// longer current; it must not be written. An engine command is always written as far as previews go. An end turned
+    /// away no longer writes the applied anchor, so the first engine command after it restores the anchor, as after any
+    /// superseded preview; an anchor or step turned away leaves the bookkeeping as the gate left it.
+    /// </summary>
+    public bool ConfirmWrite(OverlayPreviewRole role, long generation)
+    {
+        if (role == OverlayPreviewRole.None || IsCurrent(generation))
+        {
+            return true;
+        }
+
+        if (role == OverlayPreviewRole.End)
+        {
+            _candidateAnchorShown = true;
+        }
+
+        return false;
     }
 }

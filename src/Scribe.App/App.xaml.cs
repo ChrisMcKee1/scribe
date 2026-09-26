@@ -379,10 +379,9 @@ public partial class App : Application
             Dispatcher.BeginInvoke(() => _settingsWindow?.ShowPlaygroundPipeline(report));
         _controller.Error += message =>
         {
+            // The pill says what the dictation did with the outcome on its return to idle (a microphone that would not
+            // open included), so the failure message goes to the tray only; the pill shows it there as the next step.
             _tray!.ShowError(message);
-            // Mirror the failure on the overlay (like cleanup failures): the user is looking at the
-            // pill mid-dictation, not the tray, when the microphone produces nothing.
-            OnCleanupFailed(message);
         };
         _controller.Warning += warning =>
         {
@@ -393,7 +392,6 @@ public partial class App : Application
                 OnRecordingWarning(warning.RecordingRevision, pillText);
             }
         };
-        _controller.CleanupFailed += OnCleanupFailed;
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
         {
             // Best-effort, exactly like the other tray balloons: a notification failure must never
@@ -800,7 +798,9 @@ public partial class App : Application
     /// <summary>
     /// Reflects the newest dictation state in the tray icon and the recording overlay. Runs on the UI thread, only for a
     /// change newer than the last one shown, so a late notice from the previous dictation can never hide the pill of the
-    /// recording that started after it. The overlay only shows while recording and only when the user has it enabled.
+    /// recording that started after it. The overlay only shows while recording and only when the user has it enabled; the
+    /// return to idle that ends a dictation shows its outcome in place of the hide, under the same rule, so a late outcome
+    /// never covers a newer recording.
     /// </summary>
     private void RenderDictationState(DictationStateChange change)
     {
@@ -846,7 +846,17 @@ public partial class App : Application
                     _overlay?.ShowProcessing(change.AiPolishing);
                     break;
                 default:
-                    _overlay?.HideOverlay();
+                    // What the finished dictation did ("Typed", or a notice), held by the overlay and then hidden; a
+                    // quietly discarded one, a pause while idle and every other idle change just hide.
+                    if (change.Outcome is { } outcome)
+                    {
+                        _overlay?.ShowOutcome(outcome);
+                    }
+                    else
+                    {
+                        _overlay?.HideOverlay();
+                    }
+
                     break;
             }
         }
@@ -854,34 +864,12 @@ public partial class App : Application
         // Pausing is the user standing Scribe down, so the idle helper (~100 MB) is ended now rather
         // than after the keep-warm period, as pausing already does for the speech models. Only the
         // newest change gets here, so a pause shown late can never release the helper under a newer
-        // recording; a newer command or an on-screen state still vetoes it inside the client as well.
+        // recording; a newer command or an on-screen state still vetoes it inside the client as well,
+        // and an outcome the pause's own dictation just showed holds the release until it has hidden.
         if (state == DictationState.Paused)
         {
             _overlay?.ReleaseWhenIdle();
         }
-    }
-
-    /// <summary>
-    /// Shows the brief red "intelligence failed" overlay when AI cleanup fell back to raw text.
-    /// Raised on a background thread, so the overlay mutation is posted to the UI thread (never
-    /// invoked: the raising thread must not wait for it) and only shown when the user has the overlay
-    /// enabled and the app is not already shutting down by the time it runs.
-    /// </summary>
-    private void OnCleanupFailed(string reason)
-    {
-        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
-        if (!overlayEnabled)
-        {
-            return;
-        }
-
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (_controller?.IsClosing == false)
-            {
-                _overlay?.ShowFailed(reason);
-            }
-        });
     }
 
     /// <summary>
