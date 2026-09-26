@@ -584,7 +584,7 @@ public sealed class StartupRegistrationTests
         Assert.Equal(!requested, result.Status.IsEnabled);
         Assert.Equal(shown, backend.State);
         Assert.Equal(0, backend.EnableCalls + backend.DisableCalls);
-        Assert.Contains("left as it was", result.Status.Message);
+        Assert.Contains("wasn't changed", result.Status.Message);
     }
 
     [Fact]

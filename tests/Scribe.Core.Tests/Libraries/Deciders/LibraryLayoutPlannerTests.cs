@@ -13,14 +13,14 @@ public sealed class LibraryLayoutPlannerTests
     private static readonly (double Width, double Height)[] Targets = [(940, 660), (1097, 569), (1092, 566), (960, 492)];
 
     [Fact]
-    public void D9_the_minimum_window_is_side_by_side_with_164_dips_per_text_column_and_short_under_the_tab_strip()
+    public void D9_the_minimum_window_is_side_by_side_with_157_dips_per_text_column_and_short_under_the_tab_strip()
     {
         // Without the strip the normal composition had six rows here; the strip leaves it five, so the short one is used,
         // which shows seven.
         var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 660));
 
         Assert.Equal(LibraryLayoutComposition.SideBySide | LibraryLayoutComposition.Short, layout.Composition);
-        Assert.Equal(164, layout.SpokenColumnWidth);
+        Assert.Equal(157, layout.SpokenColumnWidth);
         Assert.Equal(layout.SpokenColumnWidth, layout.WrittenColumnWidth);
         Assert.Equal(220, layout.ListWidth);
         Assert.Equal(7, layout.VisibleTermRows);
@@ -66,7 +66,7 @@ public sealed class LibraryLayoutPlannerTests
         }
 
         Assert.True(layout.VisibleTermRows >= LibraryLayoutPlanner.MinimumRows);
-        Assert.Equal(40 * scale, layout.UseColumnWidth);
+        Assert.Equal(54 * scale, layout.UseColumnWidth);
         Assert.Equal(40 * scale, layout.ActionColumnWidth);
     }
 

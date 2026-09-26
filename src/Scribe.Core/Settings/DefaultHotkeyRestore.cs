@@ -42,10 +42,10 @@ public static class DefaultHotkeyRestore
         var saveNeeded = !dictation.SameKeysAndBehavior(savedDictation) || !dictationOnly.SameKeysAndBehavior(savedDictationOnly);
         var message = (changed, saveNeeded) switch
         {
-            (true, true) => $"Hotkeys set to the defaults: {Defaults}. Save to apply them.",
-            (true, false) => $"Hotkeys set back to the defaults: {Defaults}. They are already saved.",
-            (false, true) => $"The hotkeys already show the defaults: {Defaults}. Save to apply them.",
-            (false, false) => $"Your hotkeys already match the defaults: {Defaults}.",
+            (true, true) => $"Shortcuts set to the defaults: {Defaults}. Choose Save to use them.",
+            (true, false) => $"Shortcuts set back to the defaults: {Defaults}. They're already saved.",
+            (false, true) => $"The defaults are already shown: {Defaults}. Choose Save to use them.",
+            (false, false) => $"Your shortcuts already match the defaults: {Defaults}.",
         };
         return new Result(dictation, dictationOnly, changed, saveNeeded, message);
     }

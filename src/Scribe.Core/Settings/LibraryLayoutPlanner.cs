@@ -71,10 +71,10 @@ public sealed record LibraryLayout(
 /// <para>
 /// The fixed geometry is the Settings window's (the 232 DIP navigation rail, the content margins of 12 and 24 DIPs, the
 /// 32 DIP title bar and the footer) and the tab's planned one (a 220 DIP list pane, 12 DIPs between panes, 16 inside the
-/// card, a 40 DIP Use and action column). Word packs is the second tab of the Dictionary page (Your words, Word packs),
+/// card, a 54 DIP Use column and a 40 DIP action column). Word packs is the second tab of the Dictionary page (Your words, Word packs),
 /// so a 40 DIP tab strip sits above the card, under the page title, subtitle and commands, at every window size and text
 /// size. Everything that holds text grows with the text size, the tab strip included; the minimum a text column must
-/// keep does too, so large text gets the stacked fallback. At 940 x 660 and 100% text each text column gets 164 DIPs, so
+/// keep does too, so large text gets the stacked fallback. At 940 x 660 and 100% text each text column gets 157 DIPs, so
 /// the minimum window stays side by side, and the tab strip leaves the normal composition five rows there, so it takes
 /// the short one, which shows seven. The window clamps its minimum size of 940 x 660 to the monitor's work area, which is
 /// where the short composition matters most: 1920 x 1080 at 175% (about 1097 x 569 DIPs), 1366 x 768 at 125%
@@ -102,7 +102,7 @@ public static class LibraryLayoutPlanner
     private const double MaxListPaneWidth = 320;
     private const double PaneGap = 12;
     private const double CardPadding = 16;
-    private const double UseColumn = 40;
+    private const double UseColumn = 54;
     private const double ActionColumn = 40;
 
     // The Dictionary page's tab strip (Your words, Word packs), above the card; it grows with the text size.

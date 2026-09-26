@@ -6,6 +6,26 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 public sealed class WordPackUiTextTests
 {
     [Fact]
+    public void Empty_selected_pack_text_matches_the_editor_empty_state()
+    {
+        Assert.Equal("No words yet. Add a word or phrase and how it should be written.", WordPackUiText.EmptySelectedPack);
+    }
+
+    [Fact]
+    public void Every_import_row_error_has_plain_copy()
+    {
+        foreach (var kind in Enum.GetValues<LibraryCsvRowErrorKind>())
+        {
+            var text = WordPackUiText.RowErrorReason(kind);
+
+            Assert.False(string.IsNullOrWhiteSpace(text));
+            Assert.DoesNotContain("_", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("-", text, StringComparison.Ordinal);
+            Assert.DoesNotMatch("[a-z][A-Z]", text);
+        }
+    }
+
+    [Fact]
     public void List_meta_uses_source_words_unsaved_and_matches()
     {
         Assert.Equal("Built-in, 94 words", WordPackUiText.ListMeta(true, 94, false));

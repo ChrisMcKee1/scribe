@@ -171,7 +171,7 @@ public sealed class StartupToggle
                     return new StartupToggleResult(
                         shown with
                         {
-                            Error = "Could not save the Start with Windows setting, so Windows was left as it was. Try again.",
+                            Error = "Couldn't save the Start with Windows setting, so Windows wasn't changed. Try again.",
                         },
                         saved,
                         StartupToggleOutcome.SaveFailed);
@@ -213,7 +213,7 @@ public sealed class StartupToggle
             _log.LogWarning(ex, "Applying the Start with Windows change failed.");
             return new StartupToggleResult(
                 new StartupRegistrationStatus(null,
-                    "Could not change the Windows startup setting. Reopen Settings to try again."),
+                    "Couldn't change the Windows startup setting. Close and reopen Settings to try again."),
                 saved,
                 StartupToggleOutcome.Unknown);
         }

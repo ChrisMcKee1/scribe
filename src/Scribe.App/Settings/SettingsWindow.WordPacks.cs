@@ -1363,7 +1363,8 @@ public partial class SettingsWindow
     {
         if (_librarySearchResult?.IsActive != true || _librarySearchResult.CountIn(libraryId) > 0 || _wordPackWorkspace is null)
         {
-            return _libraryDetailEmptyText;
+            var selectedPack = _wordPackWorkspace?.Draft.Find(libraryId);
+            return selectedPack is null ? _libraryDetailEmptyText : WordPackUiText.EmptySelectedPack;
         }
 
         var selected = _wordPackWorkspace.Draft.Find(libraryId)?.Content.Name ?? "this word pack";
@@ -1889,12 +1890,17 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
     private AcceptedImport? ShowImportWordPackDialog(LibraryImportPlan plan)
     {
         var nameBox = new TextBox { Text = plan.SuggestedName, MinWidth = 320, Margin = new Thickness(0, 8, 0, 8) };
+        nameBox.SetValue(AutomationProperties.NameProperty, "Word pack name");
         var summary = new TextBlock
         {
             Text = $"Adds {plan.Adds:N0}, {plan.WrittenDifferently:N0} written differently, {plan.AlreadyHere:N0} already here, {plan.RemovalRules:N0} remove words.",
             TextWrapping = TextWrapping.Wrap,
         };
-        var conflict = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var conflict = new StackPanel
+        {
+            Margin = new Thickness(0, 8, 0, 0),
+            Visibility = plan.WrittenDifferently > 0 ? Visibility.Visible : Visibility.Collapsed,
+        };
         var keepMine = new RadioButton { Content = "Keep mine", IsChecked = true, GroupName = "ImportConflictChoice" };
         var useFile = new RadioButton { Content = "Use the file's version", GroupName = "ImportConflictChoice" };
         conflict.Children.Add(keepMine);
@@ -1902,13 +1908,16 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         var errors = new TextBlock
         {
             Text = plan.SkippedRows.Count == 0
-                ? "No row errors."
-                : string.Join(Environment.NewLine, plan.SkippedRows.Take(6).Select(row => $"Row {row.Line}: {row.Kind}")),
+                ? string.Empty
+                : "Some rows couldn't be read:" + Environment.NewLine
+                    + string.Join(Environment.NewLine, plan.SkippedRows.Take(6).Select(row => $"Row {row.Line}: {WordPackUiText.RowErrorReason(row.Kind)}"))
+                    + (plan.SkippedRows.Count > 6 ? Environment.NewLine + $"...and {plan.SkippedRows.Count - 6:N0} more." : string.Empty),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0),
+            Visibility = plan.SkippedRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed,
         };
         var panel = new StackPanel();
-        panel.Children.Add(new TextBlock { Text = "Replacement name" });
+        panel.Children.Add(new TextBlock { Text = "Create a new word pack" });
         panel.Children.Add(nameBox);
         panel.Children.Add(summary);
         panel.Children.Add(conflict);
@@ -1944,7 +1953,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         return dialog.ShowDialog() == true
             ? new AcceptedImport(
                 plan with { SuggestedName = nameBox.Text },
-                useFile.IsChecked == true ? ImportConflictChoice.UseFilesVersion : ImportConflictChoice.KeepMine)
+                conflict.Visibility == Visibility.Visible && useFile.IsChecked == true ? ImportConflictChoice.UseFilesVersion : ImportConflictChoice.KeepMine)
             : null;
     }
 

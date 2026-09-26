@@ -316,6 +316,63 @@
                     </ItemsPanelTemplate>
                 </Setter.Value>
             </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridRow">
+                        <Border x:Name="KeyboardRowBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True">
+                            <SelectiveScrollingGrid>
+                                <SelectiveScrollingGrid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </SelectiveScrollingGrid.ColumnDefinitions>
+                                <SelectiveScrollingGrid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </SelectiveScrollingGrid.RowDefinitions>
+                                <DataGridCellsPresenter Grid.Column="1"
+                                                        ItemsPanel="{TemplateBinding ItemsPanel}"
+                                                        SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                <DataGridDetailsPresenter Grid.Row="1" Grid.Column="1"
+                                                          SelectiveScrollingGrid.SelectiveScrollingOrientation="{Binding AreRowDetailsFrozen, ConverterParameter={x:Static SelectiveScrollingOrientation.Vertical}, Converter={x:Static DataGrid.RowDetailsScrollingConverter}, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                                          Visibility="{TemplateBinding DetailsVisibility}"/>
+                                <DataGridRowHeader Grid.Row="0" Grid.RowSpan="2" Grid.Column="0"
+                                                   SelectiveScrollingGrid.SelectiveScrollingOrientation="Vertical"
+                                                   Visibility="{Binding HeadersVisibility, ConverterParameter={x:Static DataGridHeadersVisibility.Row}, Converter={x:Static DataGrid.HeadersVisibilityConverter}, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"/>
+                                <Rectangle x:Name="KeyboardRowActiveRectangle" Grid.Row="0" Grid.Column="1"
+                                           Width="3" Height="18" Margin="1,0,0,0"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                           Fill="{DynamicResource ListViewItemPillFillBrush}"
+                                           RadiusX="2" RadiusY="2" IsHitTestVisible="False"
+                                           Visibility="Collapsed"/>
+                            </SelectiveScrollingGrid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="AlternationIndex" Value="0">
+                                <Setter TargetName="KeyboardRowBorder" Property="Background" Value="{Binding RowBackground, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"/>
+                            </Trigger>
+                            <Trigger Property="AlternationIndex" Value="1">
+                                <Setter TargetName="KeyboardRowBorder" Property="Background" Value="{Binding AlternatingRowBackground, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsEnabled" Value="True"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="KeyboardRowBorder" Property="Background" Value="{DynamicResource ListViewItemBackgroundPointerOver}"/>
+                            </MultiTrigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="KeyboardRowActiveRectangle" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="KeyboardRowBorder" Property="Background" Value="{DynamicResource ListViewItemBackgroundPointerOver}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
             <Setter Property="KeyboardNavigation.TabNavigation" Value="Once"/>
@@ -323,16 +380,8 @@
             <Setter Property="RowStyle" Value="{StaticResource KeyboardRow}"/>
         </Style>
 
-        <!-- A word pack row. The selected word pack is the one the page's edits apply to, and WPF-UI marks it only with a
-             subtle fill (1.18:1 against the page in the dark theme) and a 3 px accent pill (1.63:1 against that fill
-             with the accent #0E0E70), so it also gets a 1 DIP outline in the strong control stroke and a SemiBold
-             name, whatever the accent. Drawn over the selected fill the stroke measures 5.27:1 against that fill and
-             6.23:1 against the page in the dark theme, 3.19:1 and 3.46:1 in the light one. Both cues are overlays,
-             and so is the pill here, drawn over the first cell's padding instead of in a column of its own: selecting
-             a row moves no cell, and no longer makes the row wider than the list (WPF-UI's column for the pill added
-             a horizontal scroll bar under it). AccentContrastResources supplies the outline and the weight, and
-             leaves both off in contrast themes. Otherwise WPF-UI 4.3.0's DefaultDataGridRowStyle template, less its
-             empty visual states, and based on KeyboardRow as the note above requires. -->
+        <!-- A word pack row adds the contrast outline over KeyboardRow's selected fill and pill. AccentContrastResources
+             supplies the outline and the SemiBold name weight, and leaves both off in contrast themes. -->
         <Style x:Key="LibraryRow" TargetType="DataGridRow" BasedOn="{StaticResource KeyboardRow}">
             <Setter Property="Template">
                 <Setter.Value>
@@ -790,7 +839,7 @@
                                             <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="210" Margin="8,0,0,0"
                                                       SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
-                                                      AutomationProperties.Name="Dictation shortcut, hold or toggle"/>
+                                                      AutomationProperties.Name="Dictation shortcut, how it works"/>
                                         </Grid>
                                         <TextBlock x:Name="HotkeyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Types your words with AI cleanup."/>
@@ -814,7 +863,7 @@
                                             <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="210" Margin="8,0,0,0"
                                                       SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
-                                                      AutomationProperties.Name="Shortcut without AI cleanup, hold or toggle"/>
+                                                      AutomationProperties.Name="Shortcut without AI cleanup, how it works"/>
                                         </Grid>
                                         <TextBlock x:Name="DictationOnlyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Optional. Types exactly what Scribe hears, with your dictionary and snippets."/>
@@ -952,7 +1001,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Start Scribe when you sign in to Windows" Style="{StaticResource CardTitle}"/>
                                             <TextBlock x:Name="LaunchStatusText" Style="{StaticResource CardDescription}"
-                                                       Text="Checking the Windows startup setting..."/>
+                                                       Text="Checking Windows startup settings..."/>
                                             <ui:Button Content="Windows startup settings"
                                                        HorizontalAlignment="Left" Margin="0,8,0,0"
                                                        Click="StartupSettings_Click"/>
@@ -1565,10 +1614,6 @@
                                         <ui:Button x:Name="DictionaryTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
                                     </Grid>
                                     <Grid Grid.Row="1" Margin="0,0,0,10">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -1586,6 +1631,10 @@
                                                        Icon="{ui:SymbolIcon Broom24}"
                                                        Margin="0,0,4,0" Click="DictionaryCleanupButton_Click"
                                                        ToolTip="Finds words and word packs you haven't used, so you can turn them off. You review every change."/>
+                                            <ui:Button x:Name="DictionaryMoreButton" Padding="8,5" Content="More"
+                                                       Icon="{ui:SymbolIcon MoreHorizontal24}"
+                                                       Margin="0,0,4,0" Click="DictionaryMoreButton_Click"
+                                                       ToolTip="More dictionary actions"/>
                                             <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
                                                         Margin="12,0,0,0" VerticalAlignment="Center"
                                                         Visibility="Collapsed">
@@ -1605,14 +1654,9 @@
                                                            Margin="8,0,0,0" VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </WrapPanel>
-                                        <ui:Button x:Name="DictionaryMoreButton" Grid.Row="1" Padding="8,5" Content="More"
-                                                   Icon="{ui:SymbolIcon MoreHorizontal24}"
-                                                   Margin="0,4,0,0" HorizontalAlignment="Left"
-                                                   Click="DictionaryMoreButton_Click"
-                                                   ToolTip="More dictionary actions"/>
-                                        <ui:TextBox x:Name="DictionarySearchBox" Grid.Column="1" Grid.RowSpan="2"
+                                        <ui:TextBox x:Name="DictionarySearchBox" Grid.Column="1"
                                                     MinWidth="180" Width="180" MaxWidth="260"
-                                                    HorizontalAlignment="Right"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Top"
                                                     PlaceholderText="Find a word"
                                                     AutomationProperties.Name="Find a word"
                                                     TextChanged="DictionarySearchBox_TextChanged"/>
@@ -1654,14 +1698,12 @@
                                                             </Style>
                                                         </DataGridTextColumn.EditingElementStyle>
                                                     </DataGridTextColumn>
-                                                    <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                    <DataGridCheckBoxColumn Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
                                                                             ElementStyle="{StaticResource WholeWordCheckBox}"
                                                                             EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}">
-                                                        <DataGridCheckBoxColumn.HeaderStyle>
-                                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-                                                                <Setter Property="ToolTip" Value="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
-                                                            </Style>
-                                                        </DataGridCheckBoxColumn.HeaderStyle>
+                                                        <DataGridCheckBoxColumn.Header>
+                                                            <TextBlock Text="Whole words only" ToolTip="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
+                                                        </DataGridCheckBoxColumn.Header>
                                                     </DataGridCheckBoxColumn>
                                                     <DataGridTemplateColumn Header="Word pack" Width="160" CanUserSort="True"
                                                                             SortMemberPath="Coverage">
@@ -2338,7 +2380,7 @@
                                       Margin="32">
                                     <StackPanel>
                                         <TextBlock x:Name="HistoryEmptyHint"
-                                                   Text="No dictations yet. Hold your hotkey and speak, then your dictations will appear here."
+                                                   Text="No dictations yet. Hold your shortcut in any app and speak."
                                                    TextAlignment="Center" TextWrapping="Wrap"
                                                    Style="{StaticResource CardDescription}"/>
                                         <ui:Button x:Name="HistoryRetryButton"
