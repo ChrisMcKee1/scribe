@@ -10,6 +10,7 @@ using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Scribe.Core.Vocabulary;
+using ManualClock = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
 
 namespace Scribe.Core.Tests;
 
@@ -172,12 +173,16 @@ public sealed class StoredSettingsReapplyTests : IDisposable
         _settings.Save(saved);
         var queued = new List<Action>();
         var processor = new TextPostProcessor(_dictionary, NullLogger<TextPostProcessor>.Instance);
+
+        // The deadlines on the test's clock: on the system clock the refresh's 15 s deadline would answer the reapply for an
+        // observer held up that long before the check that it still waits (stream TR round 5, the A9 sweep).
         using var publisher = new VocabularyPublisher(
             _libraries,
             _dictionary,
             processor,
             NullLogger<VocabularyPublisher>.Instance,
-            queued.Add);
+            queued.Add,
+            new ManualClock());
         var starting = publisher.StartAsync();
         Assert.Single(queued)();
         queued.Clear();
