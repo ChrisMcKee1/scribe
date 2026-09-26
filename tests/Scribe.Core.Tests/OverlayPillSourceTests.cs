@@ -36,37 +36,107 @@ public sealed class OverlayPillSourceTests
     };
 
     [Fact]
-    public void Every_colour_literal_in_the_overlay_is_a_pill_palette_colour()
+    public void Every_colour_the_overlay_s_XAML_writes_is_a_pill_palette_colour_or_Transparent()
     {
-        var palette = PillPalette.All.Select(c => c.Color).ToHashSet();
+        // Transparent paints nothing: the window's see-through background, and the sheen in a contrast theme.
         var found = 0;
         foreach (var file in OverlayFiles("*.xaml"))
         {
-            foreach (Match match in Regex.Matches(File.ReadAllText(file), "#[0-9A-Fa-f]{3,8}\\b"))
-            {
-                found++;
-                Assert.True(SrgbColor.TryParse(match.Value, out var color), $"{Path.GetFileName(file)}: {match.Value} is not #RRGGBB or #AARRGGBB.");
-                Assert.True(palette.Contains(color), $"{Path.GetFileName(file)} draws {match.Value}, which PillPalette does not have.");
-            }
+            var colours = Colours(File.ReadAllText(file)).ToArray();
+            Assert.All(colours, c => Assert.True(c.Approved, $"{Path.GetFileName(file)}: {c.Where} is {c.Value}, which PillPalette does not have."));
+            found += colours.Count(c => c.Value.StartsWith('#'));
         }
 
         Assert.True(found >= 2 * 15, "The pill's colours were not found where the overlay keeps them.");
     }
 
-    [Fact]
-    public void The_only_named_colour_in_the_overlay_is_Transparent()
+    [Theory]
+    // Astra's example: valid XAML, a visible colour, in single quotes.
+    [InlineData("<Grid x:Name='NoticeContent' Background='Red'/>")]
+    // Property-element syntax: as the property's text, as an object's attribute, and as an object's initialization text.
+    [InlineData("<Border><Border.Background>Red</Border.Background></Border>")]
+    [InlineData("<Border><Border.Background><SolidColorBrush Color='Red'/></Border.Background></Border>")]
+    [InlineData("<Border><Border.Background><SolidColorBrush>Red</SolidColorBrush></Border.Background></Border>")]
+    // A colour resource written as its element's text, and a colour property the old list did not name.
+    [InlineData("<Grid.Resources><Color x:Key='Stray'>#123456</Color></Grid.Resources>")]
+    [InlineData("<TextBox PlaceholderForeground=\"Red\"/>")]
+    // Any case, and a short form no palette colour is written in.
+    [InlineData("<Border Background=\"red\"/>")]
+    [InlineData("<Border Background=\"#F00\"/>")]
+    // A colour inside a markup extension, and the scRGB form.
+    [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=Red}'/>")]
+    [InlineData("<Border Background='sc#1,1,0,0'/>")]
+    public void The_colour_scan_finds_a_stray_colour_however_XAML_writes_it(string fragment)
     {
-        // A named colour is a colour too. Transparent paints nothing: the window's see-through background, and the sheen
-        // in a contrast theme.
-        foreach (var file in OverlayFiles("*.xaml"))
+        Assert.Contains(Colours(InGrid(fragment)), c => !c.Approved);
+    }
+
+    [Fact]
+    public void The_colour_scan_passes_the_palette_Transparent_and_theme_resources()
+    {
+        var colours = Colours(InGrid(
+            "<Border Background='Transparent' BorderBrush='{ThemeResource PillErrorEdgeBrush}'>" +
+            "<Border.Background><SolidColorBrush Color='#1A2744'/></Border.Background></Border>" +
+            "<TextBlock Text='Typed' TextTrimming='CharacterEllipsis' VerticalAlignment='Center'/>")).ToArray();
+
+        Assert.Equal(["Transparent", "#1A2744"], colours.Select(c => c.Value));
+        Assert.All(colours, c => Assert.True(c.Approved));
+    }
+
+    // A fragment inside a Grid that declares the XAML namespaces, so it parses as the overlay's own files do.
+    private static string InGrid(string fragment) =>
+        "<Grid xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' " +
+        "xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>" + fragment + "</Grid>";
+
+    // Every colour a XAML document writes, read from the parsed document rather than its source text, so the quote style
+    // and the syntax do not matter: each attribute's value and each element's own text (property-element syntax, and an
+    // object's initialization text such as a Color resource), with each term of a markup extension read on its own. A
+    // value is a colour when it is written in hex, in scRGB, or as a colour's name in any case (the names XAML accepts are
+    // the web colours System.Drawing knows; its system colours, such as Window and Menu, are not colour names in XAML).
+    // Only a hex value PillPalette has, and Transparent, which paints nothing, are approved.
+    private static IEnumerable<(string Where, string Value, bool Approved)> Colours(string xaml)
+    {
+        var palette = PillPalette.All.Select(c => c.Color).ToHashSet();
+        foreach (var element in XDocument.Parse(xaml, LoadOptions.SetLineInfo).Descendants())
         {
-            var named = Regex.Matches(
-                    File.ReadAllText(file),
-                    "\\b(?:Color|Fill|Stroke|Background|Foreground|BorderBrush)=\"(?<value>[A-Za-z]+)\"")
-                .Select(m => m.Groups["value"].Value)
-                .ToArray();
-            Assert.All(named, value => Assert.Equal("Transparent", value));
+            var values = element.Attributes()
+                .Select(a => (Node: (XObject)a, Where: $"{element.Name.LocalName} {a.Name.LocalName}", a.Value))
+                .Concat(element.Nodes().OfType<XText>().Select(t => (Node: (XObject)t, Where: $"{element.Name.LocalName}'s text", t.Value)));
+            foreach (var (node, where, value) in values)
+            {
+                foreach (var term in Terms(value))
+                {
+                    if (Approval(term) is { } approved)
+                    {
+                        yield return ($"line {((System.Xml.IXmlLineInfo)node).LineNumber}, {where}", term, approved);
+                    }
+                }
+            }
         }
+
+        // Null when the term is not a colour at all.
+        bool? Approval(string term)
+        {
+            if (term.StartsWith('#'))
+            {
+                return SrgbColor.TryParse(term, out var color) && palette.Contains(color);
+            }
+
+            if (term.StartsWith("sc#", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return IsColourName(term) ? string.Equals(term, "Transparent", StringComparison.OrdinalIgnoreCase) : null;
+        }
+
+        static IEnumerable<string> Terms(string value) =>
+            value.TrimStart().StartsWith('{')
+                ? value.Split([' ', '\t', '\r', '\n', '{', '}', ',', '=', '\''], StringSplitOptions.RemoveEmptyEntries)
+                : value.Trim() is { Length: > 0 } whole ? [whole] : [];
+
+        static bool IsColourName(string term) =>
+            System.Drawing.Color.FromName(term) is { IsKnownColor: true, IsSystemColor: false };
     }
 
     [Fact]
