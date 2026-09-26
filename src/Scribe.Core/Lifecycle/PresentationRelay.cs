@@ -71,7 +71,8 @@ public sealed class PresentationRelay<T>
 
     /// <summary>
     /// Queues work that belongs to the change numbered <paramref name="revision"/>, or <paramref name="ifNotCurrent"/>
-    /// when that change is no longer the rendered one by the time the rendering thread reaches it.
+    /// when that change is no longer the rendered one by the time the rendering thread reaches it. Once the relay is
+    /// closed neither runs: nobody is left to read a notice.
     /// </summary>
     public void PublishIfCurrent(long revision, Action work, Action? ifNotCurrent)
     {
@@ -91,7 +92,12 @@ public sealed class PresentationRelay<T>
     {
         try
         {
-            if (revision <= 0 || _isClosed() || Interlocked.Read(ref _lastRendered) != revision)
+            if (_isClosed())
+            {
+                return;
+            }
+
+            if (revision <= 0 || Interlocked.Read(ref _lastRendered) != revision)
             {
                 ifNotCurrent?.Invoke();
                 return;

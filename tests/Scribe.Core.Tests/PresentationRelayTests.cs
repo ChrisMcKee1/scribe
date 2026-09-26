@@ -320,6 +320,8 @@ public sealed class PresentationRelayTests
         RunAll(posted);
         closed = true;
         relay.PublishIfCurrent(2, () => ran.Add("after close"));
+        relay.PublishIfCurrent(1, () => ran.Add("after close"), () => ran.Add("fallback after close"));
+        relay.PublishIfCurrent(0, () => ran.Add("after close"), () => ran.Add("fallback after close"));
         RunAll(posted);
 
         Assert.Equal(["warning while recording", "fallback for ended recording", "fallback for stale warning"], ran);

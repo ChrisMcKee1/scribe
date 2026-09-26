@@ -982,6 +982,9 @@ public partial class App : Application
             return;
         }
 
+        // The same revision twice on purpose: here only a warning for a recording that was already over (revision 0) is
+        // decided. Whether its recording is still the one shown is decided by PublishIfCurrent below, in queue order after
+        // that recording's own change has rendered; reading the relay's last revision here could run ahead of it.
         if (DictationProblemRouting.DecideRecordingWarning(
                 report.Problem,
                 recordingIndicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
