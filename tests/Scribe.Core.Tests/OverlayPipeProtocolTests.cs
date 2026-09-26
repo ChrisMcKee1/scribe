@@ -117,22 +117,70 @@ public sealed class OverlayPipeProtocolTests
             client,
             StringComparison.Ordinal);
         Assert.Contains("writer.WriteLine(_desired.ReplayLine);", client, StringComparison.Ordinal);
-        Assert.Contains("Enqueue(_desired.ReplayLine, ensureAlive: false);", client, StringComparison.Ordinal);
+        Assert.Contains("Enqueue(desired.ReplayLine, desired, ensureAlive: false);", client, StringComparison.Ordinal);
         Assert.DoesNotContain("writer.WriteLine(_desired.Line);", client, StringComparison.Ordinal);
         Assert.DoesNotContain("Enqueue(_desired.Line", client, StringComparison.Ordinal);
 
         // The outcome is transient and needs the helper; it keeps the helper from when its write returns, never from when
         // it was taken (a write can take up to its timeout and still succeed).
         Assert.Matches(new Regex(@"new DesiredState\(OverlayPipeProtocol\.OutcomeLine\(outcome\), OverlayDemand\.Transient\)"), client);
-        Assert.Matches(new Regex(@"Enqueue\(desired\.Line, ensureAlive: true, showsFor: outcome\.OnScreen\)"), client);
+        Assert.Matches(new Regex(@"Enqueue\(desired\.Line, desired, ensureAlive: true, showsFor: outcome\.OnScreen\)"), client);
         Assert.Contains(
-            "_lifetime.OnStateCommand(\n            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper);",
+            "_lifetime.OnStateCommand(\n            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, IsSuperseded(item));",
             client.ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
         Assert.Matches(
             new Regex(@"WriteWithTimeout\([^;]+\);\s*if \(item\.ShowsForMs > 0\)\s*\{\s*_lifetime\.OnShown\(Environment\.TickCount64, item\.ShowsForMs\);"),
             client);
         Assert.Single(Regex.Matches(client, Regex.Escape("_lifetime.OnShown(")));
+    }
+
+    [Fact]
+    public void A_state_command_a_newer_state_replaced_is_never_written_and_an_anchor_move_writes_the_applied_anchor()
+    {
+        // Astra's A2 and every command of its shape: a queued state line written after a launch replayed something newer.
+        var client = StripComments(File.ReadAllText(ClientFile())).ReplaceLineEndings("\n");
+
+        // Every request is a state of its own, compared by reference; no state object is shared between two requests.
+        Assert.Contains("private sealed class DesiredState(string line, OverlayDemand demand)", client, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex(@"static DesiredState \w+ \{ get; \}"), client);
+        Assert.Contains(
+            "private bool IsSuperseded(Command item) => item.State is { } state && !ReferenceEquals(state, _desired);",
+            client,
+            StringComparison.Ordinal);
+        foreach (var (method, published) in new[]
+                 {
+                     ("public void ShowRecording()", "var desired = DesiredState.Recording();"),
+                     ("public void ShowProcessing(bool aiPolishing)", "var desired = DesiredState.Processing(aiPolishing);"),
+                     ("public void ShowOutcome(PillOutcome outcome)", "var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);"),
+                     ("public void HideOverlay()", "var desired = DesiredState.Hidden();"),
+                     // A warning goes out for the live recording's state, and goes with it once a newer state replaces it.
+                     ("public void ShowRecordingWarning(string? reason)", "var desired = _desired is { IsRecording: true } recording ? recording : DesiredState.Recording();"),
+                 })
+        {
+            var body = Body(client, method);
+            Assert.Contains(published, body, StringComparison.Ordinal);
+            Assert.Contains("_desired = desired;", body, StringComparison.Ordinal);
+            Assert.Matches(new Regex(@"Enqueue\([^;]*, desired, "), body);
+        }
+
+        // Judged before the decision (a stale command launches nothing) and again right before the write, after any launch.
+        var handle = Body(client, "private void HandleState(Command item)");
+        Assert.Equal(2, Regex.Matches(handle, Regex.Escape("IsSuperseded(item)")).Count);
+        Assert.Matches(
+            new Regex(@"if \(IsSuperseded\(item\)\)\s*\{[\s\S]*?return;\s*\}\s*WriteWithTimeout\(item\.AppliedAnchor \? AppliedAnchorLine : item\.Text\);"),
+            handle);
+        Assert.True(
+            handle.IndexOf("Prepare(action, helper, nowMs)", StringComparison.Ordinal)
+                < handle.LastIndexOf("IsSuperseded(item)", StringComparison.Ordinal),
+            "The second judgement comes after the launch.");
+
+        // The engine's anchor move writes the anchor as it stands when written, so it never puts back an older one.
+        var move = Body(client, "public void SetPosition(OverlayPosition position)");
+        Assert.Contains(
+            "EnqueueStamped(new Command(CommandKind.State, OverlayPipeProtocol.PositionLine(position), AppliedAnchor: true));",
+            move,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -165,6 +213,25 @@ public sealed class OverlayPipeProtocolTests
         PillOutcomeKind.NothingTyped => PillOutcome.Of(new(false, "none", 0, 2), false, null, null)!,
         _ => PillOutcome.Of(new(false, "unicode", 1, 2), false, null, null)!,
     };
+
+    // The text of a member from its signature to its matching closing brace.
+    private static string Body(string code, string signature)
+    {
+        var start = code.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"'{signature}' was not found.");
+        var open = code.IndexOf('{', code.IndexOf(')', start));
+        var depth = 0;
+        for (var i = open; i < code.Length; i++)
+        {
+            depth += code[i] == '{' ? 1 : code[i] == '}' ? -1 : 0;
+            if (depth == 0)
+            {
+                return code[start..(i + 1)];
+            }
+        }
+
+        throw new InvalidOperationException($"'{signature}' has no closing brace.");
+    }
 
     // The member names of an enum as declared, comments and attributes aside.
     private static string[] EnumMembers(string source, string name)

@@ -80,8 +80,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private int _latestMeter;
 
     // The latest state the engine asked for, replayed to a relaunched helper. One immutable object, so
-    // the consumer can never pair one state's command with another state's demand.
-    private volatile DesiredState _desired = DesiredState.Hidden;
+    // the consumer can never pair one state's command with another state's demand, and a new object for
+    // every request, so a queued command can tell whether the state it was made for is still the latest.
+    private volatile DesiredState _desired = DesiredState.Hidden();
 
     // The applied (saved) anchor. Volatile: written from the UI thread, read by the consumer thread
     // when a relaunch replays it to the fresh process. Previews change what is on screen but never
@@ -98,32 +99,37 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         _consumer.Start();
     }
 
-    public void Warmup() => Enqueue(OverlayPipeProtocol.Warmup, ensureAlive: true);
+    public void Warmup() => Enqueue(OverlayPipeProtocol.Warmup, state: null, ensureAlive: true);
 
     public void ShowRecording()
     {
         CancelPreview();
         Subscribe();
         _meterLevel = 0f;
-        _desired = DesiredState.Recording;
-        Enqueue(OverlayPipeProtocol.Recording, ensureAlive: true);
+        var desired = DesiredState.Recording();
+        _desired = desired;
+        Enqueue(OverlayPipeProtocol.Recording, desired, ensureAlive: true);
     }
 
     public void ShowRecordingWarning(string? reason)
     {
         CancelPreview();
         Subscribe();
-        _desired = DesiredState.Recording;
-        Enqueue(OverlayPipeProtocol.WarningLine(reason), ensureAlive: true);
+
+        // A warning belongs to the live recording: it goes out for that recording's state, and goes with it once a newer
+        // state replaces the recording.
+        var desired = _desired is { IsRecording: true } recording ? recording : DesiredState.Recording();
+        _desired = desired;
+        Enqueue(OverlayPipeProtocol.WarningLine(reason), desired, ensureAlive: true);
     }
 
     public void ShowProcessing(bool aiPolishing)
     {
         CancelPreview();
         Unsubscribe();
-        var desired = aiPolishing ? DesiredState.Polishing : DesiredState.Transcribing;
+        var desired = DesiredState.Processing(aiPolishing);
         _desired = desired;
-        Enqueue(desired.Line, ensureAlive: true);
+        Enqueue(desired.Line, desired, ensureAlive: true);
     }
 
     public void ShowOutcome(PillOutcome outcome)
@@ -133,25 +139,30 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Unsubscribe();
         var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);
         _desired = desired;
-        Enqueue(desired.Line, ensureAlive: true, showsFor: outcome.OnScreen);
+        Enqueue(desired.Line, desired, ensureAlive: true, showsFor: outcome.OnScreen);
     }
 
     public void HideOverlay()
     {
         CancelPreview();
         Unsubscribe();
-        _desired = DesiredState.Hidden;
+        var desired = DesiredState.Hidden();
+        _desired = desired;
         // The engine's hide cancels a pending relaunch retry; a preview's cosmetic end does not.
-        Enqueue(OverlayPipeProtocol.Hide, ensureAlive: false, cancelsRetry: true);
+        Enqueue(OverlayPipeProtocol.Hide, desired, ensureAlive: false, cancelsRetry: true);
     }
 
     public void SetPosition(OverlayPosition position)
     {
         CancelPreview();
         _position = position;
-        // Don't launch the helper just to move it; a relaunch replays the anchor from _position.
-        Enqueue(OverlayPipeProtocol.PositionLine(position), ensureAlive: false);
-        Enqueue(_desired.ReplayLine, ensureAlive: false);
+
+        // Don't launch the helper just to move it; a relaunch replays the anchor from _position. The anchor line is the
+        // applied anchor when it is written, so a queued move never puts back one that a newer move, or a relaunch's
+        // replay, already replaced; the state line is for the state asked for now, and goes if a newer state replaces it.
+        EnqueueStamped(new Command(CommandKind.State, OverlayPipeProtocol.PositionLine(position), AppliedAnchor: true));
+        var desired = _desired;
+        Enqueue(desired.ReplayLine, desired, ensureAlive: false);
     }
 
     public void SetKeepWarm(int minutes)
@@ -253,9 +264,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     // ---- Command queue plumbing -----------------------------------------------------------------
 
-    private void Enqueue(string text, bool ensureAlive, bool cancelsRetry = false, TimeSpan showsFor = default) =>
+    private void Enqueue(string text, DesiredState? state, bool ensureAlive, bool cancelsRetry = false, TimeSpan showsFor = default) =>
         EnqueueStamped(new Command(
-            CommandKind.State, text, ensureAlive, cancelsRetry, ShowsForMs: (long)showsFor.TotalMilliseconds));
+            CommandKind.State, text, ensureAlive, cancelsRetry, ShowsForMs: (long)showsFor.TotalMilliseconds, State: state));
 
     private void EnqueuePreview(long generation, OverlayPreviewRole role, string text, bool ensureAlive) =>
         EnqueueStamped(new Command(CommandKind.State, text, ensureAlive, Role: role, Generation: generation));
@@ -428,7 +439,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         var nowMs = Environment.TickCount64;
         var helper = ObserveHelper(nowMs);
         var action = _lifetime.OnStateCommand(
-            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper);
+            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, IsSuperseded(item));
         if (!Prepare(action, helper, nowMs))
         {
             return;
@@ -442,19 +453,30 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         if (item.Role == OverlayPreviewRole.End)
         {
             WritePreviewEnd();
+            return;
         }
-        else
-        {
-            WriteWithTimeout(item.Text);
 
-            // Timed from a fresh reading once the write has returned: it can take up to the write timeout and still
-            // succeed, and the overlay starts its own hold only once it has the line.
-            if (item.ShowsForMs > 0)
-            {
-                _lifetime.OnShown(Environment.TickCount64, item.ShowsForMs);
-            }
+        // Judged again at the write: a launch can block for seconds while the engine asks for something newer, and the
+        // launch's replay already gave the new helper that; the newer state's own command is queued behind this one.
+        if (IsSuperseded(item))
+        {
+            TryLog(LogLevel.Debug, null, "Overlay command {Command} skipped: a newer state replaced it.", item.Verb);
+            return;
+        }
+
+        WriteWithTimeout(item.AppliedAnchor ? AppliedAnchorLine : item.Text);
+
+        // Timed from a fresh reading once the write has returned: it can take up to the write timeout and still
+        // succeed, and the overlay starts its own hold only once it has the line.
+        if (item.ShowsForMs > 0)
+        {
+            _lifetime.OnShown(Environment.TickCount64, item.ShowsForMs);
         }
     }
+
+    // A state command made for a state the engine has since replaced. Each request publishes a DesiredState of its own,
+    // so identity, not the line, says which state a command was made for.
+    private bool IsSuperseded(Command item) => item.State is { } state && !ReferenceEquals(state, _desired);
 
     private void HandleMeter()
     {
@@ -1137,6 +1159,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Abandoned,
     }
 
+    /// <param name="State">
+    /// For a state command, the state it was made for; it is not written once a newer state has replaced that one (see
+    /// IsSuperseded). Null for commands that show no state of their own: the warmup, an anchor, a preview's steps.
+    /// </param>
+    /// <param name="AppliedAnchor">An anchor move that writes the applied anchor as it stands when written.</param>
     private readonly record struct Command(
         CommandKind Kind,
         string Text = "",
@@ -1145,7 +1172,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         long Stamp = 0,
         OverlayPreviewRole Role = OverlayPreviewRole.None,
         long Generation = 0,
-        long ShowsForMs = 0)
+        long ShowsForMs = 0,
+        DesiredState? State = null,
+        bool AppliedAnchor = false)
     {
         public static Command Exit { get; } = new(CommandKind.Exit);
 
@@ -1170,13 +1199,24 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         };
     }
 
-    /// <summary>The latest state the engine asked for: the pipe line that shows it, and what it needs from the helper.</summary>
-    private sealed record DesiredState(string Line, OverlayDemand Demand)
+    /// <summary>
+    /// The latest state the engine asked for: the pipe line that shows it, and what it needs from the helper. A class, and a
+    /// new one for every request: a queued command compares the state it was made for with the latest by reference, and
+    /// two requests for the same line (two recordings) are still two states.
+    /// </summary>
+    private sealed class DesiredState(string line, OverlayDemand demand)
     {
-        public static DesiredState Hidden { get; } = new(OverlayPipeProtocol.Hide, OverlayDemand.None);
-        public static DesiredState Recording { get; } = new(OverlayPipeProtocol.Recording, OverlayDemand.Sustained);
-        public static DesiredState Transcribing { get; } = new(OverlayPipeProtocol.ProcessingLine(aiCleanup: false), OverlayDemand.Sustained);
-        public static DesiredState Polishing { get; } = new(OverlayPipeProtocol.ProcessingLine(aiCleanup: true), OverlayDemand.Sustained);
+        public string Line { get; } = line;
+
+        public OverlayDemand Demand { get; } = demand;
+
+        public bool IsRecording => Line == OverlayPipeProtocol.Recording;
+
+        public static DesiredState Hidden() => new(OverlayPipeProtocol.Hide, OverlayDemand.None);
+
+        public static DesiredState Recording() => new(OverlayPipeProtocol.Recording, OverlayDemand.Sustained);
+
+        public static DesiredState Processing(bool aiCleanup) => new(OverlayPipeProtocol.ProcessingLine(aiCleanup), OverlayDemand.Sustained);
 
         /// <summary>
         /// What a relaunched helper, or one being moved, is told to show: the state itself, unless it hides itself (a

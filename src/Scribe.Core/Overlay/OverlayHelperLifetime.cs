@@ -240,9 +240,16 @@ public sealed class OverlayHelperLifetime
     /// pill must show, the startup warmup, a preview); <paramref name="cancelsRetry"/> marks the engine's
     /// hide, which drops a pending retry. An outcome the command shows keeps the helper once its write has
     /// returned (<see cref="OnShown"/>), not from here: the write, after a launch or not, may still take a while.
+    /// <paramref name="superseded"/> marks a command for a state the engine has since replaced; the newer state's own
+    /// command is queued behind it. Such a command never launches the helper on its own account (it would be launched to
+    /// show something already over); a lost helper it notices is still brought back while the latest state keeps the pill
+    /// on screen, as by any command. With the helper running it is <see cref="OverlayCommandAction.Write"/>, for what the
+    /// command owes besides its own line (the anchor a superseded preview moved), and the caller writes nothing of the
+    /// line itself, judging again right before the write, after any launch.
     /// </summary>
     public OverlayCommandAction OnStateCommand(
-        long nowMs, long stamp, bool ensureAlive, bool cancelsRetry, OverlayDemand demand, OverlayHelperObservation helper)
+        long nowMs, long stamp, bool ensureAlive, bool cancelsRetry, OverlayDemand demand, OverlayHelperObservation helper,
+        bool superseded = false)
     {
         if (_exited)
         {
@@ -255,7 +262,7 @@ public sealed class OverlayHelperLifetime
             _backoff.CancelRetry();
         }
 
-        return Decide(nowMs, ensureAlive, demand, helper);
+        return Decide(nowMs, ensureAlive && !superseded, demand, helper);
     }
 
     /// <summary>
