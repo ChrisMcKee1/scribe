@@ -66,7 +66,7 @@ public sealed class PillTextScale
     /// <summary>The pill started to hide: a change held back is dropped, since the next show reads the scale again.</summary>
     public void OnHidden() => _pending = null;
 
-    private void Defer(double textScale) => _pending = textScale == Current ? null : textScale;
+    private void Defer(double textScale) => _pending = textScale;
 
     private bool Take(double textScale)
     {
