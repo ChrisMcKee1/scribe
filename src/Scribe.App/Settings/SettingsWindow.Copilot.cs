@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Windows;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Settings;
 using Wpf.Ui.Controls;
 
 namespace Scribe.App.Settings;
@@ -49,7 +50,7 @@ public partial class SettingsWindow
     private void RefreshCopilotCliStatus()
     {
         CopilotCliBar.Severity = InfoBarSeverity.Informational;
-        CopilotCliBar.Title = "Checking for the GitHub Copilot CLI…";
+        CopilotCliBar.Title = "Checking for the GitHub Copilot command-line tool...";
         CopilotCliBar.Message = string.Empty;
         CopilotRecheckButton.IsEnabled = false;
 
@@ -103,7 +104,8 @@ public partial class SettingsWindow
                      * yet". The button stays for the case the button is actually for: re-reading
                      * after an install or a sign-in changed the answer.
                      */
-                    if (status.Found && !_copilotModelsLoaded)
+                    if (status.Found && !_copilotModelsLoaded &&
+                        RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen))
                     {
                         LoadCopilotModels();
                     }
@@ -205,7 +207,7 @@ public partial class SettingsWindow
         // can fire again while a fetch is still in flight.
         _copilotModelsLoaded = true;
         CopilotLoadModelsButton.IsEnabled = false;
-        CopilotModelHint.Text = "Reading the models your Copilot licence allows…";
+        CopilotModelHint.Text = "Reading the models your Copilot subscription allows...";
 
         var cliPath = _copilotCli.Path;
         _ = Task.Run(async () => await GitHubCopilotModels.ListAsync(cliPath, CancellationToken.None)
@@ -245,7 +247,7 @@ public partial class SettingsWindow
                         CopilotModelCombo.Text = typed;
 
                         CopilotModelHint.Text =
-                            $"{models.Count} model(s) available. Leave blank to use your account's default.";
+                            $"{models.Count} model(s) available. Leave empty to use your account's default.";
                     });
                 },
                 TaskScheduler.Default);

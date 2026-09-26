@@ -1371,10 +1371,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCombo.DisplayMemberPath = nameof(ProviderChoice.Label);
         AiProviderCombo.ItemsSource = new[]
         {
-            new ProviderChoice(CleanupProvider.FoundryLocal, "On-device (Foundry Local)"),
-            new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry (your Azure sign-in)"),
-            new ProviderChoice(CleanupProvider.OpenAiCompatible, "Custom endpoint (Ollama, LM Studio, OpenRouter)"),
-            new ProviderChoice(CleanupProvider.GitHubCopilot, "GitHub Copilot (your Copilot licence)"),
+            new ProviderChoice(CleanupProvider.FoundryLocal, "On this PC (Foundry Local)"),
+            new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry"),
+            new ProviderChoice(CleanupProvider.OpenAiCompatible, "Another AI service"),
+            new ProviderChoice(CleanupProvider.GitHubCopilot, "GitHub Copilot"),
         };
 
         // Foundry model picker: searchable list of curated aliases. The live Foundry Local catalog
@@ -1389,6 +1389,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var providers = (ProviderChoice[])AiProviderCombo.ItemsSource;
         AiProviderCombo.SelectedItem =
             providers.FirstOrDefault(p => p.Provider == _settings.AiCleanupProvider) ?? providers[0];
+        SetSelectedProviderRadio(_settings.AiCleanupProvider);
 
         var savedModel = CleanupModelCatalog.Curated
             .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
@@ -1406,6 +1407,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureAuthModeBox.SelectedIndex = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey)
             ? 2
             : _settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
+        SetSelectedAzureAuthRadio(AzureAuthModeBox.SelectedIndex);
         SpTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
         SpClientIdBox.Text = _settings.AiCleanupAzureClientId ?? string.Empty;
         SpClientSecretBox.Password = _settings.AiCleanupAzureClientSecret ?? string.Empty;
@@ -1426,15 +1428,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Show the effective writing style: the user's saved guidance, or the default when blank so
         // they can see and edit exactly what gets sent to the model.
         AiWritingStyleBox.Text = CleanupPrompt.ResolveWritingStyle(_settings.AiCleanupWritingStyle);
+        UpdateAiWritingStyleSummary();
 
         // Cleanup prompt: the style selector plus the editable frontier/local guardrail prompts. Each box
         // shows the effective prompt (the user's override, or the built-in default) so it is visible and tunable.
         AiPromptStyleCombo.DisplayMemberPath = nameof(PromptStyleChoice.Label);
         AiPromptStyleCombo.ItemsSource = new[]
         {
-            new PromptStyleChoice(CleanupPromptStyle.Auto, "Automatic (recommended), by provider"),
-            new PromptStyleChoice(CleanupPromptStyle.Frontier, "Frontier, for cloud and capable models"),
-            new PromptStyleChoice(CleanupPromptStyle.Local, "Local, for on-device and small models"),
+            new PromptStyleChoice(CleanupPromptStyle.Auto, "Automatic (recommended)"),
+            new PromptStyleChoice(CleanupPromptStyle.Frontier, "Detailed, for cloud and larger models"),
+            new PromptStyleChoice(CleanupPromptStyle.Local, "Short, for small models on this PC"),
         };
         var promptStyles = (PromptStyleChoice[])AiPromptStyleCombo.ItemsSource;
         AiPromptStyleCombo.SelectedItem =
@@ -1456,9 +1459,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
         }
-        else if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.AzureFoundry)
+        else if (RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen) &&
+                 SelectedProvider == CleanupProvider.AzureFoundry)
         {
-            // Detect an existing Azure sign-in and auto-list deployments so search works immediately.
             _ = ProbeAzureSignInAsync();
         }
     }
@@ -2707,7 +2710,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // --- AI cleanup ----------------------------------------------------------------------
 
     private CleanupProvider SelectedProvider =>
-        (AiProviderCombo.SelectedItem as ProviderChoice)?.Provider ?? CleanupProvider.FoundryLocal;
+        AiProviderCopilotRadio?.IsChecked == true ? CleanupProvider.GitHubCopilot :
+        AiProviderFoundryRadio?.IsChecked == true ? CleanupProvider.AzureFoundry :
+        AiProviderCustomRadio?.IsChecked == true ? CleanupProvider.OpenAiCompatible :
+        CleanupProvider.FoundryLocal;
 
     private CleanupPromptStyle SelectedPromptStyle =>
         (AiPromptStyleCombo.SelectedItem as PromptStyleChoice)?.Style ?? CleanupPromptStyle.Auto;
@@ -2727,13 +2733,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateAiEnabledState();
-        if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.AzureFoundry)
-        {
-            _ = ProbeAzureSignInAsync();
-        }
     }
 
     private void AiProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateDictionaryGlossaryHint();
+        if (AiProviderCombo.SelectedItem is ProviderChoice choice)
+        {
+            SetSelectedProviderRadio(choice.Provider);
+        }
+
+        AiProviderChanged(RemoteActivityTrigger.ProviderChange);
+    }
+
+    private void AiProviderRadio_Checked(object sender, RoutedEventArgs e) =>
+        AiProviderChanged(RemoteActivityTrigger.ProviderChange);
+
+    private void AiProviderChanged(RemoteActivityTrigger trigger)
     {
         UpdateDictionaryGlossaryHint();
         if (_loadingUi)
@@ -2741,15 +2757,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        SyncProviderComboToRadio();
         UpdateAiProviderPanels();
+        UpdateAiEnabledState();
         RefreshAiStatus();
 
-        // Merely selecting Foundry Local shows what is already running and downloads nothing; saving
-        // with cleanup on, or pressing "Set up Foundry Local", is what starts the runtime.
         if (SelectedProvider == CleanupProvider.FoundryLocal)
         {
-            // RefreshAiStatus reports the saved provider. When that is another one, its status is not
-            // Foundry Local's and must not stand in the Foundry Local panel.
             if (_savedAiProvider != CleanupProvider.FoundryLocal)
             {
                 AiStatusText.Text = FoundryIdleStatus;
@@ -2757,10 +2771,55 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
         }
-        else if (SelectedProvider == CleanupProvider.AzureFoundry)
+        else if (SelectedProvider == CleanupProvider.AzureFoundry &&
+                 RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), trigger))
         {
             _ = ProbeAzureSignInAsync();
         }
+    }
+
+    private void SetSelectedProviderRadio(CleanupProvider provider)
+    {
+        if (AiProviderLocalRadio is null)
+        {
+            return;
+        }
+
+        AiProviderLocalRadio.IsChecked = provider == CleanupProvider.FoundryLocal;
+        AiProviderFoundryRadio.IsChecked = provider == CleanupProvider.AzureFoundry;
+        AiProviderCustomRadio.IsChecked = provider == CleanupProvider.OpenAiCompatible;
+        AiProviderCopilotRadio.IsChecked = provider == CleanupProvider.GitHubCopilot;
+    }
+
+    private void SyncProviderComboToRadio()
+    {
+        if (AiProviderCombo?.ItemsSource is not IEnumerable<ProviderChoice> providers)
+        {
+            return;
+        }
+
+        var provider = SelectedProvider;
+        AiProviderCombo.SelectedItem = providers.FirstOrDefault(choice => choice.Provider == provider);
+    }
+
+    private AppSettings CurrentAiDraftSettings()
+    {
+        var draft = _settings.Clone();
+        draft.EnableAiCleanup = AiCleanupCheck?.IsChecked == true;
+        draft.AiCleanupProvider = SelectedProvider;
+        draft.AiCleanupModel = AiModelBox?.Text?.Trim() ?? draft.AiCleanupModel;
+        draft.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
+        draft.AiCleanupAzureEndpoint = AzureEndpointBox?.Text;
+        draft.AiCleanupAzureDeployment = AzureDeploymentBox?.Text;
+        draft.AiCleanupAzureTenantId = IsAzureApiKeySelected ? null : (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal ? SpTenantBox?.Text : AzureTenantBox?.Text);
+        draft.AiCleanupAzureClientId = SpClientIdBox?.Text;
+        draft.AiCleanupAzureClientSecret = SpClientSecretBox?.Password;
+        draft.AiCleanupAzureApiKey = IsAzureApiKeySelected ? AzureApiKeyBox?.Password : string.Empty;
+        draft.AiCleanupCustomEndpoint = CustomEndpointBox?.Text;
+        draft.AiCleanupCustomModel = CustomModelBox?.Text;
+        draft.AiCleanupCustomApiKey = CustomApiKeyBox?.Password;
+        draft.AiCleanupCopilotModel = CopilotModelCombo?.Text;
+        return draft;
     }
 
     // --- Filterable model dropdowns --------------------------------------------------------
@@ -2896,13 +2955,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private async void AiSetupButton_Click(object sender, RoutedEventArgs e)
     {
         AiSetupButton.IsEnabled = false;
-        AiStatusText.Text = "Setting up Foundry Local… The first setup downloads the hardware runtime for this PC, which can take a while.";
+        AiStatusText.Text = "Setting up. The first time can take a while.";
         try
         {
             var available = await Task.Run(() => _cleanup.ProbeAsync());
             if (!available)
             {
-                AiStatusText.Text = "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then try again.";
+                AiStatusText.Text = "Couldn't set up AI on this PC. Try again, or choose another AI service.";
                 return;
             }
 
@@ -2913,7 +2972,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var count = await RefreshFoundryModelsAsync(initializeRuntime: true);
             var loaded = _foundryExecutionBuilds.Values.FirstOrDefault(m => m.Loaded);
             var running = loaded is null
-                ? "No model is loaded yet; the one you pick downloads when you press Load, or save with AI cleanup on."
+                ? $"Ready to download {DisplayNameForFoundryAlias(AiModelBox.Text)}."
                 : $"{loaded.Alias} is loaded and running on the {loaded.DeviceLabel ?? "default device"}.";
 
             AiStatusText.Text = count switch
@@ -2925,7 +2984,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch
         {
-            AiStatusText.Text = "Couldn't set up Foundry Local. Make sure it's installed and try again.";
+            AiStatusText.Text = "Couldn't set up AI on this PC. Try again, or choose another AI service.";
         }
         finally
         {
@@ -3058,19 +3117,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _foundryModelOp = true;
         AiLoadButton.IsEnabled = false;
         AiUnloadButton.IsEnabled = false;
-        AiStatusText.Text = "Unloading the on-device model…";
+        AiStatusText.Text = "Freeing model memory...";
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             var loaded = await _cleanup.GetLoadedFoundryModelAsync(cts.Token);
             var ok = await _cleanup.UnloadFoundryModelAsync(loaded, cts.Token);
             AiStatusText.Text = ok
-                ? "Unloaded. No on-device model is resident."
-                : "Nothing was loaded to unload.";
+                ? "Model memory freed."
+                : "Model memory freed.";
         }
         catch
         {
-            AiStatusText.Text = "Couldn't unload the on-device model.";
+            AiStatusText.Text = "Couldn't free model memory. Try again.";
         }
         finally
         {
@@ -3220,8 +3279,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (AzureStatusText is not null)
             {
                 AzureStatusText.Text = CanVerifyAzureApiKey
-                    ? "Verify the API key before saving this Microsoft Foundry configuration."
-                    : "Enter the endpoint, deployment name, and API key.";
+                    ? "Fill in the details above, then choose Verify."
+                    : "Fill in the details above, then choose Verify.";
             }
 
             ApplyAzureSettingsAccess();
@@ -3236,7 +3295,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 if (AzureStatusText is not null)
                 {
-                    AzureStatusText.Text = "Enter the service principal details, then verify them.";
+                    AzureStatusText.Text = "Fill in the details above, then choose Verify.";
                 }
 
                 ApplyAzureSettingsAccess();
@@ -3269,7 +3328,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var shouldListModels = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         ApplyAzureSettingsAccess();
-        AzureStatusText.Text = "Checking your Azure CLI sign-in…";
+        AzureStatusText.Text = "Checking your Azure sign-in...";
 
         try
         {
@@ -3386,7 +3445,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public Task<AzureSignInStatus> ProbeAsync() => window.ProbeCurrentAzureSignInAsync(attemptCancellation);
 
-        public void ReportBrowserSignIn() => window.AzureStatusText.Text = "Opening Azure sign-in in your browser…";
+        public void ReportBrowserSignIn() => window.AzureStatusText.Text = "Finish signing in in your browser.";
 
         public async Task<(bool Ok, string Message)> LoginAsync()
         {
@@ -3412,12 +3471,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             window.AzureStatusText.Text = result.Outcome switch
             {
                 AzureCliSignIn.Outcome.CliMissing =>
-                    "Azure CLI was not found. Install it below, or use an endpoint and API key instead.",
+                    "Azure CLI isn't installed.",
                 AzureCliSignIn.Outcome.LoginFailed => result.Message,
                 AzureCliSignIn.Outcome.NotSignedIn when allowInteractiveLogin =>
                     "Azure sign-in completed, but Scribe could not verify an Azure token. Check the tenant and try again.",
                 AzureCliSignIn.Outcome.NotSignedIn =>
-                    "Not signed in to Azure. Sign in to reveal subscriptions and models.",
+                    "Not signed in to Azure. Until you sign in, Scribe types what it heard.",
                 _ => $"{DescribeAzureIdentity(status)} Listing compatible deployments…",
             };
         }
@@ -3436,7 +3495,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private bool IsAzureApiKeySelected => AzureAuthModeBox?.SelectedIndex == 2;
+    private bool IsAzureApiKeySelected => AzureApiKeyRadio?.IsChecked == true || AzureAuthModeBox?.SelectedIndex == 2;
 
     private string SelectedAzureApiKey => IsAzureApiKeySelected ? AzureApiKeyBox?.Password ?? string.Empty : string.Empty;
 
@@ -3447,7 +3506,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         !string.IsNullOrWhiteSpace(SelectedAzureApiKey);
 
     private AzureAuthMode SelectedAzureAuthMode =>
-        AzureAuthModeBox?.SelectedIndex == 1 ? AzureAuthMode.ServicePrincipal : AzureAuthMode.AzureCli;
+        AzureServicePrincipalRadio?.IsChecked == true || AzureAuthModeBox?.SelectedIndex == 1
+            ? AzureAuthMode.ServicePrincipal
+            : AzureAuthMode.AzureCli;
 
     /// <summary>The app registration currently entered, or null when it is incomplete.</summary>
     private AzureServicePrincipal? CurrentServicePrincipal => AzureServicePrincipal.TryCreate(
@@ -3455,6 +3516,34 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         SpTenantBox?.Text,
         SpClientIdBox?.Text,
         SpClientSecretBox?.Password);
+
+    private void SetSelectedAzureAuthRadio(int selectedIndex)
+    {
+        if (AzureCliRadio is null)
+        {
+            return;
+        }
+
+        AzureCliRadio.IsChecked = selectedIndex == 0;
+        AzureServicePrincipalRadio.IsChecked = selectedIndex == 1;
+        AzureApiKeyRadio.IsChecked = selectedIndex == 2;
+    }
+
+    private void AzureAuthRadio_Checked(object sender, RoutedEventArgs e)
+    {
+        if (AzureAuthModeBox is not null)
+        {
+            AzureAuthModeBox.SelectedIndex = IsAzureApiKeySelected ? 2 : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
+        }
+
+        AzureAuthModeBox_SelectionChanged(sender, new SelectionChangedEventArgs(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent, new List<object>(), new List<object>()));
+    }
+
+    private void AzureUseApiKeyButton_Click(object sender, RoutedEventArgs e)
+    {
+        AzureApiKeyRadio.IsChecked = true;
+        AzureManualButton_Click(sender, e);
+    }
 
     private AzureSettingsAccess.State CurrentAzureSettingsAccess =>
         AzureSettingsAccess.Resolve(
@@ -3513,10 +3602,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         AzureRefreshButton.Visibility = Visibility.Visible;
         AzureRefreshButton.Content = apiKeyMode
-            ? _azureApiKeyVerified ? "Re-verify" : "Verify API key"
+            ? _azureApiKeyVerified ? "Verify" : "Verify"
             : servicePrincipal
-            ? _azureSignInStatus.IsSignedIn ? "Re-verify" : "Verify service principal"
-            : _azureSignInStatus.IsSignedIn ? "Refresh models" : "Sign in & find models";
+            ? _azureSignInStatus.IsSignedIn ? "Verify" : "Verify"
+            : _azureSignInStatus.IsSignedIn ? "Refresh models" : "Check sign-in";
 
         // Verifying an app registration is a direct Entra call, so unlike the CLI path it does not
         // have to wait on the Azure CLI probe that _azureConnectionKnown tracks.
@@ -3600,9 +3689,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (AzureStatusText is not null)
         {
             AzureStatusText.Text = IsAzureApiKeySelected
-                ? "Enter the endpoint, deployment name, and API key."
+                ? "Fill in the details above, then choose Verify."
                 : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-                    ? "Enter the service principal details, then verify them."
+                    ? "Fill in the details above, then choose Verify."
                     : "Checking your Azure CLI sign-in before showing cloud resources.";
         }
 
@@ -3827,7 +3916,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (!CanVerifyAzureApiKey)
         {
-            AzureStatusText.Text = "Enter the endpoint, deployment name, and API key.";
+            AzureStatusText.Text = "Fill in the details above, then choose Verify.";
             ApplyAzureSettingsAccess();
             return;
         }
@@ -4588,23 +4677,96 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UpdateAiEnabledState()
     {
-        var on = AiCleanupCheck.IsChecked == true;
-        AiProviderCombo.IsEnabled = on;
-        FoundryPanel.IsEnabled = on;
-        AzurePanel.IsEnabled = on;
-        CustomPanel.IsEnabled = on;
-        CopilotPanel.IsEnabled = on;
-        AiWritingStyleBox.IsEnabled = on;
-        ResetWritingStyleButton.IsEnabled = on;
-        AiPromptStyleCombo.IsEnabled = on;
-        AiFrontierPromptBox.IsEnabled = on;
-        ResetFrontierPromptButton.IsEnabled = on;
-        AiLocalPromptBox.IsEnabled = on;
-        ResetLocalPromptButton.IsEnabled = on;
+        var draft = CurrentAiDraftSettings();
+        var providerSummary = CleanupDisclosure.SummaryFor(SelectedProvider);
+        var offProviderSummary = ProviderSetupSummary(_settings);
+        var savedSetup = SavedAiSetupState();
+        var page = AiCleanupPageState.Describe(
+            _settings,
+            draft,
+            _cleanup.Status,
+            savedSetupState: savedSetup,
+            providerSummary: offProviderSummary,
+            modelName: DisplayNameForFoundryAlias(AiModelBox?.Text));
+
+        AiCleanupDescription.Text = page.StatusLine;
+        AiOffHelperText.Text = page.OffHelperText ?? string.Empty;
+        AiOffHelperText.Visibility = page.OffHelperText is null ? Visibility.Collapsed : Visibility.Visible;
+        var setupVisibility = page.ShowProviderSetup ? Visibility.Visible : Visibility.Collapsed;
+        AiDisclosureCard.Visibility = setupVisibility;
+        AiProviderCard.Visibility = setupVisibility;
+        AiWritingStyleCard.Visibility = setupVisibility;
+        AiAdvancedCard.Visibility = setupVisibility;
+        AiProviderSummaryText.Text = providerSummary;
+        UpdateAiWritingStyleSummary();
     }
 
-    private void ResetWritingStyleButton_Click(object sender, RoutedEventArgs e) =>
+    private AiCleanupSetupState SavedAiSetupState()
+    {
+        if (!_settings.EnableAiCleanup && _settings.AiCleanupProvider == CleanupProvider.FoundryLocal)
+        {
+            return AiCleanupSetupState.NothingConfigured;
+        }
+
+        if (!HasProviderConfiguration(_settings, _settings.AiCleanupProvider))
+        {
+            return _settings.AiCleanupProvider == CleanupProvider.FoundryLocal
+                ? AiCleanupSetupState.Incomplete
+                : AiCleanupSetupState.NothingConfigured;
+        }
+
+        return AiCleanupSetupState.Complete;
+    }
+
+    private static string ProviderSetupSummary(AppSettings settings) => settings.AiCleanupProvider switch
+    {
+        CleanupProvider.FoundryLocal => "On this PC (Foundry Local)",
+        CleanupProvider.AzureFoundry when !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) =>
+            $"Microsoft Foundry ({settings.AiCleanupAzureDeployment})",
+        CleanupProvider.AzureFoundry => "Microsoft Foundry",
+        CleanupProvider.OpenAiCompatible when !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel) =>
+            $"Another AI service ({settings.AiCleanupCustomModel})",
+        CleanupProvider.OpenAiCompatible => "Another AI service",
+        CleanupProvider.GitHubCopilot when !string.IsNullOrWhiteSpace(settings.AiCleanupCopilotModel) =>
+            $"GitHub Copilot ({settings.AiCleanupCopilotModel})",
+        CleanupProvider.GitHubCopilot => "GitHub Copilot",
+        _ => "AI cleanup",
+    };
+
+    private static bool HasProviderConfiguration(AppSettings settings, CleanupProvider provider) => provider switch
+    {
+        CleanupProvider.FoundryLocal => !string.IsNullOrWhiteSpace(settings.AiCleanupModel),
+        CleanupProvider.AzureFoundry => !string.IsNullOrWhiteSpace(settings.AiCleanupAzureEndpoint) &&
+            !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) &&
+            (!string.IsNullOrWhiteSpace(settings.AiCleanupAzureApiKey) ||
+             settings.AiCleanupAzureAuthMode == AzureAuthMode.AzureCli ||
+             AzureServicePrincipalValidator.IsComplete(settings.AiCleanupAzureTenantId, settings.AiCleanupAzureClientId, settings.AiCleanupAzureClientSecret)),
+        CleanupProvider.OpenAiCompatible => !string.IsNullOrWhiteSpace(settings.AiCleanupCustomEndpoint) &&
+            !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel),
+        CleanupProvider.GitHubCopilot => true,
+        _ => false,
+    };
+
+    private void UpdateAiWritingStyleSummary()
+    {
+        if (AiWritingStyleSummary is null || AiWritingStyleBox is null)
+        {
+            return;
+        }
+
+        AiWritingStyleSummary.Text = string.Equals(
+            NormalizePrompt(AiWritingStyleBox.Text),
+            NormalizePrompt(CleanupPrompt.DefaultWritingStyle),
+            StringComparison.Ordinal)
+            ? "Scribe's style: clear sentences, correct punctuation, numbers as digits, and your spoken corrections applied."
+            : "Your own style.";
+    }
+
+    private void ResetWritingStyleButton_Click(object sender, RoutedEventArgs e)
+    {
         AiWritingStyleBox.Text = CleanupPrompt.DefaultWritingStyle;
+        UpdateAiWritingStyleSummary();
+    }
 
     // Prompt-style selector has no live side effects; the choice is applied on Save with the other
     // cleanup settings. The handler exists only because the XAML binds SelectionChanged.
@@ -4650,6 +4812,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private static string NormalizePrompt(string? text) =>
         (text ?? string.Empty).Replace("\r\n", "\n").Replace("\r", "\n").Trim();
 
+    private string DisplayNameForFoundryAlias(string? alias)
+    {
+        var key = alias?.Trim() ?? string.Empty;
+        return _foundryCuratedByAlias.TryGetValue(key, out var model)
+            ? model.DisplayName.Replace(" (recommended)", string.Empty, StringComparison.Ordinal)
+            : string.IsNullOrWhiteSpace(key) ? "the selected model" : key;
+    }
+
     private void UpdateAiModelHint()
     {
         if (AiModelHint is null)
@@ -4670,12 +4840,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Lead with the benchmark badge when this model is a golden-suite winner so the
-        // recommendation is visible the moment it is selected, not just in the panel hint above.
-        var hint = string.IsNullOrEmpty(model.Recommendation)
-            ? model.Hint
-            : $"Recommended, {model.Recommendation}. {model.Hint}";
-
+        var hint = model.Hint;
         AiModelHint.Text = buildNote is null ? hint : $"{hint} {buildNote}";
     }
 
