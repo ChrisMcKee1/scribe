@@ -395,12 +395,12 @@ public sealed class DictationInsertionTests
         var xaml = ReadSource("src", "Scribe.App", "Settings", "SettingsWindow.xaml");
         var code = ReadSource("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
 
-        // On the Dictation page, in the Text insertion group, last in its Tab order, named by its title for screen readers.
+        // On the Dictation page, in the Typing section, named by its title for screen readers.
         var page = xaml[xaml.IndexOf("x:Name=\"SectionDictation\"", StringComparison.Ordinal)..
-            xaml.IndexOf("x:Name=\"SectionOverlay\"", StringComparison.Ordinal)];
+            xaml.IndexOf("x:Name=\"SectionAdvanced\"", StringComparison.Ordinal)];
         var toggle = page.IndexOf("x:Name=\"SpaceAfterDictationCheck\"", StringComparison.Ordinal);
-        Assert.True(toggle > page.IndexOf("Text=\"Text insertion\"", StringComparison.Ordinal));
-        Assert.True(toggle > page.IndexOf("x:Name=\"ShiftEnterCheck\"", StringComparison.Ordinal));
+        Assert.True(toggle > page.IndexOf("x:Name=\"RestoreHotkeysButton\"", StringComparison.Ordinal));
+        Assert.True(toggle < page.IndexOf("x:Name=\"OverlayCheck\"", StringComparison.Ordinal));
         Assert.Contains("<TextBlock x:Name=\"SpaceAfterDictationTitle\" Text=\"Add a space after each dictation\"", page, StringComparison.Ordinal);
         Assert.Contains(
             "Text=\"Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space.\"",

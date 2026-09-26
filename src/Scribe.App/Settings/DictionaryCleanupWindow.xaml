@@ -91,7 +91,7 @@
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
                 <TextBlock x:Name="LibrariesHeader" Style="{StaticResource SectionHeader}"
-                           Text="Libraries with terms that did not come up"/>
+                           Text="Word packs with words that did not come up"/>
                 <ItemsControl x:Name="LibrariesList" Focusable="False"
                               AutomationProperties.LabeledBy="{Binding ElementName=LibrariesHeader}"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
@@ -109,7 +109,7 @@
             <ui:Button x:Name="DeleteButton" Content="Delete selected entries" MinWidth="170"
                        Margin="0,0,8,0"
                        Appearance="Danger" Click="DeleteButton_Click"
-                       ToolTip="Remove the ticked entries from your dictionary for good. Libraries are switched off either way; their terms are not yours to delete."/>
+                       ToolTip="Remove the ticked entries from your dictionary for good. Word packs are switched off either way; their terms are not yours to delete."/>
             <ui:Button x:Name="DisableButton" Content="Turn off selected" Appearance="Primary"
                        MinWidth="150" Click="DisableButton_Click"
                        ToolTip="Keep the ticked entries but stop them applying. You can switch them back on any time."/>

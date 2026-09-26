@@ -668,12 +668,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // --- Playground ------------------------------------------------------------------------
+    // --- Try dictation ------------------------------------------------------------------------
 
     internal void ShowPlaygroundPipeline(DictationPipelineReport report)
     {
         if (!IsVisible ||
-            SectionPlayground.Visibility != Visibility.Visible ||
+            SectionTryDictation.Visibility != Visibility.Visible ||
             new WindowInteropHelper(this).Handle != report.TargetWindow)
         {
             return;
@@ -848,46 +848,68 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Navigation rail -------------------------------------------------------------------
 
-    // Nav order must match the ListBoxItem order in XAML.
-    private Grid[] SectionPanels =>
-    [
-        SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
-        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionPlayground, SectionHistory,
-        SectionUsage, SectionDiagnostics, SectionAbout,
-    ];
-
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Fires during InitializeComponent (SelectedIndex is set in XAML) before the panels parse.
         if (SectionDiagnostics is null)
         {
             return;
         }
 
-        var panels = SectionPanels;
-        var selected = Math.Clamp(NavList.SelectedIndex, 0, panels.Length - 1);
-        for (var i = 0; i < panels.Length; i++)
+        if (CurrentNavigationPage() is { } page)
         {
-            panels[i].Visibility = i == selected ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        if (panels[selected] == SectionHistory)
-        {
-            LoadHistory();
-        }
-        else if (panels[selected] == SectionUsage)
-        {
-            LoadUsage();
+            ShowPage(page);
         }
     }
 
-    /// <summary>Navigates the rail to the given section, e.g. to show where a save error lives.</summary>
+    /// <summary>Navigates the rail to the given page, optionally focusing a named control on it.</summary>
+    internal void ShowPage(SettingsPage page, string? focusName = null)
+    {
+        if (!PagePanels.TryGetValue(page, out var selected))
+        {
+            return;
+        }
+
+        foreach (var panel in AllSectionPanels)
+        {
+            panel.Visibility = ReferenceEquals(panel, selected) ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (!Equals(NavList.SelectedValue, page))
+        {
+            NavList.SelectedValue = page;
+        }
+
+        selected.BringIntoView();
+        if (page == SettingsPage.History)
+        {
+            LoadHistory();
+        }
+        else if (page == SettingsPage.Usage)
+        {
+            LoadUsage();
+        }
+
+        if (!string.IsNullOrWhiteSpace(focusName) && FindName(focusName) is IInputElement target)
+        {
+            _ = target.Focus();
+        }
+    }
+
+    /// <summary>Navigates to a section still addressed by older validation code.</summary>
     private void ShowSection(Grid section)
     {
-        var index = Array.IndexOf(SectionPanels, section);
-        if (index >= 0)
+        foreach (var pair in PagePanels)
         {
-            NavList.SelectedIndex = index;
+            if (ReferenceEquals(pair.Value, section))
+            {
+                ShowPage(pair.Key);
+                return;
+            }
+        }
+
+        foreach (var panel in AllSectionPanels)
+        {
+            panel.Visibility = ReferenceEquals(panel, section) ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
@@ -1000,23 +1022,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PopulateChoices()
     {
-        ModeCombo.ItemsSource = new[] { "Hold", "Toggle" };
-        DictationOnlyModeCombo.ItemsSource = new[] { "Hold", "Toggle" };
+        ModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
+        DictationOnlyModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
         TranscriptionModelCombo.ItemsSource = TranscriptionModelCatalog.Curated;
 
         InjectionCombo.DisplayMemberPath = nameof(InjectionChoice.Label);
         InjectionCombo.ItemsSource = new[]
         {
-            new InjectionChoice(InjectionMethod.UnicodeType, "Type it in (recommended, works everywhere)"),
-            new InjectionChoice(InjectionMethod.ClipboardPaste, "Paste it in (faster for long text)"),
+            new InjectionChoice(InjectionMethod.UnicodeType, "Type the text (recommended)"),
+            new InjectionChoice(InjectionMethod.ClipboardPaste, "Paste the text"),
         };
 
         NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
         NewlineCombo.ItemsSource = new[]
         {
-            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart: one line in terminals (recommended)"),
-            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line, never send Enter"),
-            new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
+            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Automatic: one line in command windows (recommended)"),
+            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line"),
+            new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks"),
         };
     }
 
@@ -1599,7 +1621,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PostCheck_Toggled(object sender, RoutedEventArgs e) => UpdateDictionaryGlossaryHint();
 
-    // --- Libraries -----------------------------------------------------------------------
+    // --- Word packs -----------------------------------------------------------------------
 
     private void InitializeLibraryGrid()
     {
@@ -5018,7 +5040,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (duplicateSnippet is not null)
         {
-            ShowSection(SectionSnippets);
+            ShowSection(SectionVoiceSnippets);
             SnippetList.SelectedItem = duplicateSnippet;
             SnippetList.ScrollIntoView(duplicateSnippet);
             ShowThemedMessage(
@@ -5035,7 +5057,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
         if (dictationOnlyBinding is not null && SamePhysicalBinding(standardBinding, dictationOnlyBinding))
         {
-            ShowSection(SectionGeneral);
+            ShowSection(SectionDictation);
             ShowThemedMessage(
                 "Hotkey conflict",
                 "The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.");
@@ -5586,7 +5608,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public override string ToString() => Label;
     }
 
-    // --- Overlay position picker -----------------------------------------------------------
+    // --- Recording indicator position picker -----------------------------------------------------------
 
     private void LoadOverlayPosition(OverlayPosition position)
     {

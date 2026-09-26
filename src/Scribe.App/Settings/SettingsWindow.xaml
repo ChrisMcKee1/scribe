@@ -222,7 +222,7 @@
             <Setter Property="HorizontalAlignment" Value="Center"/>
         </Style>
         <Style x:Key="LibraryOnCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
-            <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Use the {0} library'}"/>
+            <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Use the {0} word pack'}"/>
         </Style>
         <Style x:Key="LibraryOnCheckBox" TargetType="CheckBox" BasedOn="{StaticResource LibraryOnCheckBoxEditing}">
             <Setter Property="IsHitTestVisible" Value="False"/>
@@ -255,7 +255,7 @@
 
         <!-- Every grid on these pages is one Tab stop whose cells the arrow keys move between, as in a Windows
              list. WPF-UI's cell style (DefaultDataGridCellStyle, DataGrid.xaml in WPF-UI 4.3.0) makes no cell a
-             Tab stop, so a grid of text had no Tab stop at all (the Libraries, History, Usage and Diagnostics
+             Tab stop, so a grid of text had no Tab stop at all (the Word packs, History, Usage and Diagnostics
              grids could not be reached from the keyboard, and after Space on a check box the arrow keys had no
              cell to move to), while a grid whose cells hold buttons put every row's button in the Tab order.
              Cells take focus again, and TabNavigation Once enters a grid on the cell that last had focus (the
@@ -286,7 +286,7 @@
             <Setter Property="RowStyle" Value="{StaticResource KeyboardRow}"/>
         </Style>
 
-        <!-- A library row. The selected library is the one the page's edits apply to, and WPF-UI marks it only with a
+        <!-- A word pack row. The selected word pack is the one the page's edits apply to, and WPF-UI marks it only with a
              subtle fill (1.18:1 against the page in the dark theme) and a 3 px accent pill (1.63:1 against that fill
              with the accent #0E0E70), so it also gets a 1 DIP outline in the strong control stroke and a SemiBold
              name, whatever the accent. Drawn over the selected fill the stroke measures 5.27:1 against that fill and
@@ -362,7 +362,7 @@
             </Setter>
         </Style>
 
-        <!-- The selected library's name, SemiBold with the row's outline (see LibraryRow). Only the name line of the name
+        <!-- The selected word pack's name, SemiBold with the row's outline (see LibraryRow). Only the name line of the name
              cell: its source line and the other columns stay as they are, because the other columns size to their
              content and a wider SemiBold value there would move them. The name sits in the cell template's panel, which
              gives it the 2 px margin a text column's text gets, so the style adds no margin of its own. -->
@@ -374,7 +374,7 @@
             </Style.Triggers>
         </Style>
 
-        <!-- The Libraries list's name cell shows the name over its source ("Built-in" or "Your library"). A template cell
+        <!-- The word packs list's name cell shows the name over its source ("Built-in" or "Your word pack"). A template cell
              has no text of its own, so UI Automation would read it as "Item: GitHub, Column Display Index: 1"; it is named
              after both lines instead. Based on KeyboardCell, as the warning above requires. -->
         <Style x:Key="LibraryNameCell" TargetType="DataGridCell" BasedOn="{StaticResource KeyboardCell}">
@@ -501,8 +501,9 @@
             <ListBox x:Name="NavList" Grid.Column="0" Margin="8,4,4,16"
                      Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     KeyboardNavigation.TabNavigation="Once"
                      AutomationProperties.Name="Settings pages"
-                     SelectedIndex="0" SelectionChanged="NavList_SelectionChanged">
+                     SelectionChanged="NavList_SelectionChanged">
                 <ListBox.Resources>
                     <Style TargetType="ui:SymbolIcon">
                         <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
@@ -520,90 +521,52 @@
                         </Style.Triggers>
                     </Style>
                 </ListBox.Resources>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="20"/>
+                            <TextBlock Text="{Binding Label}" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
-                        <Setter Property="Padding" Value="12,10"/>
-                        <Setter Property="Margin" Value="0,2"/>
+                        <Setter Property="Padding" Value="12,8"/>
+                        <Setter Property="Margin" Value="4,1"/>
+                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}"/>
+                        <Setter Property="AutomationProperties.PositionInSet" Value="{Binding Position}"/>
+                        <Setter Property="AutomationProperties.SizeOfSet" Value="11"/>
                     </Style>
                 </ListBox.ItemContainerStyle>
-                <ListBoxItem AutomationProperties.Name="General">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Settings24" FontSize="20"/>
-                        <TextBlock Text="General" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Dictation">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Mic24" FontSize="20"/>
-                        <TextBlock Text="Dictation" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Overlay">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Desktop24" FontSize="20"/>
-                        <TextBlock Text="Overlay" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="AI cleanup">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Wand24" FontSize="20"/>
-                        <TextBlock Text="AI cleanup" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Dictionary">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Book24" FontSize="20"/>
-                        <TextBlock Text="Dictionary" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Libraries">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Library24" FontSize="20"/>
-                        <TextBlock Text="Libraries" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Snippets">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="TextQuote24" FontSize="20"/>
-                        <TextBlock Text="Snippets" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Profiles">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Apps24" FontSize="20"/>
-                        <TextBlock Text="Profiles" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Playground">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Beaker24" FontSize="20"/>
-                        <TextBlock Text="Playground" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="History">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="History24" FontSize="20"/>
-                        <TextBlock Text="History" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Usage">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="DataTrending24" FontSize="20"/>
-                        <TextBlock Text="Usage" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="Diagnostics">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Pulse24" FontSize="20"/>
-                        <TextBlock Text="Diagnostics" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
-                <ListBoxItem AutomationProperties.Name="About">
-                    <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Info24" FontSize="20"/>
-                        <TextBlock Text="About" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </ListBoxItem>
+                <ListBox.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.ContainerStyle>
+                            <Style TargetType="GroupItem">
+                                <Setter Property="Focusable" Value="False"/>
+                                <Setter Property="KeyboardNavigation.TabNavigation" Value="Continue"/>
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
+                            </Style>
+                        </GroupStyle.ContainerStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Margin="12,16,0,4" IsHitTestVisible="False" Focusable="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Name}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Setter Property="Margin" Value="0"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListBox.GroupStyle>
             </ListBox>
 
             <!-- Right: the selected section + a persistent Save/Cancel footer -->
@@ -630,15 +593,15 @@
                 <Grid Grid.Row="0">
 
                     <!-- ============================ General ============================ -->
-                    <Grid x:Name="SectionGeneral">
+                    <Grid x:Name="SectionDictation">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock Text="General" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Text="Dictation" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Your microphone, the push-to-talk keys, and how Scribe starts."/>
+                                       Text="Your microphone, your shortcuts, and what you see while you dictate."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
@@ -652,7 +615,7 @@
                                                   SelectionChanged="DeviceCombo_SelectionChanged"
                                                   DropDownClosed="DeviceCombo_DropDownClosed"
                                                   Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
-                                        <ui:Button Content="Open Windows sound settings"
+                                        <ui:Button Content="Sound settings"
                                                    HorizontalAlignment="Left" Margin="0,8,0,0"
                                                    Click="SoundSettings_Click"/>
                                     </StackPanel>
@@ -660,7 +623,7 @@
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <TextBlock x:Name="HotkeyTitle" Text="Dictation with AI cleanup" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="HotkeyTitle" Text="Dictation shortcut" Style="{StaticResource CardTitle}"/>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -669,18 +632,18 @@
                                             </Grid.ColumnDefinitions>
                                             <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
-                                                        PlaceholderText="Press Set, then a key or mouse button"
+                                                        PlaceholderText="Choose Change, then press a key, two keys or a mouse button"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=HotkeyTitle}"/>
-                                            <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Set"
+                                            <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Change"
                                                        Margin="8,0,0,0" MinWidth="72"
                                                        Click="CaptureButton_Click"/>
                                             <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="104" Margin="8,0,0,0"
                                                       VerticalContentAlignment="Center"
-                                                      AutomationProperties.Name="Dictation with AI cleanup, hold or toggle"/>
+                                                      AutomationProperties.Name="Dictation shortcut, hold or toggle"/>
                                         </Grid>
                                         <TextBlock Style="{StaticResource CardDescription}"
                                                    Text="Uses your current AI cleanup setting. Hold: keep the key, mouse button, chord or shortcut down while speaking. Toggle: press once to start, again to stop."/>
-                                        <TextBlock x:Name="DictationOnlyTitle" Text="Dictation only" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                        <TextBlock x:Name="DictationOnlyTitle" Text="Shortcut without AI cleanup" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -690,15 +653,15 @@
                                             </Grid.ColumnDefinitions>
                                             <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
-                                                        PlaceholderText="Not set"
+                                                        PlaceholderText="None"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=DictationOnlyTitle}"/>
-                                            <ui:Button Grid.Column="1" Content="Set" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button Grid.Column="1" Content="Change" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyCaptureButton_Click"/>
-                                            <ui:Button Grid.Column="2" Content="Clear" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button Grid.Column="2" Content="Remove" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyClearButton_Click"/>
                                             <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="104" Margin="8,0,0,0"
                                                       VerticalContentAlignment="Center"
-                                                      AutomationProperties.Name="Dictation only, hold or toggle"/>
+                                                      AutomationProperties.Name="Shortcut without AI cleanup, hold or toggle"/>
                                         </Grid>
                                         <TextBlock Style="{StaticResource CardDescription}"
                                                    Text="Optional second hotkey that always skips AI cleanup. The dictionary, snippets, profiles, and other local processing still apply."/>
@@ -710,10 +673,41 @@
                                              actually restores, and what binding them costs in other apps. -->
                                         <TextBlock x:Name="DefaultHotkeysHintText" Style="{StaticResource CardDescription}"
                                                    Margin="0,16,0,0"/>
-                                        <ui:Button x:Name="RestoreHotkeysButton" Content="Restore default hotkeys"
+                                        <ui:Button x:Name="RestoreHotkeysButton" Content="Restore default shortcuts"
                                                    Margin="0,10,0,0" HorizontalAlignment="Left" Appearance="Secondary"
                                                    AutomationProperties.HelpText="{Binding Text, ElementName=DefaultHotkeysHintText}"
                                                    Click="RestoreHotkeysButton_Click"/>
+                                    </StackPanel>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <CheckBox x:Name="SpaceAfterDictationCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}">
+                                                <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="SpaceAfterDictationHint" Style="{StaticResource CardDescription}" Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
+                                    </StackPanel>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <CheckBox x:Name="OverlayCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=OverlayTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=OverlayDescription}">
+                                                <TextBlock x:Name="OverlayTitle" Text="Show the recording indicator" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="OverlayDescription" Style="{StaticResource CardDescription}" Text="A small bar with a live sound level appears while Scribe listens."/>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <CheckBox x:Name="AutoStopCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}">
+                                                <TextBlock x:Name="AutoStopTitle" Text="Stop when I stop talking" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="AutoStopDescription" Style="{StaticResource CardDescription}" Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early, so leave it off if that happens."/>
                                     </StackPanel>
                                 </ui:Card>
 
@@ -742,79 +736,47 @@
                                         </StackPanel>
                                     </Grid>
                                 </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <CheckBox x:Name="StoreAudioCheck" Style="{StaticResource SettingCheckBox}"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
-                                                  AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}">
-                                                <TextBlock x:Name="StoreAudioTitle" Text="Keep audio with history" Style="{StaticResource CardTitle}"/>
-                                        </CheckBox>
-                                        <!-- Text comes from StorageRetentionPolicy.StoredAudioHint so it always
-                                                                                         names the limits maintenance actually enforces. -->
-                                        <TextBlock Margin="28,2,0,0" x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}"/>
-                                    </StackPanel>
-                                </ui:Card>
-
+                                <!-- Updates: Store packages defer to Microsoft; Velopack installs use GitHub releases. -->
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock Text="Keep dictation history for" Style="{StaticResource CardTitle}"/>
-                                            <!-- Text comes from StorageRetentionPolicy.TextRetentionHint. -->
-                                            <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource CardDescription}"/>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
+                                            <TextBlock Text="Updates" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock x:Name="UpdateStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                       Text="Use Check for updates when you want Scribe to connect."/>
                                         </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ui:NumberBox x:Name="HistoryRetentionBox" Width="130"
-                                                          Minimum="0" Maximum="3650" SmallChange="1"
-                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
-                                                          SpinButtonPlacementMode="Inline"
-                                                          AutomationProperties.Name="Keep dictation history for days"/>
-                                            <TextBlock Text="days" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                        </StackPanel>
+                                        <ui:Button x:Name="UpdateCheckButton" Grid.Column="1" Content="Check for updates"
+                                                   MinWidth="76" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                   Click="UpdateCheckButton_Click"/>
+                                        <ui:Button x:Name="UpdateApplyButton" Grid.Column="2" Content="Restart to update"
+                                                   MinWidth="76" VerticalAlignment="Center" Appearance="Primary"
+                                                   Visibility="Collapsed" Click="UpdateApplyButton_Click"/>
                                     </Grid>
                                 </ui:Card>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
 
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock x:Name="TranscriptionModelTitle" Text="Speech recognition model" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}"
-                                                   Text="Parakeet is recommended for multilingual dictation. Moonshine models are smaller English-only options. Choose Install for any model that is not already available."/>
-                                        <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
-                                                  HorizontalAlignment="Stretch"
-                                                  DisplayMemberPath="DisplayName"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=TranscriptionModelTitle}"
-                                                  SelectionChanged="TranscriptionModelCombo_SelectionChanged">
-                                            <!-- DisplayMemberPath only controls what is drawn; UI Automation falls
-                                                 back to ToString(), which on this Core record dumps every field. -->
-                                            <ComboBox.ItemContainerStyle>
-                                                <Style TargetType="ComboBoxItem">
-                                                    <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}"/>
-                                                </Style>
-                                            </ComboBox.ItemContainerStyle>
-                                        </ComboBox>
-                                        <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource CardDescription}"
-                                                   Margin="0,6,0,0" TextWrapping="Wrap"/>
-                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Install"
-                                                       MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>
-                                            <ProgressBar x:Name="TranscriptionModelProgress" Width="220" Height="8"
-                                                         Margin="12,0,0,0" VerticalAlignment="Center"
-                                                         Minimum="0" Maximum="100" Visibility="Collapsed"
-                                                         AutomationProperties.Name="Speech model install progress"/>
-                                        </StackPanel>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="Changing the speech model takes effect after restarting Scribe. If the selected model is unavailable, Scribe falls back to Parakeet when it is installed."/>
-                                    </StackPanel>
-                                </ui:Card>
-
+                    <!-- ============================ Dictation ============================ -->
+                    <Grid x:Name="SectionAdvanced" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="1000" HorizontalAlignment="Left">
+                            <TextBlock Text="Advanced" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Settings most people never need to change. The defaults suit most PCs."/>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <ui:CardExpander x:Name="AdvancedDecodingExpander" Margin="0,10,0,8" IsExpanded="False"
                                                  AutomationProperties.LabeledBy="{Binding ElementName=AdvancedDecodingTitle}">
-                                    <ui:CardExpander.Header>
+                                <ui:CardExpander.Header>
                                         <StackPanel>
                                             <TextBlock x:Name="AdvancedDecodingTitle" Text="Advanced decoding" Style="{StaticResource CardTitle}" FontWeight="SemiBold"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
@@ -855,44 +817,39 @@
                                     </StackPanel>
                                 </ui:CardExpander>
 
-                                <!-- Updates: Store packages defer to Microsoft; Velopack installs use GitHub releases. -->
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
-                                            <TextBlock Text="Updates" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="UpdateStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                       Text="Use Check for updates when you want Scribe to connect."/>
+                                    <StackPanel>
+                                        <TextBlock x:Name="TranscriptionModelTitle" Text="Speech recognition model" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}"
+                                                   Text="Parakeet is recommended for multilingual dictation. Moonshine models are smaller English-only options. Choose Install for any model that is not already available."/>
+                                        <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
+                                                  HorizontalAlignment="Stretch"
+                                                  DisplayMemberPath="DisplayName"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=TranscriptionModelTitle}"
+                                                  SelectionChanged="TranscriptionModelCombo_SelectionChanged">
+                                            <!-- DisplayMemberPath only controls what is drawn; UI Automation falls
+                                                 back to ToString(), which on this Core record dumps every field. -->
+                                            <ComboBox.ItemContainerStyle>
+                                                <Style TargetType="ComboBoxItem">
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}"/>
+                                                </Style>
+                                            </ComboBox.ItemContainerStyle>
+                                        </ComboBox>
+                                        <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource CardDescription}"
+                                                   Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Install"
+                                                       MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>
+                                            <ProgressBar x:Name="TranscriptionModelProgress" Width="220" Height="8"
+                                                         Margin="12,0,0,0" VerticalAlignment="Center"
+                                                         Minimum="0" Maximum="100" Visibility="Collapsed"
+                                                         AutomationProperties.Name="Speech model install progress"/>
                                         </StackPanel>
-                                        <ui:Button x:Name="UpdateCheckButton" Grid.Column="1" Content="Check for updates"
-                                                   MinWidth="76" VerticalAlignment="Center" Margin="0,0,8,0"
-                                                   Click="UpdateCheckButton_Click"/>
-                                        <ui:Button x:Name="UpdateApplyButton" Grid.Column="2" Content="Restart to update"
-                                                   MinWidth="76" VerticalAlignment="Center" Appearance="Primary"
-                                                   Visibility="Collapsed" Click="UpdateApplyButton_Click"/>
-                                    </Grid>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                   Text="Changing the speech model takes effect after restarting Scribe. If the selected model is unavailable, Scribe falls back to Parakeet when it is installed."/>
+                                    </StackPanel>
                                 </ui:Card>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Grid>
 
-                    <!-- ============================ Dictation ============================ -->
-                    <Grid x:Name="SectionDictation" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock Text="Dictation" Style="{StaticResource PageTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="How captures behave and how the finished text lands in your apps."/>
-                        </StackPanel>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <TextBlock Text="Capture" Style="{StaticResource SectionHeader}" Margin="2,4,0,10"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -902,16 +859,6 @@
                                                 <TextBlock x:Name="VadTitle" Text="Voice activity detection" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
                                         <TextBlock Margin="28,2,0,0" x:Name="VadDescription" Style="{StaticResource CardDescription}" Text="Trim leading/trailing silence and ignore captures with no speech."/>
-                                    </StackPanel>
-                                </ui:Card>
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <CheckBox x:Name="AutoStopCheck" Style="{StaticResource SettingCheckBox}"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
-                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}">
-                                                <TextBlock x:Name="AutoStopTitle" Text="End dictation on silence (toggle mode)" Style="{StaticResource CardTitle}"/>
-                                        </CheckBox>
-                                        <TextBlock Margin="28,2,0,0" x:Name="AutoStopDescription" Style="{StaticResource CardDescription}" Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early, so leave it off if that happens."/>
                                     </StackPanel>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
@@ -999,49 +946,46 @@
                                         <TextBlock Margin="28,2,0,0" x:Name="ShiftEnterDescription" Style="{StaticResource CardDescription}" Text="Chat apps like Teams, Slack, and Discord send a message when you press Enter, so a dictation with paragraphs used to send itself on the first break. This types line breaks as Shift+Enter instead, which starts a new line without sending. Turn it off only if an app you use does something else with Shift+Enter."/>
                                     </StackPanel>
                                 </ui:Card>
+
+                                <TextBlock Text="Appearance" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="SpaceAfterDictationCheck" Style="{StaticResource SettingCheckBox}"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
-                                                  AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}">
-                                                <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource CardTitle}"/>
+                                        <CheckBox x:Name="AccentSourceCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AccentSourceTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AccentSourceDescription}">
+                                            <TextBlock x:Name="AccentSourceTitle" Text="Use my Windows accent color" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
-                                        <TextBlock Margin="28,2,0,0" x:Name="SpaceAfterDictationHint" Style="{StaticResource CardDescription}" Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
+                                        <TextBlock Margin="28,2,0,0" x:Name="AccentSourceDescription" Style="{StaticResource CardDescription}"
+                                                   Text="Settings, Add to dictionary and the tray menu use your Windows accent color instead of Scribe blue. The recording indicator and the tray icon always use Scribe blue."/>
                                     </StackPanel>
                                 </ui:Card>
+
+                                <ui:Button x:Name="RestoreAdvancedDefaultsButton" Content="Restore advanced defaults"
+                                           HorizontalAlignment="Left" Margin="0,10,0,8"
+                                           Click="RestoreAdvancedDefaultsButton_Click"/>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
 
-                    <!-- ============================ Overlay ============================ -->
-                    <Grid x:Name="SectionOverlay" Visibility="Collapsed">
+                    <!-- ============================ Recording indicator ============================ -->
+                    <Grid x:Name="SectionRecordingIndicator" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock Text="Overlay" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Text="Recording indicator" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="The glass recording pill that shows Scribe is listening, and where it lives on your screen."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <CheckBox x:Name="OverlayCheck" Style="{StaticResource SettingCheckBox}"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=OverlayTitle}"
-                                                  AutomationProperties.HelpText="{Binding Text, ElementName=OverlayDescription}">
-                                                <TextBlock x:Name="OverlayTitle" Text="Show the recording overlay" Style="{StaticResource CardTitle}"/>
-                                        </CheckBox>
-                                        <TextBlock Margin="28,2,0,0" x:Name="OverlayDescription" Style="{StaticResource CardDescription}" Text="A small always-on-top indicator with a live level meter while capturing."/>
-                                    </StackPanel>
-                                </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <TextBlock Text="Overlay position" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock Text="Where it appears" Style="{StaticResource CardTitle}"/>
                                         <TextBlock Style="{StaticResource CardDescription}"
-                                                   Text="Click where the pill should appear while you dictate, then try it on your real screen."/>
+                                                   Text="Choose a spot, then preview it on your screen."/>
                                         <Grid Margin="0,14,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
@@ -1513,7 +1457,7 @@
                                        Text="Replace spoken words or phrases with the spelling you actually want. 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
                         </StackPanel>
                         <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
-                            <ui:Button x:Name="DictionaryAddButton" Content="Add entry"
+                            <ui:Button x:Name="DictionaryAddButton" Content="Add word"
                                        Icon="{ui:SymbolIcon Add24}" Appearance="Primary"
                                        Margin="0,0,8,0" Click="DictionaryAddButton_Click"
                                        ToolTip="Add a blank entry and start editing it."/>
@@ -1521,7 +1465,7 @@
                                        Icon="{ui:SymbolIcon Lightbulb24}"
                                        Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
                                        ToolTip="Learn vocabulary from recent dictations. A configured remote AI provider receives a bounded text sample only after you confirm; otherwise Scribe scans locally."/>
-                            <ui:Button x:Name="DictionaryCleanupButton" Content="Clean up unused terms"
+                            <ui:Button x:Name="DictionaryCleanupButton" Content="Clean up unused words..."
                                        Icon="{ui:SymbolIcon Broom24}"
                                        Margin="0,0,8,0" Click="DictionaryCleanupButton_Click"
                                        ToolTip="Scan your dictation history for entries and libraries whose wording has not come up in anything you have dictated, so they stop crowding out the vocabulary you do use. Nothing is removed without your review."/>
@@ -1583,7 +1527,7 @@
                                     </DataGridTextColumn>
                                     <!-- Live comparison against the libraries that are switched on, so a user can
                                          see at a glance which entries are doing real work and which are clutter. -->
-                                    <DataGridTemplateColumn Header="Library" Width="150" CanUserSort="True"
+                                    <DataGridTemplateColumn Header="Word pack" Width="150" CanUserSort="True"
                                                             SortMemberPath="Coverage">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
@@ -1622,8 +1566,8 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- ============================ Libraries ============================ -->
-                    <Grid x:Name="SectionLibraries" Visibility="Collapsed">
+                    <!-- ============================ Word packs ============================ -->
+                    <Grid x:Name="SectionWordPacks" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
@@ -1631,23 +1575,23 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock x:Name="LibrariesPageTitle" Text="Libraries" Style="{StaticResource PageTitle}"/>
+                            <TextBlock x:Name="LibrariesPageTitle" Text="Word packs" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Turn on ready-made vocabulary packs so Scribe spells technical terms the way you say them. 'a p i m' becomes 'APIM', 'gpt five six terra' becomes 'GPT-5.6-Terra'. The two AI packs are on by default; the rest are opt-in. Enabled libraries layer on top of your dictionary, and your own entries always win. Import a CSV to add your own. Changes apply when you save."/>
                         </StackPanel>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
-                            <ui:Button x:Name="LibraryImportButton" Content="Import library"
+                            <ui:Button x:Name="LibraryImportButton" Content="Import a word pack..."
                                        Icon="{ui:SymbolIcon ArrowDownload24}"
                                        Margin="0,0,8,0" Click="LibraryImportButton_Click"
-                                       ToolTip="Add a dictionary library from a CSV file."/>
+                                       ToolTip="Add a dictionary word pack from a CSV file."/>
                             <ui:Button x:Name="LibraryExportButton" Content="Export CSV"
                                        Icon="{ui:SymbolIcon ArrowUpload24}"
                                        Margin="0,0,8,0" Click="LibraryExportButton_Click"
-                                       ToolTip="Save the selected library as a CSV file to back up or share."/>
+                                       ToolTip="Save the selected word pack as a CSV file to back up or share."/>
                             <ui:Button x:Name="LibraryRemoveButton" Content="Remove"
                                        Icon="{ui:SymbolIcon Delete24}"
                                        Click="LibraryRemoveButton_Click"
-                                       ToolTip="Remove the selected imported library. Built-in libraries can only be turned off."/>
+                                       ToolTip="Remove the selected imported word pack. Built-in libraries can only be turned off."/>
                         </StackPanel>
                         <Grid Grid.Row="2">
                             <Grid.ColumnDefinitions>
@@ -1676,11 +1620,11 @@
                                         <!-- The 2 px side margin is the one WPF gives a text column's text, so the name lines
                                              up with the Category and Terms text beside it. The two lines carry their own
                                              leading, so a 1 px top and bottom keeps a default window showing every
-                                             shipped library without scrolling, as the one-line rows did. A template column,
+                                             shipped word pack without scrolling, as the one-line rows did. A template column,
                                              unlike a text column, has no binding to fall back on for Ctrl+C or for the cell's
                                              UI Automation value, so ClipboardContentBinding supplies the name for both. The
                                              name line, and only it, takes LibraryNameText's SemiBold cue for the selected row. -->
-                                        <DataGridTemplateColumn Header="Library" Width="*" IsReadOnly="True"
+                                        <DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True"
                                                                 ClipboardContentBinding="{Binding Name}"
                                                                 CellStyle="{StaticResource LibraryNameCell}">
                                             <DataGridTemplateColumn.CellTemplate>
@@ -1723,22 +1667,22 @@
                                     <TextBlock x:Name="LibraryDetailEmpty" Grid.Row="1"
                                                VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
                                                Style="{StaticResource CardDescription}" TextWrapping="Wrap"
-                                               Text="Select a library on the left to see its terms."/>
+                                               Text="Select a word pack to see its words."/>
                                 </Grid>
                             </ui:Card>
                         </Grid>
                         <TextBlock Grid.Row="3" Style="{StaticResource CardDescription}" Margin="2,8,2,0"
-                                   Text="Tip: click a library to preview its terms on the right. Enable the ones you want, turn off any you don't, then save."/>
+                                   Text="Tip: click a word pack to preview its terms on the right. Enable the ones you want, turn off any you don't, then save."/>
                     </Grid>
 
                     <!-- ============================ Snippets ============================ -->
-                    <Grid x:Name="SectionSnippets" Visibility="Collapsed">
+                    <Grid x:Name="SectionVoiceSnippets" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock x:Name="SnippetsPageTitle" Text="Snippets" Style="{StaticResource PageTitle}"/>
+                            <TextBlock x:Name="SnippetsPageTitle" Text="Voice snippets" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Say a trigger phrase, like 'insert my standup update', and Scribe types the saved template instead. Pick distinctive phrases you wouldn't say by accident. Edits apply when you save."/>
                         </StackPanel>
@@ -1807,13 +1751,13 @@
                     </Grid>
 
                     <!-- ============================ Profiles ============================ -->
-                    <Grid x:Name="SectionProfiles" Visibility="Collapsed">
+                    <Grid x:Name="SectionAppProfiles" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock x:Name="ProfilesPageTitle" Text="Profiles" Style="{StaticResource PageTitle}"/>
+                            <TextBlock x:Name="ProfilesPageTitle" Text="App profiles" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Use a different writing style or line-break rule in specific apps, like Outlook or Teams."/>
                         </StackPanel>
@@ -1888,16 +1832,16 @@
                         </Grid>
                     </Grid>
 
-                    <!-- ============================ Playground ============================ -->
-                    <Grid x:Name="SectionPlayground" Visibility="Collapsed">
+                    <!-- ============================ Try dictation ============================ -->
+                    <Grid x:Name="SectionTryDictation" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock Text="Playground" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Text="Try dictation" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Focus the text box and use your dictation shortcut to run the full audio pipeline without leaving Scribe."/>
+                                       Text="Check that dictation works, and see what Scribe changed."/>
                         </StackPanel>
 
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
@@ -1934,7 +1878,7 @@
                                                      Padding="10" SpellCheck.IsEnabled="False"
                                                      AutomationProperties.LabeledBy="{Binding ElementName=PlaygroundOutputTitle}"/>
                                         <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="Underlined highlights came from a dictionary, library, or snippet. Hover one to see what matched."/>
+                                                   Text="Underlined highlights came from a dictionary, word pack, or snippet. Hover one to see what matched."/>
                                     </StackPanel>
                                 </ui:Card>
 
@@ -2028,7 +1972,43 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="HistoryPageTitle" Text="History" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Review recent dictations, copy text, or remove entries. History stays on this PC."/>
+                                       Text="Find, copy or delete your recent dictations."/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Keep dictation history for" Style="{StaticResource CardTitle}"/>
+                                            <!-- Text comes from StorageRetentionPolicy.TextRetentionHint. -->
+                                            <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource CardDescription}"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:NumberBox x:Name="HistoryRetentionBox" Width="130"
+                                                          Minimum="0" Maximum="3650" SmallChange="1"
+                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
+                                                          SpinButtonPlacementMode="Inline"
+                                                          AutomationProperties.Name="Keep dictation history for days"/>
+                                            <TextBlock Text="days" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <CheckBox x:Name="StoreAudioCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}">
+                                                <TextBlock x:Name="StoreAudioTitle" Text="Keep audio with history" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <!-- Text comes from StorageRetentionPolicy.StoredAudioHint so it always
+                                                                                         names the limits maintenance actually enforces. -->
+                                        <TextBlock Margin="28,2,0,0" x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}"/>
+                                    </StackPanel>
+                                </ui:Card>
+
                         </StackPanel>
                         <ui:Card Grid.Row="1" Padding="0" Style="{StaticResource PanelCard}">
                             <Grid>
@@ -2166,7 +2146,7 @@
                             <StackPanel MaxWidth="600" HorizontalAlignment="Left">
                                 <TextBlock Text="Usage" Style="{StaticResource PageTitle}"/>
                                 <TextBlock Style="{StaticResource PageSubtitle}"
-                                           Text="Your local dictation activity and recurring terminology. Nothing is uploaded when this page opens."/>
+                                           Text="How much you've dictated, and words you might add to your dictionary."/>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
                                 <ComboBox x:Name="UsagePeriodBox" Width="150" Margin="0,0,8,0"
@@ -2371,7 +2351,7 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock Text="Diagnostics" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="How fast dictation runs on this PC, and what happened when AI cleanup fell back to raw text. Everything here is computed from data already on your disk. Nothing is collected."/>
+                                       Text="Get help, see what went wrong, and check how fast dictation runs."/>
                         </StackPanel>
 
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -2561,9 +2541,9 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock Text="About Scribe" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Text="About" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Version, privacy, support, and the open-source project behind the app."/>
+                                       Text="Version, updates, help, privacy and feedback."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
