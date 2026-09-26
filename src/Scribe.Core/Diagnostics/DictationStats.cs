@@ -24,8 +24,9 @@ public static class DictationStats
         string CurrentModelId,
         string CurrentModelName,
         bool HasEarlierModelDictations,
-        int ParakeetDecodeCount,
-        MetricSummary? ParakeetDecodeMs,
+        bool ReachedReadLimit,
+        int SpeechRecognitionCount,
+        MetricSummary? SpeechRecognitionMs,
         int CleanupCount,
         MetricSummary? CleanupMs,
         int CombinedCount,
@@ -33,109 +34,63 @@ public static class DictationStats
         double FastestRtf,
         double RtfP50,
         double RtfP95,
-        double LongestAudioSeconds);
+        double LongestAudioSeconds)
+    {
+        public int ParakeetDecodeCount => SpeechRecognitionCount;
+
+        public MetricSummary? ParakeetDecodeMs => SpeechRecognitionMs;
+    }
 
     /// <summary>
     /// Computes stats over the entries newer than <paramref name="since"/>. Entries with a
-    /// non-positive audio length are skipped (RTF would be undefined). Returns null when nothing
-    /// qualifies, so the panel can show a friendly empty state instead of zeros.
+    /// non-positive audio length are skipped because RTF would be undefined. Returns null when no
+    /// entry for the current speech model qualifies.
     /// </summary>
-    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since)
+    public static Snapshot? Compute(
+        IEnumerable<HistoryEntry> entries,
+        DateTimeOffset since,
+        string? currentModelId = TranscriptionModelCatalog.DefaultId,
+        bool currentModelAvailable = true,
+        int? readLimit = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
-        var decodeMs = new List<double>();
-        var rtf = new List<double>();
-        var cleanupMs = new List<double>();
-        var combinedMs = new List<double>();
-        var count = 0;
-        long totalAudioMs = 0;
-        double longestAudioMs = 0;
-
-        foreach (var entry in entries)
-        {
-            if (entry.TimestampUtc < since || entry.AudioMilliseconds <= 0)
-            {
-                continue;
-            }
-
-            count++;
-            if (string.Equals(
-                    entry.TranscriptionModelId,
-                    TranscriptionModelCatalog.DefaultId,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                decodeMs.Add(entry.DecodeMilliseconds);
-                rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
-            }
-
-            if (entry.CleanupMilliseconds is > 0)
-            {
-                cleanupMs.Add(entry.CleanupMilliseconds.Value);
-                combinedMs.Add(entry.DecodeMilliseconds + entry.CleanupMilliseconds.Value);
-            }
-
-            totalAudioMs += entry.AudioMilliseconds;
-            longestAudioMs = Math.Max(longestAudioMs, entry.AudioMilliseconds);
-        }
-
-        if (totalAudioMs == 0)
+        var readEntries = entries.ToList();
+        var reachedReadLimit = readLimit is > 0 && readEntries.Count >= readLimit.Value;
+        var selectedModelId = currentModelAvailable
+            ? currentModelId
+            : readEntries
+                .Where(entry => entry.TimestampUtc >= since)
+                .OrderByDescending(entry => entry.TimestampUtc)
+                .FirstOrDefault(entry => entry.TranscriptionModelId is { Length: > 0 })
+                ?.TranscriptionModelId ?? currentModelId;
+        var currentModel = TranscriptionModelCatalog.Resolve(selectedModelId);
+        var entriesInWindow = readEntries
+            .Where(entry => entry.TimestampUtc >= since && entry.AudioMilliseconds > 0)
+            .ToList();
+        if (entriesInWindow.Count == 0)
         {
             return null;
         }
 
-        decodeMs.Sort();
-        rtf.Sort();
-        cleanupMs.Sort();
-        combinedMs.Sort();
+        var hasRecordedOtherModel = entriesInWindow.Any(entry =>
+            entry.TranscriptionModelId is { Length: > 0 } modelId &&
+            !string.Equals(modelId, currentModel.Id, StringComparison.OrdinalIgnoreCase));
 
-        return new Snapshot(
-            Count: count,
-            TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
-            CurrentModelId: TranscriptionModelCatalog.DefaultId,
-            CurrentModelName: TranscriptionModelCatalog.Resolve(TranscriptionModelCatalog.DefaultId).DisplayName,
-            HasEarlierModelDictations: false,
-            ParakeetDecodeCount: decodeMs.Count,
-            ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
-            CleanupCount: cleanupMs.Count,
-            CleanupMs: cleanupMs.Count > 0 ? Summarize(cleanupMs) : null,
-            CombinedCount: combinedMs.Count,
-            CombinedMs: combinedMs.Count > 0 ? Summarize(combinedMs) : null,
-            FastestRtf: rtf.FirstOrDefault(value => value > 0),
-            RtfP50: rtf.Count > 0 ? Percentile(rtf, 0.50) : 0,
-            RtfP95: rtf.Count > 0 ? Percentile(rtf, 0.95) : 0,
-            LongestAudioSeconds: longestAudioMs / 1000.0);
-    }
-
-    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since, string? currentModelId)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-
-        var currentModel = TranscriptionModelCatalog.Resolve(currentModelId);
         var decodeMs = new List<double>();
         var rtf = new List<double>();
         var cleanupMs = new List<double>();
         var combinedMs = new List<double>();
         var count = 0;
-        var allModelsCount = 0;
-        var otherModelCount = 0;
+        var leftOutCount = 0;
         long totalAudioMs = 0;
         double longestAudioMs = 0;
 
-        foreach (var entry in entries)
+        foreach (var entry in entriesInWindow)
         {
-            if (entry.TimestampUtc < since || entry.AudioMilliseconds <= 0)
+            if (!CountsForCurrentModel(entry, currentModel.Id, hasRecordedOtherModel))
             {
-                continue;
-            }
-
-            allModelsCount++;
-            if (!string.Equals(
-                    entry.TranscriptionModelId,
-                    currentModel.Id,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                otherModelCount++;
+                leftOutCount++;
                 continue;
             }
 
@@ -155,7 +110,9 @@ public static class DictationStats
 
         if (count == 0)
         {
-            return null;
+            return leftOutCount > 0
+                ? EmptySnapshot(currentModel, reachedReadLimit)
+                : null;
         }
 
         decodeMs.Sort();
@@ -168,9 +125,10 @@ public static class DictationStats
             TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
             CurrentModelId: currentModel.Id,
             CurrentModelName: currentModel.DisplayName,
-            HasEarlierModelDictations: otherModelCount > 0 && allModelsCount > count,
-            ParakeetDecodeCount: decodeMs.Count,
-            ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
+            HasEarlierModelDictations: leftOutCount > 0,
+            ReachedReadLimit: reachedReadLimit,
+            SpeechRecognitionCount: decodeMs.Count,
+            SpeechRecognitionMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
             CleanupCount: cleanupMs.Count,
             CleanupMs: cleanupMs.Count > 0 ? Summarize(cleanupMs) : null,
             CombinedCount: combinedMs.Count,
@@ -179,6 +137,34 @@ public static class DictationStats
             RtfP50: rtf.Count > 0 ? Percentile(rtf, 0.50) : 0,
             RtfP95: rtf.Count > 0 ? Percentile(rtf, 0.95) : 0,
             LongestAudioSeconds: longestAudioMs / 1000.0);
+    }
+
+    private static Snapshot EmptySnapshot(TranscriptionModel currentModel, bool reachedReadLimit) => new(
+        Count: 0,
+        TotalAudio: TimeSpan.Zero,
+        CurrentModelId: currentModel.Id,
+        CurrentModelName: currentModel.DisplayName,
+        HasEarlierModelDictations: true,
+        ReachedReadLimit: reachedReadLimit,
+        SpeechRecognitionCount: 0,
+        SpeechRecognitionMs: null,
+        CleanupCount: 0,
+        CleanupMs: null,
+        CombinedCount: 0,
+        CombinedMs: null,
+        FastestRtf: 0,
+        RtfP50: 0,
+        RtfP95: 0,
+        LongestAudioSeconds: 0);
+
+    private static bool CountsForCurrentModel(HistoryEntry entry, string currentModelId, bool hasRecordedOtherModel)
+    {
+        if (entry.TranscriptionModelId is not { Length: > 0 } modelId)
+        {
+            return !hasRecordedOtherModel;
+        }
+
+        return string.Equals(modelId, currentModelId, StringComparison.OrdinalIgnoreCase);
     }
 
     private static MetricSummary Summarize(IReadOnlyList<double> sortedAscending)

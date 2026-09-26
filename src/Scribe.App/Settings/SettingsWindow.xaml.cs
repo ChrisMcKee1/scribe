@@ -136,7 +136,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string _noFailuresText = string.Empty;
     private string _snippetEmptyText = string.Empty;
     private string _libraryDetailEmptyText = string.Empty;
-    private string _statsSummaryEmptyText = string.Empty;
 
     private ICollectionView? _historyView;
     private UsageAnalyzer.Snapshot? _usageSnapshot;
@@ -1586,17 +1585,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        ShowPerformanceStats(null, statsFailed: false, DiagnosticsSpeedReadState.Reading);
         var since = DateTimeOffset.UtcNow.AddDays(-7);
-        ComputeCapabilityReport? capability;
-        Scribe.Core.Diagnostics.DictationStats.Snapshot? stats;
+        var currentModelId = _committedSettings.TranscriptionModelId;
+        PerformanceData performance;
         try
         {
-            (capability, stats) = await Task.Run(() => ReadPerformanceData(since));
+            performance = await Task.Run(() => ReadPerformanceData(since, currentModelId));
         }
         catch (Exception ex)
         {
             TryLog(ex, "Could not read diagnostics for Settings.");
-            (capability, stats) = (null, null);
+            performance = new(null, null, StatsFailed: true);
         }
 
         if (!_statsLoad.Publish(ticket, string.Empty))
@@ -1604,14 +1604,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        ShowSystemCapability(capability);
-        ShowPerformanceStats(stats);
+        ShowSystemCapability(performance.Capability);
+        ShowPerformanceStats(performance.Stats, performance.StatsFailed);
     }
 
     // Runs on a worker thread, so it touches no controls. Hardware detection is descriptive only and
     // the stats are a nicety, so neither failure may take the Diagnostics page down.
-    private (ComputeCapabilityReport? Capability, Scribe.Core.Diagnostics.DictationStats.Snapshot? Stats)
-        ReadPerformanceData(DateTimeOffset since)
+    private PerformanceData ReadPerformanceData(DateTimeOffset since, string? currentModelId)
     {
         ComputeCapabilityReport? capability = null;
         try
@@ -1624,123 +1623,139 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         Scribe.Core.Diagnostics.DictationStats.Snapshot? stats = null;
+        var statsFailed = false;
         try
         {
-            stats = Scribe.Core.Diagnostics.DictationStats.Compute(_history.GetRecent(1000), since);
+            var entries = _history.GetRecent(1000);
+            stats = Scribe.Core.Diagnostics.DictationStats.Compute(
+                entries,
+                since,
+                currentModelId,
+                currentModelAvailable: SelectedSpeechModelIsRunning(currentModelId),
+                readLimit: 1000);
         }
         catch (Exception ex)
         {
             TryLog(ex, "Performance stats unavailable.");
+            statsFailed = true;
         }
 
-        return (capability, stats);
+        return new(capability, stats, statsFailed);
     }
 
-    private void ShowPerformanceStats(Scribe.Core.Diagnostics.DictationStats.Snapshot? stats)
+    // The saved selection is what recognition runs only when it is installed and is the model this session started with: a
+    // model saved without a restart, or one that fell back, isn't, and then the newest recorded model in the window is.
+    private bool SelectedSpeechModelIsRunning(string? selectedModelId)
     {
-        if (stats is null)
-        {
-            StatsSummaryText.Text = _statsSummaryEmptyText; // the friendly empty-state text
-            return;
-        }
+        var selected = TranscriptionModelCatalog.Resolve(selectedModelId);
+        var running = TranscriptionModelCatalog.Resolve(_runningTranscription.ModelId);
+        var available = string.Equals(selected.Id, TranscriptionModelCatalog.DefaultId, StringComparison.OrdinalIgnoreCase) ||
+            _transcriptionModelInstaller.IsInstalled(selected);
+        return available && string.Equals(selected.Id, running.Id, StringComparison.OrdinalIgnoreCase);
+    }
 
+    private void ShowPerformanceStats(
+        Scribe.Core.Diagnostics.DictationStats.Snapshot? stats,
+        bool statsFailed,
+        DiagnosticsSpeedReadState emptyState = DiagnosticsSpeedReadState.Empty)
+    {
         try
         {
-            StatsSummaryText.Text =
-                "A local snapshot of your current rhythm. Lower latency is faster; " +
-                "pace shows how quickly Scribe processes speech compared with its duration.";
-
-            StatWeekDictations.Text = stats.Count.ToString("N0");
-            StatWeekSpeech.Text = FormatElapsed(stats.TotalAudio.TotalSeconds);
-            StatLongestDictation.Text = FormatElapsed(stats.LongestAudioSeconds);
-            StatBestPace.Text = stats.FastestRtf > 0
-                ? $"{1.0 / stats.FastestRtf:0.0}x"
-                : "n/a";
-
-            if (stats.ParakeetDecodeMs is { } decode)
-            {
-                DecodeSummaryHint.Text =
-                    $"Time inside Parakeet only, over {stats.ParakeetDecodeCount} " +
-                    $"run{(stats.ParakeetDecodeCount == 1 ? string.Empty : "s")}. AI cleanup is never counted here. " +
-                    $"Typical pace {FormatPace(stats.RtfP50)} realtime; slower runs {FormatPace(stats.RtfP95)}.";
-                StatDecodeAverage.Text = FormatLatency(decode.Average);
-                StatDecodeMin.Text = FormatLatency(decode.Min);
-                StatDecodeMax.Text = FormatLatency(decode.Max);
-                StatDecodeP50.Text = FormatLatency(decode.P50);
-                StatDecodeP95.Text = FormatLatency(decode.P95);
-                DecodeMetricsGrid.Visibility = Visibility.Visible;
-                DecodeNoDataText.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                DecodeSummaryHint.Text = "Waiting for a model-verified Parakeet run.";
-                DecodeMetricsGrid.Visibility = Visibility.Collapsed;
-                DecodeNoDataText.Visibility = Visibility.Visible;
-            }
-
-            if (stats.CleanupMs is { } cleanup)
-            {
-                CleanupSummaryHint.Text =
-                    $"The cleanup model round trip on its own, over {stats.CleanupCount} " +
-                    $"run{(stats.CleanupCount == 1 ? string.Empty : "s")}. Recognition time is not included.";
-                StatCleanupAverage.Text = FormatLatency(cleanup.Average);
-                StatCleanupMin.Text = FormatLatency(cleanup.Min);
-                StatCleanupMax.Text = FormatLatency(cleanup.Max);
-                StatCleanupP50.Text = FormatLatency(cleanup.P50);
-                StatCleanupP95.Text = FormatLatency(cleanup.P95);
-                CleanupMetricsGrid.Visibility = Visibility.Visible;
-                CleanupNoDataText.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                CleanupSummaryHint.Text = "No AI cleanup runs in this period yet.";
-                CleanupMetricsGrid.Visibility = Visibility.Collapsed;
-                CleanupNoDataText.Visibility = Visibility.Visible;
-                SpeedDetailsExpander.IsExpanded = false;
-            }
-
-            if (stats.CombinedMs is { } combined)
-            {
-                CombinedSummaryHint.Text =
-                    $"Recognition plus the cleanup model round trip over {stats.CombinedCount} " +
-                    $"run{(stats.CombinedCount == 1 ? string.Empty : "s")}. This is the wait you actually feel.";
-                StatCombinedAverage.Text = FormatLatency(combined.Average);
-                StatCombinedMin.Text = FormatLatency(combined.Min);
-                StatCombinedMax.Text = FormatLatency(combined.Max);
-                StatCombinedP50.Text = FormatLatency(combined.P50);
-                StatCombinedP95.Text = FormatLatency(combined.P95);
-                CombinedMetricsGrid.Visibility = Visibility.Visible;
-                CombinedNoDataText.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                CombinedSummaryHint.Text = "No cleanup-enabled runs in this period yet.";
-                CombinedMetricsGrid.Visibility = Visibility.Collapsed;
-                CombinedNoDataText.Visibility = Visibility.Visible;
-                SpeedDetailsExpander.IsExpanded = false;
-            }
-
-            StatsGrid.Visibility = Visibility.Visible;
+            var text = statsFailed
+                ? DiagnosticsSpeedText.ForState(DiagnosticsSpeedReadState.Failure)
+                : stats is null
+                    ? DiagnosticsSpeedText.ForState(emptyState)
+                    : DiagnosticsSpeedText.ForStats(stats);
+            ApplyPerformanceText(text);
         }
         catch (Exception ex)
         {
             // Stats are a nicety; never block the settings window over them.
-            System.Diagnostics.Debug.WriteLine($"Performance stats unavailable: {ex.Message}");
+            TryLog(ex, "Could not show diagnostics speed statistics.");
+        }
+    }
+
+    private void ApplyPerformanceText(DiagnosticsSpeedTextView text)
+    {
+        StatsSummaryText.Text = text.Description;
+        StatsRetryButton.Visibility = text.ShowRetry ? Visibility.Visible : Visibility.Collapsed;
+        StatsGrid.Visibility = text.ShowTable ? Visibility.Visible : Visibility.Collapsed;
+        SpeedDetailsExpander.Visibility = text.ShowDetails ? Visibility.Visible : Visibility.Collapsed;
+        if (!text.ShowDetails)
+        {
+            SpeedDetailsExpander.IsExpanded = false;
         }
 
-        static string FormatLatency(double ms) =>
-            ms < 1000 ? $"{ms:0} ms" : $"{ms / 1000.0:0.0} s";
+        StatDecodeP50.Text = text.TypicalSpeechRecognition;
+        StatCleanupP50.Text = text.TypicalCleanup;
+        StatCombinedP50.Text = text.TypicalCombined;
+        StatDecodeP95.Text = text.SlowSpeechRecognition;
+        StatCleanupP95.Text = text.SlowCleanup;
+        StatCombinedP95.Text = text.SlowCombined;
 
-        static string FormatElapsed(double seconds) => seconds switch
-        {
-            < 60 => $"{seconds:0} sec",
-            < 3600 => $"{seconds / 60.0:0.#} min",
-            _ => $"{seconds / 3600.0:0.#} hr",
-        };
+        SpeedDetailsCountText.Text = text.SampleCountLine;
+        SpeedDetailsCapText.Text = text.CapLine;
+        SpeedDetailsCapText.Visibility = text.ShowCapLine ? Visibility.Visible : Visibility.Collapsed;
+        SpeedDetailsBestText.Text = text.BestLine;
 
-        static string FormatPace(double rtf) =>
-            rtf > 0 ? $"{1.0 / rtf:0.0}x" : "n/a";
+        ApplyStepText(
+            text.SpeechRecognition,
+            DecodeSummaryHint,
+            DecodeMetricsGrid,
+            DecodeNoDataText,
+            StatDecodeAverage,
+            StatDecodeMin,
+            StatDecodeMax);
+        ApplyStepText(
+            text.Cleanup,
+            CleanupSummaryHint,
+            CleanupMetricsGrid,
+            CleanupNoDataText,
+            StatCleanupAverage,
+            StatCleanupMin,
+            StatCleanupMax);
+        ApplyStepText(
+            text.Combined,
+            CombinedSummaryHint,
+            CombinedMetricsGrid,
+            CombinedNoDataText,
+            StatCombinedAverage,
+            StatCombinedMin,
+            StatCombinedMax);
     }
+
+    private static void ApplyStepText(
+        DiagnosticsSpeedStepText step,
+        TextBlock hint,
+        UIElement metrics,
+        TextBlock empty,
+        TextBlock average,
+        TextBlock fastest,
+        TextBlock slowest)
+    {
+        hint.Text = step.Hint;
+        empty.Text = step.EmptyLine;
+        if (step.HasData)
+        {
+            average.Text = step.Average;
+            fastest.Text = step.Fastest;
+            slowest.Text = step.Slowest;
+            metrics.Visibility = Visibility.Visible;
+            empty.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            metrics.Visibility = Visibility.Collapsed;
+            empty.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void StatsRetryButton_Click(object sender, RoutedEventArgs e) => LoadPerformanceStats();
+
+    private sealed record PerformanceData(
+        ComputeCapabilityReport? Capability,
+        Scribe.Core.Diagnostics.DictationStats.Snapshot? Stats,
+        bool StatsFailed);
 
     // Grids and hints for the sections that only display stored data. Their rows arrive later.
     private void InitializeReadOnlySections()
@@ -1762,8 +1777,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         NoFailuresText.Visibility = Visibility.Visible;
         ClearFailuresButton.IsEnabled = false;
 
-        _statsSummaryEmptyText = StatsSummaryText.Text;
-        StatsSummaryText.Text = "Reading your statistics...";
+        ShowPerformanceStats(null, statsFailed: false, DiagnosticsSpeedReadState.Reading);
     }
 
     private async void LoadFailures()
