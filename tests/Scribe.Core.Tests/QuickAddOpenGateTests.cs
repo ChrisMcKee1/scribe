@@ -17,23 +17,31 @@ public sealed class QuickAddOpenGateTests
             opens++;
             await release.Task;
         });
-        var second = gate.RunAsync(
-            () =>
-            {
-                opens++;
-                return Task.CompletedTask;
-            },
-            () =>
-            {
-                coalesced++;
-                return Task.CompletedTask;
-            });
+        try
+        {
+            var second = gate.RunAsync(
+                () =>
+                {
+                    opens++;
+                    return Task.CompletedTask;
+                },
+                () =>
+                {
+                    coalesced++;
+                    return Task.CompletedTask;
+                });
 
-        await Task.Delay(50);
-        Assert.Equal(1, opens);
+            await Task.Delay(50);
+            Assert.Equal(1, opens);
 
-        release.SetResult();
-        await Task.WhenAll(first, second);
+            release.SetResult();
+            await Task.WhenAll(first, second);
+        }
+        finally
+        {
+            // The first open holds until the test lets it go, and is let go on every way out (stream TR round 7).
+            release.TrySetResult();
+        }
 
         Assert.Equal(1, opens);
         Assert.Equal(1, coalesced);
