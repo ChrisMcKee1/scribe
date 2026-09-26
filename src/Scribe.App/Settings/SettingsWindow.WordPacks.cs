@@ -1576,7 +1576,10 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             return;
         }
 
-        var contentWidth = SectionWordPacks.ActualWidth > 0 ? SectionWordPacks.ActualWidth : root.ActualWidth;
+        // The tab's own width once it has been laid out; before that, the window less the rail and the content margins.
+        var contentWidth = SectionWordPacks.ActualWidth > 0
+            ? SectionWordPacks.ActualWidth
+            : Math.Max(1, root.ActualWidth - RailColumn.ActualWidth - 36);
         _wordPackLayout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(
             contentWidth,
             root.ActualHeight,

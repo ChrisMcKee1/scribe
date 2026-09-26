@@ -1,8 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Documents;
-using System.Windows.Media;
+using System.Windows.Threading;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Settings;
 
@@ -10,6 +8,10 @@ namespace Scribe.App.Settings;
 
 public partial class SettingsWindow
 {
+    // The Word packs search box keeps at least this much beside the buttons, or it moves to a row of its own.
+    private const double WordPacksSearchMinimum = 180;
+    private const double ToolbarGap = 12;
+
     private void UsageMetricsCard_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateUsageMetricLayout();
 
     private void WordPacksToolbarGrid_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateWordPacksToolbarLayout();
@@ -18,66 +20,16 @@ public partial class SettingsWindow
 
     private void UpdateTextSizeAdaptiveLayouts()
     {
-        ApplyLargeTextToRealizedControls();
-        ApplyDictionaryGridTextColumnMinimums();
         ApplyListPaneWidths();
-        UpdateWordPacksToolbarLayout();
-        UpdateHistoryToolbarLayout();
         UpdateUsageMetricLayout();
-    }
 
-    private void ApplyLargeTextToRealizedControls()
-    {
-        if (TextScaleService.CurrentFactor <= 1 || Content is not DependencyObject root)
+        // The toolbars decide from their buttons' measured widths, which a text size change updates only on the next layout
+        // pass.
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
-            return;
-        }
-
-        var fontSize = TryFindResource("ScribeFontBody") is double body ? body : 14;
-        foreach (var grid in FindVisualDescendants<DataGrid>(root))
-        {
-            grid.FontSize = fontSize;
-        }
-
-        foreach (var header in FindVisualDescendants<DataGridColumnHeader>(root))
-        {
-            header.FontSize = fontSize;
-        }
-
-        foreach (var accessText in FindVisualDescendants<AccessText>(root))
-        {
-            accessText.FontSize = fontSize;
-        }
-    }
-
-    private static IEnumerable<T> FindVisualDescendants<T>(DependencyObject root)
-        where T : DependencyObject
-    {
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            if (child is T found)
-            {
-                yield return found;
-            }
-
-            foreach (var nested in FindVisualDescendants<T>(child))
-            {
-                yield return nested;
-            }
-        }
-    }
-
-    private void ApplyDictionaryGridTextColumnMinimums()
-    {
-        if (TextScaleService.CurrentFactor <= 1)
-        {
-            return;
-        }
-
-        var minimum = 120 * TextScaleService.CurrentFactor;
-        DictionarySpokenColumn.MinWidth = minimum;
-        DictionaryWrittenColumn.MinWidth = minimum;
+            UpdateWordPacksToolbarLayout();
+            UpdateHistoryToolbarLayout();
+        });
     }
 
     private void ApplyListPaneWidths()
@@ -97,40 +49,53 @@ public partial class SettingsWindow
         column.Width = new GridLength(width);
     }
 
+    // The natural width of a toolbar's buttons: a horizontal panel measures its children without a width limit, so their
+    // desired sizes don't depend on whether the search box shares their row, and the decision can't flip back and forth.
+    private static double NaturalWidth(Panel panel) =>
+        panel.Children.OfType<FrameworkElement>().Where(child => child.Visibility != Visibility.Collapsed).Sum(child => child.DesiredSize.Width);
+
+    // The search box moves under the buttons when both don't fit on one row, and comes back when they do; on its own row
+    // the buttons may wrap too, so none is cut off at the largest text sizes or the smallest windows.
     private void UpdateWordPacksToolbarLayout()
     {
-        if (TextScaleService.CurrentFactor <= 1 || WordPacksToolbarGrid.ActualWidth <= 0)
+        var available = WordPacksToolbarGrid.ActualWidth;
+        if (available <= 0)
         {
             return;
         }
 
-        LibraryImportButton.Content = "Import...";
-        Grid.SetRow(LibrarySearchBox, 1);
-        Grid.SetColumn(LibrarySearchBox, 0);
-        Grid.SetColumnSpan(LibrarySearchBox, 3);
-        LibrarySearchBox.Margin = new Thickness(0, 8, 0, 0);
+        var twoRows = NaturalWidth(WordPacksToolbarButtons) + WordPacksSearchMinimum + ToolbarGap > available;
+        Grid.SetRow(LibrarySearchBox, twoRows ? 1 : 0);
+        Grid.SetColumn(LibrarySearchBox, twoRows ? 0 : 2);
+        Grid.SetColumnSpan(LibrarySearchBox, twoRows ? 3 : 1);
+        LibrarySearchBox.Margin = twoRows ? new Thickness(0, 8, 0, 0) : new Thickness(0);
+        Grid.SetColumnSpan(WordPacksToolbarButtons, twoRows ? 3 : 1);
+        if (twoRows)
+        {
+            WordPacksToolbarButtons.MaxWidth = available;
+        }
+        else
+        {
+            WordPacksToolbarButtons.ClearValue(MaxWidthProperty);
+        }
     }
 
     private void UpdateHistoryToolbarLayout()
     {
-        if (TextScaleService.CurrentFactor <= 1 || HistoryToolbarGrid.ActualWidth <= 0)
+        var available = HistoryToolbarGrid.ActualWidth;
+        if (available <= 0)
         {
             return;
         }
 
-        if (HistoryToolbarGrid.RowDefinitions.Count == 0)
-        {
-            HistoryToolbarGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            HistoryToolbarGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        }
-
-        Grid.SetRow(HistoryToolbarActions, 1);
-        Grid.SetColumn(HistoryToolbarActions, 0);
-        Grid.SetColumnSpan(HistoryToolbarActions, 2);
-        HistoryToolbarActions.Margin = new Thickness(0, 8, 0, 0);
-        HistoryToolbarActions.HorizontalAlignment = HorizontalAlignment.Left;
-
-        Grid.SetColumnSpan(HistorySearchBox, 2);
-        HistorySearchBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+        var twoRows = HistorySearchBox.Visibility == Visibility.Visible &&
+            NaturalWidth(HistoryToolbarActions) + HistorySearchBox.MinWidth + ToolbarGap > available;
+        Grid.SetRow(HistoryToolbarActions, twoRows ? 1 : 0);
+        Grid.SetColumn(HistoryToolbarActions, twoRows ? 0 : 1);
+        Grid.SetColumnSpan(HistoryToolbarActions, twoRows ? 2 : 1);
+        HistoryToolbarActions.Margin = twoRows ? new Thickness(0, 8, 0, 0) : new Thickness(0);
+        HistoryToolbarActions.HorizontalAlignment = twoRows ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        Grid.SetColumnSpan(HistorySearchBox, twoRows ? 2 : 1);
+        HistorySearchBox.HorizontalAlignment = twoRows ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
     }
 }

@@ -28,6 +28,7 @@ public sealed class TextScaleService : IDisposable
 
     public void Start()
     {
+        TextScaleControlStyles.EnsureInstalled(Application.Current.Resources);
         Apply();
         _settings.TextScaleFactorChanged += OnTextScaleFactorChanged;
     }

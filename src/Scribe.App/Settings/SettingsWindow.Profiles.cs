@@ -360,7 +360,8 @@ public partial class SettingsWindow
     {
         var hasSelection = SelectedProfile is not null;
         ProfileEditor.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
-        ProfileEmptyState.Visibility = hasSelection ? Visibility.Collapsed : Visibility.Visible;
+        ProfileEmptyState.Visibility = hasSelection || _profileCompact ? Visibility.Collapsed : Visibility.Visible;
+        ProfileCompactEmptyHint.Visibility = !hasSelection && _profileCompact ? Visibility.Visible : Visibility.Collapsed;
         if (hasSelection)
         {
             return;
@@ -369,6 +370,7 @@ public partial class SettingsWindow
         ProfileEmptyHint.Text = _profileRows.Count == 0
             ? "No app profiles yet. Add one to change how Scribe writes in a specific app."
             : "Select a profile to edit it.";
+        ProfileCompactEmptyHint.Text = ProfileEmptyHint.Text;
     }
 
     private void RefreshProfileCommands()
@@ -394,6 +396,9 @@ public partial class SettingsWindow
 
     private void ProfileAiCleanupButton_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage.AiCleanup);
 
+    // Whether the compact layout (notice and hint inside the editor's scroller) is in use; UpdateProfileLayout decides it.
+    private bool _profileCompact;
+
     private void UpdateProfileLayout()
     {
         if (ProfileBodyGrid.ActualHeight <= 0)
@@ -413,6 +418,11 @@ public partial class SettingsWindow
         ProfileOrderHint.Visibility = !compact && state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
         ProfileCompactAiCleanupNotice.Visibility = compact && state.ShowAiCleanupNotice ? Visibility.Visible : Visibility.Collapsed;
         ProfileCompactOrderHint.Visibility = compact && state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+        if (_profileCompact != compact)
+        {
+            _profileCompact = compact;
+            RefreshProfileEmptyState();
+        }
     }
 
     /// <summary>Builds the profile list to persist. The order is the ListBox order: first match wins.</summary>
