@@ -89,6 +89,9 @@ public sealed class AppExitCloseGuardTests
         var app = File.ReadAllText(FindRepoFile("src", "Scribe.App", "App.xaml.cs"));
         Assert.Contains("_settingsWindow is { IsDraftDiscardedForAppExit: false } window ? window : null;", app, StringComparison.Ordinal);
         Assert.Contains("liveSettings.IsDraftDiscardedForAppExit = false;", app, StringComparison.Ordinal);
+        var persist = app[app.IndexOf("persist: entry =>", StringComparison.Ordinal)..];
+        persist = persist[..persist.IndexOf("dictionary.Update(entry);", StringComparison.Ordinal)];
+        Assert.Contains("if (_settingsWindow is { IsDraftDiscardedForAppExit: false } settings)", persist, StringComparison.Ordinal);
 
         var close = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.AppClose.cs"));
         Assert.Contains("IsDraftDiscardedForAppExit = true;", close, StringComparison.Ordinal);

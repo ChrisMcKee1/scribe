@@ -2126,7 +2126,9 @@ public partial class App : Application
                 },
                 persist: entry =>
                 {
-                    if (_settingsWindow is { } settings)
+                    // A draft discarded for an update never receives the correction: it would update a row the user
+                    // threw away. Storage takes it, and that Settings window closes once the update runs.
+                    if (_settingsWindow is { IsDraftDiscardedForAppExit: false } settings)
                     {
                         return settings.ApplyQuickDictionaryEntry(entry);
                     }
