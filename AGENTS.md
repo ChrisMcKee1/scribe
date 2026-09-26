@@ -1154,6 +1154,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   exercise remote AI cleanup. Before any release from a line carrying the integration, check that W-V's merge is an
   ancestor of the release head too. The Store build's journal (the redirected `LocalCache` folder, native and checked
   replace) is unverified until the desktop gate exercises it.
+- **Release gate: no release until the Settings redesign's Word packs page lands.** The containment of the old window
+  keeps it from reporting a switch it cannot store, but a build carrying it cannot switch any word pack on or off, and
+  its dictionary cleanup reviews no word pack. The Word packs page (W2) removes `LegacyLibraryPageContainment` with the
+  old page, so before any release from a line carrying the integration, check that the type is gone from the release
+  head (`git grep -q LegacyLibraryPageContainment <release head> -- src` finds nothing).
 - **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
   import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
   `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
@@ -1455,11 +1460,13 @@ packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
-- **The word pack library model ships only with W-V's vocabulary publication.** Before cutting a release, check whether
-  the W1b integration commit ("Integrate the library model's parts", first on `win/libraries-integration`) is an
-  ancestor of the release head (`git merge-base --is-ancestor <integration commit> <release head>`); if it is, W-V's
-  merge commit must be an ancestor too, checked the same way, or the release is refused. Until the Store rows of the
-  desktop gate are observed, the release notes say the Store build's library journal is unverified (see Word packs).
+- **The word pack library model ships only with W-V's vocabulary publication and W2's Word packs page.** Before cutting
+  a release, check whether the W1b integration commit ("Integrate the library model's parts", first on
+  `win/libraries-integration`) is an ancestor of the release head (`git merge-base --is-ancestor <integration commit>
+  <release head>`); if it is, W-V's merge commit must be an ancestor too, checked the same way, and the old Settings
+  window's containment must be gone (`git grep -q LegacyLibraryPageContainment <release head> -- src` finds nothing,
+  see Word packs), or the release is refused. Until the Store rows of the desktop gate are observed, the release notes
+  say the Store build's library journal is unverified (see Word packs).
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
