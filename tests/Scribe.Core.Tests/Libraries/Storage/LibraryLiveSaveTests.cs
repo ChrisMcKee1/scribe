@@ -28,30 +28,46 @@ public sealed class LibraryLiveSaveTests
         Assert.Single(manifests);
         var before = File.ReadAllBytes(fixture.PathOf("team-terms.csv"));
 
+        // The commit waits for the test's release and nothing else (stream TR round 5, A8): the load below has to meet it
+        // still inside its transaction, and a hold that ended by itself would unwind the commit under it. The finally lets
+        // it go on every way out and lets it finish before the fixture closes the database.
         using var inCommit = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        fixture.Settings.WriteStep = (step, _, _) =>
+        Task? commit = null;
+        try
         {
-            if (step == "save committing")
+            fixture.Settings.WriteStep = (step, _, _) =>
             {
-                inCommit.Set();
-                Assert.True(release.Wait(Bound));
+                if (step == "save committing")
+                {
+                    inCommit.Set();
+                    release.Wait();
+                }
+            };
+            commit = Task.Run(() => fixture.Settings.SaveBundle(fixture.Settings.Load(), null, null, default, prepared.Save!.Payload));
+            Assert.True(inCommit.Wait(Bound));
+
+            var during = await Task.Run(service.LoadCatalog).WaitAsync(Bound);
+
+            Assert.Equal(start.Generation, during.Generation);
+            Assert.Equal(manifests, Directory.GetFiles(fixture.Paths.LibraryJournalDir, "*.manifest.json"));
+            Assert.Equal(before, File.ReadAllBytes(fixture.PathOf("team-terms.csv")));
+            Assert.DoesNotContain(fixture.AllFiles(), file => file.EndsWith(".scribe-staged", StringComparison.Ordinal));
+            Assert.Equal("Kubernetes", during.Find("team-terms")!.Content.Rows[0].Values.Written);
+
+            release.Set();
+            await commit.WaitAsync(Bound);
+        }
+        finally
+        {
+            release.Set();
+            if (commit is not null)
+            {
+                await Task.WhenAny(commit, Task.Delay(Bound)); // never throws: a failure above is the one to report
             }
-        };
-        var commit = Task.Run(() => fixture.Settings.SaveBundle(fixture.Settings.Load(), null, null, default, prepared.Save!.Payload));
-        Assert.True(inCommit.Wait(Bound));
 
-        var during = await Task.Run(service.LoadCatalog).WaitAsync(Bound);
-
-        Assert.Equal(start.Generation, during.Generation);
-        Assert.Equal(manifests, Directory.GetFiles(fixture.Paths.LibraryJournalDir, "*.manifest.json"));
-        Assert.Equal(before, File.ReadAllBytes(fixture.PathOf("team-terms.csv")));
-        Assert.DoesNotContain(fixture.AllFiles(), file => file.EndsWith(".scribe-staged", StringComparison.Ordinal));
-        Assert.Equal("Kubernetes", during.Find("team-terms")!.Content.Rows[0].Values.Written);
-
-        release.Set();
-        await commit.WaitAsync(Bound);
-        fixture.Settings.WriteStep = null;
+            fixture.Settings.WriteStep = null;
+        }
 
         // Committed, not completed: every reader sees the new generation through the manifest, and nothing is installed.
         var afterCommit = await Task.Run(service.LoadCatalog).WaitAsync(Bound);

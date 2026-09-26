@@ -80,6 +80,7 @@ public sealed class TranscriptionServiceLifecycleTests
         using var releaseDispose = new ManualResetEventSlim();
         var engine = new FakeEngine();
         using var service = new TranscriptionService(engine.Load, Logger());
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
         service.Initialize();
         service.Transcribe(CapturedAudio.Empty); // compiles the call path before the race
         engine.OnDispose = () =>
@@ -125,6 +126,7 @@ public sealed class TranscriptionServiceLifecycleTests
         using var releaseDecode = new ManualResetEventSlim();
         var engine = new FakeEngine();
         using var service = new TranscriptionService(engine.Load, Logger());
+        using var releaseAtExit = new ReleaseAtExit(releaseDecode);
         service.Unload(); // compiles the call path; a no-op before anything is loaded
         engine.OnDecode = _ =>
         {
@@ -155,6 +157,7 @@ public sealed class TranscriptionServiceLifecycleTests
     {
         using var inDecode = new ManualResetEventSlim();
         using var releaseDecode = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseDecode);
         var engine = new FakeEngine();
         var service = new TranscriptionService(engine.Load, Logger());
         engine.OnDecode = _ =>
@@ -189,6 +192,7 @@ public sealed class TranscriptionServiceLifecycleTests
     {
         using var inDispose = new ManualResetEventSlim();
         using var releaseDispose = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
         var engine = new FakeEngine();
         var service = new TranscriptionService(engine.Load, Logger());
         service.Initialize();
@@ -245,6 +249,7 @@ public sealed class TranscriptionServiceLifecycleTests
         using var releaseDecode = new ManualResetEventSlim();
         var engine = new FakeEngine();
         using var service = new TranscriptionService(engine.Load, Logger());
+        using var releaseAtExit = new ReleaseAtExit(releaseDecode);
         service.Transcribe(CapturedAudio.Empty); // compiles the call path before the race
         engine.OnDecode = _ =>
         {

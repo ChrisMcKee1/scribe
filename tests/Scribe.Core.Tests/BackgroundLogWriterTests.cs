@@ -352,9 +352,10 @@ public class BackgroundLogWriterTests
             sink, new BackgroundLogWriterOptions { MaxQueuedRecords = Writers * LinesEach, PromptWriteTimeout = Patience });
 
         using var start = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(start);
         var tasks = Enumerable.Range(0, Writers).Select(w => Task.Run(() =>
         {
-            start.Wait(Patience);
+            start.Wait();
             for (var i = 0; i < LinesEach; i++)
             {
                 // Every hundredth line waits for the disk, the rest only queue.

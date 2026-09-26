@@ -35,6 +35,7 @@ public sealed class PresentationRelayTests
     {
         using var ui = new FakeUiThread();
         using var uiMayGoOn = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(uiMayGoOn);
         ui.Post(uiMayGoOn.Wait); // the UI thread is busy, as it is for the whole of the app's exit
         var rendered = new ConcurrentQueue<long>();
         var relay = new PresentationRelay<long>(ui.Post, rendered.Enqueue, () => false);
@@ -154,6 +155,7 @@ public sealed class PresentationRelayTests
 
         using var aIsIdle = new ManualResetEventSlim();
         using var bRaised = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(aIsIdle, bRaised);
         var processingA = BlockedThreads.Start(() =>
         {
             var idle = lifecycle.ReturnToIdle(Timeout.InfiniteTimeSpan);
@@ -199,6 +201,7 @@ public sealed class PresentationRelayTests
 
         using var aIsPaused = new ManualResetEventSlim();
         using var bRaised = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(bRaised);
         var pausedWhenAReturned = false;
         var processingA = BlockedThreads.Start(() =>
         {
@@ -278,6 +281,7 @@ public sealed class PresentationRelayTests
             ui.Post, change => shown.Enqueue(change.Phase.ToString()), () => lifecycle.IsClosing);
         var tray = new UiThreadDispatch(() => ui.IsCurrent, ui.Post, () => false);
         using var uiMayGoOn = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(uiMayGoOn);
         ui.Post(uiMayGoOn.Wait);
 
         var dictation = BlockedThreads.Start(() =>
@@ -408,6 +412,7 @@ public sealed class PresentationRelayTests
 
         using var failureQueued = new ManualResetEventSlim();
         using var mayReturnToIdle = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(mayReturnToIdle);
         Thread? processing = null;
         ProcessingHandOff.Run(
             announce: () => Publish(relay, stop.Presentation),
@@ -525,6 +530,7 @@ public sealed class PresentationRelayTests
             ran.Enqueue("after the inline call returned");
         });
         using var uiMayGoOn = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(uiMayGoOn);
         ui.Post(uiMayGoOn.Wait);
         dispatch.Run(() => ran.Enqueue("posted")); // returns although the UI thread is busy
         Assert.Equal(["inline", "after the inline call returned"], ran);

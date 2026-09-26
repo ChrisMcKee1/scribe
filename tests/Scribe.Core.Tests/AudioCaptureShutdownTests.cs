@@ -29,6 +29,7 @@ public sealed class AudioCaptureShutdownTests
     {
         var stack = new FakeCaptureStack();
         using var openMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
         var service = stack.CreateService(BlockedThreads.SafetyTimeout);
 
@@ -61,6 +62,7 @@ public sealed class AudioCaptureShutdownTests
     {
         var stack = new FakeCaptureStack();
         using var openMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
         var service = stack.CreateService(TimeSpan.Zero);
 
@@ -117,6 +119,7 @@ public sealed class AudioCaptureShutdownTests
 
         using var callbackEntered = new ManualResetEventSlim();
         using var callbackMayGoOn = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(callbackMayGoOn);
         service.LevelChanged += (_, _) =>
         {
             callbackEntered.Set();
@@ -169,6 +172,7 @@ public sealed class AudioCaptureShutdownTests
         using var preempted = new ManualResetEventSlim();
         using var resumed = new ManualResetEventSlim();
         using var notified = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(resumed);
         service.LevelChanged += (_, _) =>
         {
             var stop = lifecycle.TryBeginProcessing(recording.DictationId);

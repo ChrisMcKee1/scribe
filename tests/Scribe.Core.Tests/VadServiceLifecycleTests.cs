@@ -78,6 +78,7 @@ public sealed class VadServiceLifecycleTests
         using var releaseDispose = new ManualResetEventSlim();
         var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
         using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>());
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
         vad.Initialize();
         vad.Trim(CapturedAudio.Empty); // compiles the call path before the race
         detectors.OnDispose = () =>
@@ -112,6 +113,7 @@ public sealed class VadServiceLifecycleTests
         using var releaseTrim = new ManualResetEventSlim();
         var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
         using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>());
+        using var releaseAtExit = new ReleaseAtExit(releaseTrim);
         vad.Unload(); // compiles the call path; a no-op before anything is loaded
         detectors.OnAccept = () =>
         {
@@ -143,6 +145,7 @@ public sealed class VadServiceLifecycleTests
     {
         using var inTrim = new ManualResetEventSlim();
         using var releaseTrim = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseTrim);
         var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
         var vad = new VadService(detectors.Load, new CapturingLogger<VadService>());
         detectors.OnAccept = () =>
@@ -189,6 +192,7 @@ public sealed class VadServiceLifecycleTests
     {
         using var inDispose = new ManualResetEventSlim();
         using var releaseDispose = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
         var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
         var vad = new VadService(detectors.Load, new CapturingLogger<VadService>());
         vad.Initialize();

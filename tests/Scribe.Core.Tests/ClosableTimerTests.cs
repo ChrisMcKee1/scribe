@@ -156,6 +156,7 @@ public sealed class ClosableTimerTests
     {
         using var inChange = new ManualResetEventSlim();
         using var releaseChange = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseChange);
         var provider = new ManualTimeProvider();
         var timer = new ClosableTimer(() => { }, provider);
         var inner = provider.Timers[0];
@@ -189,6 +190,7 @@ public sealed class ClosableTimerTests
     {
         using var inCallback = new ManualResetEventSlim();
         using var releaseCallback = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseCallback);
         var provider = new ManualTimeProvider();
         ClosableTimer? timer = null;
         bool? rearmed = null;

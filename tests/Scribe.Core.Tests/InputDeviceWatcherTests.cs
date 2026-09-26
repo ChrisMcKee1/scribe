@@ -137,6 +137,7 @@ public sealed class InputDeviceWatcherTests
         // the reading below, rather than hang the test on its own thread.
         using var readEntered = new ManualResetEventSlim();
         using var readMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(readMayFinish);
         rig.DuringRead = () =>
         {
             readEntered.Set();
