@@ -14,12 +14,12 @@
         PreviewKeyDown="Window_PreviewKeyDown">
     <ui:FluentWindow.Resources>
         <Style TargetType="TextBlock" x:Key="CardTitle">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardDescription">
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
@@ -54,7 +54,7 @@
                             <TextBlock x:Name="CheckGlyph"
                                        Text="✓"
                                        Visibility="Collapsed"
-                                       FontSize="13"
+                                       FontSize="{DynamicResource ScribeFontCaption}"
                                        FontWeight="SemiBold"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
@@ -86,7 +86,7 @@
             <Setter Property="Margin" Value="0,0,4,4"/>
             <Setter Property="Padding" Value="8,4"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="MaxWidth" Value="320"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Template">
@@ -164,7 +164,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="Warning24" FontSize="16" Margin="0,2,8,0"
+                        <ui:SymbolIcon Symbol="Warning24" FontSize="{DynamicResource ScribeFontBodyLarge}" Margin="0,2,8,0"
                                        Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
                         <TextBlock x:Name="DictionaryOffText" Grid.Column="1" Style="{StaticResource CardDescription}" Margin="0"/>
                         <ui:Button x:Name="OpenAdvancedButton" Grid.Column="2" Margin="12,0,0,0"
@@ -278,7 +278,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <ui:SymbolIcon x:Name="StatusIcon" FontSize="16" Margin="0,2,8,0" Visibility="Collapsed"/>
+                    <ui:SymbolIcon x:Name="StatusIcon" FontSize="{DynamicResource ScribeFontBodyLarge}" Margin="0,2,8,0" Visibility="Collapsed"/>
                     <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource CardDescription}" Margin="0"/>
                     <ui:Button x:Name="StatusActionButton" Grid.Column="2" Margin="12,0,0,0" Visibility="Collapsed" Click="StatusActionButton_Click"/>
                 </Grid>

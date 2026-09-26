@@ -29,6 +29,7 @@ public partial class QuickAddWindow : FluentWindow
     private readonly Func<IReadOnlyList<DictionaryEntry>> _loadExisting;
     private readonly Func<DictionaryEntry, DictionaryEntry> _persist;
     private readonly QuickAddWindowOptions _options;
+    private readonly TextScaleService? _textScale;
     private readonly ILogger? _logger;
     private readonly ObservableCollection<WordChip> _chips = new();
     private readonly List<TranscriptSource> _sources;
@@ -85,9 +86,10 @@ public partial class QuickAddWindow : FluentWindow
         IReadOnlyList<string> recentTranscripts,
         Func<IReadOnlyList<DictionaryEntry>> loadExisting,
         Func<DictionaryEntry, DictionaryEntry> persist,
+        TextScaleService? textScale = null,
         ILogger? logger = null,
         QuickAddWindowOptions? options = null)
-        : this(recentTranscripts.Select(text => new QuickAddSource(null, text, text)).ToList(), loadExisting, persist, logger, options)
+        : this(recentTranscripts.Select(text => new QuickAddSource(null, text, text)).ToList(), loadExisting, persist, textScale, logger, options)
     {
     }
 
@@ -95,12 +97,14 @@ public partial class QuickAddWindow : FluentWindow
         IReadOnlyList<QuickAddSource> recentTranscripts,
         Func<IReadOnlyList<DictionaryEntry>> loadExisting,
         Func<DictionaryEntry, DictionaryEntry> persist,
+        TextScaleService? textScale = null,
         ILogger? logger = null,
         QuickAddWindowOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(recentTranscripts);
         _loadExisting = loadExisting ?? throw new ArgumentNullException(nameof(loadExisting));
         _persist = persist ?? throw new ArgumentNullException(nameof(persist));
+        _textScale = textScale;
         _logger = logger;
         _options = options ?? new QuickAddWindowOptions();
         _vocabulary = ReadVocabulary();
@@ -109,6 +113,11 @@ public partial class QuickAddWindow : FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
         InitializeComponent();
         ApplyWindowFit();
+        if (_textScale is not null)
+        {
+            _textScale.Changed += TextScale_Changed;
+        }
+
         SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
 
         _announcementTimer = new System.Windows.Threading.DispatcherTimer { Interval = QuickAddAnnouncement.AnnouncementDelay };
@@ -134,6 +143,7 @@ public partial class QuickAddWindow : FluentWindow
 
         PreviewMouseLeftButtonUp += (_, _) => FinishDrag();
         Closing += QuickAddWindow_Closing;
+        Closed += QuickAddWindow_Closed;
 
         _sources = recentTranscripts
             .Where(source => !string.IsNullOrWhiteSpace(source.Text))
@@ -157,6 +167,18 @@ public partial class QuickAddWindow : FluentWindow
         UpdateStatus(forceAnnouncement: false);
     }
 
+    private void TextScale_Changed(object? sender, EventArgs e) => ApplyWindowFit();
+
+    private void QuickAddWindow_Closed(object? sender, EventArgs e)
+    {
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= TextScale_Changed;
+        }
+
+        Closed -= QuickAddWindow_Closed;
+    }
+
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WmDpiChanged)
@@ -170,7 +192,7 @@ public partial class QuickAddWindow : FluentWindow
     private void ApplyWindowFit()
     {
         var area = WindowPlacement.WorkAreaFor(this);
-        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top);
+        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top, _textScale?.Factor ?? 1);
         MinWidth = fit.MinWidth;
         MinHeight = fit.MinHeight;
         Width = fit.Width;
@@ -1181,7 +1203,5 @@ public partial class QuickAddWindow : FluentWindow
         public override string ToString() => Text;
     }
 }
-
-
 
 

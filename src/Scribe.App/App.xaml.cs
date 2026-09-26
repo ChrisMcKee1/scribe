@@ -66,6 +66,7 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private QuickAdd.QuickAddWindow? _quickAddWindow;
+    private TextScaleService? _textScale;
 
     /// <summary>The file log sink, so its health can be reported in Settings.</summary>
     internal static FileLoggerProvider? LogSink { get; private set; }
@@ -96,6 +97,8 @@ public partial class App : Application
         // Before any window exists, the already-running notice below included.
         TitleBarButtonNames.Apply(Resources);
         ButtonLabelContrast.Apply(Resources);
+        _textScale = new TextScaleService(Dispatcher);
+        _textScale.Start();
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         var requestedPage = RequestedSettingsPage(e.Args, out var hasSettingsSwitch);
@@ -1615,6 +1618,7 @@ public partial class App : Application
                 },
                 () => _controller!.ReloadVocabulary(),
                 services.GetRequiredService<ILibraryVocabularySource>(),
+                _textScale,
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
                 services.GetRequiredService<SessionDiagnostics>());
@@ -1876,6 +1880,7 @@ public partial class App : Application
         var gesture = HotkeyCapture.Gesture(_controller?.CurrentSettings);
         _welcomeWindow = new Onboarding.WelcomeWindow(
             gesture,
+            _textScale,
             () => OpenSettings(Scribe.Core.Settings.SettingsPage.Dictation),
             () => OpenSettings(Scribe.Core.Settings.SettingsPage.TryDictation));
         _welcomeWindow.Closed += (_, _) => _welcomeWindow = null;
@@ -1991,6 +1996,7 @@ public partial class App : Application
                     dictionary.Update(entry);
                     return entry;
                 },
+                _textScale,
                 logger: services.GetService<ILoggerFactory>()?.CreateLogger<QuickAdd.QuickAddWindow>(),
                 options: new QuickAdd.QuickAddWindow.QuickAddWindowOptions(
                     AiCleanupEnabled: _controller?.CurrentSettings.EnableAiCleanup ?? false,
@@ -2235,6 +2241,7 @@ public partial class App : Application
             new("overlay", () => _overlay?.CloseOverlay()),
             new("dictation controller", () => _controller?.Dispose()),
             new("tray icon", () => _tray?.Dispose()),
+            new("text scale", () => _textScale?.Dispose()),
             new("theme watcher", DisposeThemeWatcher),
             new("drain settings writes", () =>
             {

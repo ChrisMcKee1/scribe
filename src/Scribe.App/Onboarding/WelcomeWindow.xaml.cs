@@ -17,12 +17,18 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly Action _openSettings;
     private readonly Action _tryItNow;
+    private readonly TextScaleService? _textScale;
     private DoubleAnimation? _welcomeLastAnimation;
     private bool _welcomeAnimationStarted;
     private bool _welcomeAnimationFinished;
 
-    public WelcomeWindow((string Title, string Body) gesture, Action openSettings, Action? tryItNow = null)
+    public WelcomeWindow(
+        (string Title, string Body) gesture,
+        TextScaleService? textScale,
+        Action openSettings,
+        Action? tryItNow = null)
     {
+        _textScale = textScale;
         _openSettings = openSettings ?? throw new ArgumentNullException(nameof(openSettings));
         _tryItNow = tryItNow ?? openSettings;
 
@@ -32,11 +38,18 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
         GestureHint.Text = NormalizeGestureBody(gesture.Body);
         ApplyWindowFit();
         Loaded += WelcomeWindow_Loaded;
+        if (_textScale is not null)
+        {
+            _textScale.Changed += TextScale_Changed;
+        }
+
         StateChanged += WelcomeWindow_StateChanged;
         IsVisibleChanged += WelcomeWindow_IsVisibleChanged;
         Closed += WelcomeWindow_Closed;
         SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
     }
+
+    private void TextScale_Changed(object? sender, EventArgs e) => ApplyWindowFit();
 
     private void WelcomeWindow_Loaded(object sender, RoutedEventArgs e)
     {
@@ -93,6 +106,11 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
     {
         FinishWelcomeAnimation();
         Loaded -= WelcomeWindow_Loaded;
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= TextScale_Changed;
+        }
+
         StateChanged -= WelcomeWindow_StateChanged;
         IsVisibleChanged -= WelcomeWindow_IsVisibleChanged;
         Closed -= WelcomeWindow_Closed;
@@ -151,7 +169,7 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
     private void ApplyWindowFit()
     {
         var area = WindowPlacement.WorkAreaFor(this);
-        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top);
+        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top, _textScale?.Factor ?? 1);
         MinWidth = fit.MinWidth;
         MinHeight = fit.MinHeight;
         Width = fit.Width;
@@ -195,4 +213,3 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 }
-

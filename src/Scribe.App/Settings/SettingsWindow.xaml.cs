@@ -49,6 +49,7 @@ namespace Scribe.App.Settings;
 /// </summary>
 public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 {
+    private const int WmDpiChanged = 0x02E0;
     private const string RepositoryUrl = ScribeLinks.Repository;
     private const string PrivacyPolicyUrl = ScribeLinks.PrivacyPolicy;
     private const string NewIssueUrl = ScribeLinks.NewIssue;
@@ -85,6 +86,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // window's own library switches (after a failed Save _settings holds unsaved ones), and never a fresh read of the
     // stored document, which may have turned unreadable.
     private readonly ILibraryVocabularySource _libraryVocabulary;
+    private readonly TextScaleService? _textScale;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
@@ -218,6 +220,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> applySettings,
         Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> reloadVocabulary,
         ILibraryVocabularySource libraryVocabulary,
+        TextScaleService? textScale = null,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         SessionDiagnostics? diagnostics = null)
@@ -240,6 +243,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
         _libraryVocabulary = libraryVocabulary;
+        _textScale = textScale;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -303,7 +307,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>
-            (PresentationSource.FromVisual(this) as HwndSource)?.AddHook(CaptureNonClientMouseButtons);
+        {
+            var source = PresentationSource.FromVisual(this) as HwndSource;
+            source?.AddHook(CaptureNonClientMouseButtons);
+            source?.AddHook(WndProc);
+        };
+        ApplyWindowFit();
+        if (_textScale is not null)
+        {
+            _textScale.Changed += TextScale_Changed;
+        }
+
         RefreshAiStatus();
         InitializeUpdateCard();
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
@@ -359,6 +373,30 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 $"{stranded}. Your settings and history have been carried across to the paths below.";
             AboutDataPathWarning.Visibility = Visibility.Visible;
         }
+    }
+
+    private void TextScale_Changed(object? sender, EventArgs e) => ApplyWindowFit();
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmDpiChanged)
+        {
+            Dispatcher.BeginInvoke(ApplyWindowFit);
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private void ApplyWindowFit()
+    {
+        var area = WindowPlacement.WorkAreaFor(this);
+        var fit = WindowFit.Compute(area, _textScale?.Factor ?? 1);
+        MinWidth = fit.MinWidth;
+        MinHeight = fit.MinHeight;
+        Width = fit.Width;
+        Height = fit.Height;
+        Left = fit.Left;
+        Top = fit.Top;
     }
 
     // --- Updates card (General) --------------------------------------------------------------
@@ -5017,6 +5055,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= TextScale_Changed;
+        }
+
         SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
         if (_updates is not null)
         {

@@ -13,13 +13,13 @@
         WindowCornerPreference="Round">
     <ui:FluentWindow.Resources>
         <Style TargetType="TextBlock" x:Key="CardTitle">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardDescription">
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
@@ -88,11 +88,11 @@
                     </Grid>
                 </Grid>
                 <TextBlock Text="Welcome to Scribe"
-                           FontSize="26" FontWeight="SemiBold"
+                           FontSize="{DynamicResource ScribeFontTitle}" FontWeight="SemiBold"
                            HorizontalAlignment="Center" Margin="0,12,0,0"
                            Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                 <TextBlock Text="Speak, and Scribe types your words wherever your cursor is."
-                           FontSize="14" TextAlignment="Center" TextWrapping="Wrap"
+                           FontSize="{DynamicResource ScribeFontBody}" TextAlignment="Center" TextWrapping="Wrap"
                            Margin="0,4,0,0"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
 
@@ -102,7 +102,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="Keyboard24" FontSize="22" VerticalAlignment="Top" Margin="0,2,14,0"
+                        <ui:SymbolIcon Symbol="Keyboard24" FontSize="{DynamicResource ScribeFontIconLarge}" VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
                             <TextBlock x:Name="GestureTitle" Style="{StaticResource CardTitle}"/>
@@ -119,7 +119,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="ShieldTask24" FontSize="22" VerticalAlignment="Top" Margin="0,2,14,0"
+                        <ui:SymbolIcon Symbol="ShieldTask24" FontSize="{DynamicResource ScribeFontIconLarge}" VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
                             <TextBlock Style="{StaticResource CardTitle}" Text="Audio stays on this PC"/>
@@ -135,7 +135,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="Lightbulb24" FontSize="22" VerticalAlignment="Top" Margin="0,2,14,0"
+                        <ui:SymbolIcon Symbol="Lightbulb24" FontSize="{DynamicResource ScribeFontIconLarge}" VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
                             <TextBlock Style="{StaticResource CardTitle}" Text="Good to know"/>

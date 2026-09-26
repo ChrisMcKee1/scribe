@@ -35,6 +35,20 @@
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.ChartBar}" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.ChartBarCurrent}" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
 
+            <sys:Double x:Key="ScribeFontCaption">12</sys:Double>
+            <sys:Double x:Key="ScribeFontBody">14</sys:Double>
+            <sys:Double x:Key="ScribeFontBodyLarge">16</sys:Double>
+            <sys:Double x:Key="ScribeFontSubtitle">20</sys:Double>
+            <sys:Double x:Key="ScribeFontIconLarge">22</sys:Double>
+            <sys:Double x:Key="ScribeFontTitle">26</sys:Double>
+            <sys:Double x:Key="ScribeFontDisplay">68</sys:Double>
+            <sys:Double x:Key="ControlContentThemeFontSize">14</sys:Double>
+            <sys:Double x:Key="TextControlThemeFontSize">14</sys:Double>
+            <sys:Double x:Key="DefaultDataGridFontSize">14</sys:Double>
+            <sys:Double x:Key="TitleBarThemeFontSize">12</sys:Double>
+            <sys:Double x:Key="InfoBarTitleThemeFontSize">14</sys:Double>
+            <sys:Double x:Key="InfoBarMessageThemeFontSize">14</sys:Double>
+
             <LinearGradientBrush x:Key="ScribePillFaceBrush" StartPoint="0,0" EndPoint="0,1">
                 <GradientStop Color="#1A2744" Offset="0"/>
                 <GradientStop Color="#0E1830" Offset="1"/>
