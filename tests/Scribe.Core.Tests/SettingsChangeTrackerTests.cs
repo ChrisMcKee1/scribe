@@ -59,6 +59,7 @@ public sealed class SettingsChangeTrackerTests
         draft.EnableAiCleanup = true;
         draft.DecodeThreads = 4;
         draft.StoreAudioHistory = true;
+        draft.AccentSource = AccentSource.Windows;
 
         var changes = SettingsChangeTracker.Compare(baseline, draft);
 
@@ -189,6 +190,18 @@ public sealed class SettingsChangeTrackerTests
 
         draft.EnabledDictionaryLibraryIds.RemoveAt(0);
         Assert.Equal([SettingsPage.Dictionary], SettingsChangeTracker.Compare(baseline, draft).Pages);
+    }
+
+    [Fact]
+    public void Accent_source_counts_as_an_advanced_change()
+    {
+        var baseline = AppSettings.CreateDefault();
+        var draft = baseline.Clone();
+        draft.AccentSource = AccentSource.Windows;
+
+        var changes = SettingsChangeTracker.Compare(baseline, draft);
+
+        Assert.Equal([SettingsPage.Advanced], changes.Pages);
     }
 
     [Fact]

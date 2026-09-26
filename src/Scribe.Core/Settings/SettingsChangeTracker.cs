@@ -160,7 +160,8 @@ public static class SettingsChangeTracker
             baseline.InjectionMethod != draft.InjectionMethod ||
             baseline.NewlineHandling != draft.NewlineHandling ||
             baseline.ShiftEnterLineBreaks != draft.ShiftEnterLineBreaks ||
-            baseline.ApplyPostProcessing != draft.ApplyPostProcessing);
+            baseline.ApplyPostProcessing != draft.ApplyPostProcessing ||
+            baseline.AccentSource != draft.AccentSource);
 
         AddIf(SettingsPage.Dictionary,
             !SameLibraryIds(baseline.EnabledDictionaryLibraryIds, draft.EnabledDictionaryLibraryIds) ||

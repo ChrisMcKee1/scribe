@@ -75,12 +75,6 @@ public enum ThemeColor
     /// <summary><c>AccentTextFillColorTertiaryBrush</c> as WPF-UI wrote it.</summary>
     AccentTextTertiary,
 
-    /// <summary><c>SystemColors.HotTrackColor</c>: the colour WPF's own Hyperlink style draws a link in.</summary>
-    Hyperlink,
-
-    /// <summary>The red WPF's own Hyperlink style draws a hovered link in.</summary>
-    HyperlinkHover,
-
     /// <summary><c>PaletteOrangeColor</c>: a caution badge.</summary>
     PaletteOrange,
 
@@ -167,6 +161,9 @@ public enum AccentShadeRole
     /// <summary>A link while hovered.</summary>
     HyperlinkHover,
 
+    /// <summary>A usage chart bar.</summary>
+    ChartBar,
+
     /// <summary>The track of a switch that is on, at rest.</summary>
     SwitchTrack,
 
@@ -178,6 +175,9 @@ public enum AccentShadeRole
 
     /// <summary>The accent pill for a selected list or navigation item.</summary>
     SelectionIndicator,
+
+    /// <summary>The current-period usage chart bar.</summary>
+    ChartBarCurrent,
 }
 
 /// <summary>Whether a foreground is text (SC 1.4.3) or a glyph that marks a state (SC 1.4.11).</summary>
@@ -297,6 +297,10 @@ public static class AccentContrastPlanner
     private static readonly SrgbColor LightSurface = SrgbColor.FromRgb(0xF3, 0xF3, 0xF3);
     private static readonly SrgbColor DarkSurface = SrgbColor.FromRgb(0x20, 0x20, 0x20);
 
+    // Redesign nested panels join the general measured set: the end points cover the specified range.
+    private static readonly SrgbColor[] LightNestedSurfaces = [SrgbColor.Parse("#EAEAEA"), SrgbColor.Parse("#E5E5E5")];
+    private static readonly SrgbColor[] DarkNestedSurfaces = [SrgbColor.Parse("#383838"), SrgbColor.Parse("#404040")];
+
     // The themes' own text tones, where the resources cannot be read (Light.xaml and Dark.xaml in WPF-UI 4.3.0).
     private static readonly SrgbColor LightBodyText = SrgbColor.Parse("#E4000000");
     private static readonly SrgbColor DarkBodyText = SrgbColor.White;
@@ -310,8 +314,9 @@ public static class AccentContrastPlanner
         new(AccentShadeRole.AccentTextPrimary, ThemeColor.AccentTextPrimary, WcagContrast.TextMinimum),
         new(AccentShadeRole.AccentTextSecondary, ThemeColor.AccentTextSecondary, WcagContrast.TextMinimum),
         new(AccentShadeRole.AccentTextTertiary, ThemeColor.AccentTextTertiary, WcagContrast.TextMinimum),
-        new(AccentShadeRole.Hyperlink, ThemeColor.Hyperlink, WcagContrast.TextMinimum),
-        new(AccentShadeRole.HyperlinkHover, ThemeColor.HyperlinkHover, WcagContrast.TextMinimum),
+        new(AccentShadeRole.Hyperlink, ThemeColor.AccentTextPrimary, WcagContrast.TextMinimum),
+        new(AccentShadeRole.HyperlinkHover, ThemeColor.AccentTextSecondary, WcagContrast.TextMinimum),
+        new(AccentShadeRole.ChartBar, ThemeColor.AccentFill, WcagContrast.NonTextMinimum),
 
         // ToggleSwitch.xaml: once on, the stroked track fades out and the visible one has no stroke, so the fill is
         // the only thing that can stand out from the page: ToggleSwitchFillOn, then its PointerOver and Pressed tones.
@@ -383,7 +388,7 @@ public static class AccentContrastPlanner
     public static IReadOnlyList<AccentForegroundRole> AllRoles { get; } = Roles.Select(r => r.Role).ToArray();
 
     /// <summary>Every shade role a plan in a light or dark theme can hold.</summary>
-    public static IReadOnlyList<AccentShadeRole> AllShades { get; } = ShadeSpecs.Select(s => s.Role).ToArray();
+    public static IReadOnlyList<AccentShadeRole> AllShades { get; } = ShadeSpecs.Select(s => s.Role).Append(AccentShadeRole.ChartBarCurrent).ToArray();
 
     /// <param name="theme">The theme WPF-UI applied.</param>
     /// <param name="systemHighContrast">Whether Windows is in a contrast theme, whatever WPF-UI applied.</param>
@@ -429,6 +434,19 @@ public static class AccentContrastPlanner
                 var result = ContrastShade.Ensure(source, shadeSurfaces, spec.Required, lighter: !light);
                 shades.Add(new ShadeCorrection(spec.Role, result.Original, result.Color, spec.Required, result.OriginalRatio, result.Ratio));
             }
+        }
+
+        if (shades.FirstOrDefault(s => s.Role == AccentShadeRole.ChartBar) is { } chartBar)
+        {
+            var distinct = ContrastShade.Ensure(chartBar.Color, [chartBar.Color], 1.5, lighter: !light);
+            var readable = ContrastShade.Ensure(distinct.Color, surfaces, WcagContrast.NonTextMinimum, lighter: !light);
+            shades.Add(new ShadeCorrection(
+                AccentShadeRole.ChartBarCurrent,
+                chartBar.Color,
+                readable.Color,
+                WcagContrast.NonTextMinimum,
+                ContrastShade.Lowest(chartBar.Color, surfaces),
+                readable.Ratio));
         }
 
         var foregrounds = new List<RoleForeground>(Roles.Length);
@@ -523,7 +541,16 @@ public static class AccentContrastPlanner
     // of them errs toward more contrast on the ones a given control is not on.
     private static List<SrgbColor> Surfaces(IReadOnlyDictionary<ThemeColor, SrgbColor> colors, SrgbColor page)
     {
+        var light = WcagContrast.RelativeLuminance(page) > 0.5;
         var surfaces = new List<SrgbColor> { page };
+        foreach (var nested in light ? LightNestedSurfaces : DarkNestedSurfaces)
+        {
+            if (!surfaces.Contains(nested))
+            {
+                surfaces.Add(nested);
+            }
+        }
+
         foreach (var key in new[] { ThemeColor.WindowBackground, ThemeColor.CardBackground, ThemeColor.ControlFill, ThemeColor.ControlFillSecondary })
         {
             if (colors.TryGetValue(key, out var color) && !surfaces.Contains(color.Over(page)))

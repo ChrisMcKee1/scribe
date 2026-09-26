@@ -23,7 +23,7 @@ public partial class DictionaryCleanupWindow : FluentWindow
 
     private DictionaryCleanupWindow(DictionaryUsageReport report)
     {
-        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
+        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
         InitializeComponent();
 
         SummaryText.Text = report.Summary;

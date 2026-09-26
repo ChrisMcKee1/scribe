@@ -8,6 +8,7 @@ using H.NotifyIcon.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -87,6 +88,7 @@ internal sealed class TrayIconHost : IDisposable
         _menu = new ContextMenu();
         ApplyMenuTheme();
         ApplicationThemeManager.Changed += OnApplicationThemeChanged;
+        AccentContrastResources.Replanned += OnAccentReplanned;
         _menu.Opened += (_, _) => RebuildMenu();
         SystemEvents.DisplaySettingsChanged += OnTrayIconSizeMayHaveChanged;
         SystemEvents.UserPreferenceChanged += OnTrayIconSizeMayHaveChanged;
@@ -134,6 +136,9 @@ internal sealed class TrayIconHost : IDisposable
         });
 
     private void OnTrayIconSizeMayHaveChanged(object? sender, EventArgs e) => Dispatch(ReloadIconIfSizeChanged);
+
+    private void OnAccentReplanned() =>
+        Dispatch(ApplyMenuTheme);
 
     private void ApplyMenuTheme()
     {
@@ -615,6 +620,7 @@ internal sealed class TrayIconHost : IDisposable
         ApplicationThemeManager.Changed -= OnApplicationThemeChanged;
         SystemEvents.DisplaySettingsChanged -= OnTrayIconSizeMayHaveChanged;
         SystemEvents.UserPreferenceChanged -= OnTrayIconSizeMayHaveChanged;
+        AccentContrastResources.Replanned -= OnAccentReplanned;
         _icon.Dispose();
         _retiredIcon?.Dispose();
         _retiredIcon = null;

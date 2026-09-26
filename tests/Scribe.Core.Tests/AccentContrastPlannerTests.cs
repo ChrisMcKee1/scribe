@@ -66,8 +66,6 @@ public sealed class AccentContrastPlannerTests
             [ThemeColor.AccentTextPrimary] = C(secondary),
             [ThemeColor.AccentTextSecondary] = C(tertiary),
             [ThemeColor.AccentTextTertiary] = C(primary),
-            [ThemeColor.Hyperlink] = C("#0066CC"),
-            [ThemeColor.HyperlinkHover] = C("#FF0000"),
             [ThemeColor.PaletteOrange] = C("#FF9800"),
             [ThemeColor.PaletteLightBlue] = C("#03A9F4"),
             [ThemeColor.PaletteRed] = C("#F44336"),
@@ -103,8 +101,31 @@ public sealed class AccentContrastPlannerTests
     private static AccentContrastPlan Plan(string accent, bool light) =>
         AccentContrastPlanner.Plan(light ? AppearanceTheme.Light : AppearanceTheme.Dark, false, Colours(accent, light));
 
+    private static Dictionary<ThemeColor, SrgbColor> ScribeColours(bool light)
+    {
+        var set = light ? ScribeBrand.LightAccent : ScribeBrand.DarkAccent;
+        var fill = light ? set.Primary : set.Secondary;
+        var colors = Theme(light, Hex(set.Primary), Hex(set.Secondary), Hex(set.Tertiary));
+        colors[ThemeColor.AccentPrimary] = set.Primary;
+        colors[ThemeColor.AccentFill] = fill;
+        colors[ThemeColor.AccentFillHover] = fill.WithAlpha(229);
+        colors[ThemeColor.AccentFillPressed] = fill.WithAlpha(204);
+        colors[ThemeColor.AccentTextPrimary] = set.Secondary;
+        colors[ThemeColor.AccentTextSecondary] = set.Tertiary;
+        colors[ThemeColor.AccentTextTertiary] = set.Primary;
+        return colors;
+    }
+
+    private static AccentContrastPlan ScribePlan(bool light) =>
+        AccentContrastPlanner.Plan(light ? AppearanceTheme.Light : AppearanceTheme.Dark, false, ScribeColours(light));
+
+    private static string Hex(SrgbColor color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
     private static SrgbColor[] Surfaces(bool light) =>
-        light ? [C("#F3F3F3"), C("#FAFAFA"), C("#FBFBFB"), C("#F6F6F6")] : [C("#202020"), C("#2B2B2B"), C("#2D2D2D"), C("#323232")];
+        // Includes the redesign nested panel endpoints, which tighten several exact expected ratios.
+        light
+            ? [C("#F3F3F3"), C("#EAEAEA"), C("#E5E5E5"), C("#FAFAFA"), C("#FBFBFB"), C("#F6F6F6")]
+            : [C("#202020"), C("#383838"), C("#404040"), C("#2B2B2B"), C("#2D2D2D"), C("#323232")];
 
     private static RoleForeground Role(AccentContrastPlan plan, AccentForegroundRole role) =>
         plan.For(role) ?? throw new Xunit.Sdk.XunitException($"no foreground planned for {role}");
@@ -191,7 +212,16 @@ public sealed class AccentContrastPlannerTests
 
         foreach (var shade in AccentTextShades.Concat(TrackShades))
         {
-            Assert.False(Shade(plan, shade).Changed, shade.ToString());
+            // The light theme's tertiary blue now has to read on the redesign's #E5E5E5 nested panel.
+            if (light && shade == AccentShadeRole.AccentTextTertiary)
+            {
+                Assert.True(Shade(plan, shade).Changed, shade.ToString());
+                Assert.True(Shade(plan, shade).Meets, shade.ToString());
+            }
+            else
+            {
+                Assert.False(Shade(plan, shade).Changed, shade.ToString());
+            }
         }
 
         Assert.Null(plan.CheckBoxPerimeter);
@@ -204,12 +234,11 @@ public sealed class AccentContrastPlannerTests
         var dark = Plan("blue", light: false);
         var light = Plan("blue", light: true);
 
-        // WPF's own link colour in the dark theme (2.93:1 on the page, 2.30:1 on the Diagnostics panel), and its red for a
-        // hovered link in both themes (4.07:1 and 3.60:1 on the page).
-        Assert.True(Shade(dark, AccentShadeRole.Hyperlink).Changed);
+        // Links now come from the accent text shades. The default blue link pair reads in both themes.
+        Assert.False(Shade(dark, AccentShadeRole.Hyperlink).Changed);
         Assert.False(Shade(light, AccentShadeRole.Hyperlink).Changed);
-        Assert.True(Shade(dark, AccentShadeRole.HyperlinkHover).Changed);
-        Assert.True(Shade(light, AccentShadeRole.HyperlinkHover).Changed);
+        Assert.False(Shade(dark, AccentShadeRole.HyperlinkHover).Changed);
+        Assert.False(Shade(light, AccentShadeRole.HyperlinkHover).Changed);
 
         // The danger button, and a pressed standard, transparent or danger button, in the dark theme only.
         Assert.False(Role(dark, AccentForegroundRole.DangerButton).Choice.IsThemeForeground);
@@ -231,7 +260,7 @@ public sealed class AccentContrastPlannerTests
         // With the default blue in the light theme that black reads (5.37:1 on #3186C7) where the white the template
         // means to draw would not (3.91:1), so the pressed label keeps it, while the label at rest and hovered stays white.
         Assert.Equal(SrgbColor.Black, Role(blueLight, AccentForegroundRole.AccentButtonPressed).Foreground);
-        Assert.Equal(5.37, Math.Round(Role(blueLight, AccentForegroundRole.AccentButtonPressed).Choice.RestRatio, 2));
+        Assert.Equal(5.16, Math.Round(Role(blueLight, AccentForegroundRole.AccentButtonPressed).Choice.RestRatio, 2));
         Assert.Equal(3.91, Math.Round(WcagContrast.Ratio(SrgbColor.White, bluePressedFill), 2));
         Assert.Equal(SrgbColor.White, Role(blueLight, AccentForegroundRole.AccentButton).Foreground);
         Assert.True(Role(blueLight, AccentForegroundRole.AccentButton).Choice.MeetsInEveryState);
@@ -259,7 +288,7 @@ public sealed class AccentContrastPlannerTests
         Assert.Equal(5.70, Math.Round(Role(dark, AccentForegroundRole.DangerButton).Choice.RestRatio, 2));
         Assert.Equal(4.90, Math.Round(Role(dark, AccentForegroundRole.DangerButton).Choice.AllStatesRatio, 2));
         Assert.Equal(SrgbColor.White, Role(dark, AccentForegroundRole.DangerButtonPressed).Foreground);
-        Assert.Equal(5.49, Math.Round(Role(dark, AccentForegroundRole.DangerButtonPressed).Choice.RestRatio, 2));
+        Assert.Equal(5.21, Math.Round(Role(dark, AccentForegroundRole.DangerButtonPressed).Choice.RestRatio, 2));
 
         // Light: the theme's text reads at rest (5.30:1), and today's pressed black reads too.
         Assert.Equal(C("#E4000000"), Role(light, AccentForegroundRole.DangerButton).Foreground);
@@ -283,7 +312,7 @@ public sealed class AccentContrastPlannerTests
 
         Assert.Equal(1.41, Math.Round(WcagContrast.Ratio(SrgbColor.Black, C("#08FFFFFF").Over(C("#202020"))), 2));
         Assert.Equal(C("#C5FFFFFF"), dark.Foreground);
-        Assert.Equal(7.76, Math.Round(dark.Choice.RestRatio, 2));
+        Assert.Equal(6.43, Math.Round(dark.Choice.RestRatio, 2));
         Assert.Equal(SrgbColor.Black, light.Foreground);
         Assert.True(light.Choice.IsThemeForeground);
     }
@@ -324,9 +353,9 @@ public sealed class AccentContrastPlannerTests
     [Theory]
     // The maintainer's accent in the dark theme: WPF-UI's accent text brushes are 2.58:1, 3.85:1 and 1.93:1 on the page
     // and 2.03:1, 3.03:1 and 1.52:1 on the lightest surface they are drawn on, the Diagnostics panel.
-    [InlineData("navy", false, "#9696C2", "#9797B2", "#9494D1")]
+    [InlineData("navy", false, "#A8A8CD", "#A9A9BF", "#A7A7D9")]
     // Gold in the light theme: 2.74:1, 4.09:1 and 1.91:1 on the page, the darkest light surface.
-    [InlineData("gold", true, "#8F6800", "#906800", "#906800")]
+    [InlineData("gold", true, "#856000", "#856000", "#856000")]
     public void Accent_text_that_does_not_read_is_moved_in_lightness_until_it_reads_on_every_surface(
         string accent, bool light, string primary, string secondary, string tertiary)
     {
@@ -356,7 +385,15 @@ public sealed class AccentContrastPlannerTests
 
         Assert.Equal(colours[ThemeColor.AccentTextPrimary], Shade(plan, AccentShadeRole.AccentTextPrimary).Color);
         Assert.Equal(colours[ThemeColor.AccentTextSecondary], Shade(plan, AccentShadeRole.AccentTextSecondary).Color);
-        Assert.Equal(colours[ThemeColor.AccentTextTertiary], Shade(plan, AccentShadeRole.AccentTextTertiary).Color);
+        if (accent == "blue" && light)
+        {
+            // The redesign's #E5E5E5 nested panel makes this just miss 4.5:1, so it is corrected.
+            Assert.True(Shade(plan, AccentShadeRole.AccentTextTertiary).Changed);
+        }
+        else
+        {
+            Assert.Equal(colours[ThemeColor.AccentTextTertiary], Shade(plan, AccentShadeRole.AccentTextTertiary).Color);
+        }
     }
 
     [Fact]
@@ -365,22 +402,19 @@ public sealed class AccentContrastPlannerTests
         var dark = Plan("navy", light: false);
         var light = Plan("navy", light: true);
 
-        // SystemColors.HotTrackColor, #0066CC: 2.93:1 on the dark page (2.30:1 on the Diagnostics panel), 5.02:1 on the
-        // light page.
-        Assert.Equal(C("#399CFF"), Shade(dark, AccentShadeRole.Hyperlink).Color);
-        Assert.False(Shade(light, AccentShadeRole.Hyperlink).Changed);
-
-        // Hovered, WPF's red: 3.21:1 dark and 3.60:1 light, at worst.
-        Assert.Equal(C("#FF6767"), Shade(dark, AccentShadeRole.HyperlinkHover).Color);
-        Assert.Equal(C("#E10000"), Shade(light, AccentShadeRole.HyperlinkHover).Color);
+        // Links now follow the accent text shades, not WPF's HotTrack brush or red hover.
+        Assert.Equal(C("#A8A8CD"), Shade(dark, AccentShadeRole.Hyperlink).Color);
+        Assert.Equal(C("#060630"), Shade(light, AccentShadeRole.Hyperlink).Color);
+        Assert.Equal(C("#A9A9BF"), Shade(dark, AccentShadeRole.HyperlinkHover).Color);
+        Assert.Equal(C("#01010A"), Shade(light, AccentShadeRole.HyperlinkHover).Color);
         Assert.All(new[] { dark, light }, plan => Assert.All(
             plan.Shades.Where(s => s.Role is AccentShadeRole.Hyperlink or AccentShadeRole.HyperlinkHover),
             shade => Assert.True(shade.Meets)));
     }
 
     [Theory]
-    [InlineData("navy", false, "#7373C3", "#000000")]
-    [InlineData("gold", true, "#B68400", "#FFFFFF")]
+    [InlineData("navy", false, "#8484CA", "#000000")]
+    [InlineData("gold", true, "#AA7B00", "#FFFFFF")]
     public void A_switch_that_is_on_gets_a_track_that_stands_out_and_knobs_chosen_on_it(string accent, bool light, string track, string knob)
     {
         var plan = Plan(accent, light);
@@ -424,8 +458,8 @@ public sealed class AccentContrastPlannerTests
     }
 
     [Theory]
-    [InlineData("navy", false, "#8BFFFFFF", 1.52, 5.67)]
-    [InlineData("gold", true, "#72000000", 1.68, 4.97)]
+    [InlineData("navy", false, "#8BFFFFFF", 1.23, 4.59)]
+    [InlineData("gold", true, "#72000000", 1.52, 4.46)]
     public void A_checked_box_whose_fill_does_not_stand_out_gets_the_themes_own_border(
         string accent, bool light, string stroke, double fillRatio, double borderRatio)
     {
@@ -464,13 +498,13 @@ public sealed class AccentContrastPlannerTests
 
     [Theory]
     // The maintainer's accent in the dark theme: the selected fill is 1.52:1 on the lightest surface.
-    [InlineData("navy", false, "#FFFFFF", 1.52)]
-    [InlineData("navy", true, null, 15.77)]
+    [InlineData("navy", false, "#FFFFFF", 1.23)]
+    [InlineData("navy", true, null, 13.90)]
     // Gold in the light theme: 1.91:1.
-    [InlineData("gold", true, "#000000", 1.91)]
-    [InlineData("gold", false, null, 8.66)]
-    [InlineData("blue", true, null, 5.01)]
-    [InlineData("blue", false, null, 5.57)]
+    [InlineData("gold", true, "#000000", 1.69)]
+    [InlineData("gold", false, null, 7.00)]
+    [InlineData("blue", true, null, 4.41)]
+    [InlineData("blue", false, null, 4.51)]
     public void A_selected_list_item_gets_an_outline_in_its_own_text_colour_only_where_its_fill_is_under_3_to_1(
         string accent, bool light, string? outline, double fillRatio)
     {
@@ -550,7 +584,7 @@ public sealed class AccentContrastPlannerTests
         var glyph = Role(Plan("navy", light: false), AccentForegroundRole.CheckGlyph);
 
         Assert.Equal(8.45, Math.Round(glyph.Choice.RestRatio, 2));
-        Assert.Equal(6.80, Math.Round(glyph.Choice.AllStatesRatio, 2));
+        Assert.Equal(6.60, Math.Round(glyph.Choice.AllStatesRatio, 2));
     }
 
     [Fact]
@@ -595,6 +629,116 @@ public sealed class AccentContrastPlannerTests
         Assert.NotNull(plan.For(AccentForegroundRole.SelectedItem));
         Assert.NotNull(plan.For(AccentForegroundRole.InfoBadge));
         Assert.NotNull(plan.For(AccentShadeRole.SwitchTrack));
+    }
+
+    [Fact]
+    public void Signal_On_light_palette_acceptance_keeps_brand_fills_and_repairs_pressed_label()
+    {
+        var plan = ScribePlan(light: true);
+
+        // Acceptance: with source Scribe, every specified final role pair passes and the brand fills draw exactly as
+        // specified, while the existing repairs stay active. Do not assert zero corrections: the pressed label repair
+        // and current chart bar are expected.
+        AssertEveryForegroundMeets(plan);
+        AssertKeepsThemeForeground(plan, SrgbColor.White,
+            AccentForegroundRole.AccentButton,
+            AccentForegroundRole.CheckGlyph,
+            AccentForegroundRole.SwitchKnob,
+            AccentForegroundRole.SwitchKnobHover,
+            AccentForegroundRole.SwitchKnobPressed);
+        Assert.Equal(SrgbColor.White, Role(plan, AccentForegroundRole.AccentButtonPressed).Foreground);
+        Assert.False(Role(plan, AccentForegroundRole.AccentButtonPressed).Choice.IsThemeForeground);
+
+        foreach (var shade in plan.Shades)
+        {
+            Assert.Equal(shade.Role == AccentShadeRole.ChartBarCurrent, shade.Changed);
+        }
+
+        Assert.Equal(C("#0035B1"), Shade(plan, AccentShadeRole.Hyperlink).Color);
+        Assert.Equal(C("#00298E"), Shade(plan, AccentShadeRole.HyperlinkHover).Color);
+        Assert.Equal(C("#0C48CF"), Shade(plan, AccentShadeRole.SelectionIndicator).Color);
+        Assert.Equal(C("#0C48CF"), Shade(plan, AccentShadeRole.ChartBar).Color);
+        AssertChartCurrent(plan, light: true, "#083391");
+    }
+
+    [Fact]
+    public void Signal_On_dark_palette_acceptance_keeps_brand_fills_and_lifts_nested_tertiary_text()
+    {
+        var plan = ScribePlan(light: false);
+
+        // Acceptance: with source Scribe, every specified final role pair passes and the brand fills draw exactly as
+        // specified, while the existing repairs stay active. Do not assert zero corrections: tertiary accent text is
+        // lifted on #404040 and the current chart bar is intentionally distinct.
+        AssertEveryForegroundMeets(plan);
+        AssertKeepsThemeForeground(plan, SrgbColor.Black,
+            AccentForegroundRole.AccentButton,
+            AccentForegroundRole.CheckGlyph,
+            AccentForegroundRole.SwitchKnob,
+            AccentForegroundRole.SwitchKnobHover,
+            AccentForegroundRole.SwitchKnobPressed);
+        Assert.Equal(SrgbColor.Black, Role(plan, AccentForegroundRole.AccentButtonPressed).Foreground);
+        Assert.True(Role(plan, AccentForegroundRole.AccentButtonPressed).Choice.IsThemeForeground);
+
+        foreach (var shade in plan.Shades)
+        {
+            var expectedChanged = shade.Role is AccentShadeRole.AccentTextTertiary or AccentShadeRole.ChartBarCurrent;
+            Assert.Equal(expectedChanged, shade.Changed);
+        }
+
+        Assert.Equal(C("#81AAFF"), Shade(plan, AccentShadeRole.AccentTextTertiary).Color);
+        Assert.True(Shade(plan, AccentShadeRole.AccentTextTertiary).Meets);
+        Assert.Equal(C("#88B0FE"), Shade(plan, AccentShadeRole.Hyperlink).Color);
+        Assert.Equal(C("#A1C1FE"), Shade(plan, AccentShadeRole.HyperlinkHover).Color);
+        Assert.Equal(C("#88B0FE"), Shade(plan, AccentShadeRole.SelectionIndicator).Color);
+        Assert.Equal(C("#88B0FE"), Shade(plan, AccentShadeRole.ChartBar).Color);
+        AssertChartCurrent(plan, light: false, "#C4D8FF");
+    }
+
+    [Theory]
+    [InlineData("navy", true)]
+    [InlineData("navy", false)]
+    [InlineData("gold", true)]
+    [InlineData("gold", false)]
+    public void Windows_accent_chart_bars_are_readable_and_the_current_bar_is_distinct_where_possible(string accent, bool light)
+    {
+        var plan = Plan(accent, light);
+        var chart = Shade(plan, AccentShadeRole.ChartBar).Color;
+        var current = Shade(plan, AccentShadeRole.ChartBarCurrent).Color;
+
+        Assert.All(Surfaces(light), surface =>
+        {
+            Assert.True(WcagContrast.Ratio(chart, surface) >= WcagContrast.NonTextMinimum);
+            Assert.True(WcagContrast.Ratio(current, surface) >= WcagContrast.NonTextMinimum);
+        });
+        Assert.True(WcagContrast.Ratio(chart, current) >= 1.5 || current == SrgbColor.Black || current == SrgbColor.White);
+    }
+
+    private static void AssertEveryForegroundMeets(AccentContrastPlan plan)
+    {
+        Assert.All(plan.Foregrounds, foreground =>
+        {
+            Assert.True(foreground.Choice.MeetsInEveryState, foreground.Role.ToString());
+            Assert.True(foreground.Choice.AllStatesRatio >= foreground.ApplicableMinimum, foreground.Role.ToString());
+        });
+    }
+
+    private static void AssertKeepsThemeForeground(AccentContrastPlan plan, SrgbColor color, params AccentForegroundRole[] roles)
+    {
+        foreach (var role in roles)
+        {
+            var foreground = Role(plan, role);
+            Assert.True(foreground.Choice.IsThemeForeground, role.ToString());
+            Assert.Equal(color, foreground.Foreground);
+        }
+    }
+
+    private static void AssertChartCurrent(AccentContrastPlan plan, bool light, string expected)
+    {
+        var chart = Shade(plan, AccentShadeRole.ChartBar).Color;
+        var current = Shade(plan, AccentShadeRole.ChartBarCurrent).Color;
+        Assert.Equal(C(expected), current);
+        Assert.All(Surfaces(light), surface => Assert.True(WcagContrast.Ratio(current, surface) >= WcagContrast.NonTextMinimum));
+        Assert.True(WcagContrast.Ratio(current, chart) >= 1.5);
     }
 
     [Theory]

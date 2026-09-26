@@ -26,7 +26,7 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
         _openSettings = openSettings ?? throw new ArgumentNullException(nameof(openSettings));
         _tryItNow = tryItNow ?? openSettings;
 
-        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
+        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
         InitializeComponent();
         GestureTitle.Text = NormalizeGestureTitle(gesture.Title);
         GestureHint.Text = NormalizeGestureBody(gesture.Body);

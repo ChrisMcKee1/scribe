@@ -9,6 +9,7 @@ public enum AdvancedSection
     Recording,
     TypingIntoApps,
     TextChanges,
+    Appearance,
 }
 
 public static class AdvancedDefaults
@@ -31,6 +32,7 @@ public static class AdvancedDefaults
                 Count(settings.NewlineHandling != defaults.NewlineHandling) +
                 Count(settings.ShiftEnterLineBreaks != defaults.ShiftEnterLineBreaks),
             AdvancedSection.TextChanges => Count(settings.ApplyPostProcessing != defaults.ApplyPostProcessing),
+            AdvancedSection.Appearance => Count(settings.AccentSource != defaults.AccentSource),
             _ => throw new ArgumentOutOfRangeException(nameof(section), section, null),
         };
     }
@@ -48,6 +50,7 @@ public static class AdvancedDefaults
         target.NewlineHandling = defaults.NewlineHandling;
         target.ShiftEnterLineBreaks = defaults.ShiftEnterLineBreaks;
         target.ApplyPostProcessing = defaults.ApplyPostProcessing;
+        target.AccentSource = defaults.AccentSource;
         return target;
     }
 
