@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Hotkeys;
@@ -10,7 +11,8 @@ namespace Scribe.Core.Tests;
 /// the calling test thread plays the hook thread, requests go through the real
 /// <see cref="HotkeyCommandRouter"/>, and transitions are read straight off the queue the
 /// dispatcher would consume. <see cref="Service"/> is a service over the same router that is never
-/// started, for its real requests and its real consumer step.
+/// started, for its real requests and its real consumer step; the reconcile passes it asks for are
+/// queued for the test to run on its own thread (<see cref="RunReconcilePasses"/>), never run on the pool.
 /// </summary>
 internal sealed class HotkeyEngineHarness : IDisposable
 {
@@ -31,8 +33,18 @@ internal sealed class HotkeyEngineHarness : IDisposable
 
         (Engine, _) = Router.BeginEngine(Transitions);
         Service = new HotkeyService(
-            NullLogger<HotkeyService>.Instance, Router, () => true, keyDownInWindows, releaseLeakedKey);
+            NullLogger<HotkeyService>.Instance,
+            Router,
+            () => true,
+            keyDownInWindows,
+            releaseLeakedKey,
+            scheduleReconcilePass: _reconcilePassesAsked.Enqueue);
     }
+
+    // The reconcile passes the service asked for, in order, by the key view epoch each judges (0 for the mouse hook's sync
+    // alone): the harness takes them in place of the pool's run after a 25 ms settle, which a loaded test run can starve
+    // past any bound (review round 3, item 6), and the test runs them on its own thread.
+    private readonly ConcurrentQueue<long> _reconcilePassesAsked = new();
 
     public HotkeyTransitionQueue Transitions { get; } = new();
 
@@ -97,6 +109,37 @@ internal sealed class HotkeyEngineHarness : IDisposable
     /// </summary>
     public bool WouldDispatch(HotkeyService.QueuedTransition transition) =>
         HotkeyService.ShouldDispatch(transition, Router);
+
+    /// <summary>
+    /// The reconcile passes the service has asked for since the last take, in order, each by the key view epoch it judges
+    /// (0 for the mouse hook's sync alone). The service asks on the thread that schedules (the consumer's step here), so a
+    /// pass asked for is here as soon as <see cref="DispatchAll"/> returns, with no pool delay to wait out.
+    /// </summary>
+    public List<long> TakeReconcilePasses()
+    {
+        var taken = new List<long>();
+        while (_reconcilePassesAsked.TryDequeue(out var repairAt))
+        {
+            taken.Add(repairAt);
+        }
+
+        return taken;
+    }
+
+    /// <summary>
+    /// Runs every reconcile pass asked for so far on this thread, in the order asked, each for the epoch it was asked for,
+    /// as the pool would after its settle; returns those epochs.
+    /// </summary>
+    public List<long> RunReconcilePasses()
+    {
+        var taken = TakeReconcilePasses();
+        foreach (var repairAt in taken)
+        {
+            Service.RunReconcilePassForTests(requestedAt: repairAt);
+        }
+
+        return taken;
+    }
 
     /// <summary>
     /// Runs <paramref name="body"/> on a dedicated thread and fails the test, rather than hanging,

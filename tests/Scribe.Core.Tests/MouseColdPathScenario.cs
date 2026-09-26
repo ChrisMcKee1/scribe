@@ -36,8 +36,7 @@ public static class MouseColdPathScenario
     {
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
 
-        // Start's first step, before either hook exists: the service's own statics (the keyboard callback's offsets and
-        // the watchdog's periods), whose initializer uses Marshal.
+        // Start's first step, before either hook exists: the service's own statics (the watchdog's periods).
         RuntimeHelpers.RunClassConstructor(typeof(HotkeyService).TypeHandle);
         using var h = new HotkeyEngineHarness(
             HotkeyCaptureSession.Build([MouseButtons.Back], HotkeyMode.Hold),

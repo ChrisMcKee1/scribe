@@ -597,6 +597,27 @@ public class HotkeyEngineTests
     }
 
     [Fact]
+    public void An_exception_from_the_pass_never_leaves_the_signal_s_pool_callback()
+    {
+        // Review round 3, item 6: a test's recorder, disposed while a pass that coalesced late was still on its way, threw
+        // out of this callback on a pool thread and took the whole test host down; in the app the same would end Scribe.
+        // The pool callback is run here on the test's own thread (it is what the registered wait runs), so an exception it
+        // let out fails this test instead of the process.
+        var calls = 0;
+        using var signal = new HotkeyReconcileSignal(_ =>
+        {
+            calls++;
+            throw new ObjectDisposedException("recorder");
+        });
+        var runPass = typeof(HotkeyReconcileSignal).GetMethod(
+            "RunPass", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+        runPass.Invoke(signal, null);
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public void Inbox_delivers_every_item_once_and_in_order_per_producer_under_concurrent_pushes()
     {
         const int producers = 4;

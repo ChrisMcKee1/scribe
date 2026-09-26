@@ -217,8 +217,10 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
 > **Upgrading?** Your hotkeys stay as they were (Right Ctrl, unless you changed it). To switch to
 > Page Down and Page Up, choose **Restore default hotkeys** in Settings, General, then Save. While
 > they are bound, Page Down and Page Up pressed on their own no longer page through documents in
-> other apps, and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held
-> they work there as before. Pick any other key or chord in Settings if you would rather keep them,
+> other apps (except the few presses Scribe lets through around a Remote Desktop or virtual machine
+> window, described in [Remote Desktop and virtual machines](#remote-desktop-and-virtual-machines)),
+> and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held they work there
+> as before. Pick any other key or chord in Settings if you would rather keep them,
 > or if you present.
 
 ## 🎛️ How it works
@@ -234,6 +236,30 @@ the pill and where it appears, voice-activity detection, line-break handling, pe
 snippets, post-processing, start-with-Windows (applied the moment you flip it), how text is
 inserted, and the space Scribe adds after each dictation.
 
+### Remote Desktop and virtual machines
+
+Dictating into a Remote Desktop, Azure Virtual Desktop, Windows 365, Hyper-V, VMware, VirtualBox
+or Citrix window works as it does anywhere else, with a few things Scribe does there. A remote
+client can install a keyboard hook of its own, which sees your push-to-talk key before Scribe's
+does. So after a remote window comes to the front, Scribe moves its hook ahead of the client's, and
+moves it ahead again while the window stays in front: a bound, not a seal. A press in the gap
+before a move can still reach the remote session, and so can a press in the moment right after one,
+which Scribe cannot tell from the repeat of a key held across the move: Scribe lets that keystroke
+through whole, repeats and release included, so a push-to-talk Page Down pages the session for as
+long as you hold it (the dictation still starts and ends). A key you are already holding when
+Scribe moves is left alone, even if you change Scribe's hotkey settings meanwhile: its repeats and
+its release go where its press went, as long as its next repeat reaches Scribe within the time your
+keyboard's repeat settings allow (under a second with the Windows defaults, a second and a half at
+most). A key whose repeat comes later than that, or a keystroke a program sends stamped with a time
+in the future, is taken as a new press. And if you let go of a key Scribe is letting through where
+Scribe cannot see it, on the lock screen for example, its next press goes through once, whole, too.
+Text is always typed into a remote window, never pasted, even when you chose Paste it in, because a
+remote session reads the clipboard only when it pastes, which can be after Scribe has put back what
+you had copied. It is typed in small batches with a short pause between them, never hundreds of
+keystrokes at once, which adds about a quarter of a second to a 180-character dictation and about a
+second to a 770-character one. And the keys Scribe presses for you (Shift+Enter for a line break)
+carry the real key codes remote clients forward.
+
 ## 📚 The full feature catalog
 
 **Dictation core**
@@ -245,9 +271,9 @@ inserted, and the space Scribe adds after each dictation.
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
-| Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
+| Smart text injection | Unicode or clipboard insertion with automatic fallback, terminal-aware line-break flattening so newlines never fire Enter, and paced typing, never a paste, into Remote Desktop and virtual machine sessions |
 | Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
-| Hotkey self-healing | Detects and repairs stuck modifiers, and restores the keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
+| Hotkey self-healing | Detects and repairs stuck modifiers, restores the keyboard and mouse hooks Windows removes silently, and moves its keyboard hook ahead of a Remote Desktop client's while the client is in front, so push-to-talk keeps working across long sessions |
 
 **Text quality**
 

@@ -11,7 +11,8 @@ namespace Scribe.Core.TextInjection;
 /// Default <see cref="ITextInjector"/>. Clipboard-paste runs the whole borrow, Ctrl+V, restore sequence
 /// on a dedicated STA thread, with small delays so the target app reads the clipboard before it is
 /// restored. Falls back to Unicode keystroke typing whenever no paste can have fired, and exposes typing
-/// directly via <see cref="InjectionMethod.UnicodeType"/>.
+/// directly via <see cref="InjectionMethod.UnicodeType"/>. A Remote Desktop or virtual machine client is always
+/// typed into, never pasted into, whatever the method asked for (see <see cref="TypingPace"/>).
 /// </summary>
 public sealed class TextInjector : ITextInjector
 {
@@ -24,8 +25,12 @@ public sealed class TextInjector : ITextInjector
     // Unicode typing is sent in small batches so a long dictation can't overrun the target's input
     // queue (which silently drops keystrokes). Each batch is UnicodeChunkChars code units; we pause
     // InterChunkSettleMs between batches and resend a short SendInput remainder up to MaxChunkRetries.
-    private const int UnicodeChunkChars = 50;
-    private const int InterChunkSettleMs = 5;
+    // A Remote Desktop or virtual machine client gets smaller batches further apart, RemoteChunkChars
+    // and RemoteSettleMs, for the remote session's input stack (see TypingPace).
+    internal const int UnicodeChunkChars = 50;
+    internal const int InterChunkSettleMs = 5;
+    internal const int RemoteChunkChars = 16;
+    internal const int RemoteSettleMs = 20;
     private const int ChunkRetryDelayMs = 12;
     private const int MaxChunkRetries = 5;
 
@@ -49,7 +54,8 @@ public sealed class TextInjector : ITextInjector
         string text,
         InjectionMethod method = InjectionMethod.ClipboardPaste,
         nint expectedForegroundWindow = 0,
-        bool shiftEnterLineBreaks = true)
+        bool shiftEnterLineBreaks = true,
+        string? targetProcessName = null)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -64,13 +70,15 @@ public sealed class TextInjector : ITextInjector
         // Capture the ambient dictation span on the calling thread; the STA worker is a fresh
         // Thread, so Activity.Current would not flow to it. We re-parent the child span explicitly.
         var parent = Activity.Current;
+        var pace = TypingPace.For(targetProcessName);
 
         return RunOnStaThread(() =>
         {
             var activity = TryStartActivity(parent, text.Length);
+            ReportTarget(activity, text, pace, method);
             try
             {
-                return InjectOnStaThread(activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks);
+                return InjectOnStaThread(activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks, pace);
             }
             finally
             {
@@ -82,7 +90,8 @@ public sealed class TextInjector : ITextInjector
     }
 
     private InjectionResult InjectOnStaThread(
-        Activity? activity, string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks)
+        Activity? activity, string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks,
+        TypingPace pace)
     {
         if (!IsExpectedForeground(expectedForegroundWindow))
         {
@@ -95,12 +104,21 @@ public sealed class TextInjector : ITextInjector
             return new InjectionResult(true, "win32-edit", text.Length, text.Length);
         }
 
-        if (method == InjectionMethod.UnicodeType)
+        // Read once, from the layout of the window about to receive the keys (see InjectionKeys).
+        var keys = InjectionKeys.From(_platform);
+
+        // A Remote Desktop or virtual machine client is typed into, whatever the insertion setting (review round 2, item 6):
+        // its clipboard redirection uses delayed rendering ([MS-RDPECLIP]: "The data associated with the Clipboard Format is
+        // sent only if a paste operation is executed"), so the remote app reads the clipboard when it pastes, which can be
+        // after the restore below has put the user's previous clipboard back, and the session would paste that, possibly
+        // something private, instead of the dictation. With real scan codes a Ctrl+V reaches the session, so the race is
+        // real. Typing touches no clipboard. The trace says the paste was bypassed (ReportTarget).
+        if (method == InjectionMethod.UnicodeType || pace.PacedForRemoteSession)
         {
-            return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false);
+            return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace);
         }
 
-        var paste = PasteViaClipboard(text, expectedForegroundWindow);
+        var paste = PasteViaClipboard(text, expectedForegroundWindow, keys);
         ReportClipboard(activity, paste);
         LogClipboard(paste);
 
@@ -123,7 +141,7 @@ public sealed class TextInjector : ITextInjector
         }
 
         // No paste can have fired, so typing cannot duplicate anything.
-        return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: true) with
+        return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: true, keys, pace) with
         {
             Paste = paste.Delivery,
             ClipboardRestore = paste.Restore,
@@ -158,14 +176,62 @@ public sealed class TextInjector : ITextInjector
         }
     }
 
-    private InjectionResult TypeAndReport(
-        Activity? activity, string text, nint expectedForegroundWindow, bool shiftEnterLineBreaks, bool fallback)
+    // Whether the target is a Remote Desktop or virtual machine client, whether a paste asked for was typed instead because
+    // it is one, and the shape of the text: counts only, never the text, so a report about input a remote session could not
+    // take can be answered. Optional, like every span tag.
+    private static void ReportTarget(Activity? activity, string text, TypingPace pace, InjectionMethod method)
     {
-        var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks);
+        if (activity is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var shape = InjectedTextShape.Of(text);
+            activity.SetTag(ScribeTelemetry.TagInjectRemote, pace.PacedForRemoteSession);
+            activity.SetTag(
+                ScribeTelemetry.TagInjectPasteBypassed,
+                method == InjectionMethod.ClipboardPaste && pace.PacedForRemoteSession);
+            activity.SetTag(ScribeTelemetry.TagInjectLineBreaks, shape.LineBreaks);
+            activity.SetTag(ScribeTelemetry.TagInjectSurrogatePairs, shape.SurrogatePairs);
+            activity.SetTag(ScribeTelemetry.TagInjectControlCharacters, shape.ControlCharacters);
+        }
+        catch (Exception)
+        {
+            // Telemetry is optional; the injection is not.
+        }
+    }
+
+    private InjectionResult TypeAndReport(
+        Activity? activity, string text, nint expectedForegroundWindow, bool shiftEnterLineBreaks, bool fallback,
+        InjectionKeys keys, TypingPace pace)
+    {
+        var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks, keys, pace);
         ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback);
+        ReportPace(activity, pace, typed.Batches);
         return new InjectionResult(
             typed.Sent == typed.Total, "unicode", typed.Sent, typed.Total,
             typed.Sent == typed.Total ? null : "Only part of the text was accepted by Windows.");
+    }
+
+    // How typing was paced: the most code units one SendInput call carried, and how many calls it took.
+    private static void ReportPace(Activity? activity, TypingPace pace, int batches)
+    {
+        if (activity is null)
+        {
+            return;
+        }
+
+        try
+        {
+            activity.SetTag(ScribeTelemetry.TagInjectBatchUnits, pace.BatchUnits);
+            activity.SetTag(ScribeTelemetry.TagInjectBatches, batches);
+        }
+        catch (Exception)
+        {
+            // Telemetry is optional; the injection is not.
+        }
     }
 
     private static InjectionResult FocusChanged(int total) =>
@@ -213,7 +279,7 @@ public sealed class TextInjector : ITextInjector
         bool ConfirmOpened,
         bool CloseMovedSequence);
 
-    private ClipboardPasteReport PasteViaClipboard(string text, nint expectedForegroundWindow)
+    private ClipboardPasteReport PasteViaClipboard(string text, nint expectedForegroundWindow, InjectionKeys keys)
     {
         // An image, copied files or other non-text content can't be saved and restored (text-only by
         // design), so the borrow refuses it and the caller types instead; slower, but the user's
@@ -264,13 +330,13 @@ public sealed class TextInjector : ITextInjector
             return Report(PasteDelivery.FocusChanged, RestoreClipboard(lease));
         }
 
-        var ctrlV = SendCtrlV();
+        var ctrlV = SendCtrlV(keys);
 
         // A short send can leave Ctrl (or V) logically held down; release both before anything
         // else so a typing fallback can't turn the dictation into accidental keyboard shortcuts.
         if (ctrlV.Sent < ctrlV.Total)
         {
-            ReleaseCtrlV();
+            ReleaseCtrlV(keys);
         }
 
         // The paste fires on the V-down (the chord's second event). Fewer than two inserted means
@@ -362,9 +428,9 @@ public sealed class TextInjector : ITextInjector
 
     // Best-effort key-up pair after a partial Ctrl+V send. Sending an up for a key that was never
     // down is harmless; leaving Ctrl held down is not.
-    private void ReleaseCtrlV()
+    private void ReleaseCtrlV(InjectionKeys keys)
     {
-        var inputs = BuildCtrlVReleaseInputs();
+        var inputs = BuildCtrlVReleaseInputs(keys);
         var sent = SendWithRetry(inputs);
         if (sent != inputs.Length)
         {
@@ -372,18 +438,21 @@ public sealed class TextInjector : ITextInjector
         }
     }
 
-    internal static INPUT[] BuildCtrlVReleaseInputs() =>
-        [KeyUp(VK_CONTROL), KeyUp(VK_V)];
+    internal static INPUT[] BuildCtrlVReleaseInputs(InjectionKeys keys = default) =>
+        [KeyUp(VK_CONTROL, keys.Control), KeyUp(VK_V, keys.V)];
 
-    private (int Sent, int Total) SendCtrlV()
+    // The paste chord. Every VK-based event carries the scan code the target's layout gives its key (see InjectionKeys).
+    internal static INPUT[] BuildCtrlVInputs(InjectionKeys keys = default) =>
+    [
+        KeyDown(VK_CONTROL, keys.Control),
+        KeyDown(VK_V, keys.V),
+        KeyUp(VK_V, keys.V),
+        KeyUp(VK_CONTROL, keys.Control),
+    ];
+
+    private (int Sent, int Total) SendCtrlV(InjectionKeys keys)
     {
-        INPUT[] inputs =
-        [
-            KeyDown(VK_CONTROL),
-            KeyDown(VK_V),
-            KeyUp(VK_V),
-            KeyUp(VK_CONTROL),
-        ];
+        var inputs = BuildCtrlVInputs(keys);
 
         uint sent = _platform.SendInput(inputs);
         if (sent != inputs.Length)
@@ -394,12 +463,13 @@ public sealed class TextInjector : ITextInjector
         return ((int)sent, inputs.Length);
     }
 
-    private (int Sent, int Total) TypeUnicode(string text, nint expectedForegroundWindow, bool shiftEnter)
+    private (int Sent, int Total, int Batches) TypeUnicode(
+        string text, nint expectedForegroundWindow, bool shiftEnter, InjectionKeys keys, TypingPace pace)
     {
         int total = CountKeyEvents(text, 0, text.Length, shiftEnter);
         if (total == 0)
         {
-            return (0, 0);
+            return (0, 0, 0);
         }
 
         // Windows silently drops synthetic keystrokes when a single SendInput batch is larger than the
@@ -407,8 +477,10 @@ public sealed class TextInjector : ITextInjector
         // one appears partially or not at all. Type in small chunks with a brief settle between them,
         // and resend the unsent remainder of a chunk before giving up. The values favour reliability
         // over raw speed: a few hundred milliseconds on a rare long paragraph is imperceptible next to
-        // dropped text.
+        // dropped text. A Remote Desktop or virtual machine client gets smaller chunks further apart
+        // (TypingPace), for the remote session's input stack.
         int sent = 0;
+        int batches = 0;
         try
         {
             for (int start = 0; start < text.Length;)
@@ -418,11 +490,12 @@ public sealed class TextInjector : ITextInjector
                     break;
                 }
 
-                int count = ChunkLength(text, start, UnicodeChunkChars);
-                var inputs = BuildUnicodeChunk(text, start, count, shiftEnter);
+                int count = ChunkLength(text, start, pace.BatchUnits, pace.PreferWordBoundary);
+                var inputs = BuildUnicodeChunk(text, start, count, shiftEnter, keys);
 
                 int delivered = SendWithRetry(inputs);
                 sent += delivered;
+                batches++;
 
                 // The target stopped accepting input mid-stream even after retries; stop and let the caller
                 // report the partial send (the text.inject span is marked errored when sent != total).
@@ -433,7 +506,7 @@ public sealed class TextInjector : ITextInjector
                     // ReleaseCtrlV exists; a key-up for a key that was never down is harmless.
                     if (shiftEnter)
                     {
-                        ReleaseShift();
+                        ReleaseShift(keys);
                     }
 
                     break;
@@ -444,11 +517,11 @@ public sealed class TextInjector : ITextInjector
                 // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
                 if (start < text.Length)
                 {
-                    _platform.Sleep(InterChunkSettleMs);
+                    _platform.Sleep(pace.SettleMs);
                 }
             }
         }
-        catch when (ReleaseShiftOnFault(shiftEnter))
+        catch when (ReleaseShiftOnFault(shiftEnter, keys))
         {
             // Unreachable: the filter always returns false so the exception keeps propagating. The
             // filter exists purely to run the Shift key-up first. Without it, a throw between the
@@ -463,13 +536,13 @@ public sealed class TextInjector : ITextInjector
             _logger.LogWarning("Unicode typing delivered {Sent}/{Total} events; text may be truncated.", sent, total);
         }
 
-        return (sent, total);
+        return (sent, total, batches);
     }
 
     // Best-effort key-up after a partial chunk that may have ended mid-chord.
-    private void ReleaseShift()
+    private void ReleaseShift(InjectionKeys keys)
     {
-        INPUT[] inputs = [KeyUp(VK_SHIFT)];
+        INPUT[] inputs = [KeyUp(VK_SHIFT, keys.Shift)];
         if (SendWithRetry(inputs) != inputs.Length)
         {
             _logger.LogWarning("Releasing Shift after a partial Unicode chunk did not deliver.");
@@ -481,13 +554,13 @@ public sealed class TextInjector : ITextInjector
     /// Swallowing a failure here is deliberate. This runs while another exception is already in
     /// flight, and throwing from a filter would replace the real fault with a misleading one.
     /// </summary>
-    private bool ReleaseShiftOnFault(bool shiftEnter)
+    private bool ReleaseShiftOnFault(bool shiftEnter, InjectionKeys keys)
     {
         if (shiftEnter)
         {
             try
             {
-                ReleaseShift();
+                ReleaseShift(keys);
             }
             catch
             {
@@ -501,7 +574,8 @@ public sealed class TextInjector : ITextInjector
     // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally because
     // each surrogate half is sent as its own KEYEVENTF_UNICODE event. Line breaks are the exception:
     // see BuildLineBreak.
-    internal static INPUT[] BuildUnicodeChunk(string text, int start, int count, bool shiftEnter = true)
+    internal static INPUT[] BuildUnicodeChunk(
+        string text, int start, int count, bool shiftEnter = true, InjectionKeys keys = default)
     {
         var inputs = new List<INPUT>(count * 2);
         int end = start + count;
@@ -510,7 +584,7 @@ public sealed class TextInjector : ITextInjector
             char ch = text[i];
             if (ch is '\r' or '\n')
             {
-                inputs.AddRange(BuildLineBreak(shiftEnter));
+                inputs.AddRange(BuildLineBreak(shiftEnter, keys));
 
                 // CRLF is one line break, not two. ChunkLength guarantees the pair is never split
                 // across batches, so the lookahead never runs past the end of this chunk.
@@ -541,16 +615,22 @@ public sealed class TextInjector : ITextInjector
     // RichEdit it is indistinguishable from Enter, so the shifted form is safe or strictly better
     // nearly everywhere. Word treats it as a line break rather than a paragraph mark, which is the
     // one visible difference and still renders as the new line the speaker asked for.
-    internal static IEnumerable<INPUT> BuildLineBreak(bool shiftEnter)
+    internal static IEnumerable<INPUT> BuildLineBreak(bool shiftEnter, InjectionKeys keys = default)
     {
         if (!shiftEnter)
         {
-            return [KeyDown(VK_RETURN), KeyUp(VK_RETURN)];
+            return [KeyDown(VK_RETURN, keys.Return), KeyUp(VK_RETURN, keys.Return)];
         }
 
         // Physical chord order: hold shift, tap Return, release shift. Unicode events are unaffected
         // by modifier state, and shift is released before the next character, so nothing leaks.
-        return [KeyDown(VK_SHIFT), KeyDown(VK_RETURN), KeyUp(VK_RETURN), KeyUp(VK_SHIFT)];
+        return
+        [
+            KeyDown(VK_SHIFT, keys.Shift),
+            KeyDown(VK_RETURN, keys.Return),
+            KeyUp(VK_RETURN, keys.Return),
+            KeyUp(VK_SHIFT, keys.Shift),
+        ];
     }
 
     // Keeps a CRLF pair inside a single batch: split across two SendInput calls the CR and the LF
@@ -563,7 +643,7 @@ public sealed class TextInjector : ITextInjector
     // time, which reads as typing rather than glitching. The backoff never gives up more than half a
     // batch, so a long unbroken token (a URL, a file path) still makes steady progress instead of
     // degrading toward one character per send.
-    internal static int ChunkLength(string text, int start, int max)
+    internal static int ChunkLength(string text, int start, int max, bool preferWordBoundary = true)
     {
         int count = Math.Min(max, text.Length - start);
         int end = start + count;
@@ -580,16 +660,24 @@ public sealed class TextInjector : ITextInjector
             return count;
         }
 
-        int floor = start + (count / 2);
-        for (int i = end - 1; i > floor; i--)
+        if (preferWordBoundary)
         {
-            if (IsBreakBetween(text[i - 1], text[i]))
+            int floor = start + (count / 2);
+            for (int i = end - 1; i > floor; i--)
             {
-                return i - start;
+                if (IsBreakBetween(text[i - 1], text[i]))
+                {
+                    return i - start;
+                }
             }
         }
 
-        return count;
+        // Never split a surrogate pair either. A cut at a word boundary never can (neither half is white space or a
+        // line break), so only a batch that found none, or does not look for one, is shortened by the one unit that
+        // keeps the pair together. The halves are separate KEYEVENTF_UNICODE events, and a Remote Desktop client
+        // forwards each as its own 16-bit Unicode keyboard event; sent in two calls, a settle apart, the target would
+        // hold a lone high surrogate across the pause.
+        return count > 1 && char.IsHighSurrogate(text[end - 1]) && char.IsLowSurrogate(text[end]) ? count - 1 : count;
     }
 
     // A batch may end after whitespace or a line break, so the next batch starts a fresh word.
@@ -653,9 +741,14 @@ public sealed class TextInjector : ITextInjector
         return offset;
     }
 
-    private static INPUT KeyDown(ushort virtualKey) => KeyboardInput(virtualKey, 0, 0);
+    // A VK-based key event carries the scan code the target's layout gives its key, and KEYEVENTF_EXTENDEDKEY for an
+    // extended one, never KEYEVENTF_SCANCODE (see KeyScanCodes): Windows still reads the key from wVk, so a local app gets
+    // the same key as before, and a Remote Desktop or virtual machine client, which forwards keys by scan code, a real one.
+    private static INPUT KeyDown(ushort virtualKey, KeyScanCode scan) =>
+        KeyboardInput(virtualKey, scan.Code, KeyScanCodes.Flags(scan, keyUp: false));
 
-    private static INPUT KeyUp(ushort virtualKey) => KeyboardInput(virtualKey, 0, KEYEVENTF_KEYUP);
+    private static INPUT KeyUp(ushort virtualKey, KeyScanCode scan) =>
+        KeyboardInput(virtualKey, scan.Code, KeyScanCodes.Flags(scan, keyUp: true));
 
     private static INPUT UnicodeKey(char ch, bool keyUp)
     {
