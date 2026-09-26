@@ -16,6 +16,7 @@ public sealed class WordPackSaveProtocolTests
     // waits is stuck. Twice the hold guard, so that a save that never reaches its hold fails there first, naming the hold;
     // this one ends a test stuck anywhere else, such as in an await of the save itself.
     private static readonly TimeSpan PumpIdleBound = HoldBound + HoldBound;
+
     public static TheoryData<string> ValidationFailures => new()
     {
         "dictionary", "snippet", "hotkey", "duration", "provider", "word pack",
@@ -600,6 +601,7 @@ public sealed class WordPackSaveProtocolTests
             Workspace = DeciderFixture.Workspace(Catalog);
             Store = new TraceStore(this, Catalog);
             Protocol = new WordPackSaveProtocol(Store);
+            PumpContext.DisposeAtExit(this);
         }
 
         public LibraryCatalog Catalog { get; set; }
@@ -702,8 +704,10 @@ public sealed class WordPackSaveProtocolTests
             }
         }
 
-        // Opens every hold on every way out of a test that declares the harness with using, so work parked at one, or the
-        // pool thread the catalog load blocks there, never outlives a test that failed before its release.
+        // Opens every hold, so work parked at one, or the pool thread the catalog load blocks there, never outlives its test.
+        // Called by a test that declares the harness with using, on its way out, and by the pump the harness was made under,
+        // when it ends, which covers a test the pump gave up on while it was still pending (stream TR round 7c). Opening a
+        // hold twice does nothing.
         public void Dispose()
         {
             foreach (var hold in _holds.Values)
@@ -828,36 +832,61 @@ public sealed class WordPackSaveProtocolTests
     private sealed class PumpContext : SynchronizationContext
     {
         private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = [];
+        private readonly ConcurrentQueue<IDisposable> _atExit = new();
+
+        // Has what a test sets up on the owner thread disposed when the pump ends, however it ends. The test's own using
+        // cannot cover the pump giving up on it: its task is still pending then, and never reaches its way out.
+        public static void DisposeAtExit(IDisposable owned)
+        {
+            if (Current is PumpContext pump)
+            {
+                pump._atExit.Enqueue(owned);
+            }
+        }
 
         // Runs the owner's posted work until the test's task completes. A test whose owner thread has run nothing for
-        // PumpIdleBound while the test is still waiting fails, instead of pumping for ever and stopping the run.
+        // PumpIdleBound while the test is still waiting fails, instead of pumping for ever and stopping the run. On every way
+        // out, that one included, the pump itself lets go of what the test left held, closes its queue, so nothing posted
+        // later waits in it for a pump that has stopped, and gives the owner thread its own context back (stream TR round 7c).
         public static async Task RunAsync(Func<int, Task> action)
         {
             var previous = Current;
             var context = new PumpContext();
             SetSynchronizationContext(context);
-            var owner = Environment.CurrentManagedThreadId;
-            var task = action(owner);
-            _ = task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
-            var lastRan = Stopwatch.GetTimestamp();
-            while (!task.IsCompleted || context._queue.Count > 0)
+            Task task;
+            try
             {
-                if (context._queue.TryTake(out var work, 50))
+                var owner = Environment.CurrentManagedThreadId;
+                task = action(owner);
+                _ = task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
+                var lastRan = Stopwatch.GetTimestamp();
+                while (!task.IsCompleted || context._queue.Count > 0)
                 {
-                    SetSynchronizationContext(context);
-                    work.Callback(work.State);
-                    lastRan = Stopwatch.GetTimestamp();
-                }
-                else if (!task.IsCompleted && Stopwatch.GetElapsedTime(lastRan) > PumpIdleBound)
-                {
-                    SetSynchronizationContext(previous);
-                    Assert.Fail(
-                        $"The test never finished: nothing ran on its owner thread for {PumpIdleBound.TotalSeconds:0} s " +
-                        "while it was still waiting.");
+                    if (context._queue.TryTake(out var work, 50))
+                    {
+                        SetSynchronizationContext(context);
+                        work.Callback(work.State);
+                        lastRan = Stopwatch.GetTimestamp();
+                    }
+                    else if (!task.IsCompleted && Stopwatch.GetElapsedTime(lastRan) > PumpIdleBound)
+                    {
+                        Assert.Fail(
+                            $"The test never finished: nothing ran on its owner thread for {PumpIdleBound.TotalSeconds:0} s " +
+                            "while it was still waiting.");
+                    }
                 }
             }
+            finally
+            {
+                while (context._atExit.TryDequeue(out var owned))
+                {
+                    owned.Dispose();
+                }
 
-            SetSynchronizationContext(previous);
+                context._queue.CompleteAdding();
+                SetSynchronizationContext(previous);
+            }
+
             await task;
         }
 
