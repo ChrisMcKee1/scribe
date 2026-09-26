@@ -2114,7 +2114,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 entries,
                 since,
                 currentModelId,
-                currentModelAvailable: SelectedSpeechModelAvailable(currentModelId),
+                currentModelAvailable: SelectedSpeechModelIsRunning(currentModelId),
                 readLimit: 1000);
         }
         catch (Exception ex)
@@ -2126,11 +2126,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return new(capability, stats, statsFailed);
     }
 
-    private bool SelectedSpeechModelAvailable(string? selectedModelId)
+    // The saved selection is what recognition runs only when it is installed and is the model this session started with: a
+    // model saved without a restart, or one that fell back, isn't, and then the newest recorded model in the window is.
+    private bool SelectedSpeechModelIsRunning(string? selectedModelId)
     {
         var selected = TranscriptionModelCatalog.Resolve(selectedModelId);
-        return string.Equals(selected.Id, TranscriptionModelCatalog.DefaultId, StringComparison.OrdinalIgnoreCase) ||
+        var running = TranscriptionModelCatalog.Resolve(_runningTranscription.ModelId);
+        var available = string.Equals(selected.Id, TranscriptionModelCatalog.DefaultId, StringComparison.OrdinalIgnoreCase) ||
             _transcriptionModelInstaller.IsInstalled(selected);
+        return available && string.Equals(selected.Id, running.Id, StringComparison.OrdinalIgnoreCase);
     }
 
     private void ShowPerformanceStats(

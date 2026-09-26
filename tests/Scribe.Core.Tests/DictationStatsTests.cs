@@ -255,6 +255,24 @@ public sealed class DictationStatsTests
     }
 
     [Fact]
+    public void The_fallback_model_comes_only_from_the_window()
+    {
+        // A recorded model older than the window must not decide which model the window's null-id runs count as.
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 1_000, modelId: null, ageHours: 24),
+                Entry(audioMs: 10_000, decodeMs: 2_000, modelId: TranscriptionModelCatalog.DefaultId, ageHours: 24 * 8),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            "moonshine-base-en-int8",
+            currentModelAvailable: false);
+
+        Assert.NotNull(stats);
+        Assert.Equal("moonshine-base-en-int8", stats!.CurrentModelId);
+        Assert.Equal(1, stats.Count);
+    }
+
+    [Fact]
     public void Compute_keeps_selected_model_when_unavailable_but_history_has_no_model_id()
     {
         var stats = DictationStats.Compute(

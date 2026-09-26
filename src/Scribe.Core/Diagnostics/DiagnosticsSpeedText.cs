@@ -64,7 +64,10 @@ public static class DiagnosticsSpeedText
         ArgumentNullException.ThrowIfNull(stats);
         if (stats.Count == 0)
         {
-            return EmptyView(DescriptionFor(stats) + " " + NoDictationsForModel, showRetry: false);
+            // The details holding the cap line are hidden here, so the description carries it: a run of this model may
+            // sit beyond the read limit.
+            var empty = DescriptionFor(stats) + " " + NoDictationsForModel;
+            return EmptyView(stats.ReachedReadLimit ? empty + " " + CapLine : empty, showRetry: false);
         }
 
         var speech = Step(

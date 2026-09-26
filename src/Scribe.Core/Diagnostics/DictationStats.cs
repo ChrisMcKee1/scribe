@@ -60,6 +60,7 @@ public static class DictationStats
         var selectedModelId = currentModelAvailable
             ? currentModelId
             : readEntries
+                .Where(entry => entry.TimestampUtc >= since)
                 .OrderByDescending(entry => entry.TimestampUtc)
                 .FirstOrDefault(entry => entry.TranscriptionModelId is { Length: > 0 })
                 ?.TranscriptionModelId ?? currentModelId;

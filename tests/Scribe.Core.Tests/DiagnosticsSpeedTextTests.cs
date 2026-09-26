@@ -83,6 +83,33 @@ public sealed class DiagnosticsSpeedTextTests
     }
 
     [Fact]
+    public void Exclusion_only_snapshot_at_the_read_limit_still_says_so()
+    {
+        // The details holding the cap line are hidden when nothing qualifies, so the description carries it.
+        var text = DiagnosticsSpeedText.ForStats(Snapshot(
+            speech: null,
+            cleanup: null,
+            combined: null,
+            hasOtherModels: true,
+            reachedReadLimit: true,
+            count: 0));
+
+        Assert.EndsWith(" " + DiagnosticsSpeedText.CapLine, text.Description, StringComparison.Ordinal);
+        Assert.False(text.ShowDetails);
+    }
+
+    [Fact]
+    public void The_saved_model_counts_as_running_only_when_it_is_the_session_s_model()
+    {
+        // A model saved without a restart is installed but not what recognition runs.
+        var window = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var check = window[window.IndexOf("private bool SelectedSpeechModelIsRunning(", StringComparison.Ordinal)..];
+        check = check[..check.IndexOf("\n    }", StringComparison.Ordinal)];
+        Assert.Contains("_runningTranscription.ModelId", check, StringComparison.Ordinal);
+        Assert.Contains("return available && string.Equals(selected.Id, running.Id, StringComparison.OrdinalIgnoreCase);", check, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Speed_section_source_avoids_old_overclaiming_words()
     {
         var settings = Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings");
