@@ -102,7 +102,8 @@ public sealed record TryDictationSummaryInput(
     bool CleanupFailed = false,
     bool NoSpeech = false,
     bool MicrophoneProblem = false,
-    FailureStage? StoppedAt = null);
+    FailureStage? StoppedAt = null,
+    string? Reason = null);
 
 public static class TryDictationSummary
 {
@@ -121,17 +122,21 @@ public static class TryDictationSummary
 
         if (input.MicrophoneProblem)
         {
-            return MicrophoneProblemMessage;
+            return string.IsNullOrWhiteSpace(input.Reason)
+                ? MicrophoneProblemMessage
+                : $"Scribe couldn't record from your microphone. {input.Reason}";
         }
 
         if (input.StoppedAt is { } stage)
         {
-            return $"Stopped at {StageName(stage)}. {StageAdvice(stage)}";
+            return $"Stopped at {StageName(stage)}. {CleanReason(input.Reason) ?? StageAdvice(stage)}";
         }
 
         if (input.CleanupFailed)
         {
-            return "Done. AI cleanup didn't finish, so Scribe typed what it heard. Try again, or turn AI cleanup off.";
+            return string.IsNullOrWhiteSpace(input.Reason)
+                ? "Done. AI cleanup didn't finish, so Scribe typed what it heard. Try again, or turn AI cleanup off."
+                : $"Done. AI cleanup didn't finish, so Scribe typed what it heard. {input.Reason}";
         }
 
         if (!input.Success)
@@ -144,6 +149,9 @@ public static class TryDictationSummary
             ? $"Done. Processing took {seconds} seconds. AI cleanup: on, {input.Model} {input.Where}."
             : $"Done. Processing took {seconds} seconds. AI cleanup: off.";
     }
+
+    private static string? CleanReason(string? reason) =>
+        string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
 
     public static string StageName(FailureStage stage) => stage switch
     {

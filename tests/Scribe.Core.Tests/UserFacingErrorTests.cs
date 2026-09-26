@@ -99,5 +99,11 @@ public sealed class UserFacingErrorTests
             TryDictationSummary.Describe(new TryDictationSummaryInput(true, 1.1)));
         Assert.Equal(TryDictationSummary.NoSpeechMessage, TryDictationSummary.Describe(new TryDictationSummaryInput(false, NoSpeech: true)));
         Assert.Equal(TryDictationSummary.MicrophoneProblemMessage, TryDictationSummary.Describe(new TryDictationSummaryInput(false, MicrophoneProblem: true)));
+        Assert.Equal(
+            "Scribe couldn't record from your microphone. Open Windows Settings > System > Sound, then try again.",
+            TryDictationSummary.Describe(new TryDictationSummaryInput(false, MicrophoneProblem: true, Reason: "Open Windows Settings > System > Sound, then try again.")));
+        Assert.Equal(
+            "Done. AI cleanup didn't finish, so Scribe typed what it heard. Try again later.",
+            TryDictationSummary.Describe(new TryDictationSummaryInput(false, CleanupFailed: true, Reason: "Try again later.")));
     }
 }

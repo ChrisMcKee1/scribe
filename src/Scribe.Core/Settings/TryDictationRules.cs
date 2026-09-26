@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Settings;
 
@@ -47,4 +48,56 @@ public static class InjectionMethodLabel
 
     private static string WithSpace(string label, bool addedSpace) =>
         addedSpace ? $"{label}, then a space" : label;
+}
+
+
+public static class TryDictationTiming
+{
+    public static TimeSpan ProcessingDuration(
+        TimeSpan trimmingSilence,
+        TimeSpan speechRecognition,
+        TimeSpan aiCleanup,
+        TimeSpan dictionaryAndSnippets,
+        TimeSpan typing) =>
+        trimmingSilence + speechRecognition + aiCleanup + dictionaryAndSnippets + typing;
+
+    public static string SpeedLabel(double realTimeFactor)
+    {
+        if (realTimeFactor <= 0 || double.IsNaN(realTimeFactor) || double.IsInfinity(realTimeFactor))
+        {
+            return string.Empty;
+        }
+
+        var faster = Math.Max(1, (int)Math.Round(1 / realTimeFactor, MidpointRounding.AwayFromZero));
+        return $"{faster:N0} times faster than real time";
+    }
+}
+
+public static class TryDictationChangeList
+{
+    public const string DictionaryOrWordPackSource = "your dictionary or a word pack";
+    public const string AiCleanupChanged = "AI cleanup rewrote the text.";
+
+    public static IReadOnlyList<string> Describe(
+        IEnumerable<TextReplacement> replacements,
+        bool aiCleanupChanged)
+    {
+        ArgumentNullException.ThrowIfNull(replacements);
+        var lines = replacements.Select(Describe).ToList();
+        if (aiCleanupChanged)
+        {
+            lines.Add(AiCleanupChanged);
+        }
+
+        return lines;
+    }
+
+    public static string Describe(TextReplacement replacement)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+        var source = replacement.Kind == TextReplacementKind.Snippet
+            ? "snippet"
+            : DictionaryOrWordPackSource;
+        return $"\"{replacement.Pattern}\" became \"{replacement.Replacement}\" ({source})";
+    }
 }

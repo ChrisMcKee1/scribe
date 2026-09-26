@@ -1,5 +1,6 @@
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
+using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Xunit;
 
@@ -261,6 +262,35 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(InjectionMethod.ClipboardPaste, true, "Pasted, then a space")]
     public void Injection_method_labels_hide_internal_codes(InjectionMethod method, bool space, string expected) =>
         Assert.Equal(expected, InjectionMethodLabel.Describe(method, space));
+
+    [Fact]
+    public void Try_dictation_processing_time_excludes_recording()
+    {
+        var elapsed = TryDictationTiming.ProcessingDuration(
+            TimeSpan.FromMilliseconds(12),
+            TimeSpan.FromMilliseconds(240),
+            TimeSpan.FromMilliseconds(820),
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(35));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1108), elapsed);
+        Assert.Equal("13 times faster than real time", TryDictationTiming.SpeedLabel(0.08));
+    }
+
+    [Fact]
+    public void Try_dictation_change_lines_use_plain_sources()
+    {
+        var lines = TryDictationChangeList.Describe([
+            new TextReplacement(0, 4, "dot net", ".NET", TextReplacementKind.Dictionary),
+            new TextReplacement(5, 4, "sig", "Best regards", TextReplacementKind.Snippet),
+        ], aiCleanupChanged: true);
+
+        Assert.Equal([
+            "\"dot net\" became \".NET\" (your dictionary or a word pack)",
+            "\"sig\" became \"Best regards\" (snippet)",
+            "AI cleanup rewrote the text.",
+        ], lines);
+    }
 
     [Fact]
     public void Advanced_defaults_count_changed_settings_by_section_and_reset_only_advanced_fields()
