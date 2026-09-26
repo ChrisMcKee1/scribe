@@ -66,6 +66,11 @@ public sealed class OverlayPillSourceTests
     // A colour inside a markup extension, and the scRGB form.
     [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=Red}'/>")]
     [InlineData("<Border Background='sc#1,1,0,0'/>")]
+    // A markup extension's argument quoted either way (Grok's G3), and a colour named as a static member.
+    [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=\"Red\"}'/>")]
+    [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=\"#FF0000\"}'/>")]
+    [InlineData("<TextBlock Foreground=\"{Binding Tint, FallbackValue='Red'}\"/>")]
+    [InlineData("<Border><Border.Background><SolidColorBrush Color='{x:Bind ui:Colors.Red}'/></Border.Background></Border>")]
     public void The_colour_scan_finds_a_stray_colour_however_XAML_writes_it(string fragment)
     {
         Assert.Contains(Colours(InGrid(fragment)), c => !c.Approved);
@@ -132,9 +137,12 @@ public sealed class OverlayPillSourceTests
             return IsColourName(term) ? string.Equals(term, "Transparent", StringComparison.OrdinalIgnoreCase) : null;
         }
 
+        // A markup extension is read term by term: its argument quotes, either kind, are dropped, and a member is read apart
+        // from what it belongs to (Colors.Red) and a call apart from its arguments.
         static IEnumerable<string> Terms(string value) =>
             value.TrimStart().StartsWith('{')
-                ? value.Split([' ', '\t', '\r', '\n', '{', '}', ',', '=', '\''], StringSplitOptions.RemoveEmptyEntries)
+                ? value.Split(
+                    [' ', '\t', '\r', '\n', '{', '}', ',', '=', '\'', '"', '.', '(', ')'], StringSplitOptions.RemoveEmptyEntries)
                 : value.Trim() is { Length: > 0 } whole ? [whole] : [];
 
         static bool IsColourName(string term) =>
