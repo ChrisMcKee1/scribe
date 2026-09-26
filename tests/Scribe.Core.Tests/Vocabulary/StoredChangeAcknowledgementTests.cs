@@ -176,6 +176,11 @@ public sealed class StoredChangeAcknowledgementTests
         var first = StoredChangeAcknowledgement.Watch(Task.FromResult(new VocabularyRefresh(VocabularyRefreshOutcome.Applied, generation)), failsFirst.Read);
         failsFirst.Failure = null;
         Assert.Equal(StoredChangeOutcome.ChangedWhileSaving, await first.CompleteAsync().WaitAsync(Bound));
+
+        // Unreadable both times: two failed reads are not two equal drafts.
+        var failsBoth = new Draft("stored") { Failure = new InvalidOperationException("not ready") };
+        var both = StoredChangeAcknowledgement.Watch(Task.FromResult(new VocabularyRefresh(VocabularyRefreshOutcome.Applied, generation)), failsBoth.Read);
+        Assert.Equal(StoredChangeOutcome.ChangedWhileSaving, await both.CompleteAsync().WaitAsync(Bound));
     }
 
     [Fact]

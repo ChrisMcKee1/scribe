@@ -131,8 +131,9 @@ public sealed class VocabularyApplicationSourceTests
         var window = Read("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
 
-        // The draft is taken with nothing since the controls were read that could let an edit in: no await from the first
-        // control read, through the store and the application, to the watch.
+        // The draft is taken with nothing since the Save read what it stores that could let an edit in: no await from the
+        // row signatures it marks as saved and its first control read, through the store and the application, to the watch.
+        var signatures = save.IndexOf("var dictionarySignature = DictionarySignature();", StringComparison.Ordinal);
         var read = save.IndexOf("_externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);", StringComparison.Ordinal);
         var store = save.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
         var apply = save.IndexOf("var applying = _applySettings(_settings);", StringComparison.Ordinal);
@@ -141,9 +142,9 @@ public sealed class VocabularyApplicationSourceTests
             StringComparison.Ordinal);
         var awaited = save.IndexOf("var outcome = await acknowledgement.CompleteAsync();", StringComparison.Ordinal);
         Assert.True(
-            read > 0 && read < store && store < apply && apply < watch && watch < awaited,
+            signatures > 0 && signatures < read && read < store && store < apply && apply < watch && watch < awaited,
             "The Save does not take its draft between storing it and awaiting its generation.");
-        Assert.DoesNotMatch(@"\bawait\b", save[read..watch]);
+        Assert.DoesNotMatch(@"\bawait\b", save[signatures..watch]);
 
         // A change while waiting is reported and the Save returns false; only an unchanged draft in use returns true.
         var tail = save[awaited..];
