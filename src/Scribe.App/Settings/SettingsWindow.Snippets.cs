@@ -200,9 +200,16 @@ public partial class SettingsWindow
     /// </summary>
     private List<Snippet> BuildSnippets(out SnippetRow? duplicate)
     {
+        // Validation has already blocked every changed incomplete row, so the incomplete rows left are untouched new rows,
+        // which are dropped, and stored rows the user hasn't changed, which are kept as they are so saving another snippet
+        // doesn't delete them.
         var result = SnippetBuilder.Build(
             _snippetRows.Select(r => new SnippetBuilder.Row(
-                r.Id, r.Phrase, r.Template, r.Enabled)).ToList());
+                r.Id, r.Phrase, r.Template, r.Enabled,
+                KeepAsStored: r.Origin == DraftRowOrigin.Saved &&
+                    string.Equals(r.Phrase, r.LoadedPhrase, StringComparison.Ordinal) &&
+                    string.Equals(r.Template, r.LoadedTemplate, StringComparison.Ordinal) &&
+                    r.Enabled == r.LoadedEnabled)).ToList());
 
         duplicate = result.HasDuplicate ? _snippetRows[result.DuplicateIndex] : null;
         return result.Snippets.ToList();

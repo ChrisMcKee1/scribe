@@ -37,6 +37,23 @@ public class SnippetBuilderTests
     }
 
     [Fact]
+    public void Build_keeps_an_unchanged_stored_row_even_when_it_is_incomplete()
+    {
+        var result = SnippetBuilder.Build(new[]
+        {
+            new SnippetBuilder.Row(3, "legacy", string.Empty, Enabled: true, KeepAsStored: true),
+            Row(0, string.Empty, string.Empty),
+            Row(0, "new", "text"),
+        });
+
+        Assert.Equal(2, result.Snippets.Count);
+        var legacy = Assert.Single(result.Snippets, snippet => snippet.Id == 3);
+        Assert.Equal("legacy", legacy.Phrase);
+        Assert.Equal(string.Empty, legacy.Template);
+        Assert.Contains(result.Snippets, snippet => snippet.Phrase == "new");
+    }
+
+    [Fact]
     public void Build_reports_first_duplicate_phrase_case_insensitively()
     {
         var result = SnippetBuilder.Build(new[]

@@ -24,6 +24,37 @@ public sealed class SnippetTests
     }
 
     [Fact]
+    public void An_untouched_incomplete_legacy_snippet_survives_saving_another_and_can_be_repaired_later()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SnippetRepository(db);
+        repo.SaveAll([Snippet.New("legacy", string.Empty)]);
+        var legacy = Assert.Single(repo.GetAll());
+
+        // Saving a new snippet keeps the untouched legacy row as stored, with its id.
+        var first = Scribe.Core.Settings.SnippetBuilder.Build(
+        [
+            new(legacy.Id, legacy.Phrase, legacy.Template, legacy.Enabled, KeepAsStored: true),
+            new(0, "sig", "Regards", true),
+        ]);
+        repo.SaveAll(first.Snippets);
+        var stored = repo.GetAll();
+        Assert.Equal(2, stored.Count);
+        Assert.Contains(stored, snippet => snippet.Id == legacy.Id && snippet.Template.Length == 0);
+
+        // Repairing it later updates that same row.
+        var signature = stored.Single(snippet => snippet.Phrase == "sig");
+        var second = Scribe.Core.Settings.SnippetBuilder.Build(
+        [
+            new(legacy.Id, legacy.Phrase, "Repaired", legacy.Enabled),
+            new(signature.Id, signature.Phrase, signature.Template, signature.Enabled, KeepAsStored: true),
+        ]);
+        repo.SaveAll(second.Snippets);
+        Assert.Equal("Repaired", Assert.Single(repo.GetAll(), snippet => snippet.Id == legacy.Id).Template);
+        Assert.Equal(2, repo.GetAll().Count);
+    }
+
+    [Fact]
     public void Repository_save_all_round_trips_and_replaces()
     {
         using var db = ScribeDatabase.CreateInMemory();
