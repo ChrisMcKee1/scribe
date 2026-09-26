@@ -34,8 +34,8 @@ public partial class DictionaryCleanupWindow : FluentWindow
             .Select(u => new CleanupRow(
                 $"\"{u.Entry.Pattern}\" becomes \"{u.Entry.Replacement}\"",
                 u.Entry.Enabled
-                    ? $"Currently on. Neither wording came up in {window}."
-                    : $"Already off. Neither wording came up in {window}.",
+                    ? $"Currently on. Neither word came up in {window}."
+                    : $"Already off. Neither word came up in {window}.",
                 u.Entry))
             .ToList();
 
@@ -55,12 +55,12 @@ public partial class DictionaryCleanupWindow : FluentWindow
         LibrariesList.Visibility = LibrariesHeader.Visibility;
 
         FootnoteText.Text = hasLibraries
-            ? "Turning a term off is reversible: it stays in your dictionary with its tick cleared and "
-                + "stops being applied. Switching a library off keeps the terms you still use working, "
+            ? "Turning a word off is reversible: it stays in your dictionary with its check cleared and "
+                + "stops being applied. Turning a word pack off keeps the words you still use working, "
                 + "copying them into your own dictionary where needed. A library whose terms overlap other "
                 + "terms dictation applies stays on, because switching it off could change what dictation "
                 + "writes. Nothing is written until you save the settings window."
-            : "Turning a term off is reversible: it stays in your dictionary with its tick cleared and "
+            : "Turning a word off is reversible: it stays in your dictionary with its check cleared and "
                 + "stops being applied. Deleting removes it for good. Either way, nothing is written "
                 + "until you save the settings window.";
 
@@ -89,22 +89,22 @@ public partial class DictionaryCleanupWindow : FluentWindow
     }
 
     /// <summary>
-    /// States the size of the win and, crucially, what survives. A user will not switch off a library
-    /// they believe they are partly relying on unless they are told the working terms are carried over.
+    /// States the size of the win and, crucially, what survives. A user will not turn off a word pack
+    /// they believe they are partly relying on unless they are told the working words are carried over.
     /// </summary>
     /// <remarks>
-    /// It quotes no count of copies: the plan copies a term only where nothing else would write it the
+    /// It quotes no count of copies: the plan copies a word only where nothing else would write it the
     /// same way, which depends on everything else switched off together, so the notice after the switch
     /// reports the real number.
     /// </remarks>
     private static string DescribeLibrary(LibraryUsage usage, string window)
     {
         var unused = $"{usage.UnusedCount:N0} of {usage.TermCount:N0} "
-            + $"{(usage.TermCount == 1 ? "term" : "terms")} did not come up in {window}.";
+            + $"{(usage.TermCount == 1 ? "word" : "words")} did not come up in {window}.";
 
         return usage.KeepTerms.Count == 0
-            ? $"{unused} Switching this library off removes nothing you are using."
-            : $"{unused} Switching it off keeps the terms you still use working, copying them into your "
+            ? $"{unused} Turning this word pack off removes nothing you are using."
+            : $"{unused} Turning it off keeps the words you still use working, copying them into your "
                 + "own dictionary where needed.";
     }
 
@@ -115,15 +115,15 @@ public partial class DictionaryCleanupWindow : FluentWindow
 
         DisableButton.IsEnabled = entries + libraries > 0;
 
-        // A library is composed in memory and has no dictionary rows, so there is nothing to delete.
-        // Enabling this on a library-only selection would promise a permanence the button cannot
-        // deliver, since all it can do to a library is switch it off.
+        // A word pack is composed in memory and has no dictionary rows, so there is nothing to delete.
+        // Enabling this on a word pack-only selection would promise a permanence the button cannot
+        // deliver, since all it can do to a word pack is turn it off.
         DeleteButton.IsEnabled = entries > 0;
     }
 
     /// <summary>
-    /// Keeps the header box honest. It starts checked because every row starts ticked, and it goes
-    /// indeterminate rather than clearing itself the moment one row is unticked.
+    /// Keeps the header box honest. It starts checked because every row starts checked, and it goes
+    /// indeterminate rather than clearing itself the moment one row is unchecked.
     /// </summary>
     private void SyncSelectAll()
     {
@@ -215,8 +215,8 @@ public partial class DictionaryCleanupWindow : FluentWindow
 /// <param name="Delete">Remove the entries outright rather than just switching them off.</param>
 /// <param name="Entries">Base dictionary entries to act on, identified by their spoken form.</param>
 /// <param name="Libraries">
-/// Libraries to switch off, carrying the terms that must be preserved. Always a switch-off: library
-/// terms have no database rows, so they are never deleted here regardless of which button was used.
+/// Word packs to turn off, carrying the words that must be preserved. Always a turn-off: word pack
+/// words have no database rows, so they are never deleted here regardless of which button was used.
 /// </param>
 public sealed record DictionaryCleanupChoice(
     bool Delete,

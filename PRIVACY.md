@@ -181,9 +181,10 @@ or GitHub Copilot, every cleanup request sends that provider:
 - Scribe's cleanup instructions, including your writing style or, when a
   per-application profile matches the focused application, that profile's
   writing style. The name of the application is not sent.
-- Your vocabulary: the enabled entries of your dictionary and of every enabled
-  dictionary library, each as its written form and, where that differs, its
-  spoken form. Scribe includes this vocabulary whether or not the dictation
+- Your vocabulary: the enabled entries of your dictionary and of the word
+  packs you let AI cleanup use, each as its written form and, where that
+  differs, its spoken form. Scribe includes this vocabulary whether or not the
+  dictation
   mentions any of it, and whether or not post-processing is switched on, since
   that switch only decides whether the dictionary is applied on this PC. An
   entry whose written form spans more than one line or runs past 100

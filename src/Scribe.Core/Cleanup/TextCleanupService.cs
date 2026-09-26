@@ -492,6 +492,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// <summary>What the last disposal did. Test-only observability for the release-or-leak decision.</summary>
     internal CleanupDisposalOutcome DisposalOutcome { get; private set; }
 
+    internal long InitGenerationForTesting
+    {
+        get { lock (_gate) { return _initGeneration; } }
+    }
+
+    internal object? ServingAgentForTesting
+    {
+        get { lock (_gate) { return _agent; } }
+    }
+
     public TextCleanupService(
         ILogger<TextCleanupService> log, AppPaths? paths = null, ILibraryVocabularySource? vocabularySource = null)
         : this(
@@ -549,6 +559,95 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     public void Configure(CleanupOptions options)
     {
         ConfigureCore(options);
+    }
+
+    public async Task<CleanupTestResult> TestAsync(
+        CleanupOptions candidate, CancellationToken cancellationToken = default)
+    {
+        var options = WithoutUnadmittedGlossary(CleanupConnectionTestPolicy.Canonicalize(candidate));
+        var recipient = new CleanupRecipient(options);
+
+        if (options.Provider is CleanupProvider.FoundryLocal or CleanupProvider.GitHubCopilot)
+        {
+            return CleanupTestResult.NotApplicable(recipient);
+        }
+
+        using var lease = _operations.TryEnter();
+        if (lease is null)
+        {
+            return CleanupTestResult.Cancelled(recipient);
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        var ct = linked.Token;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!CleanupConnectionTestPolicy.CanTest(options))
+            {
+                return CleanupTestResult.Failed(recipient, CleanupReason.Same(options.Provider switch
+                {
+                    CleanupProvider.AzureFoundry => "Choose an Azure deployment to test cleanup.",
+                    CleanupProvider.OpenAiCompatible => "Enter the endpoint URL and model name to test cleanup.",
+                    _ => "Select a model to test cleanup.",
+                }));
+            }
+
+            if (ValidateTestCandidate(options) is { } validation)
+            {
+                return CleanupTestResult.Failed(recipient, validation);
+            }
+
+            var factory = ProviderFactoryForTesting is { } testFactory
+                ? await testFactory(options, ct).ConfigureAwait(false)
+                : BuildTestAgentFactory(options);
+            if (await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false) is not { } failure)
+            {
+                return CleanupTestResult.Connected(recipient);
+            }
+
+            var fallback = await TryTestAzureChatCompletionsAsync(options, failure, ct).ConfigureAwait(false);
+            if (!fallback.Tried)
+            {
+                if (failure.Exception is { } ex)
+                {
+                    LogProviderFailure(LogLevel.Warning, options.Provider, ex, "AI cleanup connection test failed.");
+                }
+                else
+                {
+                    _log.LogWarning("AI cleanup connection test failed ({Provider}): {Reason}",
+                        options.Provider, failure.Reason.Diagnostic);
+                }
+
+                return CleanupTestResult.Failed(recipient, failure.Reason);
+            }
+
+            if (fallback.Failure is null)
+            {
+                return CleanupTestResult.Connected(recipient);
+            }
+
+            if (fallback.Failure.Exception is { } fallbackEx)
+            {
+                LogProviderFailure(LogLevel.Warning, options.Provider, fallbackEx, "AI cleanup connection test failed.");
+            }
+            else
+            {
+                _log.LogWarning("AI cleanup connection test failed ({Provider}): {Reason}",
+                    options.Provider, fallback.Failure.Reason.Diagnostic);
+            }
+
+            return CleanupTestResult.Failed(recipient, fallback.Failure.Reason);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetime.IsCancellationRequested)
+        {
+            return CleanupTestResult.Cancelled(recipient);
+        }
+        catch (Exception ex)
+        {
+            LogProviderFailure(LogLevel.Warning, options.Provider, ex, "AI cleanup connection test failed.");
+            return CleanupTestResult.Failed(recipient, DescribeFailureReason(ex, options.Provider));
+        }
     }
 
     /// <summary>
@@ -3005,6 +3104,132 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     private sealed record AgentProbeFailure(CleanupReason Reason, Exception? Exception);
 
+    private sealed record TestFallbackResult(bool Tried, AgentProbeFailure? Failure)
+    {
+        public static TestFallbackResult NotTried { get; } = new(false, null);
+
+        public static TestFallbackResult Connected { get; } = new(true, null);
+
+        public static TestFallbackResult Failed(AgentProbeFailure failure) => new(true, failure);
+    }
+
+    private Func<string, AIAgent> BuildTestAgentFactory(CleanupOptions options) => options.Provider switch
+    {
+        CleanupProvider.AzureFoundry => BuildAzureTestAgentFactory(options),
+        CleanupProvider.OpenAiCompatible => BuildOpenAiCompatibleTestAgentFactory(options),
+        _ => throw new InvalidOperationException("This provider cannot be tested with a remote connection probe."),
+    };
+
+    private static CleanupReason? ValidateTestCandidate(CleanupOptions options)
+    {
+        if (options.Provider == CleanupProvider.OpenAiCompatible &&
+            !TryValidateCustomEndpoint(options.CustomEndpoint, out _, out var endpointError))
+        {
+            return CleanupReason.Same(endpointError);
+        }
+
+        if (options.Provider == CleanupProvider.AzureFoundry &&
+            !Uri.TryCreate(options.AzureEndpoint, UriKind.Absolute, out _))
+        {
+            return CleanupReason.Same("The Azure endpoint is not a valid URL.");
+        }
+
+        return null;
+    }
+
+    private Func<string, AIAgent> BuildOpenAiCompatibleTestAgentFactory(CleanupOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.CustomEndpoint) || string.IsNullOrWhiteSpace(options.CustomModel))
+        {
+            throw new InvalidOperationException("Enter the endpoint URL and model name to test cleanup.");
+        }
+
+        if (!TryValidateCustomEndpoint(options.CustomEndpoint, out var endpointUri, out var endpointError))
+        {
+            throw new InvalidOperationException(endpointError);
+        }
+
+        var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
+        var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
+        ConfigureClient(clientOptions);
+        var client = new OpenAIClient(new ApiKeyCredential(key), clientOptions);
+        var chatClient = client.GetChatClient(options.CustomModel!.Trim());
+        return instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
+    }
+
+    private Func<string, AIAgent> BuildAzureTestAgentFactory(CleanupOptions options)
+    {
+        var client = CreateAzureOpenAIClient(options);
+#pragma warning disable OPENAI001
+        return instructions => CreateAzureResponsesAgent(client.GetResponsesClient(), options.AzureDeployment!, instructions);
+#pragma warning restore OPENAI001
+    }
+
+    private Func<string, AIAgent> BuildAzureChatCompletionsTestAgentFactory(CleanupOptions options)
+    {
+        var client = CreateAzureOpenAIClient(options);
+        return instructions => CreateAzureChatCompletionsAgent(client.GetChatClient(options.AzureDeployment!), instructions);
+    }
+
+    private OpenAIClient CreateAzureOpenAIClient(CleanupOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.AzureEndpoint) || string.IsNullOrWhiteSpace(options.AzureDeployment))
+        {
+            throw new InvalidOperationException("Choose an Azure deployment to test cleanup.");
+        }
+
+        if (!Uri.TryCreate(options.AzureEndpoint, UriKind.Absolute, out var endpointUri))
+        {
+            throw new InvalidOperationException("The Azure endpoint is not a valid URL.");
+        }
+
+        var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
+        return useKey
+            ? AzureOpenAIResponsesClientFactory.CreateClientWithApiKey(
+                endpointUri,
+                options.AzureApiKey!,
+                disableRetries: DisableRetries,
+                configure: ConfigureClient)
+            : AzureOpenAIResponsesClientFactory.CreateClientWithTokenCredential(
+                endpointUri,
+                CreateTestCredential(options),
+                disableRetries: DisableRetries,
+                configure: ConfigureClient);
+    }
+
+    private static Azure.Core.TokenCredential CreateTestCredential(CleanupOptions options)
+    {
+        var request = new AzureCredentialRequest(
+            options.AzureAuthMode,
+            options.AzureTenantId,
+            options.AzureSubscriptionId,
+            options.AzureClientId,
+            options.AzureClientSecret);
+        return options.AzureAuthMode == Settings.AzureAuthMode.ServicePrincipal
+            ? AzureCredentialFactory.CreateUncached(request)
+            : AzureCredentialFactory.Create(request);
+    }
+
+    private async Task<TestFallbackResult> TryTestAzureChatCompletionsAsync(
+        CleanupOptions options, AgentProbeFailure failure, CancellationToken ct)
+    {
+        if (options.Provider != CleanupProvider.AzureFoundry || !IsSurfaceRejection(failure.Exception))
+        {
+            return TestFallbackResult.NotTried;
+        }
+
+        try
+        {
+            var chatFactory = BuildAzureChatCompletionsTestAgentFactory(options);
+            var chatFailure = await ProbeAgentAsync(options, chatFactory, ct).ConfigureAwait(false);
+            return chatFailure is null ? TestFallbackResult.Connected : TestFallbackResult.Failed(chatFailure);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return TestFallbackResult.Failed(new AgentProbeFailure(DescribeFailureReason(ex, options.Provider), ex));
+        }
+    }
+
     // See ProviderFactoryForTesting. Hands over a factory exactly the way the real initializers do.
     private async Task<AIAgent?> InitFromTestFactoryAsync(
         Func<CleanupOptions, CancellationToken, Task<Func<string, AIAgent>>> build, CleanupOptions options, CancellationToken ct)
@@ -3306,6 +3531,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         ct.ThrowIfCancellationRequested();
         var factory = _pendingFactory
             ?? throw new InvalidOperationException("The readiness probe has no agent factory to build its agent from.");
+        return await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false);
+    }
+
+    private async Task<AgentProbeFailure?> ProbeAgentAsync(
+        CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         var agent = factory(BuildProbeSystemPrompt(options));
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(ProbeTimeoutSecondsFor(options)));

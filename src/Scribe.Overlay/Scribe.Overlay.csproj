@@ -50,4 +50,12 @@
     <PackageReference Include="Microsoft.WindowsAppSDK.Base" />
   </ItemGroup>
 
+  <!-- The pill's text-scaled geometry and the rule for when a new text scale applies are plain C# in Scribe.Core, where
+       they are tested (PillGeometryTests, PillTextScaleTests). The overlay compiles those two files itself rather than
+       referencing Scribe.Core, which would bring its dependencies and native payload into this process. -->
+  <ItemGroup>
+    <Compile Include="..\Scribe.Core\Overlay\PillGeometry.cs" Link="Shared\PillGeometry.cs" />
+    <Compile Include="..\Scribe.Core\Overlay\PillTextScale.cs" Link="Shared\PillTextScale.cs" />
+  </ItemGroup>
+
 </Project>

@@ -65,16 +65,15 @@ public sealed class TrayCoreRedesignT0Tests
         Assert.True(delivery.Silent);
         Assert.False(delivery.RespectQuietTime);
         Assert.Equal("Your microphone is muted", notice.Title);
-        Assert.Equal("Microphone muted", notice.PillText);
+        Assert.Equal("Microphone muted", DictationProblemText.PillLine(DictationProblem.MicrophoneMuted));
     }
 
     [Fact]
-    public void Dictation_problem_from_legacy_maps_current_strings()
+    public void Dictation_problem_uses_typed_reports_and_catalog_pill_lines()
     {
-        Assert.Equal(DictationProblem.TooQuick, DictationProblemText.FromLegacy("that was too quick, hold the key while you speak"));
-        Assert.Equal(DictationProblem.NothingRecognized, DictationProblemText.FromLegacy("nothing was recognised, try again"));
         var press = DictationProblemText.Describe(DictationProblem.TooQuick, HotkeyMode.Toggle, "Page Down");
         Assert.Equal("That was too quick. Press Page Down, speak, then press it again.", press.Body);
+        Assert.Equal("Press, speak, press again", DictationProblemText.PillLine(DictationProblem.TooQuick, HotkeyMode.Toggle));
     }
 
     [Fact]

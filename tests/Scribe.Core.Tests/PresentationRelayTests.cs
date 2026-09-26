@@ -312,15 +312,19 @@ public sealed class PresentationRelayTests
         relay.PublishIfCurrent(1, () => ran.Add("warning while recording"));
         relay.PublishIfCurrent(2, () => ran.Add("warning for a change not shown yet"));
         relay.PublishIfCurrent(0, () => ran.Add("warning for a recording that was already over"));
+        relay.PublishIfCurrent(0, () => ran.Add("impossible"), () => ran.Add("fallback for ended recording"));
         relay.Publish(2, "processing");
         relay.PublishIfCurrent(1, () => ran.Add("late warning for the recording"));
+        relay.PublishIfCurrent(1, () => ran.Add("impossible"), () => ran.Add("fallback for stale warning"));
         relay.PublishIfCurrent(2, () => throw new InvalidOperationException("overlay helper gone"));
         RunAll(posted);
         closed = true;
         relay.PublishIfCurrent(2, () => ran.Add("after close"));
+        relay.PublishIfCurrent(1, () => ran.Add("after close"), () => ran.Add("fallback after close"));
+        relay.PublishIfCurrent(0, () => ran.Add("after close"), () => ran.Add("fallback after close"));
         RunAll(posted);
 
-        Assert.Equal(["warning while recording"], ran);
+        Assert.Equal(["warning while recording", "fallback for ended recording", "fallback for stale warning"], ran);
         Assert.Single(failures);
     }
 

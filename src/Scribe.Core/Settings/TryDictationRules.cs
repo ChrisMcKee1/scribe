@@ -192,8 +192,26 @@ public static class TryDictationReportClassifier
     public const string StageAiCleanup = "AI cleanup";
     public const string StageDictionaryAndSnippets = "Dictionary and snippets";
     public const string StageTextInsertion = "Text insertion";
+    public const string AudioCaptureFailed = "Recording did not finish.";
     public const string NoSpeechDetected = "No speech was detected.";
     public const string NoSpeechRecognized = "No speech was recognized.";
+    public const string SilenceTrimmingFailed = "Silence trimming failed.";
+    public const string SpeechRecognitionFailed = "Speech recognition failed.";
+    public const string SilentCapture = "Only silence was recorded.";
+    public const string AiCleanupFailed = "AI cleanup did not finish.";
+    public const string DictionaryAndSnippetsFailed = "Dictionary and snippets did not finish.";
+    public const string TextInsertionFailed = "Typing did not finish.";
+
+    public static string FailureReasonForStage(string? stage) => stage switch
+    {
+        StageAudioCapture => AudioCaptureFailed,
+        StageVoiceActivityDetection => SilenceTrimmingFailed,
+        StageSpeechRecognition => SpeechRecognitionFailed,
+        StageAiCleanup => AiCleanupFailed,
+        StageDictionaryAndSnippets => DictionaryAndSnippetsFailed,
+        StageTextInsertion => TextInsertionFailed,
+        _ => "Dictation did not finish.",
+    };
 
     public static FailureStage? StageFrom(string? stage) => stage switch
     {
@@ -208,7 +226,9 @@ public static class TryDictationReportClassifier
 
     public static bool IsNoSpeech(string? stage, string? reason) =>
         (string.Equals(stage, StageVoiceActivityDetection, StringComparison.Ordinal) && string.Equals(reason, NoSpeechDetected, StringComparison.Ordinal)) ||
-        (string.Equals(stage, StageSpeechRecognition, StringComparison.Ordinal) && string.Equals(reason, NoSpeechRecognized, StringComparison.Ordinal));
+        (string.Equals(stage, StageSpeechRecognition, StringComparison.Ordinal) && string.Equals(reason, NoSpeechRecognized, StringComparison.Ordinal)) ||
+        (string.Equals(stage, StageVoiceActivityDetection, StringComparison.Ordinal) && string.Equals(reason, SilentCapture, StringComparison.Ordinal)) ||
+        (string.Equals(stage, StageSpeechRecognition, StringComparison.Ordinal) && string.Equals(reason, SilentCapture, StringComparison.Ordinal));
 
     public static bool IsMicrophoneProblem(string? stage) =>
         string.Equals(stage, StageAudioCapture, StringComparison.Ordinal);

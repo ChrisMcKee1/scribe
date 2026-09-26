@@ -19,77 +19,169 @@ public partial class SettingsWindow
 {
     // --- History --------------------------------------------------------------------------
 
-    private async void LoadHistory()
+    private async void LoadHistory(int retry = 0)
     {
+        HookHistoryLeave();
         if (!_historyLoad.TryBegin(null, out var ticket))
         {
             return;
         }
 
+        if (retry > 0)
+        {
+            // Wait out the burst of deletions that made the last read stale, and read again only if History is still
+            // the page on screen and nothing newer replaced this request.
+            await Task.Delay(HistoryReadGeneration.RetryDelay(retry));
+            if (!_historyLoad.CanPublish(ticket) || !IsHistoryPageShown())
+            {
+                return;
+            }
+        }
+
+        var generation = _historyMutationGeneration.Capture();
         IReadOnlyList<HistoryEntry> entries;
         try
         {
-            entries = await Task.Run(() => _history.GetRecent(HistoryRowFormat.RecentLimit));
+            entries = await Task.Run(() => _history.GetRecent(HistoryRowFormat.RecentLimit + 1));
         }
         catch (Exception ex)
         {
             if (_historyLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load dictation history for Settings.");
-                HistoryEmptyHint.Text = HistoryRowFormat.LoadFailedText;
-                HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
-                ApplyHistoryLoadState(loadFailed: true);
+                ShowHistoryLoadFailed();
             }
 
             return;
         }
 
-        if (!_historyLoad.Publish(ticket, string.Empty))
+        var requestStillCurrent = _historyLoad.CanPublish(ticket) && IsHistoryPageShown();
+        var retryIfStale = _historyPagedRows.Count == 0 && _historyRows.Count == 0;
+        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryIfStale, retry);
+        if (completion == HistoryReadCompletion.Retry)
+        {
+            _historyLoad.Fail(ticket);
+            LoadHistory(retry + 1);
+            return;
+        }
+
+        if (completion == HistoryReadCompletion.GiveUp)
+        {
+            if (_historyLoad.Fail(ticket))
+            {
+                LogHistoryReadGaveUp("load", retry);
+                ShowHistoryLoadFailed();
+            }
+
+            return;
+        }
+
+        if (completion == HistoryReadCompletion.Drop && requestStillCurrent)
+        {
+            // Still the current request, but a deletion or rating made it stale while rows were already shown. Those
+            // rows were brought up to date as each change arrived, so they stand: finish this request as loaded
+            // (never leave it Loading with nothing running) and carry on as a successful load would.
+            if (_historyLoad.Publish(ticket, string.Empty))
+            {
+                ContinueWithShownHistory(SelectedHistory?.Id);
+            }
+
+            return;
+        }
+
+        if (completion == HistoryReadCompletion.Drop || !_historyLoad.Publish(ticket, string.Empty))
         {
             return;
         }
 
-        // The rows are replaced, which clears the list's selection; the dictation selected now stays selected if it's still
-        // there, so a reload (after a rating, a delete elsewhere) doesn't close the details the user is reading.
         var selectedId = SelectedHistory?.Id;
-        _historyRows.Clear();
-        foreach (var entry in entries)
+        Interlocked.Increment(ref _historyOlderTicket);
+        _historyLoadedOlder = false;
+        _historyOlderLoading = false;
+        _historyOlderLoadFailed = false;
+        _historyMayHaveOlder = entries.Count > HistoryRowFormat.RecentLimit;
+        _historyPagedRows.Clear();
+        foreach (var entry in entries.Take(HistoryRowFormat.RecentLimit))
         {
-            var row = HistoryRow.From(entry);
-
-            // A rating still being written was read back before it landed; show the new value.
-            _historyRows.Add(_ratingWrites.IsPending(row.Id)
-                ? row with { Rating = _ratingWrites.Resolve(row.Id, row.Rating), RatingPending = true }
-                : row);
+            _historyPagedRows.Add(RowFromEntry(entry));
         }
 
-        if (selectedId is { } reselect && IndexOfHistoryRow(reselect) is >= 0 and var reselectAt)
+        ContinueWithShownHistory(selectedId);
+    }
+
+    private void ContinueWithShownHistory(long? selectedId)
+    {
+        if (IsHistorySearchActive())
         {
-            HistoryGrid.SelectedItem = _historyRows[reselectAt];
+            StartHistorySearch(debounce: false);
+        }
+        else
+        {
+            ShowPagedHistoryRows(selectedId);
+        }
+    }
+
+    // Leaving History ends its searches: one waiting to retry would otherwise resume on the next visit, beside the fresh
+    // load that showing the page starts. Hooked on first use so the History code stays in this file. IsVisibleChanged
+    // never fires offscreen (the render harness has no presentation source), where nothing navigates anyway.
+    private void HookHistoryLeave()
+    {
+        if (_historyLeaveHooked)
+        {
+            return;
         }
 
-        var hasRows = _historyRows.Count > 0;
-        HistoryEmptyHint.Text = _historyEmptyText;
-        HistoryRetryButton.Visibility = Visibility.Collapsed;
-        HistorySearchBox.Visibility = hasRows ? Visibility.Visible : Visibility.Collapsed;
-        HistoryRangeText.Text = HistoryRowFormat.RangeLine(_historyRows.Count, HistoryRowFormat.RecentLimit) ?? string.Empty;
-        HistoryRangeText.Visibility = HistoryRangeText.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        _historyView?.Refresh();
-        ApplyHistoryLoadState(loadFailed: false);
-        UpdateHistorySearchStatus();
-        UpdateHistorySelection();
+        _historyLeaveHooked = true;
+        SectionHistory.IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is false)
+            {
+                Interlocked.Increment(ref _historySearchTicket);
+                _historySearchDelay?.Cancel();
+            }
+        };
     }
 
     private HistoryRow? SelectedHistory => HistoryGrid.SelectedItem as HistoryRow;
+
+    // Visibility, not IsVisible: the offscreen render harness has no presentation source, where IsVisible is always false.
+    private bool IsHistoryPageShown() => !_closed && SectionHistory.Visibility == Visibility.Visible;
+
+    private void ShowHistoryLoadFailed()
+    {
+        HistoryEmptyHint.Text = HistoryRowFormat.LoadFailedText;
+        HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
+        ApplyHistoryLoadState(loadFailed: true);
+    }
+
+    private void LogHistoryReadGaveUp(string read, int retries)
+    {
+        try
+        {
+            _log.LogInformation(
+                "History {Read} stayed stale after {Retries} automatic retries while dictations were deleted or rated; showing Try again.",
+                read,
+                retries);
+        }
+        catch
+        {
+            // Diagnostics must never disrupt the settings window.
+        }
+    }
 
     private void HistoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateHistorySelection();
 
     private void HistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        _historyView?.Refresh();
-        UpdateHistorySearchStatus();
-        UpdateHistorySelection();
+        if (IsHistorySearchActive())
+        {
+            StartHistorySearch(debounce: true);
+            return;
+        }
+
+        _historySearchDelay?.Cancel();
+        ShowPagedHistoryRows(SelectedHistory?.Id);
     }
 
     private void HistoryClearSearchButton_Click(object sender, RoutedEventArgs e)
@@ -100,44 +192,265 @@ public partial class SettingsWindow
 
     private void HistoryRetryButton_Click(object sender, RoutedEventArgs e)
     {
-        // Rows already shown stay in place with the loading line above them; only an empty list shows it centred.
         HistoryEmptyHint.Text = HistoryRowFormat.LoadingText;
         HistoryInlineStatusText.Text = HistoryRowFormat.LoadingText;
         ApplyHistoryLoadState(loadFailed: false, loading: true);
+
+        // A failed search retries the search itself, with a fresh retry budget: going through the recent load could
+        // drop that load as stale (rows are already shown) and never search again.
+        if (IsHistorySearchActive() && _historyLoad.IsLoaded)
+        {
+            StartHistorySearch(debounce: false);
+            return;
+        }
+
         LoadHistory();
     }
 
-    private bool FilterHistoryRow(object item) =>
-        item is not HistoryRow row ||
-        TextFilter.Matches(HistorySearchBox?.Text, row.Text, row.App, row.When);
-
-    private void UpdateHistorySearchStatus()
+    private async void HistoryLoadOlderButton_Click(object sender, RoutedEventArgs e)
     {
-        var filteredCount = _historyView?.Cast<object>().Count() ?? _historyRows.Count;
-        var noMatches = _historyRows.Count > 0 && filteredCount == 0 && !string.IsNullOrWhiteSpace(HistorySearchBox.Text);
-        var state = HistoryRowFormat.LoadState(_historyRows.Count > 0, loadFailed: false, searchActive: noMatches);
-        HistoryNoMatchesPanel.Visibility = state.ShowSearchNoMatches ? Visibility.Visible : Visibility.Collapsed;
+        if (IsHistorySearchActive() || _historyOlderLoading || (!_historyMayHaveOlder && !_historyOlderLoadFailed))
+        {
+            return;
+        }
+
+        if (_historyPagedRows.LastOrDefault() is not { } boundary)
+        {
+            return;
+        }
+
+        _historyOlderLoading = true;
+        _historyOlderLoadFailed = false;
+        var ticket = Interlocked.Increment(ref _historyOlderTicket);
+        var generation = _historyMutationGeneration.Capture();
+        UpdateHistoryRangeLine();
+
+        IReadOnlyList<HistoryEntry> entries;
+        try
+        {
+            entries = await Task.Run(() => _history.GetOlder(boundary.TimestampUtc, boundary.Id, HistoryRowFormat.RecentLimit + 1));
+        }
+        catch (Exception ex)
+        {
+            if (ticket == Interlocked.Read(ref _historyOlderTicket))
+            {
+                _historyOlderLoading = false;
+                _historyOlderLoadFailed = _historyMutationGeneration.IsCurrent(generation);
+            }
+
+            TryLog(ex, "Could not load older dictation history for Settings.");
+            UpdateHistoryRangeLine();
+            return;
+        }
+
+        var requestStillCurrent = ticket == Interlocked.Read(ref _historyOlderTicket);
+        if (requestStillCurrent)
+        {
+            _historyOlderLoading = false;
+        }
+
+        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: false);
+        if (_closed || completion == HistoryReadCompletion.Drop || IsHistorySearchActive())
+        {
+            UpdateHistoryRangeLine();
+            return;
+        }
+
+        _historyOlderLoadFailed = false;
+        _historyLoadedOlder = true;
+        _historyMayHaveOlder = entries.Count > HistoryRowFormat.RecentLimit;
+        foreach (var entry in entries.Take(HistoryRowFormat.RecentLimit))
+        {
+            _historyPagedRows.Add(RowFromEntry(entry));
+        }
+
+        ShowPagedHistoryRows(SelectedHistory?.Id);
     }
 
+    private bool FilterHistoryRow(object item) => true;
+
+    private bool IsHistorySearchActive() => !string.IsNullOrWhiteSpace(HistorySearchBox?.Text);
+
+    private void StartHistorySearch(bool debounce, int retry = 0)
+    {
+        var query = HistorySearchBox.Text;
+        _historySearchDelay?.Cancel();
+        _historySearchDelay?.Dispose();
+        var source = new CancellationTokenSource();
+        _historySearchDelay = source;
+        var ticket = Interlocked.Increment(ref _historySearchTicket);
+        _ = RunHistorySearchAsync(query, ticket, debounce, retry, source.Token);
+    }
+
+    private bool IsCurrentHistorySearch(string query, long ticket, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested &&
+        IsHistoryPageShown() &&
+        ticket == Interlocked.Read(ref _historySearchTicket) &&
+        string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal);
+
+    private async Task RunHistorySearchAsync(string query, long ticket, bool debounce, int retry, CancellationToken cancellationToken)
+    {
+        // Captured after any wait, so a deletion during the debounce or a retry's wait doesn't make this read stale.
+        var generation = 0L;
+        try
+        {
+            if (debounce)
+            {
+                await Task.Delay(250, cancellationToken);
+            }
+            else if (retry > 0)
+            {
+                await Task.Delay(HistoryReadGeneration.RetryDelay(retry), cancellationToken);
+            }
+
+            if (!IsCurrentHistorySearch(query, ticket, cancellationToken))
+            {
+                return;
+            }
+
+            generation = _historyMutationGeneration.Capture();
+            var entries = await Task.Run(() => _history.Search(query, HistoryRowFormat.RecentLimit), cancellationToken);
+            var completion = _historyMutationGeneration.CompleteRead(
+                generation, IsCurrentHistorySearch(query, ticket, cancellationToken), retryWhenStale: true, retry);
+            if (completion == HistoryReadCompletion.Retry)
+            {
+                StartHistorySearch(debounce: false, retry + 1);
+                return;
+            }
+
+            if (completion == HistoryReadCompletion.GiveUp)
+            {
+                LogHistoryReadGaveUp("search", retry);
+                HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
+                ApplyHistoryLoadState(loadFailed: true);
+                return;
+            }
+
+            if (completion == HistoryReadCompletion.Drop)
+            {
+                return;
+            }
+
+            var selectedId = SelectedHistory?.Id;
+            SetHistoryRows(entries.Select(RowFromEntry), selectedId);
+            ApplyHistoryLoadState(loadFailed: false);
+            UpdateHistoryRangeLine();
+            UpdateHistorySelection();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            var completion = _historyMutationGeneration.CompleteRead(
+                generation, IsCurrentHistorySearch(query, ticket, CancellationToken.None), retryWhenStale: true, retry);
+            if (completion == HistoryReadCompletion.Retry)
+            {
+                StartHistorySearch(debounce: false, retry + 1);
+                return;
+            }
+
+            if (completion is HistoryReadCompletion.Drop)
+            {
+                return;
+            }
+
+            TryLog(ex, "Could not search dictation history for Settings.");
+            HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
+            ApplyHistoryLoadState(loadFailed: true);
+        }
+    }
+
+    private void ShowPagedHistoryRows(long? selectedId)
+    {
+        SetHistoryRows(_historyPagedRows, selectedId);
+        HistoryEmptyHint.Text = _historyEmptyText;
+        HistoryRetryButton.Visibility = Visibility.Collapsed;
+        ApplyHistoryLoadState(loadFailed: false);
+        UpdateHistoryRangeLine();
+        UpdateHistorySelection();
+    }
+
+    private void SetHistoryRows(IEnumerable<HistoryRow> rows, long? selectedId)
+    {
+        _historyRows.Clear();
+        foreach (var row in rows)
+        {
+            _historyRows.Add(row);
+        }
+
+        if (selectedId is { } reselect && IndexOfHistoryRow(reselect) is >= 0 and var reselectAt)
+        {
+            HistoryGrid.SelectedItem = _historyRows[reselectAt];
+        }
+
+        _historyView?.Refresh();
+    }
+
+    private HistoryRow RowFromEntry(HistoryEntry entry)
+    {
+        var row = HistoryRow.From(entry);
+        return _ratingWrites.IsPending(row.Id)
+            ? row with { Rating = _ratingWrites.Resolve(row.Id, row.Rating), RatingPending = true }
+            : row;
+    }
+
+    private void UpdateHistoryRangeLine()
+    {
+        if (IsHistorySearchActive())
+        {
+            var searchLine = HistoryRowFormat.SearchLine(_historyRows.Count, HistoryRowFormat.RecentLimit);
+            HistoryRangeText.Text = searchLine.Text;
+            HistoryLoadOlderButton.Visibility = Visibility.Collapsed;
+            HistoryRangePanel.Visibility = searchLine.ShowClearSearch ? Visibility.Collapsed : Visibility.Visible;
+            HistoryNoMatchesText.Text = searchLine.Text;
+            HistoryClearSearchButton.Content = HistoryRowFormat.ClearSearch;
+            return;
+        }
+
+        var pageLine = HistoryRowFormat.PageLine(
+            _historyPagedRows.Count,
+            HistoryRowFormat.RecentLimit,
+            _historyLoadedOlder,
+            _historyMayHaveOlder,
+            _historyOlderLoadFailed);
+        HistoryRangeText.Text = _historyOlderLoading ? HistoryRowFormat.LoadingText : pageLine.Text;
+        HistoryLoadOlderButton.Content = pageLine.LoadOlderButtonText;
+        HistoryLoadOlderButton.IsEnabled = !_historyOlderLoading;
+        HistoryLoadOlderButton.Visibility = pageLine.ShowLoadOlder && !_historyOlderLoading ? Visibility.Visible : Visibility.Collapsed;
+        HistoryRangePanel.Visibility = HistoryRangeText.Text.Length == 0 && HistoryLoadOlderButton.Visibility != Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private void UpdateHistorySearchStatus() => ApplyHistoryLoadState(loadFailed: _historyShowsFailure);
+
+    // Remembers whether the page shows a failure, so a change that only reconciles rows (a deletion, a rating) keeps the
+    // failure and its Try again on screen; only a new read's outcome, Try again or a new search replaces it.
     private void ApplyHistoryLoadState(bool loadFailed, bool loading = false)
     {
-        var noMatches = _historyRows.Count > 0 &&
-            (_historyView?.Cast<object>().Count() ?? _historyRows.Count) == 0 &&
-            !string.IsNullOrWhiteSpace(HistorySearchBox.Text);
-        var state = HistoryRowFormat.LoadState(_historyRows.Count > 0, loadFailed, noMatches, loading);
-        HistoryGrid.Visibility = state.ShowGrid ? Visibility.Visible : Visibility.Collapsed;
-        HistoryToolbarGrid.Visibility = state.ShowToolbar ? Visibility.Visible : Visibility.Collapsed;
-        HistoryStatusPanel.Visibility = state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
-        HistoryRetryButton.Visibility = state.ShowRetry && state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
-        HistoryInlineStatusPanel.Visibility = state.ShowInlineStatus ? Visibility.Visible : Visibility.Collapsed;
-        HistoryInlineRetryButton.Visibility = state.ShowRetry ? Visibility.Visible : Visibility.Collapsed;
-        HistoryNoMatchesPanel.Visibility = state.ShowSearchNoMatches ? Visibility.Visible : Visibility.Collapsed;
+        _historyShowsFailure = loadFailed;
+        var searchActive = IsHistorySearchActive();
+        var hasPagedRows = _historyPagedRows.Count > 0;
+        var hasShownRows = _historyRows.Count > 0;
+        var noMatches = searchActive && !hasShownRows;
+        var showCentered = !hasPagedRows && !hasShownRows && !noMatches;
+        var showInline = (loadFailed || loading) && (hasPagedRows || hasShownRows || noMatches);
+        HistoryGrid.Visibility = hasShownRows ? Visibility.Visible : Visibility.Collapsed;
+        HistoryToolbarGrid.Visibility = hasPagedRows || hasShownRows || noMatches ? Visibility.Visible : Visibility.Collapsed;
+        HistorySearchBox.Visibility = hasPagedRows || hasShownRows || noMatches ? Visibility.Visible : Visibility.Collapsed;
+        HistoryStatusPanel.Visibility = showCentered ? Visibility.Visible : Visibility.Collapsed;
+        HistoryRetryButton.Visibility = loadFailed && showCentered ? Visibility.Visible : Visibility.Collapsed;
+        HistoryInlineStatusPanel.Visibility = showInline ? Visibility.Visible : Visibility.Collapsed;
+        HistoryInlineRetryButton.Visibility = loadFailed ? Visibility.Visible : Visibility.Collapsed;
+        HistoryNoMatchesPanel.Visibility = noMatches && !loadFailed && !loading ? Visibility.Visible : Visibility.Collapsed;
+        UpdateHistoryRangeLine();
     }
 
     private void UpdateHistorySelection()
     {
         var hasSelection = SelectedHistory is not null;
-        var toolbar = HistoryRowFormat.Toolbar(_historyRows.Count > 0, hasSelection);
+        var toolbar = HistoryRowFormat.Toolbar(_historyPagedRows.Count > 0 || _historyRows.Count > 0, hasSelection);
         HistoryCopyButton.IsEnabled = toolbar.CanCopy;
         HistoryDeleteButton.IsEnabled = toolbar.CanDelete;
         HistoryClearButton.IsEnabled = toolbar.CanDeleteAll;
@@ -183,6 +496,7 @@ public partial class SettingsWindow
     {
         RefreshHistoryEmptyTextFromCommitted();
         RefreshUsageInsightAvailability();
+        LoadPerformanceStats();
     }
 
     private void RefreshHistoryEmptyTextFromCommitted()
@@ -259,6 +573,7 @@ public partial class SettingsWindow
         }
 
         ReplaceHistoryRow(index, row with { Rating = next, RatingPending = true });
+        UpdateHistoryCachedRow(id, cached => cached with { Rating = next, RatingPending = true });
 
         var saved = false;
         try
@@ -277,11 +592,8 @@ public partial class SettingsWindow
             return;
         }
 
-        var current = IndexOfHistoryRow(id);
-        if (current >= 0)
-        {
-            ReplaceHistoryRow(current, _historyRows[current] with { Rating = shown, RatingPending = false });
-        }
+        _historyMutationGeneration.CompleteRatingWrite(saved);
+        UpdateHistoryRowById(id, current => current with { Rating = shown, RatingPending = false });
 
         UpdateHistorySelection();
 
@@ -324,11 +636,87 @@ public partial class SettingsWindow
     {
         var wasSelected = ReferenceEquals(HistoryGrid.SelectedItem, _historyRows[index]);
         _historyRows[index] = replacement;
+        var pageIndex = _historyPagedRows.FindIndex(row => row.Id == replacement.Id);
+        if (pageIndex >= 0)
+        {
+            _historyPagedRows[pageIndex] = replacement;
+        }
+
         if (wasSelected && HistoryGrid.SelectedItem is null)
         {
             HistoryGrid.SelectedItem = replacement;
         }
     }
+
+    private void UpdateHistoryRowById(long id, Func<HistoryRow, HistoryRow> update)
+    {
+        if (IndexOfHistoryRow(id) is >= 0 and var shownIndex)
+        {
+            ReplaceHistoryRow(shownIndex, update(_historyRows[shownIndex]));
+        }
+        else
+        {
+            UpdateHistoryCachedRow(id, update);
+        }
+    }
+
+    private void UpdateHistoryCachedRow(long id, Func<HistoryRow, HistoryRow> update)
+    {
+        var pageIndex = _historyPagedRows.FindIndex(row => row.Id == id);
+        if (pageIndex >= 0)
+        {
+            _historyPagedRows[pageIndex] = update(_historyPagedRows[pageIndex]);
+        }
+    }
+
+    private void OnHistoryDeleted(HistoryDeletion deletion)
+    {
+        _ = Dispatcher.BeginInvoke(() => ApplyHistoryDeletion(deletion));
+    }
+
+    private void ApplyHistoryDeletion(HistoryDeletion deletion)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        _historyMutationGeneration.AdvanceForDeletion();
+        var selectedId = SelectedHistory?.Id;
+        _historyPagedRows.RemoveAll(row => HistoryDeletionCoversRow(deletion, row));
+        for (var i = _historyRows.Count - 1; i >= 0; i--)
+        {
+            if (HistoryDeletionCoversRow(deletion, _historyRows[i]))
+            {
+                _historyRows.RemoveAt(i);
+            }
+        }
+
+        if (deletion.Kind == HistoryDeletionKind.Clear)
+        {
+            _historyLoadedOlder = false;
+            _historyMayHaveOlder = false;
+            _historyOlderLoadFailed = false;
+        }
+
+        if (selectedId is { } reselect && IndexOfHistoryRow(reselect) is >= 0 and var reselectAt)
+        {
+            HistoryGrid.SelectedItem = _historyRows[reselectAt];
+        }
+
+        ApplyHistoryLoadState(loadFailed: _historyShowsFailure);
+        UpdateHistorySelection();
+    }
+
+    private static bool HistoryDeletionCoversRow(HistoryDeletion deletion, HistoryRow row) =>
+        deletion.Kind switch
+        {
+            HistoryDeletionKind.Entry when deletion.Entry is { } entry =>
+                entry.Id == row.Id,
+            HistoryDeletionKind.Clear => true,
+            HistoryDeletionKind.OlderThan when deletion.CutoffUtc is { } cutoff => row.TimestampUtc < cutoff,
+            _ => false,
+        };
 
     private int IndexOfHistoryRow(long id)
     {
@@ -386,7 +774,7 @@ public partial class SettingsWindow
                 return;
             }
 
-            LoadHistory();
+            ApplyHistoryDeletion(new HistoryDeletion(HistoryDeletionKind.Entry, new HistoryEntry(row.Id, row.TimestampUtc, row.Text, 0, 0)));
             ShowInfo("Deleted the selected history entry.");
         }
         catch
@@ -403,7 +791,7 @@ public partial class SettingsWindow
 
     private async void HistoryClearButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_historyRows.Count == 0 ||
+        if ((_historyPagedRows.Count == 0 && _historyRows.Count == 0) ||
             !await ConfirmRiskyAsync(
                 "Delete all history?",
                 "This deletes every saved dictation and recording now, including ones not shown here. Your dictionary, snippets and settings are kept. This can't be undone.",
@@ -421,7 +809,7 @@ public partial class SettingsWindow
                 return;
             }
 
-            LoadHistory();
+            ApplyHistoryDeletion(new HistoryDeletion(HistoryDeletionKind.Clear));
             ShowInfo("Cleared dictation history.");
         }
         catch
@@ -432,12 +820,12 @@ public partial class SettingsWindow
             }
 
             ShowInfo("Couldn't clear history. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
-            HistoryClearButton.IsEnabled = _historyRows.Count > 0;
+            HistoryClearButton.IsEnabled = _historyPagedRows.Count > 0 || _historyRows.Count > 0;
         }
     }
 
     private sealed record HistoryRow(
-        long Id, string When, string Text, string App, string Audio, string Decode, string Cleanup, string Details)
+        long Id, DateTimeOffset TimestampUtc, string When, string Text, string App, string Audio, string Decode, string Cleanup, string Details)
     {
         /// <summary>
         /// Whether AI cleanup actually ran for this dictation. The thumbs and the report only apply
@@ -480,6 +868,7 @@ public partial class SettingsWindow
 
         public static HistoryRow From(HistoryEntry entry) => new(
             entry.Id,
+            entry.TimestampUtc,
             entry.TimestampUtc.ToLocalTime().ToString("MMM d, h:mm tt"),
             entry.Text,
             string.IsNullOrWhiteSpace(entry.TargetApp) ? HistoryRowFormat.NotApplicable : AppDisplayName.For(entry.TargetApp!),
@@ -492,5 +881,4 @@ public partial class SettingsWindow
             Rating = entry.AiRating,
         };
     }
-
 }

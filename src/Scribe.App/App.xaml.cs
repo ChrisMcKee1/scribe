@@ -80,6 +80,7 @@ public partial class App : Application
     private bool _foundryDownloadedModel;
     private readonly FoundryModelCacheRefresh _foundryRefresh = new();
     private Guid? _noticeCopyEntryId;
+    private Task? _appExitOperation;
 
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
@@ -352,7 +353,7 @@ public partial class App : Application
                 // Tray updates are best effort, and so is saying one failed.
             }
         });
-        _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
+        _tray.QuitRequested += TrayQuit;
         _tray.SettingsRequested += OpenSettings;
         _tray.CopyLastDictationRequested += CopyLastDictation;
         _tray.CopyRecentDictationRequested += CopyRecentDictation;
@@ -420,14 +421,14 @@ public partial class App : Application
                     ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
                 }
             });
-        _controller.Error += message =>
+        _controller.Error += report =>
         {
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(message, recordingRevision: 0, pillText: null, controllerError: true));
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: true));
         };
-        _controller.Warning += warning =>
+        _controller.Warning += report =>
         {
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(warning.Message, warning.RecordingRevision, warning.PillText, controllerError: false));
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: false));
         };
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -977,20 +978,43 @@ public partial class App : Application
     /// it belongs to is still what the pill shows. Showing a warning puts the pill in its recording state, so one that ran
     /// after a pause or a stop had been shown would bring back a recording pill that nothing would ever hide.
     /// </summary>
-    private void OnRecordingWarning(long recordingRevision, string reason)
+    private void ShowRecordingWarningOrNotice(DictationProblemReport report, string reason, DictationProblemNotice notice)
     {
-        if (recordingRevision <= 0)
+        if (_dictationState is not { } relay)
         {
-            return; // the recording was already over when the warning was raised
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
         }
 
-        _dictationState?.PublishIfCurrent(recordingRevision, () =>
+        // The same revision twice on purpose: here only a warning for a recording that was already over (revision 0) is
+        // decided. Whether its recording is still the one shown is decided by PublishIfCurrent below, in queue order after
+        // that recording's own change has rendered; reading the relay's last revision here could run ahead of it.
+        if (DictationProblemRouting.DecideRecordingWarning(
+                report.Problem,
+                recordingIndicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
+                report.RecordingRevision,
+                report.RecordingRevision) == DictationProblemSurface.Notice)
         {
-            if (_controller?.CurrentSettings.ShowOverlay == true)
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
+        }
+
+        // The indicator is judged again when the warning's turn comes: a Save can turn it off between here and there, and
+        // then the notice is the one place the warning shows.
+        relay.PublishIfCurrent(
+            report.RecordingRevision,
+            () =>
             {
-                _overlay?.ShowRecordingWarning(reason);
-            }
-        });
+                if (_controller?.CurrentSettings.ShowOverlay == true)
+                {
+                    _overlay?.ShowRecordingWarning(reason);
+                }
+                else
+                {
+                    ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+                }
+            },
+            () => ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action)));
     }
 
     /// <summary>
@@ -1339,41 +1363,48 @@ public partial class App : Application
         }
     }
 
-    private void ShowDictationProblem(string legacyMessage, long recordingRevision, string? pillText, bool controllerError)
+    private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
     {
-        var problem = DictationProblemText.FromLegacy(legacyMessage) ?? DictationProblem.RecognitionFailed;
-        var settings = _controller?.CurrentSettings;
-        var notice = DictationProblemText.Describe(
-            problem,
-            settings?.Hotkey.Mode ?? HotkeyMode.Hold,
-            settings?.Hotkey is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
-        if (problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete)
+        // Posted from the dictation path, so it can run after shutdown began; nobody is left to read a notice then.
+        if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
         {
-            _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            return;
+        }
+
+        var settings = _controller?.CurrentSettings;
+        var mode = report.ShortcutMode;
+
+        // The shortcut that started the dictation names the key: the one without AI cleanup has its own key and mode.
+        var notice = DictationProblemText.Describe(
+            report,
+            mode,
+            (report.Shortcut ?? settings?.Hotkey) is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
+        var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
+        if (routing == DictationProblemSurface.PillAndNotice)
+        {
+            // Only a notice that offers Copy last dictation binds the entry it copies: a no-model notice (Open Settings)
+            // must not rebind a Copy notice still on screen to whatever is newest now.
+            if (notice.Action == TrayNoticeAction.CopyLastDictation)
+            {
+                _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            }
+
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
             return;
         }
 
-        // With the recording indicator on, the pill's outcome says what the dictation did, so a controller error needs no
-        // notice of its own, unless the outcome can't carry it (a disconnect mid-recording, whose outcome then describes
-        // the insertion). A controller error the indicator doesn't carry is a notice, never a pill warning.
-        if (controllerError && settings?.ShowOverlay == true && DictationProblemText.CarriedByPillOutcome(problem))
+        if (controllerError && routing == DictationProblemSurface.PillOutcome)
         {
             return;
         }
 
-        var decision = _trayFeedback.Decide(
-            problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete
-                ? TrayFeedbackEvent.TypingFailure
-                : TrayFeedbackEvent.DictationProblem,
-            !controllerError && settings?.ShowOverlay == true);
-        if (decision.Channel == TrayFeedbackChannel.Pill)
+        if (!controllerError && routing == DictationProblemSurface.RecordingPill)
         {
-            OnRecordingWarning(recordingRevision, pillText ?? notice.PillText ?? notice.Title);
+            ShowRecordingWarningOrNotice(report, DictationProblemText.PillLine(report, mode) ?? notice.Title, notice);
             return;
         }
 
-        if (decision.Channel == TrayFeedbackChannel.Notice)
+        if (routing == DictationProblemSurface.Notice || routing == DictationProblemSurface.PillOutcome)
         {
             if (notice.Action == TrayNoticeAction.CopyLastDictation)
             {
@@ -1391,10 +1422,11 @@ public partial class App : Application
         {
             new DictionaryLibrary("current-word-packs", "Word packs", string.Empty, null, BuiltIn: true, vocabulary.Entries),
         };
-        var personal = _settingsWindow is { } window
-            ? window.CurrentDictionaryEntries()
+        var draft = _settingsWindow is { IsDraftDiscardedForAppExit: false } window ? window : null;
+        var personal = draft is not null
+            ? draft.CurrentDictionaryEntries()
             : services.GetRequiredService<IDictionaryRepository>().GetAll();
-        var pending = _settingsWindow?.PendingQuickAddSpokenForms() ?? [];
+        var pending = draft?.PendingQuickAddSpokenForms() ?? [];
         return QuickAddVocabulary.Compose(personal, pending, libraries, ["current-word-packs"]);
     }
 
@@ -1420,12 +1452,157 @@ public partial class App : Application
         _quickAddWindow.UseHeardText(spoken);
     }
 
-    private void RestartToUpdate()
+    private async void TrayQuit()
     {
-        if (_updates?.ApplyNowAndRestart() != true)
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.TrayQuit, () =>
         {
-            ShowTrayNotice(TrayNotices.RestartFailed());
+            Shutdown();
+            return Task.CompletedTask;
+        }));
+    }
+
+    private async void RestartToUpdate()
+    {
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, () =>
+        {
+            if (_updates?.ApplyNowAndRestart() != true)
+            {
+                ShowTrayNotice(TrayNotices.RestartFailed());
+            }
+
+            return Task.CompletedTask;
+        }));
+    }
+
+    private Task RunAppExitOperationAsync(Func<Task> operation)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(() => RunAppExitOperationAsync(operation)).Task.Unwrap();
         }
+
+        if (_appExitOperation is { IsCompleted: false } existing)
+        {
+            return existing;
+        }
+
+        // Reserved before the operation starts: its prompts are modal and pump messages, and a Quit or Restart clicked
+        // meanwhile must join this exit, not start a second one that runs the restart again.
+        var reservation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _appExitOperation = reservation.Task;
+
+        async Task RunReservedAsync()
+        {
+            try
+            {
+                await operation();
+                reservation.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                reservation.TrySetException(ex);
+            }
+            finally
+            {
+                if (ReferenceEquals(_appExitOperation, reservation.Task))
+                {
+                    _appExitOperation = null;
+                }
+            }
+        }
+
+        _ = RunReservedAsync();
+        return reservation.Task;
+    }
+
+    private async Task RunCloseGuardsThenAsync(CloseTrigger trigger, Func<Task> action)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(() => RunCloseGuardsThenAsync(trigger, action)).Task.Unwrap();
+            return;
+        }
+
+        var state = CurrentAppExitCloseState(trigger, includeSettingsSave: true);
+        var step = AppExitCloseGuard.First(state);
+        while (step is AppExitCloseStep.Settings or AppExitCloseStep.QuickAdd)
+        {
+            var accepted = step switch
+            {
+                AppExitCloseStep.Settings => _settingsWindow is null || await _settingsWindow.RequestAppCloseAsync(trigger),
+                AppExitCloseStep.QuickAdd => _quickAddWindow is null || await _quickAddWindow.RequestAppCloseAsync(),
+                _ => true,
+            };
+            var result = accepted ? AppExitCloseStepResult.Saved : AppExitCloseStepResult.KeepEditing;
+            state = step == AppExitCloseStep.Settings
+                ? CurrentAppExitCloseState(trigger, includeSettingsSave: false, refreshQuickAdd: true)
+                : CurrentAppExitCloseState(trigger, includeSettingsSave: false);
+            step = AppExitCloseGuard.Next(step, result, state);
+        }
+
+        if (step == AppExitCloseStep.Proceed)
+        {
+            await action();
+        }
+    }
+
+    private async Task RunAboutUpdateGuardThenAsync(Func<Task> action)
+    {
+        await RunAppExitOperationAsync(async () =>
+        {
+            var closeSettingsAfterAction = false;
+            if (_settingsWindow is { } settings)
+            {
+                var result = await settings.RequestUpdateRestartWithoutClosingAsync();
+                if (result == SettingsUpdateRestartGuardResult.Canceled)
+                {
+                    return;
+                }
+
+                closeSettingsAfterAction = result == SettingsUpdateRestartGuardResult.ProceedCloseAfterAction;
+            }
+
+            // With Discard chosen, Settings stays open to own the update's UI, but its draft no longer counts, so Add to
+            // dictionary is judged against what is stored (IsDraftDiscardedForAppExit) and asks about a correction the
+            // discarded draft was blocking.
+            var proceeded = false;
+            try
+            {
+                if (_quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true &&
+                    !await _quickAddWindow.RequestAppCloseAsync())
+                {
+                    return;
+                }
+
+                proceeded = true;
+                await action();
+            }
+            finally
+            {
+                if (_settingsWindow is { } liveSettings)
+                {
+                    if (proceeded && closeSettingsAfterAction)
+                    {
+                        liveSettings.CloseAfterAppUpdateDiscard();
+                    }
+                    else
+                    {
+                        // The update didn't go ahead, so nothing was discarded: the draft counts again.
+                        liveSettings.IsDraftDiscardedForAppExit = false;
+                    }
+                }
+            }
+        });
+    }
+
+    private AppExitCloseState CurrentAppExitCloseState(CloseTrigger trigger, bool includeSettingsSave, bool refreshQuickAdd = false)
+    {
+        var settingsUnsaved = _settingsWindow?.HasAppCloseChanges(trigger) == true
+            || includeSettingsSave && _settingsWindow?.HasAppCloseSaveInProgress == true;
+        var quickAddUnsaved = refreshQuickAdd
+            ? _quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true
+            : _quickAddWindow?.HasAppCloseCorrection() == true;
+        return new AppExitCloseState(settingsUnsaved, quickAddUnsaved);
     }
 
     private void OnTrayNoticeAction(TrayNoticeAction action)
@@ -1621,7 +1798,10 @@ public partial class App : Application
                 _textScale,
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
-                services.GetRequiredService<SessionDiagnostics>());
+                RunAboutUpdateGuardThenAsync,
+                () => ShowTrayNotice(TrayNotices.RestartFailed()),
+                services.GetRequiredService<SessionDiagnostics>(),
+                services.GetRequiredService<HistoryDeletionNotifier>());
             _settingsWindow.Closed += (_, _) =>
             {
                 audio.InputDevicesChanged -= OnInputDevicesChanged;
@@ -1962,7 +2142,7 @@ public partial class App : Application
                 recent.Select(source => new QuickAdd.QuickAddWindow.QuickAddSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision)).ToList(),
                 loadExisting: () =>
                 {
-                    var baseEntries = _settingsWindow is { } settings
+                    var baseEntries = _settingsWindow is { IsDraftDiscardedForAppExit: false } settings
                         ? settings.CurrentDictionaryEntries()
                         : services.GetRequiredService<IDictionaryRepository>().GetAll();
 
@@ -1982,7 +2162,9 @@ public partial class App : Application
                 },
                 persist: entry =>
                 {
-                    if (_settingsWindow is { } settings)
+                    // A draft discarded for an update never receives the correction: it would update a row the user
+                    // threw away. Storage takes it, and that Settings window closes once the update runs.
+                    if (_settingsWindow is { IsDraftDiscardedForAppExit: false } settings)
                     {
                         return settings.ApplyQuickDictionaryEntry(entry);
                     }

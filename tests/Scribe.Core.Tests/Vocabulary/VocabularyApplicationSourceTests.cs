@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace Scribe.Core.Tests.Vocabulary;
 
@@ -39,14 +39,15 @@ public sealed class VocabularyApplicationSourceTests
         // A Save reports success only after the generation its application asked for is awaited; a build that failed is
         // said to have saved the settings without them applying yet, and the window stays open with that.
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
-        var apply = save.IndexOf("var applying = _applySettings(_settings);", StringComparison.Ordinal);
-        var awaited = save.IndexOf("var outcome = await acknowledgement.CompleteAsync();", StringComparison.Ordinal);
-        var notApplied = save.IndexOf("if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.NotInUseYet)", StringComparison.Ordinal);
-        var succeeded = save.LastIndexOf("return true;", StringComparison.Ordinal);
+        var protocol = Read("src", "Scribe.Core", "Settings", "WordPackSaveProtocol.cs");
+        var apply = protocol.IndexOf("request.ApplySettings()", StringComparison.Ordinal);
+        var awaited = protocol.IndexOf("var outcome = await acknowledgement.CompleteAsync()", StringComparison.Ordinal);
+        var notApplied = protocol.IndexOf("StoredChangeOutcome.NotInUseYet", StringComparison.Ordinal);
+        var succeeded = save.LastIndexOf("return result.Success;", StringComparison.Ordinal);
         Assert.True(
-            apply > 0 && apply < awaited && awaited < notApplied && notApplied < succeeded,
+            apply > 0 && apply < awaited && awaited < notApplied && succeeded > 0,
             "A Save is reported before dictation can use what it stored.");
-        Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Settings saved\")", save[notApplied..succeeded], StringComparison.Ordinal);
+        Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Settings saved\")", protocol[notApplied..], StringComparison.Ordinal);
         Assert.Contains("if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())", Body(window, "private async void SaveButton_Click("), StringComparison.Ordinal);
 
         // The Usage page's Add says the term was added only once the stored settings' generation is published.
@@ -131,34 +132,29 @@ public sealed class VocabularyApplicationSourceTests
         var window = Read("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
 
-        // The draft is taken with nothing since the Save read what it stores that could let an edit in: no await from the
-        // row signatures it marks as saved and its first control read, through the store and the application, to the watch.
+        // The draft is taken after the settings document is stored and after the word pack journal is completed. New
+        // awaits in this region must not store another draft or close the window before the acknowledgement compares it.
+        var protocol = Read("src", "Scribe.Core", "Settings", "WordPackSaveProtocol.cs");
         var signatures = save.IndexOf("var dictionarySignature = DictionarySignature();", StringComparison.Ordinal);
+        var capture = protocol.IndexOf("var savedDraft = request.CaptureDraft();", StringComparison.Ordinal);
         var read = save.IndexOf("_externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);", StringComparison.Ordinal);
-        var store = save.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
-        var apply = save.IndexOf("var applying = _applySettings(_settings);", StringComparison.Ordinal);
-        var watch = save.IndexOf(
-            "var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);",
-            StringComparison.Ordinal);
-        var awaited = save.IndexOf("var outcome = await acknowledgement.CompleteAsync();", StringComparison.Ordinal);
+        var apply = protocol.IndexOf("request.ApplySettings()", StringComparison.Ordinal);
+        var watch = protocol.IndexOf("StoredChangeAcknowledgement.Watch(request.ApplySettings(), Draft)", StringComparison.Ordinal);
+        var awaited = protocol.IndexOf("var outcome = await acknowledgement.CompleteAsync()", StringComparison.Ordinal);
         Assert.True(
-            signatures > 0 && signatures < read && read < store && store < apply && apply < watch && watch < awaited,
-            "The Save does not take its draft between storing it and awaiting its generation.");
-        Assert.DoesNotMatch(@"\bawait\b", save[signatures..watch]);
+            signatures > 0 && read > signatures && capture > 0 && capture < watch && apply < awaited && watch < awaited,
+            "The Save does not capture its draft before the first await that can follow validation.");
+        Assert.DoesNotMatch(@"\bawait\b", save[signatures..read]);
+        Assert.Contains("return savedDraft;", protocol[capture..watch], StringComparison.Ordinal);
+        Assert.Contains("return request.CurrentDraft();", protocol[capture..watch], StringComparison.Ordinal);
 
         // A change while waiting is reported and the Save returns false; only an unchanged draft in use returns true.
-        var tail = save[awaited..];
-        var changed = tail.IndexOf("if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.ChangedWhileSaving)", StringComparison.Ordinal);
-        var succeeded = tail.IndexOf("return true;", StringComparison.Ordinal);
+        var tail = protocol[awaited..];
+        var changed = tail.IndexOf("VocabularyNotice.SettingsChangedWhileSaving", StringComparison.Ordinal);
+        var succeeded = save.IndexOf("return result.Success;", StringComparison.Ordinal);
         Assert.True(changed > 0 && succeeded > changed, "A Save whose draft changed while it waited can still report success.");
-        var changedBranch = tail[changed..succeeded];
-        Assert.Contains("Scribe.Core.Vocabulary.VocabularyNotice.SettingsChangedWhileSaving", changedBranch, StringComparison.Ordinal);
-        Assert.Contains("return false;", changedBranch, StringComparison.Ordinal);
-        Assert.Single(Regex.Matches(tail, Regex.Escape("return true;")));
-
-        // Nothing after the wait stores anything: the later edit waits for the user's next Save.
-        Assert.DoesNotContain("_settingsRepository.", tail, StringComparison.Ordinal);
-        Assert.DoesNotContain("_applySettings(", tail, StringComparison.Ordinal);
+        var changedBranch = tail[changed..];
+        Assert.Contains("VocabularyNotice.SettingsChangedWhileSaving", changedBranch, StringComparison.Ordinal);
 
         // Save and close closes only on a Save that returned true.
         var saveClose = Body(window, "private async void SaveCloseButton_Click(");
@@ -169,7 +165,7 @@ public sealed class VocabularyApplicationSourceTests
 
         // The draft is what a Save stores, read the way the Save reads it: the editors of the pages whose controls it reads,
         // and everything it computes beyond a plain editor as it computes it, each value framed. Hashed, never logged.
-        var draft = Body(window, "private string SaveDraftSignature()");
+        var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         foreach (var part in new[]
         {
             "new FrameworkElement[] { SectionDictation, SectionAi, SectionAdvanced, HistorySettingsCard }",
@@ -183,9 +179,7 @@ public sealed class VocabularyApplicationSourceTests
             ".Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(",
             "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));",
             ".Profiles(BuildProfiles())",
-            ".LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)",
-            ".Flag(_dictionaryLoad.HasChanges(DictionarySignature()))",
-            ".Flag(_snippetLoad.HasChanges(SnippetSignature()))",
+            "sections.Write(draft.Part(\"async-sections\"), capture);",
             ".Flag(RowEditInProgress(DictionaryGrid))",
             ".Flag(RowEditInProgress(LibraryGrid))",
             "return draft.Hash();",
@@ -197,8 +191,7 @@ public sealed class VocabularyApplicationSourceTests
         // A row read that finishes during the wait publishes what storage holds, which is no change: the dictionary and the
         // snippets go by whether they differ from storage, never by their raw signatures, and the libraries by the set a
         // Save writes, never by the rows' signature (the library snapshot is not updated by a Save).
-        Assert.DoesNotContain("(DictionarySignature())", draft.Replace("HasChanges(DictionarySignature())", string.Empty), StringComparison.Ordinal);
-        Assert.DoesNotContain("(SnippetSignature())", draft.Replace("HasChanges(SnippetSignature())", string.Empty), StringComparison.Ordinal);
+        Assert.Contains("sections.Write(draft.Part(\"async-sections\"), capture);", draft, StringComparison.Ordinal);
         Assert.DoesNotContain("LibrarySignature()", draft, StringComparison.Ordinal);
         Assert.DoesNotContain("_log.", draft, StringComparison.Ordinal);
 
@@ -258,7 +251,6 @@ public sealed class VocabularyApplicationSourceTests
             .Distinct()
             .ToList();
         Assert.Contains("AiCleanupCheck", read);
-        Assert.Contains("SpClientSecretBox", read);
         Assert.Contains("ThreadsCombo", read);
 
         foreach (var name in read)
@@ -288,7 +280,7 @@ public sealed class VocabularyApplicationSourceTests
         // model picker is walked, not skipped (round 4, A7): its typed text applies only when it loses focus, so the
         // subscription it resolves to cannot stand in for it. So are the hotkey boxes, where a capture still in progress
         // (applied only when its keys are released) shows.
-        var draft = Body(window, "private string SaveDraftSignature()");
+        var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
         Assert.True(skippedList.Success, "The draft's list of controls the walk skips was not found.");
         var skipped = skippedList.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

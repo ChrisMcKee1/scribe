@@ -49,6 +49,17 @@ public partial class SettingsStatusRow : UserControl
         UpdateLayoutMode();
     }
 
+
+    public bool FocusPrimaryButton()
+    {
+        if (PrimaryButton.Visibility != Visibility.Visible || !PrimaryButton.IsEnabled)
+        {
+            return false;
+        }
+
+        return PrimaryButton.Focus();
+    }
+
     private void ApplyIcon(AiCleanupStatusKind kind)
     {
         var (symbol, brushKey) = kind switch

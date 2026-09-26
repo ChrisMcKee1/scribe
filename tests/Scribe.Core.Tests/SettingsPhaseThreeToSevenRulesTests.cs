@@ -560,8 +560,16 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             TryDictationReportClassifier.StageSpeechRecognition,
             TryDictationReportClassifier.NoSpeechRecognized));
         Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageVoiceActivityDetection,
+            TryDictationReportClassifier.SilenceTrimmingFailed));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.SpeechRecognitionFailed));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
             TryDictationReportClassifier.StageSpeechRecognition,
             "The speech recognizer crashed."));
+        Assert.Equal(TryDictationReportClassifier.SilenceTrimmingFailed, TryDictationReportClassifier.FailureReasonForStage(TryDictationReportClassifier.StageVoiceActivityDetection));
+        Assert.Equal(TryDictationReportClassifier.SpeechRecognitionFailed, TryDictationReportClassifier.FailureReasonForStage(TryDictationReportClassifier.StageSpeechRecognition));
         Assert.Equal(FailureStage.TextInsertion, TryDictationReportClassifier.StageFrom(TryDictationReportClassifier.StageTextInsertion));
         Assert.True(TryDictationReportClassifier.IsMicrophoneProblem(TryDictationReportClassifier.StageAudioCapture));
     }
@@ -663,7 +671,10 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Settings_window_tracks_committed_settings_for_try_dictation()
     {
-        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var settingsDir = Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings");
+        var source = string.Join("\n", Directory.EnumerateFiles(settingsDir, "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var tryDictation = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs"));
 
         Assert.Contains("_committedSettings = _settings.Clone();", source, StringComparison.Ordinal);
@@ -746,8 +757,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     private static IReadOnlyList<string> ExtractCurrentStageAssignments(string source) =>
         [.. ReadCurrentStageAssignments(source).Where(stage => stage is not null).Select(stage => stage!)];
 
-    // Every assignment to currentStage: its plain literal, or null for anything else (an interpolated string, a variable,
-    // a call), which the contract can't check and so rejects.
+    // Every assignment to currentStage: its plain literal, an approved classifier constant, or null for anything else
+    // (an interpolated string, a variable, a call), which the contract can't check and so rejects.
     private static IReadOnlyList<string?> ReadCurrentStageAssignments(string source)
     {
         var tokens = Tokenize(source);
@@ -765,7 +776,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
                 end++;
             }
 
-            stages.Add(end == t + 3 && tokens[t + 2].IsPlainLiteral ? tokens[t + 2].Text : null);
+            stages.Add(ConstantValue(tokens.GetRange(t + 2, end - (t + 2))));
         }
 
         return stages;
@@ -775,7 +786,48 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         !token.IsString && string.Equals(token.Text, text, StringComparison.Ordinal);
 
     private static string? Literal(List<List<SourceToken>> arguments, int index) =>
-        index < arguments.Count && arguments[index] is [{ IsPlainLiteral: true } only] ? only.Text : null;
+        index < arguments.Count ? ConstantValue(arguments[index]) : null;
+
+    private static string? ConstantValue(IReadOnlyList<SourceToken> tokens)
+    {
+        if (tokens is [{ IsPlainLiteral: true } only])
+        {
+            return only.Text;
+        }
+
+        if (tokens.Count == 3 &&
+            IsCode(tokens[0], "TryDictationReportClassifier") &&
+            IsCode(tokens[1], ".") &&
+            !tokens[2].IsString)
+        {
+            return tokens[2].Text switch
+            {
+                nameof(TryDictationReportClassifier.StageAudioCapture) => TryDictationReportClassifier.StageAudioCapture,
+                nameof(TryDictationReportClassifier.StageVoiceActivityDetection) => TryDictationReportClassifier.StageVoiceActivityDetection,
+                nameof(TryDictationReportClassifier.StageSpeechRecognition) => TryDictationReportClassifier.StageSpeechRecognition,
+                nameof(TryDictationReportClassifier.StageAiCleanup) => TryDictationReportClassifier.StageAiCleanup,
+                nameof(TryDictationReportClassifier.StageDictionaryAndSnippets) => TryDictationReportClassifier.StageDictionaryAndSnippets,
+                nameof(TryDictationReportClassifier.StageTextInsertion) => TryDictationReportClassifier.StageTextInsertion,
+                nameof(TryDictationReportClassifier.NoSpeechDetected) => TryDictationReportClassifier.NoSpeechDetected,
+                nameof(TryDictationReportClassifier.NoSpeechRecognized) => TryDictationReportClassifier.NoSpeechRecognized,
+                nameof(TryDictationReportClassifier.SilenceTrimmingFailed) => TryDictationReportClassifier.SilenceTrimmingFailed,
+                nameof(TryDictationReportClassifier.SpeechRecognitionFailed) => TryDictationReportClassifier.SpeechRecognitionFailed,
+                nameof(TryDictationReportClassifier.AudioCaptureFailed) => TryDictationReportClassifier.AudioCaptureFailed,
+                nameof(TryDictationReportClassifier.SilentCapture) => TryDictationReportClassifier.SilentCapture,
+                nameof(TryDictationReportClassifier.AiCleanupFailed) => TryDictationReportClassifier.AiCleanupFailed,
+                nameof(TryDictationReportClassifier.DictionaryAndSnippetsFailed) => TryDictationReportClassifier.DictionaryAndSnippetsFailed,
+                nameof(TryDictationReportClassifier.TextInsertionFailed) => TryDictationReportClassifier.TextInsertionFailed,
+                _ => null,
+            };
+        }
+
+        if (tokens is [{ Text: "TryDictationSummary", IsString: false }, { Text: ".", IsString: false }, { Text: nameof(TryDictationSummary.EmptyTextReason), IsString: false }])
+        {
+            return TryDictationSummary.EmptyTextReason;
+        }
+
+        return null;
+    }
 
     // Enough of a C# lexer for these scans: comments are dropped, string literals of every form (regular, verbatim,
     // interpolated, raw) and char literals are single tokens, never code, and everything else is an identifier or one
@@ -1062,8 +1114,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             azureSetup: new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true));
 
         Assert.Equal("Save to start AI cleanup.", state.StatusLine);
-        Assert.Equal("Azure accepted the key.", state.StatusRow!.Text);
-        Assert.Equal("Verify", state.StatusRow.ActionText);
+        Assert.Equal("Connected.", state.StatusRow!.Text);
+        Assert.Equal("Test connection", state.StatusRow.ActionText);
     }
 
     [Fact]
@@ -1123,17 +1175,17 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { AzureSetupResult.SignedIn, AiCleanupStatusKind.Success, "Signed in.", "Refresh models", true, null },
         { AzureSetupResult.ListingModels, AiCleanupStatusKind.Busy, "Finding your models...", null, false, null },
         { AzureSetupResult.ListingFailed, AiCleanupStatusKind.Error, "Couldn't list your models. no access", "Try again", true, null },
-        { AzureSetupResult.Verifying, AiCleanupStatusKind.Busy, "Verifying...", null, false, null },
-        { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
-        { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
-        { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Verified.", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
+        { AzureSetupResult.Verifying, AiCleanupStatusKind.Busy, "Testing the connection...", null, false, null },
+        { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Test connection.", "Test connection", false, null },
+        { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection", true, null },
+        { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Connected.", "Test connection", true, null },
+        { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Try again", true, null },
+        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last test. Choose Test connection.", "Test connection", true, null },
+        { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Test connection.", "Test connection", false, null },
+        { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection", true, null },
+        { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Connected.", "Test connection", true, null },
+        { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Try again", true, null },
+        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last test. Choose Test connection.", "Test connection", true, null },
     };
 
     [Theory]
@@ -1190,8 +1242,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     [Theory]
-    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", null)]
-    [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing...", null)]
+    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection")]
+    [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing the connection...", null)]
     [InlineData(CustomEndpointTestResult.Connected, AiCleanupStatusKind.Success, "Connected. qwen answered.", "Test connection")]
     [InlineData(CustomEndpointTestResult.Failed, AiCleanupStatusKind.Error, "Connection refused.", "Try again")]
     public void Ai_cleanup_custom_rows_have_provider_specific_actions(
@@ -1205,6 +1257,15 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(kind, state.StatusRow!.Kind);
         Assert.Equal(text, state.StatusRow.Text);
         Assert.Equal(action, state.StatusRow.ActionText);
+    }
+
+    [Fact]
+    public void Ai_cleanup_custom_test_connection_is_disabled_until_required_fields_are_valid()
+    {
+        var state = ActiveCustom(new CustomEndpointSetupState(CustomEndpointTestResult.NotTested, CanTest: false));
+
+        Assert.Equal("Test connection", state.StatusRow!.ActionText);
+        Assert.False(state.StatusRow.ActionEnabled);
     }
 
     public static TheoryData<CleanupProvider, CleanupStatus, string?, string> RemoteStatusLines => new()

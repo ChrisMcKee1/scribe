@@ -12,8 +12,8 @@ speak, release: punctuated text is typed into whatever app has focus. Audio is c
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
-text, the cleanup instructions and the vocabulary glossary (every enabled dictionary and library term,
-within its budget), whether or not the dictation mentions them; see
+text, the cleanup instructions and the vocabulary glossary (your dictionary and the word packs you let
+AI cleanup use, within its budget), whether or not the dictation mentions them; see
 [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
@@ -279,7 +279,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows: 4061 as of 0.4.5, 4017 with the filter below).
+# Run the unit tests (must stay green; the count only ever grows: 5773 as of 0.5.0, 5701 with the filter below).
 # Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
 # session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
@@ -383,15 +383,16 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     built-in overlay and its edits documents (BuiltInLibraryOverlay), composition
                                     and policy (LibraryComposition, AiVocabularyPolicy, LibraryComposer,
                                     LibraryDecisions), and storage (LibraryJournal, LibraryInstaller, the custom
-                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry), and until
-                                    W2 LegacyLibraryPageContainment (the old Libraries page); see Word packs
+                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry); see Word packs
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
                                     CaptureTriggerBinding, StartupFailureNotice
     Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
                                     OverlayPreviewGate, PillOutcome (what a finished dictation shows on the
-                                    pill), PillTiming, OverlayPipeProtocol (every pipe verb and line)
+                                    pill), PillTiming, OverlayPipeProtocol (every pipe verb and line),
+                                    PillGeometry and PillTextScale (the pill's text-scaled size and place, and
+                                    when a new text scale applies; the overlay compiles both files itself)
     Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
                                     SrgbColor: the foreground on every accent and palette fill, and the lightness
                                     of accent text, links and switch tracks (see Accent contrast); PillPalette,
@@ -419,7 +420,7 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     AccentContrastResources (writes the accent colours), ButtonLabelContrast
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
-    OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110), states, motion
+    OverlayWindow.xaml(.cs)         the pill's visuals (its 264 x 110 DIP layout in a Viewbox), states, motion
     App.xaml                        the pill's theme brushes (Default, Light, HighContrast)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
@@ -1341,6 +1342,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   after real passes. `HistoryRepository.PruneOlderThan` counts no deletion either: production retention
   never calls it (maintenance deletes through `DeleteEntriesOlderThan` and counts that itself), only the
   soak harness does, so nothing PRIVACY.md describes may be routed through it without counting.
+- **Deleted history is announced after the commit, and nothing on the delete path waits for it.**
+  `HistoryRepository`'s `Delete`, `Clear`, `DeleteEntriesOlderThan` and `PruneOlderThan` publish a `HistoryDeletion`
+  through `HistoryDeletionNotifier` right after their SQL commit: a lock-free enqueue, still inside the write scope, so no
+  history write commits in between. The notifier delivers on its own task, in order and outside the write gate, and
+  logs by shape and swallows a subscriber that throws, so a slow or failing subscriber never reaches the delete path or
+  the history writer's thread. Subscribers (the tray's recent dictations, Add to dictionary) only update memory or post
+  to their window's dispatcher; none calls the repository or waits on the UI thread. Publishing is not
+  `StorageMaintenance.NoteDeletion`: the checkpoint accounting above is unchanged, and `PruneOlderThan` still counts no
+  deletion.
 - **The close only tries to empty the WAL.** `ScribeDatabase.Dispose` runs a final `TRUNCATE` checkpoint
   and, once the pool is cleared, logs its result row's shape (the outcome, SQLite's page counts, and
   whether the file outlived the close). It skips the checkpoint when the write gate cannot be had within
@@ -1394,6 +1404,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   callers that each loaded the document and then save the whole of it still write last-wins for every
   field, which is why read-modify-write callers go through `Update`, and why the AI switch has its own
   intent ordering below. Settings writes still never take the maintenance write gate.
+- **Library state has its own commit, which never writes the editing document.**
+  `ISettingsRepository.CommitLibraryState` runs whole under the same lock with BEGIN IMMEDIATE and never takes the
+  maintenance write gate. It checks the library generation, writes the library rows and, only when the payload changes
+  the enabled list, patches that one list in the stored document, refusing before it writes anything when that document
+  is missing, lost or unreadable. The library service's adoption and wrappers commit through it, and so do a word pack
+  Save's reference repairs (`WordPackSaveProtocol`), never `SaveBundle(_settings, ...)`: a settlement that runs after a
+  failed Save must never store that Save's unsaved fields.
 - **The AI switch invariant.** The newest intent for the AI cleanup switch wins, ordered by when the
   user made it, from the tray or in the Settings window, and a whole-document save never writes over a
   stored value its window neither showed nor changed. A tray change takes a revision
@@ -1563,26 +1580,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `libraries.state` by logical id. `EnabledDictionaryLibraryIds` is only the downgrade-safe list older builds read (a
   library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
   only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it.
-- **The old Settings window's Libraries page is contained until W2's Word packs page replaces it.** It cannot store a
-  switch, since its settings-only Save keeps the stored list, so it must not look as if it can, nor act on a selection a
-  Save may not keep (review findings A1 and G1: it said "Settings saved.", kept the ticks, and its Save prompt removed a
-  personal correction as covered by a pack ticked on but stored off, leaving neither writing it; and A2: the window's own
-  catalog load, whose adoption turns a pack changed outside Scribe off, left the prompt judging the list the window
-  opened with). `LegacyLibraryPageContainment` holds the decision and the window uses it
-  (`LegacyLibraryPageContainmentTests` runs both scenarios over the real parts and pins the window's source): the On
-  column is read-only, its box disabled so UI Automation cannot toggle it either, with the subtitle set from the type and
-  a notice under it; the Save prompt removes nothing a library covers, and asks nothing (the badges still show the
-  overlap); the Dictionary page's badges and the glossary count are judged against the committed selection, never the
-  rows: the stored list read when the page's catalog load finishes, then the one each Save hands back. That selection
-  only draws figures and is not what the next Save uses: an adoption later in the window's life (a file replaced,
-  removed or unreadable on disk) reaches it at that Save. It is also the document's list, the projection (word packs on
-  and sent to AI cleanup): since W-V, dictation applies on this PC a word pack that is on but kept from AI cleanup too
-  (for instance after a lost state, or a built-in whose edits changed outside Scribe), which the old page shows off and
-  badges nothing; that costs a figure, never a correction, since the page acts on none of it. The dictionary cleanup
-  reviews no library and never switches one off or copies its terms, and says so; an import says the pack is stored and
-  off; and after every Save the rows show the stored list again, with a notice in place of "Settings saved." (and the
-  window left open by Save and close) if a row showed otherwise. Import, export and remove work as before. Never make
-  the list write work here: that is W2's library payload.
+- **The Word packs page stages library state and saves it through the library payload.** Word pack On and AI permission
+  live in the library workspace, not in ad hoc settings rows. A Settings Save captures one `LibraryChangeSet`, prepares
+  the journal, commits its payload through `SaveBundle`, completes the journal, and calls `MarkSaved` only for a Save
+  that stands. A settings-only Save keeps the stored projection unchanged. The overlap review is never part of Save, and
+  dictionary cleanup does not switch word packs off or copy their terms into the dictionary.
 - **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
   packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
   the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything
@@ -1625,11 +1627,6 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   permission gate. Before any release from a line carrying the integration, check that a9e0b9e is an ancestor of the
   release head too. The Store build's journal (the redirected `LocalCache` folder, native and checked replace) is
   unverified until the desktop gate exercises it.
-- **Release gate: no release until the Settings redesign's Word packs page lands.** The containment of the old window
-  keeps it from reporting a switch it cannot store, but a build carrying it cannot switch any word pack on or off, and
-  its dictionary cleanup reviews no word pack. The Word packs page (W2) removes `LegacyLibraryPageContainment` with the
-  old page, so before any release from a line carrying the integration, check that the type is gone from the release
-  head (`git grep -q LegacyLibraryPageContainment <release head> -- src` finds nothing).
 - **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
   import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
   `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
@@ -1860,10 +1857,21 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   bounce; with it off there are no fades and the dots stand still. The level bars follow the level either way,
   because that is information. Nothing runs while the pill is hidden: hiding stops the dots and both timers, and a
   fade out ends in the hide. `ProcessingStoryboard` is the only repeating animation; `PulseStoryboard` is gone.
+- **The whole pill follows Windows text size, as one unit** (WCAG 1.4.4). No TextBlock scales its own text (each
+  sets `IsTextScaleFactorEnabled="False"`); the window is 264 x 110 DIP times
+  `s = clamp(UISettings.TextScaleFactor, 1, 2.25)` (1 when unreadable), and a `Viewbox` draws the content, laid out
+  at exactly 264 x 110, scaled to fill it, so every line keeps its 100% width budget and its text renders at 12 x s.
+  `PillGeometry` (Core) sizes and anchors the window, keeping the 8 DIP margin and clamping it into the work area;
+  `PillTextScale` applies a new s, read at each show and on `TextScaleFactorChanged` (dispatched to the UI thread),
+  at once on screen, after a running fade in, and at the next show when hidden or fading out. The overlay compiles
+  both files through linked `Compile` items, not a reference to Scribe.Core; `OverlayTextScaleSourceTests` pins the
+  rest from source.
 - **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
-  produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and the cleanup's
-  diagnostics-safe reason, never its display detail), or Nothing typed / Not all of it was typed (an error icon and
-  the next step: "Copy it from the tray menu" after an insertion that failed, otherwise the failure's own message);
+  produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and always the one fixed line
+  `PillOutcome.CleanupDidNotRun`, "See Settings, AI cleanup": never the cleanup's reason, which is a sentence the pill
+  cuts off, and never its display detail), or Nothing typed / Not all of it was typed (an error icon and the next
+  step from `DictationProblemText.PillLine`: "Copy it from the tray menu" after an insertion that failed, otherwise the
+  problem's own line, each measured to fit the pill);
   notices hold 1.3 s. The truth rules: a check only after the whole insertion succeeded, the space after the
   dictation included; a partial insertion or a dictation left for the recovery copy is the error state; a
   dictation discarded quietly (the speech detector found no speech in audio that was not digital silence, or
@@ -1895,7 +1903,10 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
   `SystemBackdrop=TransparentBackdrop assigned`, `TransparentBackdrop.OnTargetConnected applied`,
-  `size=462x192`, `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
+  `size=462x192` (at 100% text size and 175% DPI; at other text sizes the size is multiplied by the text scale, which
+  `SizeAndPosition` and the state line log as `textScale=`, and `SizeAndPosition` logs `clamped=True` when it had to
+  move the pill inside the work area; a text size change logs `OverlayWindow.TextScaleChanged textScale=<s>
+  resize=<True|False>`), `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
   stays alive (no teardown) with **zero IOExceptions** after launch (and no `0x80040154` or
   `0x8007007E`, which point to a missing component). The outcome and warning pills log
   `reasonLength=<n>`, never the reason text (`OverlayWindow.ShowOutcome state=<State> hold=<n>ms reasonLength=<n>`),
@@ -2065,13 +2076,16 @@ packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
-- **The word pack library model ships only with W-V's vocabulary publication and W2's Word packs page.** Before cutting
+- **The word pack library model ships only with W-V's vocabulary publication.** Before cutting
   a release, check whether the W1b integration commit ("Integrate the library model's parts", first on
   `win/libraries-integration`) is an ancestor of the release head (`git merge-base --is-ancestor <integration commit>
   <release head>`); if it is, W-V's approved head (a9e0b9e, on `win/libraries-wv-r3`) must be an ancestor too, checked
-  the same way, and the old Settings window's containment must be gone (`git grep -q LegacyLibraryPageContainment
-  <release head> -- src` finds nothing, see Word packs), or the release is refused. Until the Store rows of the desktop
-  gate are observed, the release notes say the Store build's library journal is unverified (see Word packs).
+  the same way, or the release is refused. Until the Store rows of the desktop gate are observed, the release notes say
+  the Store build's library journal is unverified (see Word packs).
+- **The old Libraries page's containment stays gone.** `LegacyLibraryPageContainment` held the 0.4.4 Libraries page's
+  switches read-only until the Word packs page replaced it. It must remain absent from release heads (`git grep
+  LegacyLibraryPageContainment -- src tests` returns no matches), and word pack switches are saved only through the
+  library payload, never by a settings-only write of `EnabledDictionaryLibraryIds`.
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
@@ -2093,7 +2107,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.4.5.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.0.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.

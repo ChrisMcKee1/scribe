@@ -8,7 +8,7 @@
         xmlns:settings="clr-namespace:Scribe.App.Settings"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
-        WindowStartupLocation="CenterScreen"
+        WindowStartupLocation="Manual"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
         WindowCornerPreference="Round"
@@ -30,12 +30,12 @@
         </Style>
 
         <Style TargetType="TextBlock" x:Key="PageTitle">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontTitle}"/>
+            <Setter Property="FontSize" Value="26"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="PageSubtitle">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
@@ -43,54 +43,54 @@
             <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="SectionHeader">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Margin" Value="1,24,0,8"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardTitle">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="RailLabel">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardDescription">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="StatusText" BasedOn="{StaticResource CardDescription}"/>
         <Style TargetType="TextBlock" x:Key="TryDictationResultLabel">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,16,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="TryDictationResultText">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="MetricValue">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontSubtitle}"/>
+            <Setter Property="FontSize" Value="20"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="MetricLabel" BasedOn="{StaticResource CardDescription}"/>
         <Style TargetType="TextBlock" x:Key="DetailTitle">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBodyLarge}"/>
+            <Setter Property="FontSize" Value="16"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="PathText">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontFamily" Value="Consolas"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
@@ -418,6 +418,72 @@
             <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
         </Style>
 
+        <Style x:Key="WordPackWrittenCell" TargetType="DataGridCell" BasedOn="{StaticResource KeyboardCell}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="4,0">
+                            <DockPanel LastChildFill="True">
+                                <TextBlock x:Name="Marker" DockPanel.Dock="Right"
+                                           Text="{Binding MarkerLabel}"
+                                           Style="{StaticResource CardDescription}"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center"
+                                           ToolTip="{Binding MarkerTooltip}"
+                                           Visibility="{Binding MarkerVisibility}"/>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditing" Value="True">
+                                <Setter TargetName="Marker" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Your words' Scribe writes cell. A removal rule (no replacement) shows "(removes these words)" in secondary text
+             over the empty cell while it isn't being edited. The column's own TextBlock can't show it: DataGridTextColumn
+             binds its Text locally, which a style setter never overrides, so the placeholder is part of the cell. The
+             editor always edits the real Replacement, so the placeholder can never be stored. -->
+        <Style x:Key="DictionaryWrittenCell" TargetType="DataGridCell" BasedOn="{StaticResource KeyboardCell}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="4,0">
+                            <Grid>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                                <TextBlock x:Name="Placeholder"
+                                           Text="(removes these words)"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Margin="2,0,0,0"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           Visibility="Collapsed"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding ReplacementIsPlaceholder}" Value="True"/>
+                                    <Condition Binding="{Binding IsEditing, RelativeSource={RelativeSource Self}}" Value="False"/>
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible"/>
+                            </MultiDataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- The remove button in a Dictionary row is only an icon, so it is named after the entry it removes. -->
         <Style x:Key="DictionaryRemoveButton" TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
             <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Remove {0}'}"/>
@@ -532,15 +598,44 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left navigation rail. A ListBox is one Tab stop and the arrow keys move along it. Each item
-                 names itself for screen readers: an item that holds a panel instead of text is otherwise
-                 announced by its type name, "System.Windows.Controls.ListBoxItem". -->
-            <ListBox x:Name="NavList" Grid.Column="0" Margin="8,4,4,16"
-                     Background="Transparent" BorderThickness="0"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     KeyboardNavigation.TabNavigation="Once"
-                     AutomationProperties.Name="Settings pages"
-                     SelectionChanged="NavList_SelectionChanged">
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <ui:AutoSuggestBox x:Name="SettingsSearchBox" Grid.Row="0"
+                                   Margin="8,4,4,8"
+                                   PlaceholderText="Find a setting"
+                                   AutomationProperties.Name="Find a setting"
+                                   MaxSuggestionListHeight="320"
+                                   UpdateTextOnSelect="False"
+                                   TextChanged="SettingsSearchBox_TextChanged"
+                                   QuerySubmitted="SettingsSearchBox_QuerySubmitted"
+                                   SuggestionChosen="SettingsSearchBox_SuggestionChosen"
+                                   PreviewKeyDown="SettingsSearchBox_PreviewKeyDown">
+                    <ui:AutoSuggestBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"/>
+                        </DataTemplate>
+                    </ui:AutoSuggestBox.ItemTemplate>
+                    <ui:AutoSuggestBox.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="IsEnabled" Value="{Binding IsSelectable}"/>
+                            <Setter Property="AutomationProperties.Name" Value="{Binding DisplayText}"/>
+                        </Style>
+                    </ui:AutoSuggestBox.ItemContainerStyle>
+                </ui:AutoSuggestBox>
+
+                <!-- The rail remains one Tab stop after Find a setting; arrow keys move between pages. Each item
+                     names itself for screen readers: an item that holds a panel instead of text is otherwise
+                     announced by its type name, "System.Windows.Controls.ListBoxItem". -->
+                <ListBox x:Name="NavList" Grid.Row="1" Margin="8,0,4,16"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         KeyboardNavigation.TabNavigation="Once"
+                         AutomationProperties.Name="Settings pages"
+                         SelectionChanged="NavList_SelectionChanged">
                 <ListBox.Resources>
                     <Style TargetType="ui:SymbolIcon">
                         <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
@@ -561,7 +656,7 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Orientation="Horizontal">
-                            <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="{DynamicResource ScribeFontSubtitle}"/>
+                            <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="20"/>
                             <TextBlock Text="{Binding Label}" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
                     </DataTemplate>
@@ -586,7 +681,7 @@
                         </GroupStyle.ContainerStyle>
                         <GroupStyle.HeaderTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Name}" FontSize="{DynamicResource ScribeFontCaption}" FontWeight="SemiBold"
+                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                            Margin="12,16,0,4" IsHitTestVisible="False" Focusable="False">
                                     <TextBlock.Style>
@@ -603,20 +698,21 @@
                             </DataTemplate>
                         </GroupStyle.HeaderTemplate>
                     </GroupStyle>
-                </ListBox.GroupStyle>
-            </ListBox>
+                    </ListBox.GroupStyle>
+                </ListBox>
+            </Grid>
 
-            <!-- Right: the selected section + a persistent Save/Cancel footer -->
+            <!-- Right: the selected section + a persistent Save footer -->
             <Grid Grid.Column="1" Margin="12,4,24,16">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Shared inline notification; any section can raise it via ShowInfo(...). Floats over
-                     the content at the top so it never shifts the section layout. -->
-                <ui:InfoBar x:Name="InfoNotice" Grid.Row="0" Panel.ZIndex="1"
-                            VerticalAlignment="Top" Margin="2,4,2,0"
+                <!-- Shared floating notification; any section can raise it via ShowInfo(...). It sits above the footer. -->
+                <ui:InfoBar x:Name="InfoNotice" Grid.Row="0" Panel.ZIndex="2"
+                            VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                            MaxWidth="480" Margin="0,0,8,8"
                             IsClosable="True" IsOpen="False">
                     <!-- WPF-UI 4.3.0 draws the close button as an icon-only Wpf.Ui Button in the bar's template
                          (CloseButton in InfoBar.xaml), the only one there, so it is named from here. -->
@@ -628,6 +724,11 @@
                 </ui:InfoBar>
 
                 <Grid Grid.Row="0">
+                    <ui:InfoBar x:Name="RecoveredSettingsNotice" Panel.ZIndex="1"
+                                VerticalAlignment="Top" Margin="2,4,14,0"
+                                IsClosable="False" IsOpen="False" Severity="Warning"
+                                Title="Using default settings"
+                                Message="Scribe couldn't use your saved settings, so it's using defaults. Review them and choose Save to keep them."/>
 
                     <!-- ============================ General ============================ -->
                     <Grid x:Name="SectionDictation">
@@ -673,40 +774,59 @@
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock x:Name="HotkeyTitle" Text="Dictation shortcut" Style="{StaticResource CardTitle}"/>
-                                        <WrapPanel x:Name="HotkeyControlsPanel" Margin="0,10,0,0">
-                                            <ui:TextBox x:Name="HotkeyBox" MinWidth="200" IsReadOnly="True"
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" Width="200" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="Choose Change, then press a key, two keys or a mouse button"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=HotkeyTitle}"/>
-                                            <ui:Button x:Name="CaptureButton" Content="Change"
+                                            <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Change"
                                                        Margin="8,0,0,0" MinWidth="72"
                                                        Click="CaptureButton_Click"/>
-                                            <ComboBox x:Name="ModeCombo" MinWidth="210" Margin="8,0,0,0"
+                                            <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="210" Margin="8,0,0,0"
                                                       SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Dictation shortcut, hold or toggle"/>
-                                        </WrapPanel>
+                                        </Grid>
                                         <TextBlock x:Name="HotkeyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Types your words with AI cleanup."/>
                                         <TextBlock x:Name="HotkeyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
                                         <TextBlock x:Name="DictationOnlyTitle" Text="Shortcut without AI cleanup" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                        <WrapPanel x:Name="DictationOnlyControlsPanel" Margin="0,10,0,0">
-                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" MinWidth="200" IsReadOnly="True"
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" Width="200" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="None"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=DictationOnlyTitle}"/>
-                                            <ui:Button Content="Change" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button Grid.Column="1" Content="Change" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyCaptureButton_Click"/>
-                                            <ui:Button x:Name="DictationOnlyClearButton" Content="Remove" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button x:Name="DictationOnlyClearButton" Grid.Column="2" Content="Remove" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyClearButton_Click"/>
-                                            <ComboBox x:Name="DictationOnlyModeCombo" MinWidth="210" Margin="8,0,0,0"
+                                            <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="210" Margin="8,0,0,0"
                                                       SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Shortcut without AI cleanup, hold or toggle"/>
-                                        </WrapPanel>
+                                        </Grid>
                                         <TextBlock x:Name="DictationOnlyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Optional. Types exactly what Scribe hears, with your dictionary and snippets."/>
                                         <TextBlock x:Name="DictationOnlyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
+                                        <Grid x:Name="ShortcutValidation" Margin="0,8,0,0" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon x:Name="ShortcutValidationIcon" Grid.Column="0" Symbol="ErrorCircle16" Width="16" Height="16" Margin="0,1,6,0" VerticalAlignment="Top"/>
+                                            <TextBlock x:Name="ShortcutValidationText" Grid.Column="1" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                        </Grid>
                                         <!-- Text comes from HotkeyCaptureSession.MouseButtonsHint: which buttons, how to set one,
                                              and what binding one costs in other apps. -->
                                         <TextBlock x:Name="MouseButtonsHintText" Style="{StaticResource CardDescription}"
@@ -875,7 +995,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="TranscriptionModelTitle" Text="Speech model" Style="{StaticResource CardTitle}"/>
                                         <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
-                                                  MinWidth="320" HorizontalAlignment="Left"
+                                                  Width="320" HorizontalAlignment="Left"
                                                   DisplayMemberPath="Label"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=TranscriptionModelTitle}"
                                                   SelectionChanged="TranscriptionModelCombo_SelectionChanged">
@@ -911,7 +1031,7 @@
                                             <TextBlock Style="{StaticResource CardDescription}"
                                                        Text="How many processor threads speech recognition uses. Automatic suits most PCs."/>
                                         </StackPanel>
-                                        <ComboBox x:Name="ThreadsCombo" Grid.Column="1" MinWidth="240"
+                                        <ComboBox x:Name="ThreadsCombo" Grid.Column="1" Width="240"
                                                   DisplayMemberPath="Label"
                                                   AutomationProperties.Name="Processor threads"/>
                                     </Grid>
@@ -929,7 +1049,7 @@
                                                        Text="Unloads the speech model after this long without a dictation, freeing memory. The next dictation takes a second or two longer to start."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="IdleReleaseCombo" MinWidth="240" DisplayMemberPath="Label"
+                                            <ComboBox x:Name="IdleReleaseCombo" Width="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Free memory when Scribe isn't used"/>
                                             <ui:NumberBox x:Name="IdleReleaseCustomBox" Width="96" Margin="8,0,0,0"
@@ -965,7 +1085,7 @@
                                                        Text="A recording stops at this length and Scribe types what it heard, so a stuck key can't record forever."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="MaxDictationCombo" MinWidth="240" DisplayMemberPath="Label"
+                                            <ComboBox x:Name="MaxDictationCombo" Width="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Longest recording"/>
                                             <ui:NumberBox x:Name="MaxDictationCustomBox" Width="96" Margin="8,0,0,0"
@@ -986,7 +1106,7 @@
                                                    Text="Typing works in almost every app and doesn't use your clipboard. Pasting is faster for long text: Scribe uses the clipboard for a moment and puts back what you had copied when it can. Some apps block pasting. Remote Desktop and virtual machine windows are always typed into, even with Paste the text chosen: a remote session reads the clipboard only when it pastes, which can be after Scribe has put back what you had copied."/>
                                         <!-- Left under the description at a fixed width wide enough for its longest item, like the
                                              speech model's, rather than across the whole card. -->
-                                        <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Left" MinWidth="420"
+                                        <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Left" Width="420"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=InjectionTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=InjectionDescription}"/>
                                     </StackPanel>
@@ -996,7 +1116,7 @@
                                         <TextBlock x:Name="NewlineTitle" Text="Line breaks" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="NewlineDescription" Style="{StaticResource CardDescription}"
                                                    Text="In command windows such as Terminal, a line break works like Enter and can send text early."/>
-                                        <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Left" MinWidth="420"
+                                        <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Left" Width="420"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=NewlineTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=NewlineDescription}"/>
                                     </StackPanel>
@@ -1294,7 +1414,8 @@
                                             <ui:TextBox x:Name="CustomEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="http://localhost:11434/v1"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomEndpointTitle}"/>
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomEndpointTitle}"
+                                                        TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="The service's OpenAI-compatible address, usually ending in /v1. Ollama: http://localhost:11434/v1. LM Studio: http://localhost:1234/v1. OpenRouter: https://openrouter.ai/api/v1."/>
 
@@ -1302,7 +1423,8 @@
                                             <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="For example, qwen3:4b"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomModelTitle}"/>
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomModelTitle}"
+                                                        TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="The name exactly as the service lists it. For Ollama, the command ollama list shows it."/>
 
@@ -1310,10 +1432,11 @@
                                             <ui:PasswordBox x:Name="CustomApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                             VerticalContentAlignment="Center"
                                                             PlaceholderText="Not needed for Ollama or LM Studio"
-                                                            AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"/>
+                                                            AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"
+                                                            PasswordChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Enter a key if your service needs one. Saved encrypted on this PC with your Windows account."/>
-                                            <settings:SettingsStatusRow x:Name="CustomStatusRow"/>
+                                            <settings:SettingsStatusRow x:Name="CustomStatusRow" PrimaryActionInvoked="CustomStatusRow_PrimaryActionInvoked"/>
                                         </StackPanel>
 
                                         <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">
@@ -1419,239 +1542,201 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <StackPanel x:Name="ProfilesHeaderPanel" Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="DictionaryPageTitle" Text="Dictionary" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Replace spoken words or phrases with the spelling you actually want. 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
+                                       Text="Teach Scribe how to write the words it hears, like &quot;dot net&quot; as .NET."/>
                         </StackPanel>
                         <TabControl x:Name="DictionaryTabs" Grid.Row="1">
                             <TabItem x:Name="YourWordsTab" Header="Your words">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                        <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-                            <ui:Button x:Name="DictionaryAddButton" Content="Add word"
-                                       Icon="{ui:SymbolIcon Add24}" Appearance="Primary"
-                                       Margin="0,0,8,0" Click="DictionaryAddButton_Click"
-                                       ToolTip="Add a blank entry and start editing it."/>
-                            <ui:Button x:Name="DictionarySuggestButton" Content="Learn from history"
-                                       Icon="{ui:SymbolIcon Lightbulb24}"
-                                       Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
-                                       ToolTip="Learn vocabulary from recent dictations. A configured remote AI provider receives a bounded text sample only after you confirm; otherwise Scribe scans locally."/>
-                            <ui:Button x:Name="DictionaryCleanupButton" Content="Clean up unused words..."
-                                       Icon="{ui:SymbolIcon Broom24}"
-                                       Margin="0,0,8,0" Click="DictionaryCleanupButton_Click"
-                                       ToolTip="Scan your dictation history for entries and libraries whose wording has not come up in anything you have dictated, so they stop crowding out the vocabulary you do use. Nothing is removed without your review."/>
-                            <ui:Button x:Name="DictionaryImportButton" Content="Import CSV"
-                                       Icon="{ui:SymbolIcon ArrowDownload24}"
-                                       Margin="0,0,8,0" Click="DictionaryImportButton_Click"
-                                       ToolTip="Merge entries from a CSV file into this dictionary."/>
-                            <ui:Button x:Name="DictionaryExportButton" Content="Export CSV"
-                                       Icon="{ui:SymbolIcon ArrowUpload24}"
-                                       Margin="0,0,8,0" Click="DictionaryExportButton_Click"
-                                       ToolTip="Save this dictionary as a CSV file to back up or share."/>
-                            <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
-                                       Icon="{ui:SymbolIcon DocumentAdd24}"
-                                       Click="DictionaryTemplateButton_Click"
-                                       ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
-                            <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
-                                        Margin="12,0,0,0" VerticalAlignment="Center"
-                                        Visibility="Collapsed">
-                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
-                                             VerticalAlignment="Center"/>
-                                <TextBlock Text="Learning from history…"
-                                           Style="{StaticResource CardDescription}"
-                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                            <StackPanel x:Name="DictionaryCleanupBusy" Orientation="Horizontal"
-                                        Margin="12,0,0,0" VerticalAlignment="Center"
-                                        Visibility="Collapsed">
-                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
-                                             VerticalAlignment="Center"/>
-                                <TextBlock Text="Checking your history…"
-                                           Style="{StaticResource CardDescription}"
-                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </WrapPanel>
-                        <ui:Card Grid.Row="1" Padding="0" Style="{StaticResource PanelCard}">
-                            <DataGrid x:Name="DictionaryGrid"
-                                      AutoGenerateColumns="False"
-                                      CanUserAddRows="False" CanUserDeleteRows="True"
-                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                      Background="Transparent" BorderThickness="0"
-                                      AutomationProperties.LabeledBy="{Binding ElementName=DictionaryPageTitle}">
-                                <DataGrid.Columns>
-                                    <!-- While a cell edits, its text box would otherwise be named by the text it holds
-                                         (TextBox.GetPlainText); the columns name it after their header instead. The
-                                         style keeps WPF's own editing style, the column's default. -->
-                                    <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*">
-                                        <DataGridTextColumn.EditingElementStyle>
-                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
-                                                <Setter Property="AutomationProperties.Name" Value="Spoken"/>
-                                            </Style>
-                                        </DataGridTextColumn.EditingElementStyle>
-                                    </DataGridTextColumn>
-                                    <DataGridTextColumn Header="Replacement" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*">
-                                        <DataGridTextColumn.EditingElementStyle>
-                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
-                                                <Setter Property="AutomationProperties.Name" Value="Replacement"/>
-                                            </Style>
-                                        </DataGridTextColumn.EditingElementStyle>
-                                    </DataGridTextColumn>
-                                    <!-- Live comparison against the libraries that are switched on, so a user can
-                                         see at a glance which entries are doing real work and which are clutter. -->
-                                    <DataGridTemplateColumn Header="Word pack" Width="150" CanUserSort="True"
-                                                            SortMemberPath="Coverage">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <ui:Badge Appearance="{Binding CoverageAppearance}"
-                                                          Margin="4,2" VerticalAlignment="Center"
-                                                          HorizontalAlignment="Left"
-                                                          Visibility="{Binding CoverageVisibility}"
-                                                          ToolTip="{Binding CoverageTooltip}">
-                                                    <TextBlock Text="{Binding CoverageLabel}" FontSize="{DynamicResource ScribeFontCaption}"/>
-                                                </ui:Badge>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
-                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}"/>
-                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                            ElementStyle="{StaticResource EntryEnabledCheckBox}"
-                                                            EditingElementStyle="{StaticResource EntryEnabledCheckBoxEditing}"/>
-                                    <DataGridTemplateColumn Header="" Width="44">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <ui:Button Icon="{ui:SymbolIcon Delete24}" Appearance="Transparent"
-                                                           Padding="6,2" Margin="0" ToolTip="Remove this entry"
-                                                           Style="{StaticResource DictionaryRemoveButton}"
-                                                           Click="DictionaryDeleteRow_Click"/>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </ui:Card>
-                        <StackPanel Grid.Row="2" Margin="2,8,2,0">
-                            <TextBlock x:Name="DictionaryGlossaryHint" Style="{StaticResource CardDescription}"
-                                       TextWrapping="Wrap"/>
-                        </StackPanel>
-
+                                    <Grid x:Name="DictionaryTextChangesNotice" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:InfoBar x:Name="DictionaryTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
+                                        <ui:Button x:Name="DictionaryTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
+                                    </Grid>
+                                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <WrapPanel Grid.Column="0" Orientation="Horizontal">
+                                            <ui:Button x:Name="DictionaryAddButton" Padding="8,5" Content="Add word"
+                                                       Icon="{ui:SymbolIcon Add24}"
+                                                       Margin="0,0,4,0" Click="DictionaryAddButton_Click"
+                                                       ToolTip="Add a blank word and start editing it."/>
+                                            <ui:Button x:Name="DictionarySuggestButton" Padding="8,5" Content="Learn from history"
+                                                       Icon="{ui:SymbolIcon Lightbulb24}"
+                                                       Margin="0,0,4,0" Click="DictionarySuggestButton_Click"
+                                                       ToolTip="Suggests words from your recent dictations. If AI cleanup uses an online service, Scribe asks before sending anything."/>
+                                            <ui:Button x:Name="DictionaryCleanupButton" Padding="8,5" Content="Clean up unused words..."
+                                                       Icon="{ui:SymbolIcon Broom24}"
+                                                       Margin="0,0,4,0" Click="DictionaryCleanupButton_Click"
+                                                       ToolTip="Finds words and word packs you haven't used, so you can turn them off. You review every change."/>
+                                            <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
+                                                        Margin="12,0,0,0" VerticalAlignment="Center"
+                                                        Visibility="Collapsed">
+                                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
+                                                             VerticalAlignment="Center"/>
+                                                <TextBlock Text="Learning from your history..."
+                                                           Style="{StaticResource CardDescription}"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <StackPanel x:Name="DictionaryCleanupBusy" Orientation="Horizontal"
+                                                        Margin="12,0,0,0" VerticalAlignment="Center"
+                                                        Visibility="Collapsed">
+                                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
+                                                             VerticalAlignment="Center"/>
+                                                <TextBlock Text="Checking your history..."
+                                                           Style="{StaticResource CardDescription}"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                        <ui:Button x:Name="DictionaryMoreButton" Grid.Row="1" Padding="8,5" Content="More"
+                                                   Icon="{ui:SymbolIcon MoreHorizontal24}"
+                                                   Margin="0,4,0,0" HorizontalAlignment="Left"
+                                                   Click="DictionaryMoreButton_Click"
+                                                   ToolTip="More dictionary actions"/>
+                                        <ui:TextBox x:Name="DictionarySearchBox" Grid.Column="1" Grid.RowSpan="2"
+                                                    MinWidth="180" Width="180" MaxWidth="260"
+                                                    HorizontalAlignment="Right"
+                                                    PlaceholderText="Find a word"
+                                                    AutomationProperties.Name="Find a word"
+                                                    TextChanged="DictionarySearchBox_TextChanged"/>
+                                    </Grid>
+                                    <Grid Grid.Row="2">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <ui:Card x:Name="DictionaryGridCard" Grid.Row="0" Padding="0" Style="{StaticResource PanelCard}">
+                                            <DataGrid x:Name="DictionaryGrid"
+                                                      AutoGenerateColumns="False"
+                                                      CanUserAddRows="False" CanUserDeleteRows="True"
+                                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                                      Background="Transparent" BorderThickness="0"
+                                                      SelectionChanged="DictionaryGrid_SelectionChanged"
+                                                      AutomationProperties.LabeledBy="{Binding ElementName=DictionaryPageTitle}">
+                                                <DataGrid.Columns>
+                                                    <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                                            ElementStyle="{StaticResource EntryEnabledCheckBox}"
+                                                                            EditingElementStyle="{StaticResource EntryEnabledCheckBoxEditing}"/>
+                                                    <DataGridTextColumn Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*">
+                                                        <DataGridTextColumn.EditingElementStyle>
+                                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
+                                                                <Setter Property="AutomationProperties.Name" Value="Scribe hears"/>
+                                                            </Style>
+                                                        </DataGridTextColumn.EditingElementStyle>
+                                                    </DataGridTextColumn>
+                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement"
+                                                                        CellStyle="{StaticResource DictionaryWrittenCell}">
+                                                        <DataGridTextColumn.ElementStyle>
+                                                            <Style TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
+                                                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                            </Style>
+                                                        </DataGridTextColumn.ElementStyle>
+                                                        <DataGridTextColumn.EditingElementStyle>
+                                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
+                                                                <Setter Property="AutomationProperties.Name" Value="Scribe writes"/>
+                                                            </Style>
+                                                        </DataGridTextColumn.EditingElementStyle>
+                                                    </DataGridTextColumn>
+                                                    <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
+                                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}">
+                                                        <DataGridCheckBoxColumn.HeaderStyle>
+                                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+                                                                <Setter Property="ToolTip" Value="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
+                                                            </Style>
+                                                        </DataGridCheckBoxColumn.HeaderStyle>
+                                                    </DataGridCheckBoxColumn>
+                                                    <DataGridTemplateColumn Header="Word pack" Width="160" CanUserSort="True"
+                                                                            SortMemberPath="Coverage">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Border Margin="4,2" Padding="8,2" CornerRadius="10"
+                                                                        BorderThickness="1" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                                                                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                        Visibility="{Binding CoverageVisibility}">
+                                                                    <TextBlock Text="{Binding CoverageLabel}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTemplateColumn Header="" Width="44">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <ui:Button Icon="{ui:SymbolIcon Delete24}" Appearance="Transparent"
+                                                                           Padding="6,2" Margin="0" ToolTip="Delete this word"
+                                                                           AutomationProperties.Name="{Binding DeleteName}"
+                                                                           Style="{StaticResource DictionaryRemoveButton}"
+                                                                           Click="DictionaryDeleteRow_Click"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </ui:Card>
+                                        <ui:Card x:Name="DictionaryStateCard" Grid.Row="0" Style="{StaticResource PanelCard}" Padding="24" Visibility="Collapsed">
+                                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440">
+                                                <TextBlock x:Name="DictionaryStateText" Style="{StaticResource CardTitle}" TextAlignment="Center" TextWrapping="Wrap"/>
+                                                <StackPanel x:Name="DictionaryStateActions" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+                                                    <ui:Button x:Name="DictionaryEmptyAddButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,4,0" Click="DictionaryAddButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryEmptyLearnButton" Content="Learn from history" Icon="{ui:SymbolIcon Lightbulb24}" Click="DictionarySuggestButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryRetryButton" Content="Try again" Visibility="Collapsed" Click="DictionaryRetryButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryClearSearchButton" Content="Clear search" Visibility="Collapsed" Click="DictionaryClearSearchButton_Click"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </ui:Card>
+                                        <Grid x:Name="DictionaryValidation" Grid.Row="1" Margin="12,8,12,0" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon x:Name="DictionaryValidationIcon" Grid.Column="0" Symbol="ErrorCircle16" Width="16" Height="16" Margin="0,1,6,0" VerticalAlignment="Top"/>
+                                            <TextBlock x:Name="DictionaryValidationText" Grid.Column="1" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                        </Grid>
+                                    </Grid>
+                                    <StackPanel Grid.Row="3" Margin="2,8,2,0">
+                                        <TextBlock x:Name="DictionaryOnCountText" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="DictionaryCoverageStatus" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>
+                                        <TextBlock x:Name="DictionaryAiVocabularyText" Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.AddToDictionaryVocabularyLine}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        <ui:CardExpander x:Name="DictionaryGlossaryDetails" Header="Details" Margin="0,6,0,0" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+                                            <TextBlock x:Name="DictionaryGlossaryHint" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/>
+                                        </ui:CardExpander>
+                                    </StackPanel>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Word packs">
-                                <!-- Interim until Phase 3b's Word packs editor replaces this tab: LegacyLibraryPageContainment
-                                     finds the subtitle as the title's next sibling and the tip in row 3, as it did on the old
-                                     Libraries page, and 3b deletes the containment with this markup (release gate 3). -->
-                                <Grid x:Name="SectionLibraries">
+                            <TabItem x:Name="WordPacksTab" Header="Word packs">
+                                <Grid x:Name="SectionWordPacks" SizeChanged="SectionWordPacks_SizeChanged">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
-                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock x:Name="LibrariesPageTitle" Text="Word packs" Style="{StaticResource CardTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}" Text=""/>
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
-                            <ui:Button x:Name="LibraryImportButton" Content="Import a word pack..."
-                                       Icon="{ui:SymbolIcon ArrowDownload24}"
-                                       Margin="0,0,8,0" Click="LibraryImportButton_Click"
-                                       ToolTip="Add a dictionary word pack from a CSV file."/>
-                            <ui:Button x:Name="LibraryExportButton" Content="Export CSV"
-                                       Icon="{ui:SymbolIcon ArrowUpload24}"
-                                       Margin="0,0,8,0" Click="LibraryExportButton_Click"
-                                       ToolTip="Save the selected word pack as a CSV file to back up or share."/>
-                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove"
-                                       Icon="{ui:SymbolIcon Delete24}"
-                                       Click="LibraryRemoveButton_Click"
-                                       ToolTip="Remove the selected imported word pack. Built-in libraries can only be turned off."/>
-                        </StackPanel>
-                        <Grid Grid.Row="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="10"/>
-                                <ColumnDefinition Width="2*" MinWidth="240"/>
-                            </Grid.ColumnDefinitions>
-                            <ui:Card Grid.Column="0" Padding="0" Style="{StaticResource PanelCard}">
-                                <!-- One A to Z list of built-in and custom libraries, placed by the window when the page
-                                     loads (LibraryOrdering). No column sorts: a header click would re-sort it, and a sorted
-                                     view moves a row the moment its box is ticked. -->
-                                <DataGrid x:Name="LibraryGrid"
-                                          AutoGenerateColumns="False"
-                                          CanUserAddRows="False" CanUserDeleteRows="False"
-                                          CanUserSortColumns="False"
-                                          SelectionMode="Single"
-                                          SelectionChanged="LibraryGrid_SelectionChanged"
-                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                          Background="Transparent" BorderThickness="0"
-                                          RowStyle="{StaticResource LibraryRow}"
-                                          AutomationProperties.Name="Word packs">
-                                    <DataGrid.Columns>
-                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                                ElementStyle="{StaticResource LibraryOnCheckBox}"
-                                                                EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
-                                        <!-- The 2 px side margin is the one WPF gives a text column's text, so the name lines
-                                             up with the Category and Terms text beside it. The two lines carry their own
-                                             leading, so a 1 px top and bottom keeps a default window showing every
-                                             shipped word pack without scrolling, as the one-line rows did. A template column,
-                                             unlike a text column, has no binding to fall back on for Ctrl+C or for the cell's
-                                             UI Automation value, so ClipboardContentBinding supplies the name for both. The
-                                             name line, and only it, takes LibraryNameText's SemiBold cue for the selected row. -->
-                                        <DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True"
-                                                                ClipboardContentBinding="{Binding Name}"
-                                                                CellStyle="{StaticResource LibraryNameCell}">
-                                            <DataGridTemplateColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Margin="2,1" VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}"/>
-                                                        <TextBlock Text="{Binding Source}" FontSize="{DynamicResource ScribeFontCaption}"
-                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellTemplate>
-                                        </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
-                                        <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </ui:Card>
-                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource EditorPanelCard}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-                                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
-                                        <TextBlock x:Name="LibraryDetailName" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
-                                        <TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                    </StackPanel>
-                                    <DataGrid x:Name="LibraryTermsGrid" Grid.Row="1"
-                                              AutoGenerateColumns="False" IsReadOnly="True"
-                                              CanUserAddRows="False" CanUserDeleteRows="False"
-                                              HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                              Background="Transparent" BorderThickness="0"
-                                              AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}">
-                                        <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern}" Width="*"/>
-                                            <DataGridTextColumn Header="Written" Binding="{Binding Replacement}" Width="*"/>
-                                        </DataGrid.Columns>
-                                    </DataGrid>
-                                    <TextBlock x:Name="LibraryDetailEmpty" Grid.Row="1"
-                                               VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
-                                               Style="{StaticResource CardDescription}" TextWrapping="Wrap"
-                                               Text="Select a word pack to see its words."/>
-                                </Grid>
-                            </ui:Card>
-                        </Grid>
-                        <TextBlock Grid.Row="3" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                    <Grid x:Name="WordPacksIntroPanel" Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="WordPacksIntroText" Style="{StaticResource PageSubtitle}" Text="Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win."/>
 
+                                    </Grid>
+                                    <Grid Grid.Row="1" Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*" MinWidth="180"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Orientation="Horizontal"><ui:Button x:Name="LibraryNewButton" Content="New word pack" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="LibraryNewButton_Click"/><ui:Button x:Name="LibraryImportButton" Content="Import a word pack..." Icon="{ui:SymbolIcon ArrowDownload24}" Margin="0,0,8,0" Click="LibraryImportButton_Click" ToolTip="Add a word pack from a CSV file."/><ui:Button x:Name="LibraryMoreButton" Content="More" Icon="{ui:SymbolIcon MoreHorizontal24}" Margin="0,0,8,0" Click="LibraryMoreButton_Click"/><ui:Button x:Name="WordPacksIntroInfoButton" Appearance="Transparent" Icon="{ui:SymbolIcon Info24}" Visibility="Collapsed" AutomationProperties.Name="About word packs" Click="WordPacksIntroInfoButton_Click"/></StackPanel><ui:TextBox x:Name="LibrarySearchBox" Grid.Column="2" PlaceholderText="Search all word packs (Ctrl+F)" AutomationProperties.Name="Search all word packs" ClearButtonEnabled="True" TextChanged="LibrarySearchBox_TextChanged"><ui:TextBox.Icon><ui:SymbolIcon Symbol="Search24"/></ui:TextBox.Icon></ui:TextBox></Grid>
+                                    <Grid x:Name="WordPacksMainGrid" Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition x:Name="WordPacksListColumn" Width="220" MinWidth="220"/><ColumnDefinition x:Name="WordPacksPaneGap" Width="12"/><ColumnDefinition x:Name="WordPacksCardColumn" Width="*" MinWidth="360"/></Grid.ColumnDefinitions>
+                                        <ui:Card x:Name="WordPacksListCard" Grid.Column="0" Padding="0" Style="{StaticResource PanelCard}"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><ui:Button x:Name="WordPacksBackButton" Grid.Row="0" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><DataGrid x:Name="LibraryGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionChanged="LibraryGrid_SelectionChanged" MouseDoubleClick="LibraryGrid_MouseDoubleClick" PreviewKeyDown="LibraryGrid_PreviewKeyDown" KeyDown="LibraryGrid_KeyDown" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" RowStyle="{StaticResource LibraryRow}" AutomationProperties.Name="Word packs"><DataGrid.Columns><DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True" ClipboardContentBinding="{Binding Name}" CellStyle="{StaticResource LibraryNameCell}"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="2,4" VerticalAlignment="Center"><DockPanel LastChildFill="True"><TextBlock Text="•" DockPanel.Dock="Left" Margin="0,0,4,0" Visibility="{Binding UnsavedVisibility}"/><TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40" ToolTip="{Binding Name}" Foreground="{Binding TextBrush}"/></DockPanel><TextBlock Text="{Binding DisplaySource}" FontSize="12" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Foreground="{Binding TextBrush}"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid></Grid></ui:Card>
+                                        <ui:Card x:Name="WordPacksCard" Grid.Column="2" Padding="16,12" Style="{StaticResource EditorPanelCard}"><ScrollViewer x:Name="WordPacksCardScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="WordPacksCardScroll_ScrollChanged"><Grid x:Name="WordPacksCardContent"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid Grid.Row="0" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0"><ui:Button x:Name="WordPacksCardBackButton" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="0,0,0,8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><TextBlock x:Name="LibraryDetailName" Style="{StaticResource DetailTitle}" AutomationProperties.HeadingLevel="Level2"/><ui:TextBox x:Name="LibraryDetailRenameBox" Visibility="Collapsed" MinWidth="260" Margin="0,0,8,0" KeyDown="LibraryDetailRenameBox_KeyDown" LostKeyboardFocus="LibraryDetailRenameBox_LostKeyboardFocus" AutomationProperties.Name="Word pack name"/><TextBlock x:Name="LibraryRenameValidation" Style="{StaticResource CardDescription}" Visibility="Collapsed"/><TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/><StackPanel x:Name="LibraryDescriptionPanel" Orientation="Horizontal" Margin="0,4,0,0"><TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/><ui:Button x:Name="LibraryDetailsButton" Content="Details" Appearance="Transparent" Padding="6,0" Margin="4,0,0,0" Click="LibraryDetailsButton_Click"/></StackPanel><TextBlock x:Name="LibraryDetailDescFull" Style="{StaticResource CardDescription}" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,4,0,0"/><CheckBox x:Name="LibraryUseCheck" Content="Use this word pack" Style="{StaticResource SettingCheckBox}" Margin="0,8,0,0" Checked="LibraryUseCheck_Changed" Unchecked="LibraryUseCheck_Changed"/><CheckBox x:Name="LibraryAiCheck" Content="Use in AI cleanup" Style="{StaticResource SettingCheckBox}" Margin="0,2,0,0" Checked="LibraryAiCheck_Changed" Unchecked="LibraryAiCheck_Changed"/><TextBlock x:Name="LibraryAiHelpText" Style="{StaticResource CardDescription}" Margin="28,0,0,0"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0"><ui:Button x:Name="LibraryExportButton" Content="Export..." Margin="0,0,8,0" Click="LibraryExportButton_Click" ToolTip="Save the selected word pack as a CSV file."/><ui:Button x:Name="LibraryDetailMoreButton" Content="More" Icon="{ui:SymbolIcon MoreHorizontal24}" Click="LibraryDetailMoreButton_Click"/></StackPanel></Grid><Grid x:Name="WordPackNoticeHost" Grid.Row="1" Margin="0,0,0,8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ui:InfoBar x:Name="WordPackNoticeBar" IsOpen="False" IsClosable="True" Severity="Informational"/><StackPanel x:Name="WordPackNoticeActionsPanel" Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0" Visibility="Collapsed"/></Grid><Grid Grid.Row="2" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ui:Button x:Name="LibraryAddWordButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="LibraryAddWordButton_Click"/><ui:Button x:Name="LibrarySortButton" Grid.Column="1" Content="Sort" Icon="{ui:SymbolIcon ChevronDown24}" Margin="0,0,8,0" Click="LibrarySortButton_Click"/><TextBlock x:Name="LibraryTermCountText" Grid.Column="3" Style="{StaticResource CardDescription}" VerticalAlignment="Center" HorizontalAlignment="Right"/></Grid><Grid Grid.Row="3"><DataGrid x:Name="LibraryTermsGrid" Height="240" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" Sorting="LibraryTermsGrid_Sorting" PreviewKeyDown="LibraryTermsGrid_PreviewKeyDown" KeyDown="LibraryTermsGrid_KeyDown" MouseDoubleClick="LibraryTermsGrid_MouseDoubleClick" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" AutomationProperties.Name="Words in selected word pack" AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}"><DataGrid.Columns><DataGridCheckBoxColumn x:Name="LibraryTermUseColumn" Header="Use" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTextColumn x:Name="LibraryTermSpokenColumn" Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*"/><DataGridTextColumn x:Name="LibraryTermWrittenColumn" Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" CellStyle="{StaticResource WordPackWrittenCell}"/><DataGridTemplateColumn x:Name="LibraryTermActionColumn" Header="" Width="44"><DataGridTemplateColumn.CellTemplate><DataTemplate><ui:Button Appearance="Transparent" Icon="{ui:SymbolIcon MoreHorizontal24}" Padding="6,2" Margin="0" AutomationProperties.Name="{Binding MoreActionName}" Click="LibraryTermMoreButton_Click"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid><StackPanel x:Name="LibraryDetailEmptyPanel" VerticalAlignment="Center" HorizontalAlignment="Center"><TextBlock x:Name="LibraryDetailEmpty" TextAlignment="Center" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Text="Choose a word pack to edit, or create your own."/><StackPanel x:Name="LibrarySearchLinksPanel" Margin="0,8,0,0" HorizontalAlignment="Center"/><ui:Button x:Name="LibraryEmptyActionButton" Content="New word pack" Margin="0,12,0,0" HorizontalAlignment="Center" Click="LibraryEmptyActionButton_Click"/></StackPanel></Grid><Border x:Name="LibraryOffLine" Grid.Row="4" Style="{StaticResource CalloutBorder}" Visibility="Collapsed"><TextBlock Style="{StaticResource StatusText}" Text="This word pack is off. You can still edit its words."/></Border><ui:Card x:Name="WordDetailsPanel" Grid.Row="4" Style="{StaticResource EditorPanelCard}" Margin="0,8,0,0" Visibility="Collapsed"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid Grid.Row="0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Word details" Style="{StaticResource DetailTitle}"/><TextBlock x:Name="WordDetailsWordText" Style="{StaticResource CardDescription}"/></StackPanel><ui:Button x:Name="WordDetailsBackButton" Grid.Column="1" Content="Back to words" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Click="WordDetailsBackButton_Click"/></Grid><Grid Grid.Row="1" Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,8,0"><TextBlock x:Name="WordDetailsSpokenTitle" Text="Scribe hears" Style="{StaticResource CardTitle}"/><TextBox x:Name="WordDetailsSpokenBox" AutomationProperties.LabeledBy="{Binding ElementName=WordDetailsSpokenTitle}" MinHeight="64" AcceptsReturn="True" TextWrapping="Wrap" TextChanged="WordDetailsBox_TextChanged"/></StackPanel><StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock x:Name="WordDetailsWrittenTitle" Text="Scribe writes" Style="{StaticResource CardTitle}"/><TextBox x:Name="WordDetailsWrittenBox" AutomationProperties.LabeledBy="{Binding ElementName=WordDetailsWrittenTitle}" MinHeight="64" AcceptsReturn="True" TextWrapping="Wrap" TextChanged="WordDetailsBox_TextChanged"/></StackPanel></Grid><StackPanel Grid.Row="2" Margin="0,8,0,0"><CheckBox x:Name="WordDetailsWholeWordCheck" Content="Whole words only" Checked="WordDetailsWholeWordCheck_Changed" Unchecked="WordDetailsWholeWordCheck_Changed"/><TextBlock x:Name="WordDetailsSourceText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsStatusText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsGlossaryText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsHintsText" Style="{StaticResource CardDescription}"/><ui:Button x:Name="WordDetailsDictionaryButton" Content="Go to dictionary entry" Appearance="Transparent" HorizontalAlignment="Left" Margin="0,8,0,0" Visibility="Collapsed" Click="WordDetailsDictionaryButton_Click"/></StackPanel></Grid></ui:Card></Grid></ScrollViewer></ui:Card>
+                                    </Grid>
                                 </Grid>
                             </TabItem>
                         </TabControl>
@@ -1668,7 +1753,7 @@
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Say a phrase and Scribe types saved text instead, like your email address or a sign-off."/>
                         </StackPanel>
-                        <Grid x:Name="ProfileBodyGrid" Grid.Row="1">
+                        <Grid Grid.Row="1">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
@@ -1681,13 +1766,13 @@
                                 <ui:InfoBar x:Name="SnippetTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
                                 <ui:Button x:Name="SnippetTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
                             </Grid>
-                            <Grid x:Name="ProfileMainGrid" Grid.Row="1">
+                            <Grid Grid.Row="1">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="270"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
 
-                                <ui:Card x:Name="ProfileListCard" Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
+                                <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="*"/>
@@ -1823,7 +1908,7 @@
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
                                         </ListBox>
-                                        <WrapPanel x:Name="ProfileToolbar" Grid.Row="1" Margin="0,8,0,0">
+                                        <WrapPanel Grid.Row="1" Margin="0,8,0,0">
                                             <ui:Button x:Name="ProfileAddButton" Content="Add" MinWidth="70" Margin="0,0,8,8" Click="ProfileAddButton_Click"/>
                                             <ui:Button x:Name="ProfileDeleteButton" Content="Delete..." MinWidth="78" Margin="0,0,8,8" Click="ProfileDeleteButton_Click"/>
                                             <ui:Button x:Name="ProfileMoveUpButton" Content="Move up" MinWidth="82" Margin="0,0,8,8" Click="ProfileMoveUpButton_Click"/>
@@ -1832,20 +1917,9 @@
                                     </Grid>
                                 </ui:Card>
 
-                                <ui:Card x:Name="ProfileEditorCard" Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
+                                <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
                                     <Grid>
                                         <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                            <StackPanel>
-                                            <Grid x:Name="ProfileCompactAiCleanupNotice" Visibility="Collapsed" Margin="0,0,0,12">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <ui:InfoBar x:Name="ProfileCompactAiCleanupInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Informational" Title="AI cleanup is off"/>
-                                                <ui:Button x:Name="ProfileCompactAiCleanupActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="120" Content="Go to AI cleanup" Click="ProfileAiCleanupButton_Click"/>
-                                            </Grid>
-                                            <TextBlock x:Name="ProfileCompactOrderHint" Style="{StaticResource CardDescription}" Margin="0,0,0,12" Visibility="Collapsed"
-                                                       Text="When an app matches more than one profile, Scribe uses the one higher in the list."/>
                                             <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                                 <TextBlock x:Name="ProfileNameTitle" Text="Name" Style="{StaticResource CardTitle}"/>
                                                 <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
@@ -1945,7 +2019,6 @@
                                                           AutomationProperties.LabeledBy="{Binding ElementName=ProfileNewlineTitle}"
                                                           SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
                                             </StackPanel>
-                                            </StackPanel>
                                         </ScrollViewer>
                                         <StackPanel x:Name="ProfileEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
                                             <TextBlock x:Name="ProfileEmptyHint"
@@ -2028,7 +2101,7 @@
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <ui:SymbolIcon x:Name="TryDictationSummaryIcon" Grid.Column="0" Symbol="CheckmarkCircle24" FontSize="{DynamicResource ScribeFontBodyLarge}" Margin="0,2,8,0"
+                                                    <ui:SymbolIcon x:Name="TryDictationSummaryIcon" Grid.Column="0" Symbol="CheckmarkCircle24" FontSize="16" Margin="0,2,8,0"
                                                                    Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
                                                     <TextBlock x:Name="TryDictationSummaryText" Grid.Column="1"
                                                                Style="{StaticResource TryDictationResultText}"
@@ -2151,7 +2224,7 @@
                                             <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource CardDescription}" Text="Older dictations are deleted automatically."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="HistoryRetentionCombo" MinWidth="240" DisplayMemberPath="Label"
+                                            <ComboBox x:Name="HistoryRetentionCombo" Width="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Keep dictations"/>
                                             <ui:NumberBox x:Name="HistoryRetentionCustomBox" ValueChanged="HistoryRetentionCustomBox_ValueChanged" Width="96" Margin="8,0,0,0"
@@ -2192,9 +2265,9 @@
                                                 MinWidth="280"
                                                 HorizontalAlignment="Left"
                                                 Visibility="Collapsed"
-                                                PlaceholderText="Search shown dictations"
+                                                PlaceholderText="Find a dictation"
                                                 ClearButtonEnabled="True"
-                                                AutomationProperties.Name="Search shown dictations"
+                                                AutomationProperties.Name="Find a dictation"
                                                 TextChanged="HistorySearchBox_TextChanged">
                                         <ui:TextBox.Icon>
                                             <ui:SymbolIcon Symbol="Search24"/>
@@ -2290,11 +2363,24 @@
                                                    Click="HistoryClearSearchButton_Click"/>
                                     </StackPanel>
                                 </Grid>
-                                <TextBlock x:Name="HistoryRangeText"
-                                           Grid.Row="3"
-                                           Margin="12,8,12,0"
-                                           Style="{StaticResource CardDescription}"
-                                           Visibility="Collapsed"/>
+                                <Grid x:Name="HistoryRangePanel"
+                                      Grid.Row="3"
+                                      Margin="12,8,12,0"
+                                      Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="HistoryRangeText"
+                                               Style="{StaticResource CardDescription}"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"/>
+                                    <ui:Button x:Name="HistoryLoadOlderButton"
+                                               Grid.Column="1"
+                                               Content="Load older"
+                                               Margin="12,0,0,0"
+                                               Click="HistoryLoadOlderButton_Click"/>
+                                </Grid>
                                 <ui:Card x:Name="HistoryDetailsCard"
                                          Grid.Row="4"
                                          Style="{StaticResource EditorPanelCard}"
@@ -2683,7 +2769,11 @@
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock Text="How long each step takes" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock x:Name="StatsSummaryText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="No dictations in the last 7 days."/>
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="StatsSummaryText" Grid.Column="0" Style="{StaticResource CardDescription}" Text="No dictations in the last 7 days."/>
+                                            <ui:Button x:Name="StatsRetryButton" Grid.Column="1" Content="Try again" Margin="12,0,0,0" MinWidth="96" Visibility="Collapsed" Click="StatsRetryButton_Click"/>
+                                        </Grid>
                                         <Grid x:Name="StatsGrid" Margin="0,12,0,0" Visibility="Collapsed">
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="1.4*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -2704,12 +2794,9 @@
                                 <ui:CardExpander x:Name="SpeedDetailsExpander" IsExpanded="False" AutomationProperties.Name="Speed details">
                                     <ui:CardExpander.Header><StackPanel><TextBlock Text="Speed details" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Average, fastest and slowest runs by step."/></StackPanel></ui:CardExpander.Header>
                                     <StackPanel Margin="0,8,0,0">
-                                        <UniformGrid Columns="4" Margin="0,0,0,12">
-                                            <StackPanel><TextBlock x:Name="StatWeekDictations" Style="{StaticResource MetricValue}"/><TextBlock Text="dictations" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                            <StackPanel><TextBlock x:Name="StatWeekSpeech" Style="{StaticResource MetricValue}"/><TextBlock Text="speech captured" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                            <StackPanel><TextBlock x:Name="StatLongestDictation" Style="{StaticResource MetricValue}"/><TextBlock Text="longest dictation" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                            <StackPanel><TextBlock x:Name="StatBestPace" Style="{StaticResource MetricValue}"/><TextBlock Text="best pace" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                        </UniformGrid>
+                                        <TextBlock x:Name="SpeedDetailsCountText" Style="{StaticResource CardDescription}" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="SpeedDetailsCapText" Style="{StaticResource CardDescription}" Margin="0,0,0,4" Visibility="Collapsed" Text="Only your latest 1,000 dictations are counted."/>
+                                        <TextBlock x:Name="SpeedDetailsBestText" Style="{StaticResource CardDescription}" Margin="0,0,0,12"/>
                                         <TextBlock x:Name="DecodeSpeedTitle" Text="Speech recognition" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="DecodeSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Speech recognition time only. AI cleanup isn't counted here."/>
                                         <UniformGrid x:Name="DecodeMetricsGrid" Columns="3" Margin="0,8,0,12" Visibility="Collapsed"><StackPanel><TextBlock x:Name="StatDecodeAverage" Style="{StaticResource MetricValue}"/><TextBlock Text="average" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatDecodeMin" Style="{StaticResource MetricValue}"/><TextBlock Text="fastest" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatDecodeMax" Style="{StaticResource MetricValue}"/><TextBlock Text="slowest" Style="{StaticResource MetricLabel}"/></StackPanel></UniformGrid>
@@ -2805,18 +2892,33 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Border Height="1" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/>
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-                    <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary"
-                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click"
-                               ToolTip="Save your changes and keep this window open."/>
-                    <ui:Button x:Name="SaveCloseButton" Content="Save and close"
-                               MinWidth="120" Margin="0,0,8,0" Click="SaveCloseButton_Click"
-                               ToolTip="Save your changes and close the window."/>
-                    <ui:Button x:Name="CancelButton" Content="Cancel"
-                               MinWidth="96" Click="CancelButton_Click" IsCancel="True"/>
-                    </StackPanel>
+                    <Grid Grid.Row="1" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Ellipse x:Name="FooterDirtyDot" Width="8" Height="8" Margin="0,0,8,0"
+                                     Fill="{DynamicResource SystemFillColorAttentionBrush}" Visibility="Collapsed"
+                                     IsHitTestVisible="False"/>
+                            <TextBlock x:Name="FooterStatusText" Style="{StaticResource CardDescription}"
+                                       VerticalAlignment="Center" Text="All changes saved"
+                                       AutomationProperties.LiveSetting="Polite"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <ui:Button x:Name="SaveButton" Content="_Save" Appearance="Primary"
+                                       MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click"
+                                       ToolTip="Save your changes and keep this window open."/>
+                            <ui:Button x:Name="SaveCloseButton" Content="Save _and close"
+                                       MinWidth="120" Margin="0,0,8,0" Click="SaveCloseButton_Click"
+                                       ToolTip="Save your changes and close the window."/>
+                            <ui:Button x:Name="CloseButton" Content="_Close"
+                                       MinWidth="96" Click="CloseButton_Click"/>
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Grid>
         </Grid>
     </Grid>
 </ui:FluentWindow>
+

@@ -9,7 +9,7 @@ public sealed class SnippetSaveBaselineSourceTests
     [Fact]
     public void A_save_takes_its_submitted_snippet_rows_as_the_baseline_without_reading_storage()
     {
-        var window = Read("SettingsWindow.xaml.cs");
+        var window = ReadSettingsWindowSources();
         var snippets = Read("SettingsWindow.Snippets.cs");
 
         // The submission is what the builder stored, taken where the Save builds the list, and adopted right after it is
@@ -18,7 +18,7 @@ public sealed class SnippetSaveBaselineSourceTests
         var captured = window.IndexOf("snippetSubmission = submitted;", StringComparison.Ordinal);
         Assert.True(built >= 0 && captured > built, "The Save does not take its snippet submission from the builder.");
         Assert.Contains(
-            "_snippetLoad.MarkSaved(snippetSignature);\r\n                MarkSnippetRowsSaved(snippetSubmission ?? []);",
+            "_snippetLoad.MarkSaved(snippetSignature);\r\n                MarkSnippetRowsSaved(snippetSubmission);",
             window.ReplaceLineEndings("\r\n"),
             StringComparison.Ordinal);
 
@@ -47,6 +47,11 @@ public sealed class SnippetSaveBaselineSourceTests
 
     private static string Read(string file) =>
         File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", file));
+
+    private static string ReadSettingsWindowSources() =>
+        string.Join("\n", Directory.EnumerateFiles(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
 
     // A member's text, from its signature to the closing brace at its own indentation.
     private static string Body(string code, string signature)

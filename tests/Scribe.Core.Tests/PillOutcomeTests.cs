@@ -2,6 +2,7 @@ using Scribe.Core.Cleanup;
 using Scribe.Core.Overlay;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
+using Scribe.Core.Tray;
 
 namespace Scribe.Core.Tests;
 
@@ -18,7 +19,7 @@ public sealed class PillOutcomeTests
     [Fact]
     public void A_dictation_typed_whole_without_AI_cleanup_asked_for_is_Typed()
     {
-        var outcome = PillOutcome.Of(Whole, cleanupRequested: false, CleanupResult.Skip("Hello."), failure: null);
+        var outcome = PillOutcome.Of(Whole, cleanupRequested: false, CleanupResult.Skip("Hello."), problem: null);
 
         Assert.NotNull(outcome);
         Assert.Equal(PillOutcomeKind.Typed, outcome.Kind);
@@ -30,7 +31,7 @@ public sealed class PillOutcomeTests
     [InlineData(CleanupOutcome.Unchanged)]
     public void A_dictation_AI_cleanup_ran_on_is_Typed(CleanupOutcome ran)
     {
-        var outcome = PillOutcome.Of(Whole, cleanupRequested: true, new CleanupResult("Hello.", ran), failure: null);
+        var outcome = PillOutcome.Of(Whole, cleanupRequested: true, new CleanupResult("Hello.", ran), problem: null);
 
         Assert.Equal(PillOutcomeKind.Typed, outcome!.Kind);
     }
@@ -52,17 +53,17 @@ public sealed class PillOutcomeTests
     }
 
     [Fact]
-    public void A_failed_cleanup_with_the_text_typed_whole_is_Typed_without_AI_cleanup_and_its_safe_reason()
+    public void A_failed_cleanup_with_the_text_typed_whole_is_Typed_without_AI_cleanup_and_the_fixed_settings_line()
     {
         var failed = new CleanupResult("raw text", CleanupOutcome.Failed, FailureReason: "AI cleanup timed out.")
         {
             DisplayDetail = "The endpoint at contoso.example did not answer.",
         };
 
-        var outcome = PillOutcome.Of(Whole, cleanupRequested: true, failed, failure: null);
+        var outcome = PillOutcome.Of(Whole, cleanupRequested: true, failed, problem: null);
 
         Assert.Equal(PillOutcomeKind.TypedWithoutCleanup, outcome!.Kind);
-        Assert.Equal("AI cleanup timed out.", outcome.Detail);
+        Assert.Equal(PillOutcome.CleanupDidNotRun, outcome.Detail);
         Assert.DoesNotContain("contoso", outcome.Detail, StringComparison.Ordinal);
     }
 
@@ -74,10 +75,10 @@ public sealed class PillOutcomeTests
             DisplayDetail = "Connecting to contoso.example.",
         };
 
-        var outcome = PillOutcome.Of(Whole, cleanupRequested: true, notReady, failure: null);
+        var outcome = PillOutcome.Of(Whole, cleanupRequested: true, notReady, problem: null);
 
         Assert.Equal(PillOutcomeKind.TypedWithoutCleanup, outcome!.Kind);
-        Assert.Equal("AI cleanup is enabled but Initializing (Loading the model.).", outcome.Detail);
+        Assert.Equal(PillOutcome.CleanupDidNotRun, outcome.Detail);
     }
 
     [Theory]
@@ -107,7 +108,7 @@ public sealed class PillOutcomeTests
     {
         var focusMoved = new InjectionResult(false, "none", 0, 6, InjectionResult.FocusChangedError);
 
-        var outcome = PillOutcome.Of(focusMoved, cleanupRequested: false, CleanupResult.Skip("x"), failure: null);
+        var outcome = PillOutcome.Of(focusMoved, cleanupRequested: false, CleanupResult.Skip("x"), problem: null);
 
         Assert.Equal(PillOutcomeKind.NothingTyped, outcome!.Kind);
         Assert.Equal(PillOutcome.RecoveryStep, outcome.Detail);
@@ -119,7 +120,7 @@ public sealed class PillOutcomeTests
     {
         var partial = new InjectionResult(false, "unicode", 3, 6, "Only part of the text was accepted by Windows.");
 
-        var outcome = PillOutcome.Of(partial, cleanupRequested: false, CleanupResult.Skip("x"), failure: null);
+        var outcome = PillOutcome.Of(partial, cleanupRequested: false, CleanupResult.Skip("x"), problem: null);
 
         Assert.Equal(PillOutcomeKind.PartlyTyped, outcome!.Kind);
         Assert.Equal(PillOutcome.RecoveryStep, outcome.Detail);
@@ -136,7 +137,7 @@ public sealed class PillOutcomeTests
             typed => new InjectionResult(false, "unicode", typed.Length - 1, typed.Length, "Only part of the text was accepted by Windows."));
 
         Assert.True(insertion.SpaceAdded);
-        var outcome = PillOutcome.Of(insertion.Injection, cleanupRequested: false, CleanupResult.Skip("x"), failure: null);
+        var outcome = PillOutcome.Of(insertion.Injection, cleanupRequested: false, CleanupResult.Skip("x"), problem: null);
 
         Assert.Equal(PillOutcomeKind.PartlyTyped, outcome!.Kind);
     }
@@ -164,41 +165,38 @@ public sealed class PillOutcomeTests
     [Fact]
     public void An_insertion_of_nothing_says_nothing()
     {
-        Assert.Null(PillOutcome.Of(InjectionResult.Empty, cleanupRequested: false, CleanupResult.Skip(string.Empty), failure: null));
+        Assert.Null(PillOutcome.Of(InjectionResult.Empty, cleanupRequested: false, CleanupResult.Skip(string.Empty), problem: null));
     }
 
     [Fact]
     public void A_dictation_that_failed_before_insertion_is_Nothing_typed_with_its_own_next_step()
     {
-        var outcome = PillOutcome.Of(insertion: null, cleanupRequested: true, cleanup: null, "nothing was recognised, try again");
+        var outcome = PillOutcome.Of(insertion: null, cleanupRequested: true, cleanup: null, new DictationProblemReport(DictationProblem.NothingRecognized));
 
         Assert.Equal(PillOutcomeKind.NothingTyped, outcome!.Kind);
-        Assert.Equal("Nothing was recognised, try again", outcome.Detail);
+        Assert.Equal("No words heard, try again", outcome.Detail);
     }
 
     [Fact]
-    public void A_failure_message_keeps_what_it_names()
+    public void A_problem_uses_catalog_pill_line_without_device_names()
     {
-        var outcome = PillOutcome.Of(null, false, null, "no audio from 'USB Mic'. Pick a different microphone in Settings");
+        var outcome = PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.NoAudioFromDevice, Device: "USB Mic"));
 
-        Assert.Equal("No audio from 'USB Mic'. Pick a different microphone in Settings", outcome!.Detail);
+        Assert.Equal("Try another microphone", outcome!.Detail);
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("  ")]
-    public void A_dictation_discarded_quietly_says_nothing(string? failure)
+    [Fact]
+    public void A_dictation_discarded_quietly_says_nothing()
     {
         // No speech was heard, or the dictionary left nothing to type: the pill hides, as before.
-        Assert.Null(PillOutcome.Of(insertion: null, cleanupRequested: true, cleanup: null, failure));
+        Assert.Null(PillOutcome.Of(insertion: null, cleanupRequested: true, cleanup: null, problem: null));
     }
 
     [Fact]
     public void The_insertion_decides_even_when_a_failure_was_reported_after_it()
     {
         // A handler that throws after the text arrived turns into "transcription failed"; the text is still there.
-        Assert.Equal(PillOutcomeKind.Typed, PillOutcome.Of(Whole, false, CleanupResult.Skip("x"), "transcription failed")!.Kind);
+        Assert.Equal(PillOutcomeKind.Typed, PillOutcome.Of(Whole, false, CleanupResult.Skip("x"), new DictationProblemReport(DictationProblem.RecognitionFailed))!.Kind);
     }
 
     [Fact]
@@ -208,8 +206,8 @@ public sealed class PillOutcomeTests
 
         var outcome = PillOutcome.Of(Whole, true, failed, null);
 
-        Assert.Equal("AI cleanup failed.  Try again.", outcome!.Detail);
-        Assert.Equal("Microphone unavailable", PillOutcome.Of(null, false, null, "microphone unavailable\r\n")!.Detail);
+        Assert.Equal(PillOutcome.CleanupDidNotRun, outcome!.Detail);
+        Assert.Equal("Microphone unavailable", PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.MicrophoneUnavailable))!.Detail);
     }
 
     [Fact]
@@ -223,7 +221,7 @@ public sealed class PillOutcomeTests
 
         var typed = PillOutcome.Of(Whole, false, CleanupResult.Skip("x"), null)!;
         var caution = PillOutcome.Of(Whole, true, new CleanupResult("x", CleanupOutcome.Failed, "AI cleanup failed."), null)!;
-        var nothing = PillOutcome.Of(null, false, null, "transcription failed")!;
+        var nothing = PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.RecognitionFailed))!;
         var partly = PillOutcome.Of(new InjectionResult(false, "unicode", 1, 2), false, null, null)!;
 
         Assert.Equal(PillTiming.TypedHold, typed.Hold);
