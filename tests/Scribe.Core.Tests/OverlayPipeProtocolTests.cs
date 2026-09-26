@@ -191,6 +191,31 @@ public sealed class OverlayPipeProtocolTests
     }
 
     [Fact]
+    public void A_preview_command_superseded_while_its_launch_blocked_is_never_written()
+    {
+        // Astra's A4: a preview command carries no state, only its preview's generation, which the gate judged when the
+        // consumer took it. Its launch can replay the newer state that superseded the preview meanwhile, so the gate judges
+        // it again after Prepare, before anything of the command is written: the anchor restore, a preview's end, or its line.
+        var client = StripComments(File.ReadAllText(ClientFile())).ReplaceLineEndings("\n");
+        var handle = Body(client, "private void HandleState(Command item)");
+        const string Confirm = "_preview.ConfirmWrite(item.Role, item.Generation)";
+
+        Assert.Single(Regex.Matches(handle, Regex.Escape(Confirm)));
+        Assert.Matches(new Regex(@"if \(!_preview\.ConfirmWrite\(item\.Role, item\.Generation\)\)\s*\{[\s\S]*?return;\s*\}"), handle);
+        var confirm = handle.IndexOf(Confirm, StringComparison.Ordinal);
+        Assert.True(handle.IndexOf("Prepare(action, helper, nowMs)", StringComparison.Ordinal) < confirm, "It is judged after the launch.");
+        foreach (var write in new[]
+                 {
+                     "WriteWithTimeout(AppliedAnchorLine);",
+                     "WritePreviewEnd();",
+                     "WriteWithTimeout(item.AppliedAnchor ? AppliedAnchorLine : item.Text);",
+                 })
+        {
+            Assert.True(confirm < handle.IndexOf(write, StringComparison.Ordinal), $"It is judged before {write}");
+        }
+    }
+
+    [Fact]
     public void The_shell_shows_a_dictation_s_outcome_in_place_of_the_hide_and_nothing_else_on_the_pill()
     {
         // The relay's render callback: the outcome travels on the Idle change, so it keeps that change's revision.

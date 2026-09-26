@@ -832,7 +832,9 @@ public sealed class OverlayHelperLifetimeTests
         consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
         consumer.Drain();
 
-        Assert.Equal(["Launch", "Replay RECORDING", "Skip TYPED", "Write RECORDING"], consumer.WhatSince(15_000));
+        Assert.Equal(
+            ["Launch", "Replay POSITION BottomCenter", "Replay RECORDING", "Skip TYPED", "Write RECORDING"],
+            consumer.WhatSince(15_000));
 
         // Nothing of A's outcome is on screen, so a pause that ends B does not wait for it.
         consumer.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
@@ -867,7 +869,10 @@ public sealed class OverlayHelperLifetimeTests
         consumer.Drain();
 
         Assert.Equal(
-            ["Launch", "Replay PROCESSING 0", "Skip RECORDING", "Skip WARNING Microphone muted", "Write PROCESSING 0"],
+            [
+                "Launch", "Replay POSITION BottomCenter", "Replay PROCESSING 0", "Skip RECORDING", "Skip WARNING Microphone muted",
+                "Write PROCESSING 0",
+            ],
             consumer.WhatSince(0));
     }
 
@@ -880,7 +885,7 @@ public sealed class OverlayHelperLifetimeTests
         consumer.Drain();
 
         Assert.Equal(
-            ["Launch", "Replay RECORDING", "Write RECORDING", "Write WARNING Microphone muted"],
+            ["Launch", "Replay POSITION BottomCenter", "Replay RECORDING", "Write RECORDING", "Write WARNING Microphone muted"],
             consumer.WhatSince(0));
     }
 
@@ -899,6 +904,125 @@ public sealed class OverlayHelperLifetimeTests
         consumer.Drain();
 
         Assert.Equal(["Write POSITION TopCenter", "Skip HIDE", "Write RECORDING"], consumer.WhatSince(100));
+    }
+
+    // ---- A preview command superseded during its launch (Astra's A4) --------------------------------------------------
+
+    [Fact]
+    public void A_preview_step_superseded_during_its_launch_is_not_written_over_the_state_the_launch_replayed()
+    {
+        // Astra's A4. A preview's anchor is written, then the helper dies. The preview's recording look passes the gate and
+        // launches a replacement; meanwhile a dictation starts and reaches processing, which supersedes the preview. The
+        // launch gives the new helper that processing, and the look, taken before, must not follow it, or the pill goes
+        // back to Listening over Processing until the engine's own command arrives.
+        var consumer = new Consumer();
+        consumer.Warmup();
+        consumer.Drain();
+        consumer.AdvanceTo(20_000);
+        consumer.Preview("TopLeft");
+        consumer.TakeNext();
+        consumer.CrashHelperAt(20_000);
+
+        consumer.NextLaunch(OverlayLaunchResult.Launched, takesMs: 500, during: () =>
+        {
+            consumer.Show("RECORDING", OverlayDemand.Sustained);
+            consumer.Show("PROCESSING 0", OverlayDemand.Sustained);
+        });
+        consumer.Drain();
+
+        Assert.Equal(
+            [
+                "Write preview POSITION TopLeft", "Launch", "Replay POSITION BottomCenter", "Replay PROCESSING 0",
+                "Skip preview RECORDING", "Write POSITION BottomCenter", "Skip RECORDING", "Write PROCESSING 0",
+            ],
+            consumer.WhatSince(20_000));
+    }
+
+    [Fact]
+    public void A_preview_anchor_superseded_during_its_own_launch_is_not_written_over_the_applied_anchor()
+    {
+        // Astra's simpler variant: the candidate anchor's own command launches the helper, the launch gives it the applied
+        // anchor, and a recording starts meanwhile. The candidate must not follow, or the recording shows at the previewed
+        // position until the engine's command restores the anchor.
+        var consumer = new Consumer();
+        consumer.NextLaunch(
+            OverlayLaunchResult.Launched, takesMs: 300, during: () => consumer.Show("RECORDING", OverlayDemand.Sustained));
+        consumer.Preview("TopLeft");
+        consumer.Drain();
+
+        Assert.Equal(
+            [
+                "Launch", "Replay POSITION BottomCenter", "Replay RECORDING", "Skip preview POSITION TopLeft",
+                "Gate drop preview RECORDING", "Write POSITION BottomCenter", "Write RECORDING",
+            ],
+            consumer.WhatSince(0));
+    }
+
+    [Fact]
+    public void A_newer_preview_begun_during_an_older_one_s_launch_is_the_only_one_shown()
+    {
+        var consumer = new Consumer();
+        long second = 0;
+        consumer.NextLaunch(OverlayLaunchResult.Launched, takesMs: 300, during: () => second = consumer.Preview("TopRight"));
+        var first = consumer.Preview("TopLeft");
+        consumer.Drain();
+        consumer.PreviewEnd(first); // the older sweep queues nothing once superseded
+        consumer.PreviewEnd(second);
+        consumer.Drain();
+
+        Assert.Equal(
+            [
+                "Launch", "Replay POSITION BottomCenter", "Replay HIDE", "Skip preview POSITION TopLeft",
+                "Gate drop preview RECORDING", "Write preview POSITION TopRight", "Write preview RECORDING",
+                "Write preview end HIDE", "Write preview end POSITION BottomCenter",
+            ],
+            consumer.WhatSince(0));
+    }
+
+    [Fact]
+    public void A_preview_end_superseded_during_its_launch_leaves_the_anchor_to_the_engine_command()
+    {
+        // A preview over a live recording ends while the helper is lost; its end brings the helper back for the recording,
+        // and the recording stops meanwhile. The end is turned away and the processing's own command puts the applied
+        // anchor back, as after any superseded preview.
+        var consumer = new Consumer();
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.AdvanceTo(20_000);
+        var preview = consumer.Preview("TopLeft");
+        consumer.Drain();
+        consumer.PreviewEnd(preview);
+        consumer.CrashHelperAt(20_000);
+
+        consumer.NextLaunch(
+            OverlayLaunchResult.Launched, takesMs: 500, during: () => consumer.Show("PROCESSING 0", OverlayDemand.Sustained));
+        consumer.Drain();
+
+        Assert.Equal(
+            [
+                "Write preview POSITION TopLeft", "Write preview RECORDING", "Launch", "Replay POSITION BottomCenter",
+                "Replay PROCESSING 0", "Skip preview end", "Write POSITION BottomCenter", "Write PROCESSING 0",
+            ],
+            consumer.WhatSince(20_000));
+    }
+
+    [Fact]
+    public void A_preview_still_current_after_its_launch_is_written_whole()
+    {
+        var consumer = new Consumer();
+        consumer.NextLaunch(OverlayLaunchResult.Launched, takesMs: 300);
+        var preview = consumer.Preview("TopLeft");
+        consumer.Drain();
+        consumer.PreviewStep(preview, "METER 500");
+        consumer.PreviewEnd(preview);
+        consumer.Drain();
+
+        Assert.Equal(
+            [
+                "Launch", "Replay POSITION BottomCenter", "Replay HIDE", "Write preview POSITION TopLeft", "Write preview RECORDING",
+                "Write preview METER 500", "Write preview end HIDE", "Write preview end POSITION BottomCenter",
+            ],
+            consumer.WhatSince(0));
     }
 
     [Fact]
@@ -1027,12 +1151,18 @@ public sealed class OverlayHelperLifetimeTests
         // and a state command carries the one it was made for, compared by reference.
         private RequestedState _latest = new("HIDE", OverlayDemand.None);
 
+        // The applied anchor, as the client's _position: a relaunch replays it, and an anchor move writes it as it stands.
+        private string _applied = "BottomCenter";
+
         public Consumer(long idleMs = Idle)
         {
             Lifetime.SetIdlePeriodMs(idleMs);
         }
 
         public OverlayHelperLifetime Lifetime { get; } = new();
+
+        /// <summary>The client's real position-preview gate: engine requests supersede a preview, which a newer one also does.</summary>
+        public OverlayPreviewGate Gate { get; } = new();
 
         public long NowMs { get; private set; }
 
@@ -1081,17 +1211,37 @@ public sealed class OverlayHelperLifetimeTests
             StampAndEnqueue(line, ensureAlive, cancelsRetry, showsForMs);
         }
 
-        /// <summary>A producer published a new state and has not stamped its command yet.</summary>
-        public void PublishOnly(OverlayDemand demand, string line = "RECORDING") => _latest = new RequestedState(line, demand);
+        /// <summary>
+        /// A producer published a new state and has not stamped its command yet. As in the client, it supersedes any
+        /// running preview first (CancelPreview).
+        /// </summary>
+        public void PublishOnly(OverlayDemand demand, string line = "RECORDING")
+        {
+            Gate.Supersede();
+            _latest = new RequestedState(line, demand);
+        }
 
         /// <summary>
         /// Stamps and queues a command for the state published last, or, with <paramref name="carriesState"/> false, one
-        /// that shows no state of its own (a warmup, an anchor).
+        /// that shows no state of its own (a warmup, an anchor). <paramref name="appliedAnchor"/> marks the engine's anchor
+        /// move, which writes the applied anchor as it stands when written.
         /// </summary>
         public void StampAndEnqueue(
-            string line, bool ensureAlive = true, bool cancelsRetry = false, long showsForMs = 0, bool carriesState = true) =>
+            string line,
+            bool ensureAlive = true,
+            bool cancelsRetry = false,
+            long showsForMs = 0,
+            bool carriesState = true,
+            bool appliedAnchor = false) =>
             _queue.Enqueue(new Pending(
-                PendingKind.State, line, Lifetime.IssueStamp(), ensureAlive, cancelsRetry, showsForMs, carriesState ? _latest : null));
+                PendingKind.State,
+                line,
+                Lifetime.IssueStamp(),
+                ensureAlive,
+                cancelsRetry,
+                showsForMs,
+                carriesState ? _latest : null,
+                AppliedAnchor: appliedAnchor));
 
         /// <summary>As OverlayProcessClient.Warmup: it launches the helper and asks for no state.</summary>
         public void Warmup() => StampAndEnqueue("WARMUP", carriesState: false);
@@ -1102,6 +1252,7 @@ public sealed class OverlayHelperLifetimeTests
         /// </summary>
         public void Warn(string text)
         {
+            Gate.Supersede();
             if (_latest.Line != "RECORDING")
             {
                 PublishOnly(OverlayDemand.Sustained);
@@ -1110,11 +1261,46 @@ public sealed class OverlayHelperLifetimeTests
             StampAndEnqueue("WARNING " + text);
         }
 
-        /// <summary>As OverlayProcessClient.SetPosition: the anchor, then the latest state's replay line, for that state.</summary>
+        /// <summary>
+        /// As OverlayProcessClient.SetPosition: the applied anchor moves, then its anchor command (written as the applied
+        /// anchor stands at the write) and the latest state's replay line, for that state.
+        /// </summary>
         public void MoveAnchor(string anchor)
         {
-            StampAndEnqueue("POSITION " + anchor, ensureAlive: false, carriesState: false);
+            Gate.Supersede();
+            _applied = anchor;
+            StampAndEnqueue("POSITION " + anchor, ensureAlive: false, carriesState: false, appliedAnchor: true);
             StampAndEnqueue(_latest.ReplayLine, ensureAlive: false);
+        }
+
+        /// <summary>
+        /// As OverlayProcessClient.Preview: a new preview supersedes any earlier one and queues its candidate anchor and its
+        /// recording look, both needing the helper. It publishes no state: the engine's latest stays what it was.
+        /// </summary>
+        public long Preview(string candidate)
+        {
+            var generation = Gate.BeginPreview();
+            EnqueuePreview(generation, OverlayPreviewRole.Anchor, "POSITION " + candidate, ensureAlive: true);
+            EnqueuePreview(generation, OverlayPreviewRole.Step, "RECORDING", ensureAlive: true);
+            return generation;
+        }
+
+        /// <summary>As the preview's sweep: one level step, queued only while its preview is current.</summary>
+        public void PreviewStep(long generation, string line)
+        {
+            if (Gate.IsCurrent(generation))
+            {
+                EnqueuePreview(generation, OverlayPreviewRole.Step, line, ensureAlive: false);
+            }
+        }
+
+        /// <summary>As the end of the preview's sweep: queued only while its preview is current.</summary>
+        public void PreviewEnd(long generation)
+        {
+            if (Gate.IsCurrent(generation))
+            {
+                EnqueuePreview(generation, OverlayPreviewRole.End, string.Empty, ensureAlive: false);
+            }
         }
 
         public void RequestRelease() =>
@@ -1132,27 +1318,50 @@ public sealed class OverlayHelperLifetimeTests
         /// <summary>Takes everything queued, at the current time, as the consumer's queue wait would.</summary>
         public void Drain()
         {
-            while (_queue.TryDequeue(out var pending))
+            while (TakeNext())
             {
-                if (pending.Kind == PendingKind.Release)
-                {
-                    var observed = Observe();
-                    var work = Lifetime.OnReleaseWhenIdle(NowMs, pending.Stamp, Demand, observed);
-                    DiscardIfLost(observed);
-                    if (work == OverlayDueWork.Release)
-                    {
-                        Record("Release");
-                        _helper = OverlayHelperStatus.Absent;
-                    }
+            }
+        }
 
-                    continue;
+        /// <summary>
+        /// Takes the next queued command, as OverlayProcessClient.HandleCommand and HandleState do: a state command passes
+        /// the preview gate first (a superseded preview's step is dropped there, and the first engine command after one
+        /// restores the applied anchor), then the lifetime decides. Returns false when nothing was queued.
+        /// </summary>
+        public bool TakeNext()
+        {
+            if (!_queue.TryDequeue(out var pending))
+            {
+                return false;
+            }
+
+            if (pending.Kind == PendingKind.Release)
+            {
+                var observed = Observe();
+                var work = Lifetime.OnReleaseWhenIdle(NowMs, pending.Stamp, Demand, observed);
+                DiscardIfLost(observed);
+                if (work == OverlayDueWork.Release)
+                {
+                    Record("Release");
+                    _helper = OverlayHelperStatus.Absent;
                 }
 
-                var helper = Observe();
-                var action = Lifetime.OnStateCommand(
-                    NowMs, pending.Stamp, pending.EnsureAlive, pending.CancelsRetry, Demand, helper, Superseded(pending));
-                Carry(action, helper, pending);
+                return true;
             }
+
+            var verdict = Gate.OnCommand(pending.Role, pending.Generation);
+            if (verdict == OverlayPreviewVerdict.Drop)
+            {
+                Lifetime.OnCommandDropped(pending.Stamp);
+                Record("Gate drop " + Label(pending));
+                return true;
+            }
+
+            var helper = Observe();
+            var action = Lifetime.OnStateCommand(
+                NowMs, pending.Stamp, pending.EnsureAlive, pending.CancelsRetry, Demand, helper, Superseded(pending));
+            Carry(action, helper, pending, verdict);
+            return true;
         }
 
         /// <summary>A live level meter taken at the current time.</summary>
@@ -1226,18 +1435,22 @@ public sealed class OverlayHelperLifetimeTests
             }
         }
 
-        private void Carry(OverlayCommandAction action, OverlayHelperObservation helper, Pending pending)
+        private void Carry(
+            OverlayCommandAction action,
+            OverlayHelperObservation helper,
+            Pending pending,
+            OverlayPreviewVerdict verdict = OverlayPreviewVerdict.Deliver)
         {
             DiscardIfLost(helper);
             switch (action)
             {
                 case OverlayCommandAction.Write:
-                    Deliver(pending);
+                    Deliver(pending, verdict);
                     break;
                 case OverlayCommandAction.Launch:
                     if (Launch())
                     {
-                        Deliver(pending);
+                        Deliver(pending, verdict);
                     }
 
                     break;
@@ -1250,42 +1463,85 @@ public sealed class OverlayHelperLifetimeTests
             }
         }
 
-        // As OverlayProcessClient.HandleState after Prepare: a command whose state a newer one replaced (while it waited, or
-        // while its launch blocked, when the launch replayed the newer state) is not written; the newer state's command is
-        // queued behind it. Otherwise the write takes the time the script gives it, an outcome is on screen from when its
-        // write returns, and a write that fails loses the helper (RecoverFromFailedWrite).
-        private void Deliver(Pending pending)
+        // As OverlayProcessClient.HandleState after Prepare: a preview command superseded while it waited or while its launch
+        // blocked is not written (ConfirmWrite), then come the anchor restore a superseded preview owes, a preview's end (the
+        // applied anchor and the latest state, read at the write), and a command whose state a newer one replaced (while it
+        // waited, or while its launch blocked, when the launch replayed the newer state) is not written; the newer state's
+        // command is queued behind it. Otherwise the write takes the time the script gives it, an outcome is on screen from
+        // when its write returns, and a write that fails loses the helper (RecoverFromFailedWrite), and the rest of the
+        // command with it.
+        private void Deliver(Pending pending, OverlayPreviewVerdict verdict)
         {
+            if (!Gate.ConfirmWrite(pending.Role, pending.Generation))
+            {
+                Record("Skip " + Label(pending));
+                return;
+            }
+
+            if (verdict == OverlayPreviewVerdict.RestoreAnchorThenDeliver && !Write("POSITION " + _applied))
+            {
+                return;
+            }
+
+            if (pending.Role == OverlayPreviewRole.End)
+            {
+                WritePreviewEnd();
+                return;
+            }
+
             if (Superseded(pending))
             {
-                Record("Skip " + pending.Line);
+                Record("Skip " + Label(pending));
                 return;
             }
 
-            var (takesMs, fails) = _writes.Count > 0 ? _writes.Dequeue() : (0L, false);
-            NowMs += takesMs; // the consumer is blocked in the write meanwhile
-            if (fails)
-            {
-                Record("Write failed " + pending.Line);
-                var action = Lifetime.OnWriteFailed(NowMs, NowMs, Demand);
-                _helper = OverlayHelperStatus.Absent;
-                if (action == OverlayCommandAction.Launch)
-                {
-                    Launch();
-                }
-                else if (action == OverlayCommandAction.Hold)
-                {
-                    Record("Hold");
-                }
-
-                return;
-            }
-
-            Record("Write " + pending.Line);
-            if (pending.ShowsForMs > 0)
+            var line = pending.AppliedAnchor ? "POSITION " + _applied : pending.Line;
+            if (Write(line, pending.Role == OverlayPreviewRole.None ? line : "preview " + line) && pending.ShowsForMs > 0)
             {
                 Lifetime.OnShown(NowMs, pending.ShowsForMs);
             }
+        }
+
+        // As OverlayProcessClient.WritePreviewEnd: a sustained state the preview covered comes back at the applied anchor;
+        // otherwise the pill hides first and moves back while hidden.
+        private void WritePreviewEnd()
+        {
+            var latest = _latest;
+            if (latest.Demand == OverlayDemand.Sustained)
+            {
+                _ = Write("POSITION " + _applied, "preview end POSITION " + _applied) && Write(latest.Line, "preview end " + latest.Line);
+            }
+            else
+            {
+                _ = Write("HIDE", "preview end HIDE") && Write("POSITION " + _applied, "preview end POSITION " + _applied);
+            }
+        }
+
+        // One WriteWithTimeout: it takes the time the script gives it, and a failure loses the helper.
+        private bool Write(string line, string? label = null)
+        {
+            label ??= line;
+            var (takesMs, fails) = _writes.Count > 0 ? _writes.Dequeue() : (0L, false);
+            NowMs += takesMs; // the consumer is blocked in the write meanwhile
+            if (!fails)
+            {
+                Record("Write " + label);
+                return true;
+            }
+
+            Record("Write failed " + label);
+            var action = Lifetime.OnWriteFailed(NowMs, NowMs, Demand);
+            _helper = OverlayHelperStatus.Absent;
+            if (action == OverlayCommandAction.Launch)
+            {
+                Launch();
+            }
+            else if (action == OverlayCommandAction.Hold)
+            {
+                Record("Hold");
+            }
+
+            return false;
         }
 
         private bool Launch()
@@ -1300,13 +1556,26 @@ public sealed class OverlayHelperLifetimeTests
             Lifetime.OnLaunchCompleted(NowMs, result, Demand);
             if (result == OverlayLaunchResult.Launched)
             {
-                Record("Replay " + _latest.ReplayLine); // TryLaunch gives the new helper the latest state
+                // TryLaunch gives the new helper the applied anchor and the latest state, as they stand once it connects.
+                Record("Replay POSITION " + _applied);
+                Record("Replay " + _latest.ReplayLine);
             }
 
             return result == OverlayLaunchResult.Launched;
         }
 
         private bool Superseded(Pending pending) => pending.State is { } state && !ReferenceEquals(state, _latest);
+
+        private static string Label(Pending pending) => pending.Role switch
+        {
+            OverlayPreviewRole.None => pending.Line,
+            OverlayPreviewRole.End => "preview end",
+            _ => "preview " + pending.Line,
+        };
+
+        private void EnqueuePreview(long generation, OverlayPreviewRole role, string line, bool ensureAlive) =>
+            _queue.Enqueue(new Pending(
+                PendingKind.State, line, Lifetime.IssueStamp(), ensureAlive, false, 0, null, role, generation));
 
         private OverlayHelperObservation Observe() => _helper switch
         {
@@ -1333,7 +1602,16 @@ public sealed class OverlayHelperLifetimeTests
         }
 
         private readonly record struct Pending(
-            PendingKind Kind, string Line, long Stamp, bool EnsureAlive, bool CancelsRetry, long ShowsForMs, RequestedState? State);
+            PendingKind Kind,
+            string Line,
+            long Stamp,
+            bool EnsureAlive,
+            bool CancelsRetry,
+            long ShowsForMs,
+            RequestedState? State,
+            OverlayPreviewRole Role = OverlayPreviewRole.None,
+            long Generation = 0,
+            bool AppliedAnchor = false);
 
         // A class, not a record: two requests for the same line are still two states.
         private sealed class RequestedState(string line, OverlayDemand demand)

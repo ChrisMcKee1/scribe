@@ -445,6 +445,16 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             return;
         }
 
+        // A preview command carries no state, only its preview's generation, which the gate judged when the command was
+        // taken. A launch in Prepare can block for seconds and replays the newer state that superseded the preview
+        // meanwhile, so the gate judges it again here, before anything of it is written; a skipped end leaves the anchor
+        // restore to the next engine command.
+        if (!_preview.ConfirmWrite(item.Role, item.Generation))
+        {
+            TryLog(LogLevel.Debug, null, "Overlay command {Command} skipped: a newer request superseded its preview.", item.Verb);
+            return;
+        }
+
         if (verdict == OverlayPreviewVerdict.RestoreAnchorThenDeliver)
         {
             WriteWithTimeout(AppliedAnchorLine);
@@ -1161,7 +1171,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     /// <param name="State">
     /// For a state command, the state it was made for; it is not written once a newer state has replaced that one (see
-    /// IsSuperseded). Null for commands that show no state of their own: the warmup, an anchor, a preview's steps.
+    /// IsSuperseded). Null for commands that show no state of their own (the warmup, an anchor) and for a preview's
+    /// commands, which are judged by their preview's generation instead (OverlayPreviewGate).
     /// </param>
     /// <param name="AppliedAnchor">An anchor move that writes the applied anchor as it stands when written.</param>
     private readonly record struct Command(
