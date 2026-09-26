@@ -363,7 +363,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     built-in overlay and its edits documents (BuiltInLibraryOverlay), composition
                                     and policy (LibraryComposition, AiVocabularyPolicy, LibraryComposer,
                                     LibraryDecisions), and storage (LibraryJournal, LibraryInstaller, the custom
-                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry); see Word packs
+                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry), and until
+                                    W2 LegacyLibraryPageContainment (the old Libraries page); see Word packs
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -995,9 +996,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)
   is the exception by design: it takes entries, not libraries, and a flattened list has no library of origin left to
   order by, so the window hands it `ComposeLibraries` over `LibraryPrecedence.Enabled` and the hint never reorders
-  them. The window also hands the cleanup scan its libraries through `LibraryPrecedence.Enabled`, and saves the
-  enabled ids in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display,
-  reversed and random orders.
+  them. The window saves the enabled ids in precedence order, never in display order (and, while the old window is
+  contained, see Word packs, hands the cleanup scan no library). `LibraryOrderInvariantTests` hands the Core calls
+  display, reversed and random orders.
 - **The cleanup switches a library off only when that cannot change what dictation writes.** `LibrarySwitchOffCopy`
   decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
   first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule
@@ -1033,7 +1034,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   every loaded library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so
   unticking one of the two while the other's row stays ticked switches nothing off, and unticking the last row with
   the id switches both off. The window passes every row and every loaded library, leaves the rows of libraries kept on
-  ticked, and Core decides.
+  ticked, and Core decides. While the old window is contained (see Word packs) its cleanup does not call it, and the rule
+  stands for the Word packs page.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
@@ -1098,8 +1100,21 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **The local state is the truth; the document's list is a projection.** Enabled word packs and AI permission live in
   `libraries.state` by logical id. `EnabledDictionaryLibraryIds` is only the downgrade-safe list older builds read (a
   library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
-  only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it. So the old
-  Settings window's own library switches do not persist until W2's page replaces its list write.
+  only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it.
+- **The old Settings window's Libraries page is contained until W2's Word packs page replaces it.** It cannot store a
+  switch, since its settings-only Save keeps the stored list, so it must not look as if it can (review findings A1 and
+  G1: it said "Settings saved.", kept the ticks, and its Save prompt removed a personal correction as covered by a pack
+  ticked on but stored off, leaving neither writing it). `LegacyLibraryPageContainment` holds the decision and the
+  window uses it (`LegacyLibraryPageContainmentTests` runs that scenario over the real parts and pins the window's
+  source): the On column is read-only, its box disabled so UI Automation cannot toggle it either, with a notice under
+  the page's subtitle; the Dictionary page's badges, the glossary count, the Save prompt and the cleanup are judged
+  against the committed selection (the stored list as the window loaded it, replaced by the list each Save hands
+  back), never the rows; the dictionary cleanup reviews no library and never switches one off or copies its terms, and
+  says so; an import says the pack is stored and off; and after every Save the rows show the stored list again, with a
+  notice in place of "Settings saved." (and the window left open by Save and close) if a row showed otherwise. Import,
+  export and remove work as before. An adoption that changes the stored list while the window is open (a file
+  replaced, removed or unreadable on disk) reaches the page at its next Save. Never make the list write work here:
+  that is W2's library payload.
 - **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
   packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
   the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything

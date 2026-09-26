@@ -168,12 +168,13 @@ public sealed class GlossaryHintTests
     [Fact]
     public void The_settings_window_hands_the_hint_the_entries_its_libraries_compose_to()
     {
-        // The window is the one caller: it composes the ticked libraries the way the library service does for dictation,
-        // in precedence order whatever order its A to Z list holds them in.
+        // The window is the one caller: it composes the libraries of the committed selection (LegacyLibraryPageContainment,
+        // never the Libraries page's rows) the way the library service does for dictation, in precedence order whatever
+        // order its A to Z list holds them in.
         var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
 
         Assert.Contains(
-            "var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()));",
+            "var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, _libraryContainment.CommittedIds));",
             code, StringComparison.Ordinal);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(code, @"new GlossaryHint\.Input\("));
     }
