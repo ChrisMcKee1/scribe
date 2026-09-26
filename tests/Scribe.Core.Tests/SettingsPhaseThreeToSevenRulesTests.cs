@@ -415,6 +415,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             .Distinct(StringComparer.Ordinal)
             .ToList();
         Assert.All(stages, stage => Assert.NotNull(TryDictationReportClassifier.StageFrom(stage)));
+        Assert.DoesNotContain(null, ReadCurrentStageAssignments(source));
         string[] classified =
         [
             TryDictationReportClassifier.StageAudioCapture,
@@ -438,6 +439,20 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         Assert.Empty(ExtractReportFailCalls(source));
         Assert.Empty(ExtractCurrentStageAssignments(source.Replace("report.Fail(", "currentStage = ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Report_fail_scan_never_takes_an_interpolated_string_for_an_exact_text()
+    {
+        var calls = ExtractReportFailCalls("report.Fail(\"Speech recognition\", $\"No speech was recognized.{1}\");");
+        var call = Assert.Single(calls);
+        Assert.Equal(TryDictationReportClassifier.StageSpeechRecognition, call.StageLiteral);
+        Assert.Null(call.ReasonLiteral);
+
+        Assert.Null(Assert.Single(ExtractReportFailCalls("report.Fail($\"Speech recognition\", \"x\");")).StageLiteral);
+        Assert.Equal([null], ReadCurrentStageAssignments("currentStage = $\"Speech recognition{1}\";"));
+        Assert.Equal([null], ReadCurrentStageAssignments("currentStage = StageFor(step);"));
+        Assert.Empty(ExtractCurrentStageAssignments("currentStage = $\"Speech recognition{1}\";"));
     }
 
     [Fact]
@@ -490,7 +505,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
     private sealed record FailCall(string? StageLiteral, string? ReasonLiteral);
 
-    private sealed record SourceToken(string Text, bool IsString);
+    private sealed record SourceToken(string Text, bool IsString, bool IsPlainLiteral = false);
 
     // The controller's report.Fail calls as the compiler sees them: each call's arguments bounded by its own parentheses,
     // and an argument that is exactly one string literal read as that literal, any other expression as null.
@@ -543,17 +558,29 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     // Every literal assigned to currentStage, the stage the controller's exception path reports.
-    private static IReadOnlyList<string> ExtractCurrentStageAssignments(string source)
+    private static IReadOnlyList<string> ExtractCurrentStageAssignments(string source) =>
+        [.. ReadCurrentStageAssignments(source).Where(stage => stage is not null).Select(stage => stage!)];
+
+    // Every assignment to currentStage: its plain literal, or null for anything else (an interpolated string, a variable,
+    // a call), which the contract can't check and so rejects.
+    private static IReadOnlyList<string?> ReadCurrentStageAssignments(string source)
     {
         var tokens = Tokenize(source);
-        var stages = new List<string>();
-        for (var t = 0; t + 3 < tokens.Count; t++)
+        var stages = new List<string?>();
+        for (var t = 0; t + 2 < tokens.Count; t++)
         {
-            if (IsCode(tokens[t], "currentStage") && IsCode(tokens[t + 1], "=") && tokens[t + 2].IsString &&
-                IsCode(tokens[t + 3], ";"))
+            if (!IsCode(tokens[t], "currentStage") || !IsCode(tokens[t + 1], "=") || IsCode(tokens[t + 2], "="))
             {
-                stages.Add(tokens[t + 2].Text);
+                continue;
             }
+
+            var end = t + 2;
+            while (end < tokens.Count && !IsCode(tokens[end], ";"))
+            {
+                end++;
+            }
+
+            stages.Add(end == t + 3 && tokens[t + 2].IsPlainLiteral ? tokens[t + 2].Text : null);
         }
 
         return stages;
@@ -563,7 +590,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         !token.IsString && string.Equals(token.Text, text, StringComparison.Ordinal);
 
     private static string? Literal(List<List<SourceToken>> arguments, int index) =>
-        index < arguments.Count && arguments[index] is [{ IsString: true } only] ? only.Text : null;
+        index < arguments.Count && arguments[index] is [{ IsPlainLiteral: true } only] ? only.Text : null;
 
     // Enough of a C# lexer for these scans: comments are dropped, string literals of every form (regular, verbatim,
     // interpolated, raw) and char literals are single tokens, never code, and everything else is an identifier or one
@@ -591,9 +618,10 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
                 var end = source.IndexOf("*/", i + 2, StringComparison.Ordinal);
                 i = end < 0 ? source.Length : end + 2;
             }
-            else if (TryReadString(source, ref i, out var value))
+            else if (TryReadString(source, ref i, out var value, out var interpolated))
             {
-                tokens.Add(new SourceToken(value, IsString: true));
+                // An interpolated string's value is only known at run time, so it is never an exact text.
+                tokens.Add(new SourceToken(value, IsString: true, IsPlainLiteral: !interpolated));
             }
             else if (c == '\'')
             {
@@ -622,7 +650,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
     // Reads a string literal at i, of any form, and moves i past it. An interpolation hole's expression is skipped, so a
     // string inside it never ends the outer one; only plain literals are compared, so the hole's text is not kept.
-    private static bool TryReadString(string source, ref int i, out string value)
+    private static bool TryReadString(string source, ref int i, out string value, out bool interpolated)
     {
         var j = i;
         var dollars = 0;
@@ -635,6 +663,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         }
 
         value = string.Empty;
+        interpolated = dollars > 0;
         if (j >= source.Length || source[j] != '"')
         {
             return false;
@@ -733,8 +762,9 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             {
                 k = SkipCharLiteral(source, k);
             }
-            else if (TryReadString(source, ref k, out _))
+            else if (TryReadString(source, ref k, out _, out _))
             {
+                // A string inside the hole is skipped whole, so its quotes never end the outer string.
             }
             else
             {
