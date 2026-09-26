@@ -50,6 +50,27 @@ public sealed class RemoteDesktopHookPathTests
         }
     }
 
+    // Review round 3, item 1: a key event applies the pending commands once, before anything about it is judged, and
+    // nothing between the judgement and the machines applies them again, so the judgement is made on the view the machines
+    // use; the mouse path keeps its order (the commands, then the machines). Only direct calls are read: a drain added
+    // anywhere on the key path would be a direct call of one of these methods.
+    [Fact]
+    public void A_key_event_applies_the_pending_commands_once_before_it_is_judged_and_never_again_before_the_machines()
+    {
+        const BindingFlags Any = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+        List<string> Calls(string method) =>
+            MouseButtonRound7Tests.Callees(typeof(HotkeyEngine).GetMethod(method, Any)!)
+                .Select(callee => callee.Name)
+                .Where(name => name is "ApplyPendingCommands" or "PassesWholeKeystroke" or "ProcessInput")
+                .ToList();
+
+        Assert.Equal(["ApplyPendingCommands", "PassesWholeKeystroke", "ProcessInput"], Calls(nameof(HotkeyEngine.OnKeyEvent)));
+        Assert.Empty(Calls("PassesWholeKeystroke"));
+        Assert.Empty(Calls("InsideUncertaintyWindow"));
+        Assert.Empty(Calls("ProcessInput"));
+        Assert.Equal(["ApplyPendingCommands", "ProcessInput"], Calls("OnInput"));
+    }
+
     // The hook thread's end disposes the pool side of the moves ahead and the foreground notice, after every hook of the
     // installation is unhooked, so no callback can be waiting on it. None of those disposals calls a monitor or lock of
     // its own; inside .NET, disposing a timer and unregistering a wait take the runtime's own locks, as disposing the
