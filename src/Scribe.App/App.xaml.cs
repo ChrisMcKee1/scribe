@@ -79,6 +79,7 @@ public partial class App : Application
     private bool _foundryDownloadedModel;
     private readonly FoundryModelCacheRefresh _foundryRefresh = new();
     private Guid? _noticeCopyEntryId;
+    private Task? _appExitOperation;
 
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
@@ -1419,16 +1420,16 @@ public partial class App : Application
 
     private async void TrayQuit()
     {
-        await RunCloseGuardsThenAsync(CloseTrigger.TrayQuit, () =>
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.TrayQuit, () =>
         {
             Shutdown();
             return Task.CompletedTask;
-        });
+        }));
     }
 
     private async void RestartToUpdate()
     {
-        await RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, () =>
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, () =>
         {
             if (_updates?.ApplyNowAndRestart() != true)
             {
@@ -1436,7 +1437,35 @@ public partial class App : Application
             }
 
             return Task.CompletedTask;
-        });
+        }));
+    }
+
+    private Task RunAppExitOperationAsync(Func<Task> operation)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(() => RunAppExitOperationAsync(operation)).Task.Unwrap();
+        }
+
+        if (_appExitOperation is { IsCompleted: false } existing)
+        {
+            return existing;
+        }
+
+        async Task RunReservedAsync()
+        {
+            try
+            {
+                await operation();
+            }
+            finally
+            {
+                _appExitOperation = null;
+            }
+        }
+
+        _appExitOperation = RunReservedAsync();
+        return _appExitOperation;
     }
 
     private async Task RunCloseGuardsThenAsync(CloseTrigger trigger, Func<Task> action)
@@ -1447,9 +1476,7 @@ public partial class App : Application
             return;
         }
 
-        var state = new AppExitCloseState(
-            _settingsWindow?.HasAppCloseChanges(trigger) == true,
-            _quickAddWindow?.HasAppCloseCorrection() == true);
+        var state = CurrentAppExitCloseState(trigger, includeSettingsSave: true);
         var step = AppExitCloseGuard.First(state);
         while (step is AppExitCloseStep.Settings or AppExitCloseStep.QuickAdd)
         {
@@ -1460,6 +1487,9 @@ public partial class App : Application
                 _ => true,
             };
             var result = accepted ? AppExitCloseStepResult.Saved : AppExitCloseStepResult.KeepEditing;
+            state = step == AppExitCloseStep.Settings
+                ? CurrentAppExitCloseState(trigger, includeSettingsSave: false, refreshQuickAdd: true)
+                : CurrentAppExitCloseState(trigger, includeSettingsSave: false);
             step = AppExitCloseGuard.Next(step, result, state);
         }
 
@@ -1467,6 +1497,46 @@ public partial class App : Application
         {
             await action();
         }
+    }
+
+    private async Task RunAboutUpdateGuardThenAsync(Func<Task> action)
+    {
+        await RunAppExitOperationAsync(async () =>
+        {
+            var closeSettingsAfterAction = false;
+            if (_settingsWindow is { } settings)
+            {
+                var result = await settings.RequestUpdateRestartWithoutClosingAsync();
+                if (result == SettingsUpdateRestartGuardResult.Canceled)
+                {
+                    return;
+                }
+
+                closeSettingsAfterAction = result == SettingsUpdateRestartGuardResult.ProceedCloseAfterAction;
+            }
+
+            if (_quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true &&
+                !await _quickAddWindow.RequestAppCloseAsync())
+            {
+                return;
+            }
+
+            await action();
+            if (closeSettingsAfterAction && _settingsWindow is { } liveSettings)
+            {
+                liveSettings.CloseAfterAppUpdateDiscard();
+            }
+        });
+    }
+
+    private AppExitCloseState CurrentAppExitCloseState(CloseTrigger trigger, bool includeSettingsSave, bool refreshQuickAdd = false)
+    {
+        var settingsUnsaved = _settingsWindow?.HasAppCloseChanges(trigger) == true
+            || includeSettingsSave && _settingsWindow?.HasAppCloseSaveInProgress == true;
+        var quickAddUnsaved = refreshQuickAdd
+            ? _quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true
+            : _quickAddWindow?.HasAppCloseCorrection() == true;
+        return new AppExitCloseState(settingsUnsaved, quickAddUnsaved);
     }
 
     private void OnTrayNoticeAction(TrayNoticeAction action)
@@ -1661,7 +1731,8 @@ public partial class App : Application
                 services.GetRequiredService<ILibraryVocabularySource>(),
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
-                action => RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, action),
+                RunAboutUpdateGuardThenAsync,
+                () => ShowTrayNotice(TrayNotices.RestartFailed()),
                 services.GetRequiredService<SessionDiagnostics>());
             _settingsWindow.Closed += (_, _) =>
             {

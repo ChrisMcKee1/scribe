@@ -8,6 +8,13 @@ public partial class QuickAddWindow
 {
     public bool HasAppCloseCorrection() => HasUnsavedSavableCorrection();
 
+    public bool RefreshAppCloseVocabularyAndHasCorrection()
+    {
+        _vocabulary = ReadVocabulary();
+        UpdateStatus(forceAnnouncement: false);
+        return HasUnsavedSavableCorrection();
+    }
+
     public async Task<bool> RequestAppCloseAsync()
     {
         if (WindowState == System.Windows.WindowState.Minimized)

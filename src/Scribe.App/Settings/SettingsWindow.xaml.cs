@@ -91,6 +91,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private readonly Func<Func<Task>, Task>? _runUpdateRestartGuard;
+    private readonly Action? _showRestartFailedNotice;
     private StoreUpdateService? _storeUpdates;
     private readonly ILogger<SettingsWindow> _log;
     private readonly TranscriptionOptions _runningTranscription;
@@ -278,6 +279,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         Func<Func<Task>, Task>? runUpdateRestartGuard = null,
+        Action? showRestartFailedNotice = null,
         SessionDiagnostics? diagnostics = null)
     {
         _settingsRepository = settingsRepository;
@@ -304,6 +306,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _runUpdateRestartGuard = runUpdateRestartGuard;
+        _showRestartFailedNotice = showRestartFailedNotice;
         _diagnostics = diagnostics;
         _log = log;
 
@@ -824,6 +827,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (_updates is null || !_updates.ApplyNowAndRestart())
         {
             UpdateStatusText.Text = "Couldn't restart to update. The update will install when you quit Scribe.";
+            _showRestartFailedNotice?.Invoke();
         }
     }
 
