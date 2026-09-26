@@ -5173,6 +5173,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        // A custom duration outside its range blocks the Save and focuses its box, rather than being clamped or stored.
+        if (!ValidateDurationChoices())
+        {
+            return false;
+        }
+
         // A tray change still waiting on a hotkey recording is newer than the switch as shown, so it is what is saved.
         var aiCleanupEnabled = _externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true);
         var azureValidation = AzureSettingsAccess.ValidateCleanup(
