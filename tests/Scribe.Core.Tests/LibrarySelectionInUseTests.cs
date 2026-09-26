@@ -21,9 +21,9 @@ namespace Scribe.Core.Tests;
 /// and sent their terms to a remote provider. Stream W-V replaced that seam with the vocabulary source: every dictation
 /// is admitted with a vocabulary generation built from one <c>Current</c> snapshot, and its post-processing and its
 /// cleanup glossary both come from it. The seam's two guarantees now hold by construction, and these cases pin both: no
-/// consumer re-reads the stored document per request, and a dictionary-only reload keeps the library vocabulary. Until the
-/// W1b integration the source is <see cref="InterimLibraryVocabularySource"/>, over the real library service and settings
-/// file here, and the cleanup service runs over a recording fake provider.
+/// consumer re-reads the stored document per request, and a dictionary-only reload keeps the library vocabulary. The
+/// source is the library service itself, over a real settings file here, and the cleanup service runs over a recording
+/// fake provider.
 /// </summary>
 public sealed class LibrarySelectionInUseTests : IDisposable
 {
@@ -75,11 +75,11 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         saved.EnabledDictionaryLibraryIds = ["dotnet-development"];
         _settings.Save(saved);
 
-        // Dictation starts on the stored settings, the way DictationController.Start and the app's composition root do:
-        // the vocabulary source reads the library selection of the settings in use, and the first generation is built.
+        // Dictation starts on the stored settings, the way DictationController.Start and the app's composition root do: the
+        // library service, the vocabulary source, publishes the vocabulary its committed state enables (the first start
+        // adopts the document's list), and the first generation is built from it.
         var inUse = _settings.Load();
-        var source = new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds);
-        using var publisher = new VocabularyPublisher(source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
+        using var publisher = new VocabularyPublisher(_libraries, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
         var generation = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
         await using var harness = new CleanupHarness();
         var provider = new RecordingProvider();
@@ -131,7 +131,8 @@ public sealed class LibrarySelectionInUseTests : IDisposable
     [Fact]
     public void The_library_service_selects_by_the_ids_it_is_given_whatever_the_stored_document_says()
     {
-        // Release 0.4.4's seam, which the interim vocabulary source adapts and J keeps as it is until the integration.
+        // Release 0.4.4's seam, which J keeps as it is for the callers that still take it (the post-processor's legacy
+        // reload, and the usage report's path for a library service that is not a vocabulary source).
         _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
 
         var entries = _libraries.GetEnabledLibraryEntries(["dotnet-development"]);
@@ -170,8 +171,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         saved.EnabledDictionaryLibraryIds = ["dotnet-development"];
         _settings.Save(saved);
         var inUse = _settings.Load();
-        var source = new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds);
-        using var publisher = new VocabularyPublisher(source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
+        using var publisher = new VocabularyPublisher(_libraries, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
         var before = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
         _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
         _dictionary.AddRange([DictionaryEntry.New("quillmoor", "Quillmoor")]);
@@ -202,8 +202,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
 
         // The stored selection is asked for only where it is defined and by the post-processor before any owner has named
         // a selection; release 0.4.4's ids overload only where it is defined, where the post-processor's legacy reload
-        // reads it, in the interim vocabulary source that adapts it, and in the usage report's path for a library service
-        // that is not a vocabulary source.
+        // reads it, and in the usage report's path for a library service that is not a vocabulary source.
         var parameterless = new Regex(@"\bGetEnabledLibraryEntries\b(?!\s*\(\s*[^\s)])");
         var withIds = new Regex(@"\bGetEnabledLibraryEntries\s*\(\s*[^\s)]");
         var lines = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
@@ -219,7 +218,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
             ],
             lines.Where(l => parameterless.IsMatch(l.Line)).Select(l => $"{l.File}: {l.Line}").Order(StringComparer.Ordinal).ToList());
         Assert.Equal(
-            ["DictionaryLibraryService.cs", "IDictionaryLibraryService.cs", "InterimLibraryVocabularySource.cs", "TextPostProcessor.cs", "UsageReport.cs"],
+            ["DictionaryLibraryService.cs", "IDictionaryLibraryService.cs", "TextPostProcessor.cs", "UsageReport.cs"],
             lines.Where(l => withIds.IsMatch(l.Line) && !l.Line.StartsWith("///", StringComparison.Ordinal))
                 .Select(l => l.File).Distinct().Order(StringComparer.Ordinal).ToList());
         Assert.DoesNotContain(lines, l => l.Line.Contains(".Reload(settings.EnabledDictionaryLibraryIds)", StringComparison.Ordinal));
@@ -269,17 +268,17 @@ public sealed class LibrarySelectionInUseTests : IDisposable
             controller[prepareMethod..controller.IndexOf("\n    }", prepareMethod, StringComparison.Ordinal)],
             StringComparison.Ordinal);
 
-        // The composition root: the vocabulary source, which AI cleanup and the publisher take, and until the W1b
-        // integration it is the interim one over the settings in use. Quick add's conflict check reads its committed
+        // The composition root registers no vocabulary source of its own: AddScribeCore registers the library service as
+        // the one source, which AI cleanup and the publisher take. Quick add's conflict check reads its committed
         // vocabulary, and the usage report's selection comes from it, never from the ids of the settings.
         var app = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "App.xaml.cs"));
-        Assert.Contains("AddSingleton<ILibraryVocabularySource>(sp => new InterimLibraryVocabularySource(", app, StringComparison.Ordinal);
-        Assert.Contains("() => _controller?.CurrentSettings.EnabledDictionaryLibraryIds));", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("InterimLibraryVocabularySource", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddSingleton<ILibraryVocabularySource>", app, StringComparison.Ordinal);
         Assert.Contains("builder.Services.AddSingleton<VocabularyPublisher>();", app, StringComparison.Ordinal);
         Assert.Contains("services.GetRequiredService<VocabularyPublisher>(),", app, StringComparison.Ordinal);
         Assert.Contains("baseEntries, services.GetRequiredService<ILibraryVocabularySource>().Current.Entries);", app, StringComparison.Ordinal);
         Assert.DoesNotContain("GetEnabledLibraryEntries", app, StringComparison.Ordinal);
-        Assert.Single(Regex.Matches(app, Regex.Escape("EnabledDictionaryLibraryIds")));
+        Assert.DoesNotContain("EnabledDictionaryLibraryIds", app, StringComparison.Ordinal);
         var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
         Assert.Contains("var vocabulary = _libraryVocabulary.Current;", window, StringComparison.Ordinal);
         Assert.Contains("[.. vocabulary.AiScope.PermittedLibraryIds],", window, StringComparison.Ordinal);
