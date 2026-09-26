@@ -93,6 +93,25 @@ internal static class BlockedThreads
     }
 }
 
+/// <summary>
+/// Sets a test's gates on every way out of the scope it is declared in (stream TR round 4, A5). A thread a test holds at a
+/// gate (a production thread, a fake's, or one the test started to run production code) waits for its release and for
+/// nothing else, because what the test asserts rests on that thread staying where it is until the test lets it go; so a
+/// test that fails before its own release still releases here, and ends rather than hangs. A using declaration is a
+/// finally over every statement after it, and runs before the ones declared earlier are disposed: declare it after the
+/// gates and after whatever the held thread belongs to.
+/// </summary>
+internal sealed class ReleaseAtExit(params ManualResetEventSlim[] gates) : IDisposable
+{
+    public void Dispose()
+    {
+        foreach (var gate in gates)
+        {
+            gate.Set();
+        }
+    }
+}
+
 /// <summary>A time provider whose clock and timers only move when a test says so.</summary>
 internal sealed class ManualTimeProvider : TimeProvider
 {

@@ -20,7 +20,7 @@ public sealed class SettingsWriteLaneTests
         var owner = new OwnerThread();
         var lane = new SettingsWriteLane(repository, owner.Post);
         var delivered = new List<int>();
-        var firstWrite = repository.HoldNextUpdate();
+        using var firstWrite = repository.HoldNextUpdate();
 
         for (var minutes = 1; minutes <= 3; minutes++)
         {
@@ -103,7 +103,7 @@ public sealed class SettingsWriteLaneTests
         var owner = new OwnerThread();
         var lane = new SettingsWriteLane(repository, owner.Post);
         var delivered = new List<AppSettings>();
-        var write = repository.HoldNextUpdate();
+        using var write = repository.HoldNextUpdate();
 
         lane.Submit(stored => stored.EnableAiCleanup = true, delivered.Add, error => throw error);
         write.WaitUntilEntered();
@@ -208,7 +208,7 @@ public sealed class SettingsWriteLaneTests
         var owner = new OwnerThread();
         var lane = new SettingsWriteLane(repository, owner.Post);
         var callbacks = 0;
-        var write = repository.HoldNextUpdate();
+        using var write = repository.HoldNextUpdate();
 
         lane.Submit(stored => stored.EnableAiCleanup = true, _ => callbacks++, _ => callbacks++);
         write.WaitUntilEntered();
@@ -241,7 +241,7 @@ public sealed class SettingsWriteLaneTests
         // turn cleanup back on for dictation.
         using var world = new TrayAndWindow(enabledAtStart: false);
         var window = world.OpenWindow();
-        var waiting = world.Settings.HoldNextCheckedUpdate();
+        using var waiting = world.Settings.HoldNextCheckedUpdate();
 
         world.TrayToggle(true);
         waiting.WaitUntilEntered();
@@ -291,7 +291,7 @@ public sealed class SettingsWriteLaneTests
     {
         using var world = new TrayAndWindow(enabledAtStart: false);
         var window = world.OpenWindow();
-        var waiting = world.Settings.HoldNextCheckedUpdate();
+        using var waiting = world.Settings.HoldNextCheckedUpdate();
 
         world.TrayToggle(true);
         waiting.WaitUntilEntered();
@@ -314,7 +314,7 @@ public sealed class SettingsWriteLaneTests
         // the tray's write landed and the user saved something else, so cleanup would have stayed on after the user
         // had turned it off. A save supersedes only the changes it accounts for.
         using var world = new TrayAndWindow(enabledAtStart: true);
-        var waiting = world.Settings.HoldNextCheckedUpdate();
+        using var waiting = world.Settings.HoldNextCheckedUpdate();
 
         world.TrayToggle(false);
         waiting.WaitUntilEntered();
@@ -339,7 +339,7 @@ public sealed class SettingsWriteLaneTests
         // user saves something else. That save used to write the window's stale on over the stored off, and the tray's
         // result then read on back and applied it.
         using var world = new TrayAndWindow(enabledAtStart: true);
-        var waiting = world.Settings.HoldNextCheckedUpdate();
+        using var waiting = world.Settings.HoldNextCheckedUpdate();
 
         world.TrayToggle(false);
         waiting.WaitUntilEntered();
@@ -391,8 +391,11 @@ public sealed class SettingsWriteLaneTests
         }
     }
 
-    /// <summary>A write that stays open until the test lets it finish.</summary>
-    private sealed class HeldWrite
+    /// <summary>
+    /// A write that stays open until the test lets it finish, and only then (review round 4 of stream TR, A5); a test holds
+    /// it with a using declaration, so it is let go on every way out.
+    /// </summary>
+    private sealed class HeldWrite : IDisposable
     {
         private readonly ManualResetEventSlim _entered = new();
         private readonly ManualResetEventSlim _release = new();
@@ -400,7 +403,7 @@ public sealed class SettingsWriteLaneTests
         public void Enter()
         {
             _entered.Set();
-            _release.Wait(BlockedThreads.SafetyTimeout);
+            _release.Wait();
         }
 
         public void WaitUntilEntered()
@@ -412,6 +415,8 @@ public sealed class SettingsWriteLaneTests
         }
 
         public void Release() => _release.Set();
+
+        public void Dispose() => Release();
     }
 
     private sealed class ScriptedSettingsRepository : ISettingsRepository

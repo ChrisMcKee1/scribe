@@ -8,6 +8,7 @@ using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Scribe.Core.Tests.CleanupLogging;
 using Scribe.Core.Vocabulary;
+using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
 using static Scribe.Core.Tests.Vocabulary.TestVocabularies;
 using ManualClock = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
 
@@ -85,10 +86,11 @@ public sealed class VocabularyPublisherTests
             readStarted.Set();
             if (reader != caller)
             {
-                release.Wait(Bound);
+                release.Wait();
             }
         };
         using var publisher = new VocabularyPublisher(source, dictionary, Processor(dictionary), NullLogger<VocabularyPublisher>.Instance);
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         var starting = publisher.StartAsync();
         Assert.True(readStarted.Wait(Bound), "The first generation's build never read the library source.");
@@ -158,7 +160,7 @@ public sealed class VocabularyPublisherTests
         {
             dictionary.Read = null;
             reading.TrySetResult();
-            release.Wait(Bound);
+            release.Wait();
         };
 
         try
@@ -203,7 +205,7 @@ public sealed class VocabularyPublisherTests
         {
             dictionary.Read = null;
             reading.TrySetResult();
-            release.Wait(Bound);
+            release.Wait();
         };
         try
         {
@@ -342,7 +344,7 @@ public sealed class VocabularyPublisherTests
         {
             dictionary.Reading = null;
             between.TrySetResult();
-            release.Wait(Bound);
+            release.Wait();
         };
         try
         {

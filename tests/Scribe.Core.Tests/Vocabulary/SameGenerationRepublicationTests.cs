@@ -130,7 +130,7 @@ public sealed class SameGenerationRepublicationTests
         {
             dictionary.Read = null;
             reading.TrySetResult();
-            release.Wait(Bound);
+            release.Wait();
         };
 
         try

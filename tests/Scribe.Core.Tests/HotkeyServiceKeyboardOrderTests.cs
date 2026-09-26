@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -362,10 +363,11 @@ public partial class HotkeyServiceTests
         using var atMove = new ManualResetEventSlim(false);
         using var proceed = new ManualResetEventSlim(false);
         using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
+        using var releaseAtExit = new ReleaseAtExit(proceed);
         service.BeforeKeyboardMoveForTests = () =>
         {
             atMove.Set();
-            proceed.Wait(HookTimeout);
+            proceed.Wait();
         };
         service.Start();
         Assert.True(
@@ -454,6 +456,7 @@ public partial class HotkeyServiceTests
         using var resume = new ManualResetEventSlim(false);
         Thread? upkeep = null;
         using var service = ScriptedForegroundService(clock, () => SampleHeldOnThread(ref inFront, upkeep, sampled, resume));
+        using var releaseAtExit = new ReleaseAtExit(resume);
         service.Start();
         var (notify, published, decided) = service.ForegroundNoticeForTests!.Value;
         AwaitDecided(decided, published());
@@ -489,6 +492,7 @@ public partial class HotkeyServiceTests
         using var resume = new ManualResetEventSlim(false);
         Thread? upkeep = null;
         using var service = ScriptedForegroundService(clock, () => SampleHeldOnThread(ref inFront, upkeep, sampled, resume));
+        using var releaseAtExit = new ReleaseAtExit(resume);
         service.Start();
         var (notify, published, decided) = service.ForegroundNoticeForTests!.Value;
         LoseTheSequence(clock, ref inFront);
@@ -522,6 +526,7 @@ public partial class HotkeyServiceTests
         using var proceed = new ManualResetEventSlim(false);
         Thread? upkeep = null;
         using var service = ScriptedForegroundService(clock, () => SampleHeldOnThread(ref inFront, upkeep, sampled, resume));
+        using var releaseAtExit = new ReleaseAtExit(resume, proceed);
         service.Start();
         var (notify, published, _) = service.ForegroundNoticeForTests!.Value;
         LoseTheSequence(clock, ref inFront);
@@ -537,7 +542,7 @@ public partial class HotkeyServiceTests
         service.BeforeKeyboardMoveForTests = () =>
         {
             atMove.Set();
-            proceed.Wait(HookTimeout);
+            proceed.Wait();
         };
         clock.Timer.Fire(); // the first move, posted with the notice's revision
         Assert.True(atMove.Wait(HookTimeout), "The hook thread never took the move.");
@@ -575,7 +580,7 @@ public partial class HotkeyServiceTests
         if (upkeep is not null && ReferenceEquals(Thread.CurrentThread, upkeep) && !sampled.IsSet)
         {
             sampled.Set();
-            resume.Wait(HookTimeout);
+            resume.Wait();
         }
 
         return window;
@@ -598,10 +603,11 @@ public partial class HotkeyServiceTests
         using var atMove = new ManualResetEventSlim(false);
         using var proceed = new ManualResetEventSlim(false);
         using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
+        using var releaseAtExit = new ReleaseAtExit(proceed);
         service.BeforeKeyboardMoveForTests = () =>
         {
             atMove.Set();
-            proceed.Wait(HookTimeout);
+            proceed.Wait();
         };
         service.Start();
         Assert.True(
@@ -628,10 +634,11 @@ public partial class HotkeyServiceTests
         using var atMove = new ManualResetEventSlim(false);
         using var proceed = new ManualResetEventSlim(false);
         using var service = ScriptedForegroundService(clock, () => ScriptedRemoteWindow);
+        using var releaseAtExit = new ReleaseAtExit(proceed);
         service.BeforeKeyboardMoveForTests = () =>
         {
             atMove.Set();
-            proceed.Wait(HookTimeout);
+            proceed.Wait();
         };
         service.Start();
         Assert.True(

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Tests.Concurrency;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Scribe.Core.Tests;
@@ -563,13 +564,14 @@ public sealed class CleanupRecoveryTests
         // Ready, but has not returned yet, so the load still finds it running and cancels it.
         using var paused = new ManualResetEventSlim();
         using var resume = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var pausedOnce = 0;
         svc.StatusChanged += () =>
         {
             if (svc.Status == CleanupStatus.Ready && Interlocked.Exchange(ref pausedOnce, 1) == 0)
             {
                 paused.Set();
-                resume.Wait(Bound);
+                resume.Wait();
             }
         };
         svc.Configure(CleanupHarness.FoundryOn());

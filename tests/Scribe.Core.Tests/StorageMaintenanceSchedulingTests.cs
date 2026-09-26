@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.Tests.StorageTime;
+using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
 
 namespace Scribe.Core.Tests;
 
@@ -75,6 +76,7 @@ public class StorageMaintenanceSchedulingTests
         var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var settings = new BlockingSettings();
         using var maintenance = Create(db, new HistoryRepository(db), time);
+        using var releaseAtExit = new ReleaseAtExit(settings.Release);
         maintenance.Start(settings.Read);
         var timer = time.SingleTimer;
 
@@ -107,6 +109,7 @@ public class StorageMaintenanceSchedulingTests
         var history = new HistoryRepository(db);
         using var maintenance = new StorageMaintenance(
             db, blocking, failures, NullLogger.Instance, new ManualTimeProvider(DateTimeOffset.UtcNow), Options);
+        using var releaseAtExit = new ReleaseAtExit(blocking.Release);
 
         var pass = Task.Run(() => maintenance.RunOnce(AppSettings.CreateDefault()));
         Assert.True(blocking.Entered.Wait(Generous));
@@ -136,12 +139,13 @@ public class StorageMaintenanceSchedulingTests
         var entry = history.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "rate me", 1, 1));
         using var holding = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var holder = new Thread(() =>
         {
             using (db.EnterWriteScope())
             {
                 holding.Set();
-                release.Wait(Generous);
+                release.Wait();
             }
         });
         holder.Start();
@@ -196,15 +200,16 @@ public class StorageMaintenanceSchedulingTests
         var history = new HistoryRepository(db);
         using var holding = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var heldByHolder = false;
 
-        // The holder never lets go by itself, as if stuck.
+        // The holder never lets go by itself, as if stuck: only the test's release, on every way out, ends its hold.
         var holder = new Thread(() =>
         {
             using var scope = db.EnterWriteScope();
             heldByHolder = scope.Held;
             holding.Set();
-            release.Wait(Generous);
+            release.Wait();
         });
         holder.Start();
         Assert.True(holding.Wait(Generous));
@@ -318,6 +323,7 @@ public class StorageMaintenanceSchedulingTests
         var settings = new BlockingSettings();
         var recording = new BlockingHistoryMaintenance(block: false);
         var maintenance = new StorageMaintenance(db, recording, new CleanupFailureLog(db), NullLogger.Instance, time, Options);
+        using var releaseAtExit = new ReleaseAtExit(settings.Release);
         maintenance.Start(settings.Read);
         var timer = time.SingleTimer;
 
@@ -389,7 +395,10 @@ public class StorageMaintenanceSchedulingTests
         }
     }
 
-    /// <summary>Blocks the first read until released, so a pass can be held open deterministically.</summary>
+    /// <summary>
+    /// Blocks the first read until released, and only then, so a pass can be held open deterministically: what a test
+    /// asserts while the pass is open rests on it staying open (review round 4 of stream TR, A5).
+    /// </summary>
     private sealed class BlockingSettings
     {
         private int _calls;
@@ -405,14 +414,16 @@ public class StorageMaintenanceSchedulingTests
             if (Interlocked.Increment(ref _calls) == 1)
             {
                 Entered.Set();
-                Release.Wait(Generous);
+                Release.Wait();
             }
 
             return AppSettings.CreateDefault();
         }
     }
 
-    /// <summary>Holds the pass inside its audio-retention step, which maintenance runs under the gate.</summary>
+    /// <summary>
+    /// Holds the pass inside its audio-retention step, which maintenance runs under the gate, until released and only then.
+    /// </summary>
     private sealed class BlockingHistoryMaintenance(bool block = true) : IHistoryMaintenance
     {
         private int _calls;
@@ -435,7 +446,7 @@ public class StorageMaintenanceSchedulingTests
             if (block)
             {
                 Entered.Set();
-                Release.Wait(Generous);
+                Release.Wait();
             }
 
             return 0;

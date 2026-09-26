@@ -373,7 +373,7 @@ public sealed class MouseButtonRound10Tests
             if (Interlocked.Exchange(ref _pausedOnce, 1) == 0)
             {
                 _paused.Set();
-                _resume.Wait(Bound);
+                _resume.Wait();
             }
         }
     }

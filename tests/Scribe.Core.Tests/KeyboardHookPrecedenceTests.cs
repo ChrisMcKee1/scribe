@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Hotkeys;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -11,7 +12,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public class KeyboardHookPrecedenceTests
 {
-    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    // A hang guard, never the verdict: every wait below is for something certain to happen. A tick, lookup or recovery a
+    // test holds mid-step waits for the test's release and nothing else, since what the test asserts meanwhile rests on it
+    // being held (review round 4 of stream TR, A5); ReleaseAtExit lets it go on every way out.
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     private const nint RemoteWindow = 0x1111;
@@ -342,12 +345,13 @@ public class KeyboardHookPrecedenceTests
         var rig = new Rig();
         using var atLookup = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         rig.BeforeLookup = window =>
         {
             if (window == LocalWindow)
             {
                 atLookup.Set();
-                release.Wait(Bound);
+                release.Wait();
             }
         };
         rig.Foreground = RemoteWindow;
@@ -396,13 +400,14 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         using var atRead = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         var hold = 1;
         rig.BeforeForegroundRead = () =>
         {
             if (Interlocked.Exchange(ref hold, 0) == 1)
             {
                 atRead.Set();
-                release.Wait(Bound);
+                release.Wait();
             }
         };
         var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
@@ -498,12 +503,13 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         using var atLookup = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         rig.BeforeLookup = window =>
         {
             if (window == LocalWindow)
             {
                 atLookup.Set();
-                release.Wait(Bound);
+                release.Wait();
             }
         };
         rig.Foreground = LocalWindow;
@@ -558,12 +564,13 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         using var atRead = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         rig.AfterForegroundRead = window =>
         {
             if (window == 0)
             {
                 atRead.Set();
-                release.Wait(Bound);
+                release.Wait();
             }
         };
         rig.Foreground = 0;
@@ -596,13 +603,14 @@ public class KeyboardHookPrecedenceTests
         Assert.Equal(KeyboardHookPrecedence.RetiredGrace, rig.Time.Timer.Due);
         using var atLookup = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         var hold = 1;
         rig.BeforeLookup = window =>
         {
             if (window == RemoteWindow && Interlocked.Exchange(ref hold, 0) == 1)
             {
                 atLookup.Set();
-                release.Wait(Bound);
+                release.Wait();
             }
         };
         var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
@@ -689,13 +697,14 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(LocalWindow);
         using var sampled = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.AfterForegroundRead = window =>
         {
             if (ReferenceEquals(Thread.CurrentThread, recovery) && !sampled.IsSet)
             {
                 sampled.Set();
-                resume.Wait(Bound);
+                resume.Wait();
             }
         };
         recovery.Start();
@@ -726,13 +735,14 @@ public class KeyboardHookPrecedenceTests
         rig.Foreground = RemoteWindow;
         using var looking = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.BeforeLookup = window =>
         {
             if (ReferenceEquals(Thread.CurrentThread, recovery) && window == RemoteWindow && !looking.IsSet)
             {
                 looking.Set();
-                resume.Wait(Bound);
+                resume.Wait();
             }
         };
         recovery.Start();
@@ -757,13 +767,14 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(LocalWindow);
         using var looking = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var handler = new Thread(rig.Deliver) { IsBackground = true };
         rig.BeforeLookup = window =>
         {
             if (ReferenceEquals(Thread.CurrentThread, handler) && !looking.IsSet)
             {
                 looking.Set();
-                resume.Wait(Bound);
+                resume.Wait();
             }
         };
         rig.Publish(OtherLocalWindow);
@@ -805,13 +816,14 @@ public class KeyboardHookPrecedenceTests
         rig.Foreground = RemoteWindow;
         using var sampled = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.AfterForegroundRead = _ =>
         {
             if (ReferenceEquals(Thread.CurrentThread, recovery) && !sampled.IsSet)
             {
                 sampled.Set();
-                resume.Wait(Bound);
+                resume.Wait();
             }
         };
         recovery.Start();
@@ -840,6 +852,7 @@ public class KeyboardHookPrecedenceTests
         using var handlerResume = new ManualResetEventSlim(false);
         using var recoveryLooking = new ManualResetEventSlim(false);
         using var recoveryResume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(handlerResume, recoveryResume);
         var handler = new Thread(rig.Deliver) { IsBackground = true };
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.BeforeLookup = _ =>
@@ -847,12 +860,12 @@ public class KeyboardHookPrecedenceTests
             if (ReferenceEquals(Thread.CurrentThread, handler) && !handlerLooking.IsSet)
             {
                 handlerLooking.Set();
-                handlerResume.Wait(Bound);
+                handlerResume.Wait();
             }
             else if (ReferenceEquals(Thread.CurrentThread, recovery) && !recoveryLooking.IsSet)
             {
                 recoveryLooking.Set();
-                recoveryResume.Wait(Bound);
+                recoveryResume.Wait();
             }
         };
         rig.Publish(RemoteWindow);

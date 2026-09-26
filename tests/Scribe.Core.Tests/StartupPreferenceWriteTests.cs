@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -12,7 +13,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class StartupPreferenceWriteTests : IDisposable
 {
-    // A hang guard, never the verdict: every wait below is for a gate the test opens or a write it lets finish.
+    // A hang guard, never the verdict: every wait below is for a gate the test opens or a write it lets finish. Each update
+    // the test holds inside its transaction waits for the test's release and nothing else, since the check made while it
+    // is held rests on it still being held (review round 4 of stream TR, A5); ReleaseAtExit lets it go on every way out.
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "scribe-settings-update-" + Guid.NewGuid().ToString("N"));
@@ -32,6 +35,7 @@ public sealed class StartupPreferenceWriteTests : IDisposable
     {
         using var trayInside = new ManualResetEventSlim();
         using var releaseTray = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseTray);
 
         // The tray toggle has read the document and is about to write it back.
         var tray = Task.Factory.StartNew(
@@ -39,7 +43,7 @@ public sealed class StartupPreferenceWriteTests : IDisposable
             {
                 stored.EnableAiCleanup = true;
                 trayInside.Set();
-                Assert.True(releaseTray.Wait(Bound));
+                releaseTray.Wait();
             }),
             TaskCreationOptions.LongRunning);
         Assert.True(trayInside.Wait(Bound));
@@ -61,13 +65,14 @@ public sealed class StartupPreferenceWriteTests : IDisposable
     {
         using var switchInside = new ManualResetEventSlim();
         using var releaseSwitch = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseSwitch);
 
         var switchWrite = Task.Factory.StartNew(
             () => _settings.Update(stored =>
             {
                 stored.LaunchOnLogin = true;
                 switchInside.Set();
-                Assert.True(releaseSwitch.Wait(Bound));
+                releaseSwitch.Wait();
             }),
             TaskCreationOptions.LongRunning);
         Assert.True(switchInside.Wait(Bound));
@@ -88,12 +93,13 @@ public sealed class StartupPreferenceWriteTests : IDisposable
     {
         using var inside = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var update = Task.Factory.StartNew(
             () => _settings.Update(stored =>
             {
                 stored.LaunchOnLogin = true;
                 inside.Set();
-                Assert.True(release.Wait(Bound));
+                release.Wait();
             }),
             TaskCreationOptions.LongRunning);
         Assert.True(inside.Wait(Bound));
