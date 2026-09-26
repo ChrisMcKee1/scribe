@@ -393,6 +393,19 @@ public partial class SettingsWindow
         menu.IsOpen = true;
     }
 
+    private void WordPacksIntroInfoButton_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu { PlacementTarget = WordPacksIntroInfoButton };
+        menu.Items.Add(new TextBlock
+        {
+            Text = "Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win.",
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 320,
+            Margin = new Thickness(12, 8, 12, 8),
+        });
+        menu.IsOpen = true;
+    }
+
     private void LibraryDetailMoreButton_Click(object sender, RoutedEventArgs e)
     {
         if (_wordPackWorkspace is null || LibraryGrid.SelectedItem is not LibraryRow row)
@@ -499,6 +512,7 @@ public partial class SettingsWindow
         AddTermCommand(menu, commands, row, TermCommands.TurnOn, "Turn on", () => SetWordPackTermEnabled(row, true));
         AddTermCommand(menu, commands, row, TermCommands.Delete, "Delete word", () => DeleteWordPackTerm(row));
         AddTermCommand(menu, commands, row, TermCommands.RestoreBuiltIn, "Restore the built-in version", () => RestoreBuiltInTerm(row));
+        AddTermCommand(menu, commands, row, TermCommands.ShowOtherSources, "Show other word packs with this word", () => ShowOtherWordPacks(row));
         AddTermCommand(menu, commands, row, TermCommands.Copy, "Copy", () => ScribeClipboard.SetText($"{row.Pattern},{row.Replacement}"));
         AddTermCommand(menu, commands, row, TermCommands.CopyToDictionary, "Copy to my dictionary", () => CopyWordPackTermToDictionary(row));
         menu.IsOpen = true;
@@ -565,6 +579,45 @@ public partial class SettingsWindow
             Enabled = true,
         });
         ShowInfo("Copied to your dictionary. Save to apply it.");
+    }
+
+    private void ShowOtherWordPacks(LibraryTermRow row)
+    {
+        if (_wordPackWorkspace is null || row.Status is null)
+        {
+            return;
+        }
+
+        var ids = row.Status.SameResultIn.Concat(row.Status.DifferentResultIn).ToList();
+        if (row.Status.WinningLibraryId is { } winner)
+        {
+            ids.Insert(0, winner);
+        }
+
+        var menu = new ContextMenu { PlacementTarget = LibraryTermsGrid };
+        foreach (var id in ids.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (_wordPackWorkspace.Draft.Find(id) is not { } pack)
+            {
+                continue;
+            }
+
+            AddMenuItem(menu, pack.Content.Name, () =>
+            {
+                LibraryGrid.SelectedItem = _libraryRows.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (_wordPackLayout?.SideBySide == false)
+                {
+                    ShowWordPackCardPage();
+                }
+            });
+        }
+
+        if (menu.Items.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "No other word packs", IsEnabled = false });
+        }
+
+        menu.IsOpen = true;
     }
 
     private void OpenWordDetails(LibraryTermRow row)
@@ -1217,6 +1270,8 @@ public partial class SettingsWindow
 
     private void SectionWordPacks_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyWordPackLayout();
 
+    private FrameworkElement? WordPackLayoutRoot() => Content as FrameworkElement;
+
     private IntPtr WordPackDpiChangedHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WmDpiChanged)
@@ -1229,21 +1284,23 @@ public partial class SettingsWindow
 
     private void ApplyWordPackLayout()
     {
-        if (SectionWordPacks.ActualWidth <= 0 || SectionWordPacks.ActualHeight <= 0)
+        if (WordPackLayoutRoot() is not { ActualWidth: > 0, ActualHeight: > 0 } root)
         {
             return;
         }
 
         _wordPackLayout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(
-            SectionWordPacks.ActualWidth,
-            SectionWordPacks.ActualHeight,
+            root.ActualWidth,
+            root.ActualHeight,
             Math.Max(1, SystemFonts.MessageFontSize / 12.0),
             WordPackNoticeBar.IsOpen,
             WordDetailsPanel.Visibility == Visibility.Visible));
         WordPacksListColumn.Width = new GridLength(_wordPackLayout.ListWidth);
         LibraryTermUseColumn.Width = new DataGridLength(_wordPackLayout.UseColumnWidth);
-        LibraryTermSpokenColumn.Width = new DataGridLength(_wordPackLayout.SpokenColumnWidth);
-        LibraryTermWrittenColumn.Width = new DataGridLength(_wordPackLayout.WrittenColumnWidth);
+        LibraryTermSpokenColumn.MinWidth = LibraryLayoutPlanner.MinimumTextColumn * Math.Max(1, SystemFonts.MessageFontSize / 12.0);
+        LibraryTermWrittenColumn.MinWidth = LibraryTermSpokenColumn.MinWidth;
+        LibraryTermSpokenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
+        LibraryTermWrittenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermActionColumn.Width = new DataGridLength(_wordPackLayout.ActionColumnWidth);
         WordPacksIntroText.Visibility = _wordPackLayout.Short ? Visibility.Collapsed : Visibility.Visible;
         WordPacksIntroInfoButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
@@ -1447,9 +1504,12 @@ public partial class SettingsWindow
         var nameBox = new TextBox { Text = plan.SuggestedName, MinWidth = 320, Margin = new Thickness(0, 8, 0, 8) };
         var summary = new TextBlock
         {
-            Text = $"{plan.Adds:N0} added, {plan.WrittenDifferently:N0} written differently, {plan.AlreadyHere:N0} already here, {plan.Skipped:N0} couldn't be read.",
+            Text = $"Adds {plan.Adds:N0}, {plan.WrittenDifferently:N0} written differently, {plan.AlreadyHere:N0} already here, {plan.RemovalRules:N0} remove words.",
             TextWrapping = TextWrapping.Wrap,
         };
+        var conflict = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        conflict.Children.Add(new RadioButton { Content = "Keep mine", IsChecked = true, GroupName = "ImportConflictChoice" });
+        conflict.Children.Add(new RadioButton { Content = "Use the file's version", GroupName = "ImportConflictChoice" });
         var errors = new TextBlock
         {
             Text = plan.SkippedRows.Count == 0
@@ -1462,6 +1522,7 @@ public partial class SettingsWindow
         panel.Children.Add(new TextBlock { Text = "Replacement name" });
         panel.Children.Add(nameBox);
         panel.Children.Add(summary);
+        panel.Children.Add(conflict);
         panel.Children.Add(errors);
         var dialog = new Wpf.Ui.Controls.FluentWindow
         {

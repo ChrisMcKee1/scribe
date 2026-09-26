@@ -77,7 +77,7 @@ public sealed class WordPackSaveProtocol
                         session.Rebase(await _store.LoadCatalogAsync().ConfigureAwait(true));
                     }
 
-                    return WordPackSaveProtocolResult.Error(PrepareMessage(prepared));
+                    return FromNotice(WordPackNotices.FromPrepare(prepared));
                 }
 
                 session.PreparedBy(prepared);
@@ -201,7 +201,7 @@ public sealed class WordPackSaveProtocol
 
         ClearPending();
         request.OnWordPacksChanged?.Invoke();
-        return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+        return FromNotice(WordPackNotices.FromSettlement(WordPackSettlement.NotSaved));
     }
 
     private async Task<WordPackSaveProtocolResult> ApplyOutcomeAsync(
@@ -230,8 +230,7 @@ public sealed class WordPackSaveProtocol
 
                 if (outcome.Status == LibrarySaveStatus.AppliedAwaitingRelease)
                 {
-                    return WordPackSaveProtocolResult.SuccessResult(
-                        "Saved. Close the word pack file in the other app so Scribe can finish.");
+                    return WordPackSaveProtocolResult.SuccessResult(WordPackNotices.FromSaveStatus(outcome.Status).Text);
                 }
 
                 return WordPackSaveProtocolResult.SuccessResult();
@@ -239,16 +238,15 @@ public sealed class WordPackSaveProtocol
             case LibrarySaveStatus.CommitUnknown:
                 _pending = session;
                 _pendingGeneration = session.PreparedGeneration;
-                return WordPackSaveProtocolResult.Warning(
-                    "Scribe couldn't confirm that your word pack changes were saved. It will finish saving them, and your edits stay here until it has.");
+                return FromNotice(WordPackNotices.FromSaveStatus(outcome.Status));
 
             case LibrarySaveStatus.Superseded:
                 session.Rebase(await _store.LoadCatalogAsync().ConfigureAwait(true));
                 request.OnWordPacksChanged?.Invoke();
-                return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+                return FromNotice(WordPackNotices.FromSaveStatus(outcome.Status));
 
             default:
-                return WordPackSaveProtocolResult.Error("Couldn't save your changes. Your edits are still here.");
+                return FromNotice(WordPackNotices.FromSaveStatus(LibrarySaveStatus.NotCommitted));
         }
     }
 
@@ -345,18 +343,12 @@ public sealed class WordPackSaveProtocol
         _pendingGeneration = 0;
     }
 
-    private static string PrepareMessage(LibraryPrepareResult? result) =>
-        result?.Status switch
+    private static WordPackSaveProtocolResult FromNotice(WordPackNotice notice) =>
+        notice.Severity switch
         {
-            LibraryPrepareStatus.PreviousSaveUnfinished when result.Failure == LibraryIoFailure.SharingViolation =>
-                "A word pack file is open in another app, so Scribe can't finish saving. Close it there and try again.",
-            LibraryPrepareStatus.PreviousSaveUnfinished =>
-                "Scribe is still finishing an earlier save. Try again in a moment.",
-            LibraryPrepareStatus.ReadOnly =>
-                "Word packs were changed by a newer version of Scribe. Update Scribe to change them here.",
-            LibraryPrepareStatus.OutsideEdit =>
-                "A word pack changed outside Scribe. Reload saved version, or save your draft as a new word pack.",
-            _ => "Couldn't save your changes. Your edits are still here.",
+            WordPackNoticeSeverity.Error => WordPackSaveProtocolResult.Error(notice.Text),
+            WordPackNoticeSeverity.Warning => WordPackSaveProtocolResult.Warning(notice.Text),
+            _ => WordPackSaveProtocolResult.SuccessResult(notice.Text),
         };
 
     private static WordPackSaveProtocolResult Unfinished() =>

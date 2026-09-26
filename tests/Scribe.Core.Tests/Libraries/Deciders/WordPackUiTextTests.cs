@@ -52,6 +52,25 @@ public sealed class WordPackUiTextTests
         Assert.DoesNotContain("<DataGridTemplateColumn x:Name=\"LibraryTermWrittenColumn\"", xaml, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Word_pack_layout_uses_the_root_content_size_not_the_tab_section_size()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.WordPacks.cs"));
+        var layout = Body(source, "private void ApplyWordPackLayout()");
+        Assert.Contains("WordPackLayoutRoot()", layout, StringComparison.Ordinal);
+        Assert.DoesNotContain("SectionWordPacks.ActualWidth", layout, StringComparison.Ordinal);
+        Assert.DoesNotContain("SectionWordPacks.ActualHeight", layout, StringComparison.Ordinal);
+    }
+
+    private static string Body(string source, string signature)
+    {
+        var start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{signature} was not found.");
+        var end = source.IndexOf("\n    }", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"{signature} has no end.");
+        return source[start..end];
+    }
+
     private static string RepositoryRoot()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);

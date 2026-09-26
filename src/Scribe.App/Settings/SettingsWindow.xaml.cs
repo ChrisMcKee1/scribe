@@ -261,6 +261,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         InitializeComponent();
         InitializeNavigation();
+        if (Content is FrameworkElement rootContent)
+        {
+            rootContent.SizeChanged += (_, _) => ApplyWordPackLayout();
+        }
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
