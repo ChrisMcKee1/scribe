@@ -19,11 +19,12 @@ namespace Scribe.Core.Libraries;
 /// lock, but a retry exists only after a publication).
 /// </para>
 /// <para>
-/// A request storage maintenance cannot take yet is kept, not dropped: the app publishes its first vocabulary when
-/// dictation starts, before maintenance is resolved and started (Grok's G2 on the integration), and maintenance's trigger
-/// arms nothing until it starts. So the request that began a hold-back, or a retry that came due, stays owed until the
-/// trigger takes it, and maintenance asks for it again when it connects and when it starts
-/// (<see cref="MaintenanceStarted"/>), whatever order the shell starts things in. A hold-back that ends first owes nothing.
+/// A request storage maintenance cannot take yet is kept, not dropped: the app publishes its first vocabulary in its first
+/// vocabulary build, which it awaits before the controller starts and before maintenance is resolved and started (Grok's
+/// G2 on the integration), and maintenance's trigger arms nothing until it starts. So the request that began a hold-back,
+/// or a retry that came due, stays owed until the trigger takes it, and maintenance asks for it again when it connects and
+/// when it starts (<see cref="MaintenanceStarted"/>), whatever order the shell starts things in. A hold-back that ends first
+/// owes nothing.
 /// </para>
 /// <para>
 /// A pass that meets foreground activity skips its remaining light steps, the library step included, and its own

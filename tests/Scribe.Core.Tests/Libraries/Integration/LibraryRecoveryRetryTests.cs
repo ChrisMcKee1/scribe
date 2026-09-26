@@ -42,10 +42,10 @@ public sealed class LibraryRecoveryRetryTests : IDisposable
     [Fact]
     public void A_hold_back_published_before_storage_maintenance_exists_is_asked_for_as_soon_as_maintenance_starts()
     {
-        // The production order (App.StartAsync): DictationController.Start publishes the first vocabulary before storage
-        // maintenance is resolved and started, so the hold-back is noted with nothing connected to ask (Grok's G2 on the
-        // integration). The request is kept, and made when maintenance starts: the first pass comes after the trigger
-        // delay, not the ordinary first pass's initial delay.
+        // The production order (App.StartAsync): the first vocabulary build, which DictationController.PrepareAsync awaits,
+        // publishes the first vocabulary before storage maintenance is resolved and started, so the hold-back is noted with
+        // nothing connected to ask (Grok's G2 on the integration). The request is kept, and made when maintenance starts:
+        // the first pass comes after the trigger delay, not the ordinary first pass's initial delay.
         var (service, files) = HeldBackStart();
         Assert.Empty(service.Current.Entries);
         Assert.True(service.Janitor.Retry.Pending);
