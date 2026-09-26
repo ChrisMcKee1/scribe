@@ -8,6 +8,7 @@ using System.Windows.Media;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 using Scribe.Core.Settings;
 
 namespace Scribe.App.Settings;
@@ -25,8 +26,18 @@ public partial class SettingsWindow
             return;
         }
 
+        CommitPendingGridEdits();
+        RefreshFooterNow();
+        var decision = ShouldAskBeforeClose(CloseTrigger.CloseButton);
+        if (!decision.Ask)
+        {
+            _closeAccepted = true;
+            base.OnClosing(e);
+            return;
+        }
+
         e.Cancel = true;
-        _ = RequestCloseAsync(CloseTrigger.CloseButton);
+        Dispatcher.BeginInvoke(new Action(async () => await RequestCloseAsync(CloseTrigger.CloseButton)));
     }
 
     private async Task SaveFromAcceleratorAsync()
@@ -54,6 +65,61 @@ public partial class SettingsWindow
     private async Task<bool> TrySaveWithConfirmationsAsync() =>
         await ConfirmDictionaryOverlapAsync() && await TrySaveAsync();
 
+    private async Task<SavePreflightInput?> PrepareSavePreflightAsync()
+    {
+        CommitPendingEditorValues();
+        var settings = CaptureDraftSettings();
+        var dictionarySignature = DictionarySignature();
+        var snippetSignature = SnippetSignature();
+        var dictionaryDirty = _dictionaryLoad.HasChanges(dictionarySignature);
+        var snippetsDirty = _snippetLoad.HasChanges(snippetSignature);
+        var dictionaryRows = _dictionaryLoad.IsLoaded ? _rows.ToList() : new List<DictionaryRow>();
+        var snippetRows = _snippetLoad.IsLoaded ? _snippetRows.ToList() : new List<SnippetRow>();
+        var profileRows = _profileRows.ToList();
+        var durationFields = DurationDraftFields(settings);
+        var issues = SettingsDraftValidator.Validate(new SettingsDraft(
+            settings,
+            _dictionaryLoad.IsLoaded ? [.. dictionaryRows.Select(ToDictionaryDraftRow)] : [],
+            _snippetLoad.IsLoaded ? [.. snippetRows.Select(row => ToDraftRow(row))] : [],
+            [.. profileRows.Select(ToProfileDraftRow)],
+            durationFields));
+        ClearAllInlineValidation();
+        foreach (var warning in issues.Where(issue => issue.Severity == ValidationSeverity.Warning))
+        {
+            ShowValidationIssue(warning);
+        }
+
+        if (issues.FirstOrDefault(issue => issue.Severity == ValidationSeverity.Blocking) is { } blocking)
+        {
+            ShowValidationIssue(blocking);
+            return null;
+        }
+
+        IReadOnlyList<DictionarySubmission>? dictionarySubmission = null;
+        var entries = dictionaryDirty ? BuildDictionaryEntries(dictionaryRows, out dictionarySubmission) : null;
+        var snippets = default(List<Snippet>);
+        IReadOnlyList<SnippetSubmission>? snippetSubmission = null;
+        if (snippetsDirty)
+        {
+            snippets = BuildSnippets(snippetRows, out snippetSubmission);
+        }
+
+        var profileSubmission = CaptureProfileSubmission(profileRows);
+        var intents = new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision);
+        var preflight = new SavePreflightInput(settings, entries, dictionarySubmission, snippets, snippetSubmission, profileSubmission, intents, dictionarySignature, snippetSignature);
+        if (!await ConfirmNewRemovalRulesAsync(dictionaryRows))
+        {
+            return null;
+        }
+
+        if (!await ConfirmRetentionChangeAsync(settings))
+        {
+            return null;
+        }
+
+        return preflight;
+    }
+
     private async Task RequestCloseAsync(CloseTrigger trigger)
     {
         if (_closePromptShowing)
@@ -67,16 +133,20 @@ public partial class SettingsWindow
             return;
         }
 
-        CommitPendingGridEdits();
-        RefreshFooterNow();
-        var decision = SettingsCloseGuard.Decide(CurrentUnsavedSections(), trigger);
-        if (!decision.Ask && !_currentChanges.IsDirty)
+        while (_saveInProgress)
         {
-            CloseAfterPromptAccepted();
-            return;
+            FooterStatusText.Text = "Saving...";
+            await Task.Delay(100);
+            if (_closed)
+            {
+                return;
+            }
         }
 
-        if (!decision.Ask && _currentChanges.IsDirty)
+        CommitPendingGridEdits();
+        RefreshFooterNow();
+        var decision = ShouldAskBeforeClose(trigger);
+        if (!decision.Ask)
         {
             CloseAfterPromptAccepted();
             return;
@@ -115,8 +185,14 @@ public partial class SettingsWindow
             var result = await dialog.ShowDialogAsync();
             if (result == Wpf.Ui.Controls.MessageBoxResult.Primary)
             {
+                if (_saveInProgress)
+                {
+                    return;
+                }
+
                 dialog.PrimaryButtonText = "Saving...";
                 _saveInProgress = true;
+                FooterStatusText.Text = "Saving...";
                 try
                 {
                     if (await TrySaveWithConfirmationsAsync())
@@ -132,6 +208,11 @@ public partial class SettingsWindow
             }
             else if (result == Wpf.Ui.Controls.MessageBoxResult.Secondary)
             {
+                while (_saveInProgress)
+                {
+                    await Task.Delay(100);
+                }
+
                 CloseAfterPromptAccepted();
             }
         }
@@ -139,6 +220,19 @@ public partial class SettingsWindow
         {
             _closePromptShowing = false;
         }
+    }
+
+    private CloseDecision ShouldAskBeforeClose(CloseTrigger trigger)
+    {
+        var guard = SettingsCloseGuard.Decide(CurrentUnsavedSections(), trigger);
+        if (trigger is CloseTrigger.UpdateRestart or CloseTrigger.SignOut or CloseTrigger.Shutdown)
+        {
+            return guard;
+        }
+
+        return _currentChanges.IsDirty || _settingsRecovered || _wordPackWorkspace?.HasUnsavedChanges == true
+            ? new CloseDecision(true, guard.Prompt, guard.Choices.Count == 0 ? [CloseChoice.Save, CloseChoice.DiscardChanges, CloseChoice.KeepEditing] : guard.Choices, CloseChoice.KeepEditing)
+            : guard;
     }
 
     private void CloseAfterPromptAccepted()
@@ -172,11 +266,11 @@ public partial class SettingsWindow
     {
         var action = SettingsCloseGuard.NextEscape(new EscapeState(
             _capturing,
-            ImeComposing: false,
+            ImeComposing: _imeComposing,
             IsEditingCell(),
-            IsAnyMenuOpen(this),
-            ReferenceEquals(Keyboard.FocusedElement, LibrarySearchBox),
-            !string.IsNullOrEmpty(LibrarySearchBox.Text)));
+            IsAnyMenuOpen(this) || FocusedComboBox() is { IsDropDownOpen: true },
+            FocusedSearchBox() is not null,
+            FocusedSearchBox() is { Text.Length: > 0 }));
         switch (action)
         {
             case EscapeAction.CancelHotkeyCapture:
@@ -187,10 +281,18 @@ public partial class SettingsWindow
                 break;
             case EscapeAction.CloseMenu:
                 CloseOpenMenus(this);
+                if (FocusedComboBox() is { } combo)
+                {
+                    combo.IsDropDownOpen = false;
+                }
+
                 break;
             case EscapeAction.ClearSearch:
-                LibrarySearchBox.Clear();
-                LibrarySearchBox.Focus();
+                if (FocusedSearchBox() is { } search)
+                {
+                    search.Clear();
+                    search.Focus();
+                }
                 break;
             default:
                 await RequestCloseAsync(CloseTrigger.Escape);
@@ -320,6 +422,7 @@ public partial class SettingsWindow
         {
             case ValidationCode.DictionarySpokenEmpty:
             case ValidationCode.DictionaryDuplicate:
+                DictionaryTabs.SelectedItem = YourWordsTab;
                 if (issue.RowKey is not null && _rows.FirstOrDefault(row => row.RowKey == issue.RowKey) is { } row)
                 {
                     DictionaryGrid.SelectedItem = row;
@@ -332,11 +435,40 @@ public partial class SettingsWindow
             case ValidationCode.SnippetTriggerEmpty:
             case ValidationCode.SnippetTextEmpty:
             case ValidationCode.SnippetDuplicate:
-                ValidateSnippetAndProfileDraft();
+                ShowPage(SettingsPage.VoiceSnippets);
+                if (issue.RowKey is not null && _snippetRows.FirstOrDefault(row => row.RowKey == issue.RowKey) is { } snippet)
+                {
+                    SnippetList.SelectedItem = snippet;
+                    SnippetList.ScrollIntoView(snippet);
+                }
+
+                var snippetTarget = issue.Code == ValidationCode.SnippetTextEmpty ? (Control)SnippetTemplateBox : SnippetPhraseBox;
+                ShowValidation(
+                    issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidation : SnippetPhraseValidation,
+                    issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidationText : SnippetPhraseValidationText,
+                    issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidationIcon : SnippetPhraseValidationIcon,
+                    snippetTarget,
+                    issue.Message);
+                snippetTarget.Focus();
                 break;
             case ValidationCode.ProfileNameEmpty:
             case ValidationCode.ProfileAppsEmpty:
-                ValidateSnippetAndProfileDraft();
+                ShowPage(SettingsPage.AppProfiles);
+                if (issue.RowKey is not null && _profileRows.FirstOrDefault(row => row.RowKey == issue.RowKey) is { } profile)
+                {
+                    ProfileList.SelectedItem = profile;
+                    ProfileList.ScrollIntoView(profile);
+                }
+
+                var appsIssue = issue.Code == ValidationCode.ProfileAppsEmpty;
+                var profileTarget = appsIssue ? (Control)ProfileAddAppButton : ProfileNameBox;
+                ShowValidation(
+                    appsIssue ? ProfileAppsValidation : ProfileNameValidation,
+                    appsIssue ? ProfileAppsValidationText : ProfileNameValidationText,
+                    appsIssue ? ProfileAppsValidationIcon : ProfileNameValidationIcon,
+                    profileTarget,
+                    issue.Message);
+                profileTarget.Focus();
                 break;
             case ValidationCode.ShortcutsIdentical:
                 ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
@@ -392,9 +524,56 @@ public partial class SettingsWindow
         ClearProfileValidation();
     }
 
-    private async Task<bool> ConfirmNewRemovalRulesAsync()
+
+
+    private static DictionaryDraftRow ToDictionaryDraftRow(DictionaryRow row) => new(
+        RowKey: row.RowKey,
+        Origin: row.Origin,
+        Touched: row.Touched,
+        Pattern: row.Pattern,
+        Replacement: row.Replacement,
+        LoadedPattern: row.LoadedPattern,
+        LoadedReplacement: row.LoadedReplacement,
+        WholeWord: row.WholeWord,
+        Enabled: row.Enabled,
+        LoadedWholeWord: row.LoadedWholeWord,
+        LoadedEnabled: row.LoadedEnabled);
+
+    private static ProfileDraftRow ToProfileDraftRow(ProfileRow row) => new(
+        RowKey: row.RowKey,
+        Origin: row.Origin,
+        Touched: row.Touched,
+        Name: row.Name,
+        Apps: row.Processes,
+        LoadedName: row.LoadedName,
+        LoadedApps: row.LoadedProcesses,
+        WritingStyle: row.WritingStyle,
+        LoadedWritingStyle: row.LoadedWritingStyle,
+        NewlineHandling: row.NewlineHandling,
+        LoadedNewlineHandling: row.LoadedNewlineHandling);
+
+    private Wpf.Ui.Controls.TextBox? FocusedSearchBox() =>
+        Keyboard.FocusedElement is Wpf.Ui.Controls.TextBox box &&
+        box.Name.Contains("Search", StringComparison.OrdinalIgnoreCase)
+            ? box
+            : null;
+
+    private ComboBox? FocusedComboBox() =>
+        FindVisualParent<ComboBox>(Keyboard.FocusedElement as DependencyObject);
+
+    private void CommitPendingEditorValues()
     {
-        var removals = DictionaryDraftRows()
+        CommitPendingGridEdits();
+        if (Keyboard.FocusedElement is UIElement focused)
+        {
+            focused.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
+            focused.Focus();
+        }
+    }
+
+    private async Task<bool> ConfirmNewRemovalRulesAsync(IReadOnlyList<DictionaryRow> rows)
+    {
+        var removals = rows.Select(ToDictionaryDraftRow)
             .Where(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation)
             .Select(row => (row.Pattern ?? string.Empty).Trim())
             .Where(text => text.Length > 0)
@@ -414,14 +593,14 @@ public partial class SettingsWindow
             "Keep editing");
     }
 
-    private async Task<bool> ConfirmRetentionChangeAsync()
+    private async Task<bool> ConfirmRetentionChangeAsync(AppSettings settings)
     {
         if (_settingsRecovered)
         {
             return true;
         }
 
-        var draftDays = SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, _committedSettings.HistoryRetentionDays);
+        var draftDays = settings.HistoryRetentionDays;
         var confirmation = HistoryRetentionChange.Describe(_committedSettings.HistoryRetentionDays, draftDays);
         if (confirmation is null)
         {
@@ -434,4 +613,15 @@ public partial class SettingsWindow
             confirmation.DeleteAndSaveText,
             confirmation.KeepEditingText);
     }
+    private sealed record SavePreflightInput(
+        AppSettings Settings,
+        IReadOnlyList<DictionaryEntry>? Entries,
+        IReadOnlyList<DictionarySubmission>? DictionarySubmission,
+        IReadOnlyList<Snippet>? Snippets,
+        IReadOnlyList<SnippetSubmission>? SnippetSubmission,
+        IReadOnlyList<ProfileSubmission> ProfileSubmission,
+        ExternalIntents Intents,
+        string DictionarySignature,
+        string SnippetSignature);
 }
+

@@ -50,18 +50,42 @@ public partial class SettingsWindow
     }
 
     private void SystemEvents_DisplaySettingsChanged(object? sender, EventArgs e) =>
-        Dispatcher.BeginInvoke(new Action(() => ApplyWindowFit(GetWindowMonitor(), center: false)));
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_closed)
+            {
+                ApplyWindowFit(GetWindowMonitor(), center: false);
+            }
+        }));
 
     private void SystemParameters_StaticPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (string.Equals(e.PropertyName, nameof(SystemParameters.WorkArea), StringComparison.Ordinal))
         {
-            Dispatcher.BeginInvoke(new Action(() => ApplyWindowFit(GetWindowMonitor(), center: false)));
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_closed)
+                {
+                    ApplyWindowFit(GetWindowMonitor(), center: false);
+                }
+            }));
         }
+    }
+
+    private void CleanupWindowFit()
+    {
+        _windowFitTimer?.Stop();
+        SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
+        SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
     }
 
     private void ApplyWindowFit(IntPtr monitor, bool center)
     {
+        if (_closed)
+        {
+            return;
+        }
+
         if (monitor == IntPtr.Zero || !TryGetMonitorWorkArea(monitor, out var workArea))
         {
             var fallback = SystemParameters.WorkArea;

@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
@@ -15,6 +16,7 @@ public partial class SettingsWindow
 {
     private readonly DispatcherTimer _footerRefreshTimer = new() { Interval = TimeSpan.FromMilliseconds(1) };
     private string _footerStatus = SettingsChangeTracker.AllChangesSaved;
+    private bool _imeComposing;
     private SettingsChangeSet _currentChanges = new(new HashSet<SettingsPage>());
 
     private void InitializeFooterAndClose()
@@ -35,6 +37,9 @@ public partial class SettingsWindow
         _profileRows.CollectionChanged += RowsChangedForFooter;
         _libraryRows.CollectionChanged += RowsChangedForFooter;
         _libraryTermRows.CollectionChanged += RowsChangedForFooter;
+        TextCompositionManager.AddPreviewTextInputStartHandler(this, (_, _) => _imeComposing = true);
+        TextCompositionManager.AddPreviewTextInputUpdateHandler(this, (_, _) => _imeComposing = true);
+        TextCompositionManager.AddPreviewTextInputHandler(this, (_, _) => _imeComposing = false);
         RecoveredSettingsNotice.IsOpen = _settingsRecovered;
         RefreshFooterNow();
     }
@@ -94,9 +99,9 @@ public partial class SettingsWindow
             _snippetLoad.IsLoaded ? SnippetDraftRows() : null,
             ProfileDraftRows(),
             _settingsRecovered,
-            _dictionaryLoad.IsLoaded ? LoadedDictionaryDraftRows() : null,
-            _snippetLoad.IsLoaded ? LoadedSnippetDraftRows() : null,
-            LoadedProfileDraftRows());
+            _dictionaryLoad.IsLoaded ? _loadedDictionaryRows : null,
+            _snippetLoad.IsLoaded ? _loadedSnippetRows : null,
+            _loadedProfileRows);
         if (_wordPackWorkspace?.HasUnsavedChanges == true)
         {
             var pages = new HashSet<SettingsPage>(changes.Pages) { SettingsPage.Dictionary };
@@ -172,7 +177,7 @@ public partial class SettingsWindow
             row.LoadedWholeWord,
             row.LoadedEnabled))];
 
-    private IReadOnlyList<LoadedDictionaryDraftRow> LoadedDictionaryDraftRows() =>
+    private IReadOnlyList<LoadedDictionaryDraftRow> LoadedDictionaryDraftRowsFromRows() =>
         [.. _rows.Where(row => row.Origin == DraftRowOrigin.Saved).Select(row => new LoadedDictionaryDraftRow(
             row.RowKey,
             row.LoadedPattern,
@@ -180,14 +185,14 @@ public partial class SettingsWindow
             row.LoadedWholeWord,
             row.LoadedEnabled))];
 
-    private IReadOnlyList<LoadedSnippetDraftRow> LoadedSnippetDraftRows() =>
+    private IReadOnlyList<LoadedSnippetDraftRow> LoadedSnippetDraftRowsFromRows() =>
         [.. _snippetRows.Where(row => row.Origin == DraftRowOrigin.Saved).Select(row => new LoadedSnippetDraftRow(
             row.RowKey,
             row.LoadedPhrase,
             row.LoadedTemplate,
             row.LoadedEnabled))];
 
-    private IReadOnlyList<LoadedProfileDraftRow> LoadedProfileDraftRows() =>
+    private IReadOnlyList<LoadedProfileDraftRow> LoadedProfileDraftRowsFromRows() =>
         [.. _profileRows.Where(row => row.Origin == DraftRowOrigin.Saved).Select(row => new LoadedProfileDraftRow(
             row.RowKey,
             row.LoadedName,

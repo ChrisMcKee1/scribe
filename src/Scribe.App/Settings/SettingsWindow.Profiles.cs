@@ -402,7 +402,10 @@ public partial class SettingsWindow
         ProfileRow Row, string? Name, string? Processes, string? WritingStyle, NewlineInjectionMode? NewlineHandling);
 
     private IReadOnlyList<ProfileSubmission> CaptureProfileSubmission() =>
-        [.. _profileRows.Select(row => new ProfileSubmission(row, row.Name, row.Processes, row.WritingStyle, row.NewlineHandling))];
+        CaptureProfileSubmission(_profileRows.ToList());
+
+    private static IReadOnlyList<ProfileSubmission> CaptureProfileSubmission(IReadOnlyList<ProfileRow> rows) =>
+        [.. rows.Select(row => new ProfileSubmission(row, row.Name, row.Processes, row.WritingStyle, row.NewlineHandling))];
 
     // Each submitted row still in the list takes what was submitted as its saved baseline, in memory. A row edited since it
     // was submitted keeps its edit, now unsaved against that baseline, and stays touched.
@@ -429,6 +432,8 @@ public partial class SettingsWindow
                 row.Touched = false;
             }
         }
+
+        _loadedProfileRows = LoadedProfileDraftRowsFromRows();
     }
 
     private IReadOnlyList<ProfileDraftRow> ProfileDraftRows() =>

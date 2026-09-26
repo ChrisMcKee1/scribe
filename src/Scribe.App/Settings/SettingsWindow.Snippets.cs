@@ -201,9 +201,22 @@ public partial class SettingsWindow
     // What Save stores for the snippets, and exactly which rows it stored. Validation has already blocked every changed
     // incomplete row, so the incomplete rows left are untouched placeholders, which are dropped and stay new, and stored
     // rows validation calls unchanged, which saving another snippet must neither delete nor turn into a conflict.
-    private List<Snippet> BuildSnippets(out SnippetRow? duplicate, out IReadOnlyList<SnippetSubmission> submission)
+    private List<Snippet> BuildSnippets(out SnippetRow? duplicate, out IReadOnlyList<SnippetSubmission> submission) =>
+        BuildSnippets(_snippetRows.ToList(), out duplicate, out submission);
+
+    private List<Snippet> BuildSnippets(IReadOnlyList<SnippetRow> rows, out IReadOnlyList<SnippetSubmission> submission)
     {
-        var rows = _snippetRows.ToList();
+        var result = SnippetBuilder.Build([.. rows.Select(ToBuilderRow)]);
+        submission = [.. result.IncludedRows.Select((index, built) => new SnippetSubmission(
+            rows[index],
+            result.Snippets[built].Phrase,
+            result.Snippets[built].Template,
+            result.Snippets[built].Enabled))];
+        return [.. result.Snippets];
+    }
+
+    private List<Snippet> BuildSnippets(IReadOnlyList<SnippetRow> rows, out SnippetRow? duplicate, out IReadOnlyList<SnippetSubmission> submission)
+    {
         var result = SnippetBuilder.Build([.. rows.Select(ToBuilderRow)]);
         duplicate = result.HasDuplicate ? rows[result.DuplicateIndex] : null;
         submission = [.. result.IncludedRows.Select((index, built) => new SnippetSubmission(
@@ -296,6 +309,7 @@ public partial class SettingsWindow
             submitted.Row.LoadedEnabled = submitted.Enabled;
         }
 
+        _loadedSnippetRows = LoadedSnippetDraftRowsFromRows();
         RefreshSnippetEmptyState();
     }
 
