@@ -1276,8 +1276,11 @@ public partial class SettingsWindow
         _updatingLibraryTerms = false;
         LibraryDetailEmptyPanel.Visibility = _libraryTermRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         LibraryDetailEmpty.Text = SearchNoMatchesText(libraryId);
-        LibraryEmptyActionButton.Content = _librarySearchResult?.IsActive == true ? $"Add \"{_librarySearchResult.Query}\" to this word pack" : "Add first word";
-        LibraryEmptyActionButton.Visibility = _wordPackWorkspace.CanEditContent(libraryId) ? Visibility.Visible : Visibility.Collapsed;
+        var addFromSearch = _librarySearchResult?.IsActive == true && _librarySearchResult.TotalMatches == 0;
+        LibraryEmptyActionButton.Content = addFromSearch ? $"Add \"{_librarySearchResult!.Query}\" to this word pack" : "Add first word";
+        LibraryEmptyActionButton.Visibility = _wordPackWorkspace.CanEditContent(libraryId) && (_librarySearchResult?.IsActive != true || addFromSearch)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         RefreshSearchLinks(libraryId);
         UpdateLibraryTermCount(rows.Count);
         RefreshWordDetails();
@@ -1292,7 +1295,8 @@ public partial class SettingsWindow
             return;
         }
 
-        foreach (var match in _librarySearchResult.FoundElsewhere(libraryId).Take(5))
+        var matches = _librarySearchResult.FoundElsewhere(libraryId).ToList();
+        foreach (var match in matches.Take(5))
         {
             if (_wordPackWorkspace.Draft.Find(match.LibraryId) is not { } pack)
             {
@@ -1315,6 +1319,16 @@ public partial class SettingsWindow
             };
             LibrarySearchLinksPanel.Children.Add(button);
         }
+
+        if (matches.Count > 5)
+        {
+            LibrarySearchLinksPanel.Children.Add(new TextBlock
+            {
+                Text = $"and {matches.Count - 5:N0} more",
+                Style = (Style)FindResource("CardDescription"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+        }
     }
 
     private string SearchNoMatchesText(string libraryId)
@@ -1325,21 +1339,12 @@ public partial class SettingsWindow
         }
 
         var selected = _wordPackWorkspace.Draft.Find(libraryId)?.Content.Name ?? "this word pack";
-        var elsewhere = _librarySearchResult.FoundElsewhere(libraryId)
-            .Select(match => _wordPackWorkspace.Draft.Find(match.LibraryId) is { } pack
-                ? $"{pack.Content.Name} ({match.Count})"
-                : null)
-            .Where(text => text is not null)
-            .Take(5)
-            .ToList();
         if (_librarySearchResult.TotalMatches == 0)
         {
             return $"No words match \"{_librarySearchResult.Query}\" in any word pack.";
         }
 
-        return elsewhere.Count == 0
-            ? $"No matches in {selected}."
-            : $"No matches in {selected}. Found in: {string.Join(", ", elsewhere)}";
+        return $"No matches in {selected}. Found in:";
     }
 
     private void LibraryTermRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -1560,6 +1565,8 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         LibraryTermSpokenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermWrittenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermActionColumn.Width = new DataGridLength(_wordPackLayout.ActionColumnWidth);
+        var rowHeight = (20 * Math.Max(1, SystemFonts.MessageFontSize / 12.0)) + 8;
+        LibraryTermsGrid.MinHeight = (32 * Math.Max(1, SystemFonts.MessageFontSize / 12.0)) + rowHeight * LibraryLayoutPlanner.MinimumRows;
         WordPacksIntroText.Visibility = _wordPackLayout.Short ? Visibility.Collapsed : Visibility.Visible;
         WordPacksIntroInfoButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
         WordDetailsBackButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;

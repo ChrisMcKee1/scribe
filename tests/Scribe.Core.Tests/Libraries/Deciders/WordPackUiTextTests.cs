@@ -10,6 +10,7 @@ public sealed class WordPackUiTextTests
     {
         Assert.Equal("Built-in, 94 words", WordPackUiText.ListMeta(true, 94, false));
         Assert.Equal("Imported, 1 word, Unsaved, 1 match", WordPackUiText.ListMeta(false, 1, true, 1));
+        Assert.Equal("Imported, 2 words, Unsaved", WordPackUiText.ListMeta(false, 2, true, 0));
     }
 
     [Fact]
@@ -96,6 +97,9 @@ public sealed class WordPackUiTextTests
     [InlineData("preview keys catch handled grid keys", "LibraryTermsGrid_PreviewKeyDown", "LibraryGrid_PreviewKeyDown")]
     [InlineData("word grid checkbox gets first click", "DataGridCheckBoxClick.Attach(LibraryTermsGrid)", "DataGridTypingTab.Attach(LibraryTermsGrid)")]
     [InlineData("word details text boxes are named", "AutomationProperties.LabeledBy=\"{Binding ElementName=WordDetailsSpokenTitle}\"", "AutomationProperties.LabeledBy=\"{Binding ElementName=WordDetailsWrittenTitle}\"")]
+    [InlineData("selected no-match text avoids duplicate pack names", "No matches in {selected}. Found in:", "matches.Count > 5")]
+    [InlineData("word pack search box can shrink", "MinWidth=\"180\"", "LibrarySearchBox")]
+    [InlineData("short card scrolls when grid keeps four rows", "VerticalScrollBarVisibility=\"Auto\"", "LibraryTermsGrid.MinHeight")]
     public void Astra_review_wiring_items_stay_fixed(string item, string first, string second)
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.WordPacks.cs"));
