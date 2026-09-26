@@ -872,10 +872,10 @@ public partial class SettingsWindow
 
         if (choice.Delete && targets.Count > 0 && !await ConfirmRiskyAsync(
                 "Delete selected words?",
-                $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} will be removed from your "
-                + "dictionary when you save. This cannot be undone once saved. Turning them off instead "
+                $"{targets.Count} {(targets.Count == 1 ? "word" : "words")} will be removed from your "
+                + "dictionary when you save. This can't be undone once saved. Turning them off instead "
                 + "keeps them in the list so you can switch them back on later.",
-                "Delete"))
+                targets.Count == 1 ? "Delete word" : "Delete words"))
         {
             return;
         }
@@ -897,8 +897,8 @@ public partial class SettingsWindow
 
         RefreshDictionaryStatus();
         ShowInfo(choice.Delete
-            ? $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} removed. Review the change, then save to apply it."
-            : $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} turned off. Review the change, then save to apply it.");
+            ? $"{targets.Count} {(targets.Count == 1 ? "word" : "words")} removed. Review the change, then save to apply it."
+            : $"{targets.Count} {(targets.Count == 1 ? "word" : "words")} turned off. Review the change, then save to apply it.");
     }
 
     // --- Dictionary CSV import / export ---------------------------------------------------
@@ -991,36 +991,14 @@ public partial class SettingsWindow
         }
 
         var (added, updated, unchanged) = MergeImportedEntries(parsed.Entries);
-        var summary = new StringBuilder();
-        summary.Append($"Imported {added} new {(added == 1 ? "word" : "words")}");
-        if (updated > 0)
-        {
-            summary.Append($", updated {updated}");
-        }
-
-        if (unchanged > 0)
-        {
-            summary.Append($", {unchanged} already up to date");
-        }
-
-        summary.Append('.');
-        if (added + updated > 0)
-        {
-            summary.Append(" The changes apply when you save.");
-        }
-
-        if (parsed.Errors.Count > 0)
-        {
-            summary.Append("\n\nSome rows couldn't be read:\n")
-                   .Append(string.Join('\n', parsed.Errors.Take(8)));
-            if (parsed.Errors.Count > 8)
-            {
-                summary.Append($"\n…and {parsed.Errors.Count - 8} more.");
-            }
-        }
+        var summary = DictionaryImportSummaryBuilder.Build(
+            added,
+            updated,
+            unchanged,
+            parsed.Errors.Select(error => error.ToString()).ToList());
 
         ShowInfo(
-            summary.ToString(),
+            summary.Body,
             parsed.Errors.Count > 0
                 ? Wpf.Ui.Controls.InfoBarSeverity.Warning
                 : Wpf.Ui.Controls.InfoBarSeverity.Success);

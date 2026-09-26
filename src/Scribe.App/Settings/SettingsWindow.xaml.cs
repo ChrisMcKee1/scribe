@@ -3,13 +3,8 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.Json;
 using Scribe.Core.Feedback;
 using System.Windows;
 using System.Windows.Automation;
@@ -206,11 +201,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _azureConnectionKnown;
     private bool _azureManualConfiguration;
     private string? _azureStatusMessage;
-    private AzureVerificationOutcome _azureApiKeyOutcome = AzureVerificationOutcome.NotRun;
     private AzureVerificationOutcome _servicePrincipalOutcome = AzureVerificationOutcome.NotRun;
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
-    private bool _azureApiKeyVerified;
     private CancellationTokenSource? _cleanupConnectionTestCts;
     private CleanupConnectionTestState? _cleanupConnectionTest;
     private bool _transcriptionModelOp;
@@ -403,7 +396,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (App.LogSink?.CurrentStatus() is { } logStatus && !logStatus.Healthy)
         {
             AboutLogsPathBox.Text =
-                $"{_paths.EffectiveLogsDir}   [NOT LOGGING: {logStatus.Reason}]";
+                $"{_paths.EffectiveLogsDir}   Logging is off: {logStatus.Reason}";
         }
         else if (App.LogSink?.CurrentStatus() is { Path.Length: > 0 } live &&
                  !live.Path.StartsWith(_paths.LogsDir, StringComparison.OrdinalIgnoreCase))
@@ -655,6 +648,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 LoadDictionaryAsync();
             }
 
+            ShowQuickAddDictionaryNotice(entry.Pattern, stored is null);
             return written;
         }
 
@@ -664,6 +658,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             string.Equals(r.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase));
 
         DictionaryEntry persisted;
+
+        // An unsaved grid row (id 0) is inserted into storage below, so for storage this is an addition too.
+        var addedByQuickAdd = row is null || row.Id == 0;
         if (row is null)
         {
             persisted = _dictionary.Add(entry with { Id = 0 });
@@ -705,7 +702,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _dictionaryLoad.MarkSaved(DictionarySignature());
         }
 
+        ShowQuickAddDictionaryNotice(persisted.Pattern, addedByQuickAdd);
         return persisted;
+    }
+
+    // A Settings save in progress owns the window's notice (Saving..., then its result), so the correction is still stored
+    // but not announced over it.
+    private void ShowQuickAddDictionaryNotice(string heard, bool added)
+    {
+        if (_saveInProgress)
+        {
+            return;
+        }
+
+        ShowInfo($"{(added ? "Added" : "Updated")} \"{heard}\" from Add to dictionary. This is already saved.");
     }
 
     // A write that stored this row outside Save (quick add, learning from history) makes it part of what is saved, so its
@@ -1101,7 +1111,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void SoundSettings_Click(object sender, RoutedEventArgs e) =>
         OpenExternalLink("ms-settings:sound",
-            "Could not open the Windows sound settings. Open Windows Settings > System > Sound.");
+            "Couldn't open sound settings. Open Windows Settings > System > Sound.");
 
     private void PopulateChoices()
     {
@@ -1438,7 +1448,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void StartupSettings_Click(object sender, RoutedEventArgs e) =>
         OpenExternalLink("ms-settings:startupapps",
-            "Could not open Windows startup settings. Open Windows Settings > Apps > Startup.");
+            "Couldn't open Windows startup settings. Open Windows Settings > Apps > Startup.");
 
     private void LoadAiSettings()
     {
@@ -1780,11 +1790,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         FailuresGrid.ItemsSource = _failures;
         _noFailuresText = NoFailuresText.Text;
-        NoFailuresText.Text = "Loading...";
-        NoFailuresText.Visibility = Visibility.Visible;
+        SetFailuresListState("Loading...", showGrid: false);
         ClearFailuresButton.IsEnabled = false;
 
         ShowPerformanceStats(null, statsFailed: false, DiagnosticsSpeedReadState.Reading);
+    }
+
+    private void SetFailuresListState(string message, bool showGrid)
+    {
+        NoFailuresText.Text = message;
+        NoFailuresText.Visibility = showGrid ? Visibility.Collapsed : Visibility.Visible;
+        FailuresGrid.Visibility = showGrid ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async void LoadFailures()
@@ -1804,8 +1820,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_failureLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load the AI cleanup failure log for Settings.");
-                NoFailuresText.Text = "Couldn't load the list.";
-                NoFailuresText.Visibility = Visibility.Visible;
+                SetFailuresListState("Couldn't load the list.", showGrid: false);
                 ClearFailuresButton.IsEnabled = true;
             }
 
@@ -1829,8 +1844,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             });
         }
 
-        NoFailuresText.Text = _noFailuresText;
-        NoFailuresText.Visibility = _failures.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SetFailuresListState(_noFailuresText, showGrid: _failures.Count > 0);
         FailuresCountText.Text = failures.Count > _failures.Count
             ? $"Showing the 20 most recent of {failures.Count:N0} failures."
             : string.Empty;
@@ -1858,8 +1872,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _failures.Clear();
             FailuresCountText.Text = string.Empty;
-            NoFailuresText.Text = _noFailuresText;
-            NoFailuresText.Visibility = Visibility.Visible;
+            SetFailuresListState(_noFailuresText, showGrid: false);
 
             // A read that started before the clear would bring the old rows back.
             LoadFailures();
@@ -2824,15 +2837,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Retiring any verification still running also ends its busy state (AzureSignInAttempts), which that
         // verification no longer can, so editing the endpoint mid-probe leaves the Verify button usable.
         _azureSignInAttempts.Retire();
-        _azureApiKeyVerified = false;
-        _azureApiKeyOutcome = AzureVerificationOutcome.ChangedSince;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         ApplyAzureSettingsAccess();
 
-        if (CanVerifyAzureApiKey)
-        {
-            _azureStatusMessage = message;
-        }
+        _azureStatusMessage = message;
     }
 
     private void UpdateAzureProjectApiKeyHint()
@@ -3089,12 +3097,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private string SelectedAzureApiKey => IsAzureApiKeySelected ? AzureApiKeyBox?.Password ?? string.Empty : string.Empty;
 
-    private bool CanVerifyAzureApiKey =>
-        IsAzureApiKeySelected &&
-        !string.IsNullOrWhiteSpace(AzureEndpointBox?.Text) &&
-        !string.IsNullOrWhiteSpace(AzureDeploymentBox?.Text) &&
-        !string.IsNullOrWhiteSpace(SelectedAzureApiKey);
-
     private AzureAuthMode SelectedAzureAuthMode =>
         AzureServicePrincipalRadio?.IsChecked == true
             ? AzureAuthMode.ServicePrincipal
@@ -3261,7 +3263,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _azureSignInAttempts.Retire();
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
-        _azureApiKeyOutcome = AzureVerificationOutcome.NotRun;
         _servicePrincipalOutcome = AzureVerificationOutcome.NotRun;
         _azureAutoListed = false;
         AzureCredentialInvalidation.Invalidate();
@@ -3486,201 +3487,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TryLog(ex, failureMessage);
             ShowInfo(failureMessage, Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
-    }
-
-    /// <summary>
-    /// Verifies the entered API key by making a real Responses API call to the configured deployment.
-    /// </summary>
-    private async Task VerifyAzureApiKeyAsync()
-    {
-        if (_azureSignInAttempts.IsBusy)
-        {
-            return;
-        }
-
-        if (!CanVerifyAzureApiKey)
-        {
-            _azureStatusMessage = "Fill in the details above, then choose Verify.";
-            ApplyAzureSettingsAccess();
-            return;
-        }
-
-        var endpoint = AzureEndpointBox.Text.Trim();
-        var deployment = AzureDeploymentBox.Text.Trim();
-        var apiKey = SelectedAzureApiKey.Trim();
-        var operationVersion = _azureSignInAttempts.Begin();
-        ApplyAzureSettingsAccess();
-        _azureStatusMessage = "Verifying the API key...";
-        try
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, _azureSignInAttempts.CancellationOf(operationVersion));
-            var result = await ProbeAzureApiKeyAsync(endpoint, deployment, apiKey, linked.Token);
-            if (!_azureSignInAttempts.IsCurrent(operationVersion))
-            {
-                return;
-            }
-
-            _azureApiKeyVerified = result.Success;
-            _azureApiKeyOutcome = result.Success
-                ? AzureVerificationOutcome.Succeeded(result.Message)
-                : AzureVerificationOutcome.Failed(result.Message);
-            _azureSignInStatus = result.Success
-                ? new AzureSignInStatus(true, null)
-                : new AzureSignInStatus(false, result.Message);
-            _azureStatusMessage = result.Message;
-        }
-        catch (OperationCanceledException)
-        {
-            if (_azureSignInAttempts.IsCurrent(operationVersion))
-            {
-                _azureApiKeyVerified = false;
-                _azureApiKeyOutcome = AzureVerificationOutcome.Failed("Verifying the API key timed out. Check the endpoint host and try again.");
-                _azureSignInStatus = new AzureSignInStatus(false, null);
-                _azureStatusMessage = _azureApiKeyOutcome.SafeMessage;
-            }
-        }
-        catch (Exception ex)
-        {
-            TryLog(ex, "Could not verify the Azure API key.");
-            if (_azureSignInAttempts.IsCurrent(operationVersion))
-            {
-                _azureApiKeyVerified = false;
-                _azureApiKeyOutcome = AzureVerificationOutcome.Failed("The API key could not be verified. Check the endpoint, deployment name, and key.");
-                _azureSignInStatus = new AzureSignInStatus(false, null);
-                _azureStatusMessage = _azureApiKeyOutcome.SafeMessage;
-            }
-        }
-        finally
-        {
-            if (_azureSignInAttempts.Finish(operationVersion))
-            {
-                ApplyAzureSettingsAccess();
-            }
-        }
-    }
-
-    private async Task<AzureApiKeyProbeResult> ProbeAzureApiKeyAsync(
-        string endpoint,
-        string deployment,
-        string apiKey,
-        CancellationToken cancellationToken)
-    {
-        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
-        {
-            return AzureApiKeyProbeResult.Fail("The Azure endpoint is not a valid URL.");
-        }
-
-        var accountEndpoint = endpointUri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase)
-            ? new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/")
-            : endpointUri;
-        var responsesEndpoint = new Uri(
-            $"{accountEndpoint.GetLeftPart(UriPartial.Authority).TrimEnd('/')}/openai/v1/responses");
-        using var request = new HttpRequestMessage(HttpMethod.Post, responsesEndpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Headers.TryAddWithoutValidation("api-key", apiKey);
-        request.Content = new StringContent(
-            JsonSerializer.Serialize(new
-            {
-                model = deployment,
-                input = "ok",
-                max_output_tokens = 16,
-                store = false,
-            }),
-            Encoding.UTF8,
-            "application/json");
-
-        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        try
-        {
-            using var response = await client.SendAsync(request, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            return response.IsSuccessStatusCode
-                ? AzureApiKeyProbeResult.Ok("API key verified. Check Cleanup status below for model availability.")
-                : AzureApiKeyProbeResult.Fail(DescribeAzureApiKeyFailure(response.StatusCode, deployment, body));
-        }
-        catch (HttpRequestException ex)
-        {
-            TryLog(ex, "Could not reach the Azure API-key endpoint.");
-            return AzureApiKeyProbeResult.Fail(
-                "Couldn't reach the Azure endpoint. Check the URL and network connection.");
-        }
-    }
-
-    private static string DescribeAzureApiKeyFailure(HttpStatusCode statusCode, string deployment, string responseBody)
-    {
-        var status = (int)statusCode;
-        return statusCode switch
-        {
-            HttpStatusCode.Unauthorized =>
-                "Azure rejected the API key (401). Check that the key belongs to this resource.",
-
-            HttpStatusCode.Forbidden =>
-                "Azure accepted the API key but denied access (403). Check that this key can call the resource.",
-
-            HttpStatusCode.NotFound =>
-                $"Azure could not find the deployment '{deployment}' (404). Check the endpoint and exact deployment name.",
-
-            HttpStatusCode.TooManyRequests =>
-                "Azure is throttling requests (429). The deployment is reachable but over quota. Wait and retry.",
-
-            _ when status >= 500 =>
-                $"Azure returned a server error ({status}). This is usually transient; try again shortly.",
-
-            _ => BuildAzureApiKeyFallback(status, deployment, responseBody),
-        };
-    }
-
-    private static string BuildAzureApiKeyFallback(int status, string deployment, string responseBody)
-    {
-        var serverMessage = ExtractAzureErrorMessage(responseBody);
-        if (serverMessage.Contains("deployment", StringComparison.OrdinalIgnoreCase) ||
-            serverMessage.Contains("model", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"Azure could not use deployment '{deployment}' ({status}). {serverMessage}";
-        }
-
-        return string.IsNullOrWhiteSpace(serverMessage)
-            ? $"Azure returned HTTP {status}. Check the endpoint, deployment name, and API key."
-            : $"Azure returned HTTP {status}. {serverMessage}";
-    }
-
-    private static string ExtractAzureErrorMessage(string responseBody)
-    {
-        if (string.IsNullOrWhiteSpace(responseBody))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(responseBody);
-            if (document.RootElement.TryGetProperty("error", out var error) &&
-                error.TryGetProperty("message", out var message) &&
-                message.GetString() is { Length: > 0 } text)
-            {
-                return FlattenStatusMessage(text);
-            }
-        }
-        catch (JsonException)
-        {
-            return FlattenStatusMessage(responseBody);
-        }
-
-        return FlattenStatusMessage(responseBody);
-    }
-
-    private static string FlattenStatusMessage(string value)
-    {
-        var line = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return line.Length <= 220 ? line : line[..220].TrimEnd() + "...";
-    }
-
-    private sealed record AzureApiKeyProbeResult(bool Success, string Message)
-    {
-        public static AzureApiKeyProbeResult Ok(string message) => new(true, message);
-
-        public static AzureApiKeyProbeResult Fail(string message) => new(false, message);
     }
 
     /// <summary>

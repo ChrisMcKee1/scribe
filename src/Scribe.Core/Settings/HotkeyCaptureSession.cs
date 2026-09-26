@@ -83,11 +83,11 @@ public sealed class HotkeyCaptureSession
     public HotkeyCaptureSession(Func<uint, string?>? layoutName = null) => _layoutName = layoutName;
 
     /// <summary>What the capture box shows while it waits for the first input.</summary>
-    public const string Prompt = "Press one or two keys or mouse buttons\u2026 (dictation is paused)";
+    public const string Prompt = "Press a key, two keys or a mouse button...";
 
     /// <summary>Why a hotkey cannot hold another input.</summary>
     public const string TooManyMessage =
-        "A dictation hotkey is one or two keys or mouse buttons, or one key or button with Ctrl, Alt or Shift.";
+        "A shortcut is one or two keys or mouse buttons, or one key or button with Ctrl, Alt or Shift.";
 
     /// <summary>
     /// The warning for a shortcut of Shift with Ctrl or Alt: only the input that completes it is kept from Windows, which
@@ -95,12 +95,12 @@ public sealed class HotkeyCaptureSession
     /// or layout.
     /// </summary>
     public const string LayoutSwitchWarning =
-        "Windows still sees this hotkey's modifier keys, so they can switch your keyboard language or layout " +
+        "Windows still sees this shortcut's modifier keys, so they can switch your keyboard language or layout " +
         "(Alt+Shift or Ctrl+Shift) if you use more than one. A key such as F13 on its own avoids that.";
 
     /// <summary>Why the left and right mouse buttons are refused.</summary>
     public const string RefusedMessage =
-        "Left and right clicks can't be a hotkey: every app needs them. Press a key, or the middle, back or forward " +
+        "Left and right clicks can't be a shortcut: every app needs them. Press a key, or the middle, back or forward " +
         "mouse button.";
 
     /// <summary>
@@ -153,10 +153,10 @@ public sealed class HotkeyCaptureSession
         _recorded.Add(virtualKey);
         var names = string.Join("+", _recorded.Select(Name));
         var hint = _recorded.Count == 1
-            ? "  (add another key or mouse button, or release)"
+            ? " (press a second key, or let go)"
             : _recorded.All(IsModifier)
-                ? "  (add a key or mouse button, or release)"
-                : "  (release to set)";
+                ? " (press a second key, or let go)"
+                : " (let go to finish)";
         return new HotkeyCaptureStep(HotkeyCaptureOutcome.Recorded, Handled: true, Text: names + hint);
     }
 
@@ -310,9 +310,9 @@ public sealed class HotkeyCaptureSession
             }
 
             return MouseButtons.IsBindable(key)
-                ? $"Press {Name(key)} last when you use this hotkey: a mouse button pressed before the keys held with " +
+                ? $"Press {Name(key)} last when you use this shortcut: a mouse button pressed before the keys held with " +
                   "it still reaches the app under the pointer."
-                : $"Press {Name(key)} last when you use this hotkey: pressed before the keys held with it, it still " +
+                : $"Press {Name(key)} last when you use this shortcut: pressed before the keys held with it, it still " +
                   "reaches the app you're using.";
         }
 

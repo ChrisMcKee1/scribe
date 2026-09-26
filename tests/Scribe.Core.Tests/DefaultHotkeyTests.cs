@@ -273,8 +273,8 @@ public sealed class DefaultHotkeyTests
         Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
         Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
         Assert.Equal(
-            "Hotkeys set to the defaults: hold Page Down for dictation with AI cleanup and hold Page Up for dictation " +
-            "only. Save to apply them.",
+            "Shortcuts set to the defaults: hold Page Down for dictation with AI cleanup and hold Page Up for dictation " +
+            "only. Choose Save to use them.",
             restored.Message);
     }
 
@@ -304,8 +304,8 @@ public sealed class DefaultHotkeyTests
         Assert.False(second.Changed);
         Assert.True(second.SaveNeeded);
         Assert.Equal(
-            "The hotkeys already show the defaults: hold Page Down for dictation with AI cleanup and hold Page Up for " +
-            "dictation only. Save to apply them.",
+            "The defaults are already shown: hold Page Down for dictation with AI cleanup and hold Page Up for " +
+            "dictation only. Choose Save to use them.",
             second.Message);
     }
 
@@ -320,7 +320,7 @@ public sealed class DefaultHotkeyTests
         Assert.False(restored.SaveNeeded);
         Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
         Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
-        Assert.StartsWith("Your hotkeys already match the defaults", restored.Message);
+        Assert.StartsWith("Your shortcuts already match the defaults", restored.Message);
         Assert.DoesNotContain("Save", restored.Message);
     }
 
@@ -333,7 +333,7 @@ public sealed class DefaultHotkeyTests
 
         Assert.True(restored.Changed);
         Assert.False(restored.SaveNeeded);
-        Assert.EndsWith("They are already saved.", restored.Message);
+        Assert.EndsWith("They're already saved.", restored.Message);
     }
 
     [Fact]

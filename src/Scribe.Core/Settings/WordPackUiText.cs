@@ -5,6 +5,8 @@ namespace Scribe.Core.Settings;
 /// <summary>Pure copy and summary decisions for the Word packs editor surface.</summary>
 public static class WordPackUiText
 {
+    public const string EmptySelectedPack = "No words yet. Add a word or phrase and how it should be written.";
+
     public static string WordCount(int count) => $"{count:N0} {(count == 1 ? "word" : "words")}";
 
     public static string MatchCount(int count) => $"{count:N0} {(count == 1 ? "match" : "matches")}";
@@ -62,5 +64,16 @@ public static class WordPackUiText
         GlossaryInclusion.NotPermitted => "Not sent to AI cleanup: this word pack isn't used in AI cleanup.",
         GlossaryInclusion.OverBudget => "Not sent to AI cleanup: the vocabulary is full.",
         _ => "Not sent to AI cleanup: this word is not included in vocabulary.",
+    };
+
+    public static string RowErrorReason(LibraryCsvRowErrorKind kind) => kind switch
+    {
+        LibraryCsvRowErrorKind.MissingFields => "missing a value",
+        LibraryCsvRowErrorKind.EmptySpoken => "Scribe hears is empty",
+        LibraryCsvRowErrorKind.InvalidWholeWord => "whole words value is not true or false",
+        LibraryCsvRowErrorKind.InvalidEnabled => "on value is not true or false",
+        LibraryCsvRowErrorKind.UnclosedQuote => "a quoted value is not closed",
+        LibraryCsvRowErrorKind.FieldTooLong => "a value is too long",
+        _ => "row format is not supported",
     };
 }
