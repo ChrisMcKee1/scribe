@@ -22,7 +22,7 @@ public partial class SettingsWindow
     {
         SnippetList.IsEnabled = editable;
         SnippetAddButton.IsEnabled = editable;
-        SnippetEmptyActionButton.IsEnabled = editable;
+        SnippetEmptyActionButton.IsEnabled = editable || _snippetLoad.State == SettingsSectionState.Failed;
         RefreshSnippetCommands();
     }
 
@@ -44,8 +44,10 @@ public partial class SettingsWindow
             {
                 TryLog(ex, "Could not load snippets for Settings.");
                 SnippetEmptyHint.Text = "Couldn't load your snippets.";
-                SnippetEmptyActionButton.Visibility = Visibility.Collapsed;
+                SnippetEmptyActionButton.Content = "Try again";
+                SnippetEmptyActionButton.Visibility = Visibility.Visible;
                 SnippetEmptyState.Visibility = Visibility.Visible;
+                SetSnippetsEditable(false);
             }
 
             return;
@@ -73,6 +75,7 @@ public partial class SettingsWindow
         }
 
         _snippetLoad.Publish(ticket, SnippetSignature());
+        SnippetEmptyActionButton.Content = "Add snippet";
         SnippetEmptyHint.Text = _snippetEmptyText;
         SetSnippetsEditable(true);
         RefreshSnippetEmptyState();
@@ -117,6 +120,32 @@ public partial class SettingsWindow
         RefreshSnippetEmptyState();
         RefreshSnippetCommands();
     }
+
+    private void SnippetEmptyActionButton_Click(object sender, RoutedEventArgs e)
+
+    {
+
+        if (_snippetLoad.State == SettingsSectionState.Failed)
+
+        {
+
+            SnippetEmptyHint.Text = "Loading snippets...";
+
+            SnippetEmptyActionButton.Visibility = Visibility.Collapsed;
+
+            LoadSnippetsAsync();
+
+            return;
+
+        }
+
+
+
+        SnippetAddButton_Click(sender, e);
+
+    }
+
+
 
     private async void SnippetDeleteButton_Click(object sender, RoutedEventArgs e)
     {
@@ -230,15 +259,61 @@ public partial class SettingsWindow
         HideValidation(SnippetTemplateValidation, SnippetTemplateValidationText, SnippetTemplateBox);
     }
 
-    private void RefreshSnippetRowsFromStorage()
+    private void StartSnippetRowsRefreshAfterSave(string storedSignature)
 
     {
+
+        _ = RefreshSnippetRowsFromStorageAfterSaveAsync(storedSignature);
+
+    }
+
+
+
+    private async Task RefreshSnippetRowsFromStorageAfterSaveAsync(string storedSignature)
+
+    {
+
+        IReadOnlyList<Snippet> stored;
+
+        try
+
+        {
+
+            stored = await Task.Run(() => _snippets.GetAll());
+
+        }
+
+        catch (Exception ex)
+
+        {
+
+            TryLog(ex, "Could not read snippets after saving Settings.");
+
+            _snippetLoad.MarkFailedAfterSave(storedSignature);
+
+            SnippetList.SelectedItem = null;
+
+            SnippetEmptyHint.Text = "Couldn't load your snippets.";
+
+            SnippetEmptyActionButton.Content = "Try again";
+
+            SnippetEmptyActionButton.Visibility = Visibility.Visible;
+
+            SnippetEmptyState.Visibility = Visibility.Visible;
+
+            SetSnippetsEditable(false);
+
+            return;
+
+        }
+
+
 
         var selectedPhrase = SelectedSnippet?.Phrase;
 
         _snippetRows.Clear();
 
-        foreach (var snippet in _snippets.GetAll())
+        foreach (var snippet in stored)
 
         {
 
@@ -268,7 +343,13 @@ public partial class SettingsWindow
 
 
 
+        SnippetEmptyActionButton.Content = "Add snippet";
+
+        _snippetLoad.MarkSaved(SnippetSignature());
+
         SnippetList.SelectedItem = _snippetRows.FirstOrDefault(row => string.Equals(row.Phrase, selectedPhrase, StringComparison.OrdinalIgnoreCase));
+
+        SetSnippetsEditable(true);
 
         RefreshSnippetEmptyState();
 

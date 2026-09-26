@@ -5375,8 +5375,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (snippets is not null)
             {
-                RefreshSnippetRowsFromStorage();
-                _snippetLoad.MarkSaved(SnippetSignature());
+                _snippetLoad.MarkSaved(snippetSignature);
+                StartSnippetRowsRefreshAfterSave(snippetSignature);
             }
 
             MarkProfileRowsSaved();
