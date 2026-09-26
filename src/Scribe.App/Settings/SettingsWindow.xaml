@@ -700,6 +700,14 @@
                                         <TextBlock x:Name="DictationOnlyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Optional. Types exactly what Scribe hears, with your dictionary and snippets."/>
                                         <TextBlock x:Name="DictationOnlyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
+                                        <Grid x:Name="ShortcutValidation" Margin="0,8,0,0" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon x:Name="ShortcutValidationIcon" Grid.Column="0" Symbol="ErrorCircle16" Width="16" Height="16" Margin="0,1,6,0" VerticalAlignment="Top"/>
+                                            <TextBlock x:Name="ShortcutValidationText" Grid.Column="1" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                        </Grid>
                                         <!-- Text comes from HotkeyCaptureSession.MouseButtonsHint: which buttons, how to set one,
                                              and what binding one costs in other apps. -->
                                         <TextBlock x:Name="MouseButtonsHintText" Style="{StaticResource CardDescription}"

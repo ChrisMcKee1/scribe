@@ -17,6 +17,7 @@ public partial class SettingsWindow
 {
     private bool _closeAccepted;
     private bool _closePromptShowing;
+    private Task? _closeOperation;
 
     protected override void OnClosing(CancelEventArgs e)
     {
@@ -76,7 +77,7 @@ public partial class SettingsWindow
         var dictionaryRows = _dictionaryLoad.IsLoaded ? _rows.ToList() : new List<DictionaryRow>();
         var snippetRows = _snippetLoad.IsLoaded ? _snippetRows.ToList() : new List<SnippetRow>();
         var profileRows = _profileRows.ToList();
-        var durationFields = DurationDraftFields(settings);
+        var durationFields = DurationDraftFields();
         var issues = SettingsDraftValidator.Validate(new SettingsDraft(
             settings,
             _dictionaryLoad.IsLoaded ? [.. dictionaryRows.Select(ToDictionaryDraftRow)] : [],
@@ -106,7 +107,10 @@ public partial class SettingsWindow
 
         var profileSubmission = CaptureProfileSubmission(profileRows);
         var intents = new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision);
-        var preflight = new SavePreflightInput(settings, entries, dictionarySubmission, snippets, snippetSubmission, profileSubmission, intents, dictionarySignature, snippetSignature);
+        var draftSections = BuildSaveDraftSections();
+        var draftCapture = draftSections.CaptureNow();
+        var draftSignature = SaveDraftSignature(draftSections, draftCapture);
+        var preflight = new SavePreflightInput(settings, entries, dictionarySubmission, snippets, snippetSubmission, profileSubmission, intents, dictionarySignature, snippetSignature, draftSignature, draftCapture);
         if (!await ConfirmNewRemovalRulesAsync(dictionaryRows))
         {
             return null;
@@ -121,6 +125,29 @@ public partial class SettingsWindow
     }
 
     private async Task RequestCloseAsync(CloseTrigger trigger)
+    {
+        if (_closeOperation is { } running)
+        {
+            await running;
+            return;
+        }
+
+        var operation = RunCloseAsync(trigger);
+        _closeOperation = operation;
+        try
+        {
+            await operation;
+        }
+        finally
+        {
+            if (ReferenceEquals(_closeOperation, operation))
+            {
+                _closeOperation = null;
+            }
+        }
+    }
+
+    private async Task RunCloseAsync(CloseTrigger trigger)
     {
         if (_closePromptShowing)
         {
@@ -383,7 +410,7 @@ public partial class SettingsWindow
             _dictionaryLoad.IsLoaded ? DictionaryDraftRows() : [],
             _snippetLoad.IsLoaded ? SnippetDraftRows() : [],
             ProfileDraftRows(),
-            DurationDraftFields(settings)));
+            DurationDraftFields()));
         foreach (var warning in issues.Where(issue => issue.Severity == ValidationSeverity.Warning))
         {
             ShowValidationIssue(warning);
@@ -398,20 +425,26 @@ public partial class SettingsWindow
         return true;
     }
 
-    private IReadOnlyList<DurationDraftField> DurationDraftFields(AppSettings settings)
+    private IReadOnlyList<DurationDraftField> DurationDraftFields()
     {
         var fields = new List<DurationDraftField>();
-        AddIfCustom(MaxDictationCombo, SettingsPage.Advanced, nameof(MaxDictationCustomBox), settings.MaxDictationMinutes, 1, 120);
-        AddIfCustom(IdleReleaseCombo, SettingsPage.Advanced, nameof(IdleReleaseCustomBox), settings.ReleaseModelsAfterIdleMinutes, 1, 1440);
-        AddIfCustom(HistoryRetentionCombo, SettingsPage.History, nameof(HistoryRetentionCustomBox), settings.HistoryRetentionDays, 1, 3650);
+        AddIfCustom(MaxDictationCombo, MaxDictationCustomBox, DurationChoiceKind.MaxDictation, SettingsPage.Advanced, nameof(MaxDictationCustomBox), 1, 120);
+        AddIfCustom(IdleReleaseCombo, IdleReleaseCustomBox, DurationChoiceKind.IdleRelease, SettingsPage.Advanced, nameof(IdleReleaseCustomBox), 1, 1440);
+        AddIfCustom(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, SettingsPage.History, nameof(HistoryRetentionCustomBox), 1, 3650);
         return fields;
 
-        void AddIfCustom(ComboBox combo, SettingsPage page, string controlName, int value, int min, int max)
+        void AddIfCustom(ComboBox combo, Wpf.Ui.Controls.NumberBox customBox, DurationChoiceKind kind, SettingsPage page, string controlName, int min, int max)
         {
-            if (combo.SelectedItem is DurationChoice { IsCustom: true })
+            if (combo.SelectedItem is not DurationChoice { IsCustom: true })
             {
-                fields.Add(new DurationDraftField(page, controlName, value, min, max));
+                return;
             }
+
+            var typed = customBox.Value;
+            var value = typed is double number && !double.IsNaN(number) && !double.IsInfinity(number) && Math.Abs(number - Math.Round(number)) < 1e-9
+                ? (int)Math.Clamp(Math.Round(number), int.MinValue, int.MaxValue)
+                : int.MinValue;
+            fields.Add(new DurationDraftField(page, controlName, value, min, max));
         }
     }
 
@@ -471,7 +504,7 @@ public partial class SettingsWindow
                 profileTarget.Focus();
                 break;
             case ValidationCode.ShortcutsIdentical:
-                ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
+                ShowValidation(ShortcutValidation, ShortcutValidationText, ShortcutValidationIcon, DictationOnlyHotkeyBox, issue.Message);
                 DictationOnlyHotkeyBox.Focus();
                 break;
             case ValidationCode.FoundryEndpointInvalid:
@@ -522,6 +555,7 @@ public partial class SettingsWindow
         HideValidation(DictionaryValidation, DictionaryValidationText, DictionaryGrid);
         ClearSnippetValidation();
         ClearProfileValidation();
+        HideValidation(ShortcutValidation, ShortcutValidationText, DictationOnlyHotkeyBox);
     }
 
 
@@ -622,6 +656,9 @@ public partial class SettingsWindow
         IReadOnlyList<ProfileSubmission> ProfileSubmission,
         ExternalIntents Intents,
         string DictionarySignature,
-        string SnippetSignature);
+        string SnippetSignature,
+        string DraftSignature,
+        SaveDraftSections.Capture DraftCapture);
 }
+
 

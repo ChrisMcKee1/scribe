@@ -156,6 +156,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
         {
+            if (_imeComposing)
+            {
+                return;
+            }
+
             e.Handled = true;
             _ = HandleEscapeAsync();
             return;
@@ -173,7 +178,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var onWordPacks = DictionaryTabs.SelectedItem == WordPacksTab;
-        if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, ImeComposing: false, onWordPacks)))
+        if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, _imeComposing, onWordPacks)))
         {
             return;
         }
@@ -504,6 +509,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ArgumentNullException.ThrowIfNull(stored);
         _committedSettings = stored.Clone();
         OnCommittedSettingsChanged();
+        ScheduleFooterRefresh();
         try
         {
             UpdateTryDictationPage();
@@ -537,6 +543,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private static DictionaryRow SavedDictionaryRow(DictionaryEntry entry) => new()
+    {
+        Id = entry.Id,
+        Pattern = entry.Pattern,
+        Replacement = entry.Replacement,
+        WholeWord = entry.WholeWord,
+        Enabled = entry.Enabled,
+        Origin = DraftRowOrigin.Saved,
+        LoadedPattern = entry.Pattern,
+        LoadedReplacement = entry.Replacement,
+        LoadedWholeWord = entry.WholeWord,
+        LoadedEnabled = entry.Enabled,
+    };
+
     public IReadOnlyList<DictionaryEntry> PersistLearnedDictionaryEntries(IReadOnlyList<DictionaryEntry> entries)
     {
         if (!_dictionaryLoad.IsLoaded)
@@ -567,19 +587,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var persisted = _dictionary.AddRange(candidates);
         foreach (var entry in persisted)
         {
-            _rows.Add(new DictionaryRow
-            {
-                Id = entry.Id,
-                Pattern = entry.Pattern,
-                Replacement = entry.Replacement,
-                WholeWord = entry.WholeWord,
-                Enabled = entry.Enabled,
-            });
+            _rows.Add(SavedDictionaryRow(entry));
         }
 
         if (!wasDirty)
         {
             _dictionaryLoad.MarkSaved(DictionarySignature());
+            _loadedDictionaryRows = LoadedDictionaryDraftRowsFromRows();
         }
 
         return persisted;
@@ -635,14 +649,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (row is null)
         {
             persisted = _dictionary.Add(entry with { Id = 0 });
-            _rows.Add(new DictionaryRow
-            {
-                Id = persisted.Id,
-                Pattern = persisted.Pattern,
-                Replacement = persisted.Replacement,
-                WholeWord = persisted.WholeWord,
-                Enabled = persisted.Enabled,
-            });
+            _rows.Add(SavedDictionaryRow(persisted));
         }
         else
         {
@@ -670,6 +677,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (!wasDirty)
         {
             _dictionaryLoad.MarkSaved(DictionarySignature());
+            _loadedDictionaryRows = LoadedDictionaryDraftRowsFromRows();
         }
 
         return persisted;
@@ -5758,7 +5766,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void DismissInfo(object? sender, EventArgs e)
     {
         _infoDismissTimer?.Stop();
-        CleanupWindowFit();
         InfoNotice.IsOpen = false;
     }
 
@@ -5793,6 +5800,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         finally
         {
             _saveInProgress = false;
+            ScheduleFooterRefresh();
         }
     }
 
@@ -5815,6 +5823,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         finally
         {
             _saveInProgress = false;
+            ScheduleFooterRefresh();
         }
     }
 
@@ -5866,11 +5875,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         bool useVocabularyReload = false,
         IReadOnlyList<SnippetSubmission>? snippetSubmission = null,
         IReadOnlyList<ProfileSubmission>? profileSubmission = null,
-        IReadOnlyList<DictionarySubmission>? dictionarySubmission = null)
+        IReadOnlyList<DictionarySubmission>? dictionarySubmission = null,
+        string? capturedDraft = null,
+        SaveDraftSections.Capture? capturedSections = null)
     {
         var savedAiIntent = intents?.AiCleanup ?? 0;
         var savedMicrophoneIntent = intents?.Microphone ?? 0;
-        SaveDraftSections.Capture? savedSections = null;
+        var savedSections = capturedSections;
         return new WordPackSaveProtocolRequest(
             _wordPackWorkspace,
             payload => _settingsRepository.SaveBundle(
@@ -5880,12 +5891,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 intents ?? new ExternalIntents(0, 0),
                 payload),
             useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings),
-            () =>
-            {
-                var sections = BuildSaveDraftSections();
-                savedSections = sections.CaptureNow();
-                return SaveDraftSignature(sections, savedSections);
-            },
+            () => capturedDraft ?? SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             () => SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             Validate: null,
             OnSettingsCommitted,
@@ -6129,9 +6135,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : localPrompt;
 
-            _settings.LaunchOnLogin = StartupPreference.Observed(observedStartup, _settings.LaunchOnLogin);
-
             CopySettings(preflight.Settings, _settings);
+            _settings.LaunchOnLogin = StartupPreference.Observed(observedStartup, _settings.LaunchOnLogin);
 
             // With the window's intents for the AI cleanup switch and the microphone, read before Saved() forgets them.
             // Once the save commits, a tray change up to the intent for its own setting is superseded. With no intent for
@@ -6139,7 +6144,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // the settings no longer hold.
             var intents = preflight.Intents;
             var result = await _wordPackSaveProtocol.SaveAsync(
-                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission, dictionarySubmission: preflight.DictionarySubmission));
+                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission, dictionarySubmission: preflight.DictionarySubmission, capturedDraft: preflight.DraftSignature, capturedSections: preflight.DraftCapture));
             if (_closed)
             {
                 return false;
@@ -6326,7 +6331,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 row.WholeWord == row.LoadedWholeWord &&
                 row.Enabled == row.LoadedEnabled;
             var pattern = unchanged ? row.LoadedPattern ?? string.Empty : (row.Pattern ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(pattern))
+            if (!unchanged && string.IsNullOrWhiteSpace(pattern))
             {
                 continue;
             }
