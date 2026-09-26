@@ -162,7 +162,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             e.Handled = true;
-            _ = HandleEscapeAsync();
+            if (!TryConsumeSettingsSearchEscape())
+            {
+                _ = HandleEscapeAsync();
+            }
+
             return;
         }
 
@@ -327,8 +331,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             rootContent.SizeChanged += (_, _) => ApplyWordPackLayout();
         }
+
         InitializeFooterAndClose();
         InitializeWindowFit();
+        InitializeSettingsSearch();
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -930,6 +936,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// <summary>Navigates the rail to the given page, optionally focusing a named control on it.</summary>
     internal void ShowPage(SettingsPage page, string? focusName = null)
     {
+        ClearSettingsSearchHiddenHint();
         if (!PagePanels.TryGetValue(page, out var selected))
         {
             return;
@@ -3148,6 +3155,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDiscoveryPanel.Visibility = cliMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
         AzureEndpointPanel.Visibility = access.ShowEndpointPanel ? Visibility.Visible : Visibility.Collapsed;
         AzureManualToggleButton.Visibility = access.ShowManualToggleButton ? Visibility.Visible : Visibility.Collapsed;
+        RetireAzureSignInHintIfSignedIn();
 
         var manualOpen = access.ShowEndpointPanel && cliMode;
         AzureManualToggleText.Text = manualOpen ? "Hide manual details" : "Enter details manually";
