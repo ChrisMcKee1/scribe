@@ -12,11 +12,12 @@ namespace Scribe.Core.Tests.Libraries;
 
 /// <summary>
 /// The old Settings window's Libraries page, contained until the Word packs page replaces it (integration review, A1 and
-/// G1): once the library state is stored a settings-only Save keeps the stored library list, so the page's switches are
-/// read-only, every figure on the page is judged against the committed selection and never the rows, the cleanup leaves
-/// libraries alone, and after a Save the rows show the stored list again. Astra's scenario runs over the real settings
-/// store, library service and post-processor; the window's use of <see cref="LegacyLibraryPageContainment"/> is pinned by
-/// reading its source, as <see cref="CleanupDisclosureTests"/> does.
+/// G1; round 3, A2): once the library state is stored a settings-only Save keeps the stored library list, so the page's
+/// switches are read-only, its figures are judged against the committed selection (the stored list its catalog load
+/// leaves, then the one each Save hands back) and never the rows, it removes no entry a library covers, the cleanup
+/// leaves libraries alone, and after a Save the rows show the stored list again. Astra's scenarios run over the real
+/// settings store, library service and post-processor; the window's use of <see cref="LegacyLibraryPageContainment"/> is
+/// pinned by reading its source, as <see cref="CleanupDisclosureTests"/> does.
 /// </summary>
 public sealed class LegacyLibraryPageContainmentTests : IDisposable
 {
@@ -100,7 +101,93 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
     }
 
     [Fact]
-    public void The_committed_selection_is_the_stored_list_and_only_a_save_moves_it()
+    public void A_pack_the_windows_own_catalog_load_switches_off_neither_costs_the_personal_correction_nor_counts_as_on()
+    {
+        // Astra's A2. Stored: the default libraries and a custom pack, on and sent to AI cleanup since the first start,
+        // which writes kube as Kubernetes; the user's own dictionary writes it the same way.
+        var paths = new AppPaths(_folder.Root);
+        Directory.CreateDirectory(paths.LibrariesDir);
+        var file = Path.Combine(paths.LibrariesDir, "team-terms.csv");
+        File.WriteAllText(file, "# name: Team terms\n# category: Custom\npattern,replacement\nkube,Kubernetes\n");
+        var saved = AppSettings.CreateDefault();
+        saved.EnabledDictionaryLibraryIds = [.. saved.EnabledDictionaryLibraryIds, "team-terms"];
+        _settings.Save(saved);
+        _libraries.LoadCatalog();
+        Assert.Contains("team-terms", _settings.Load().EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
+        _dictionary.AddRange([DictionaryEntry.New("kube", "Kubernetes")]);
+
+        // While Scribe runs, another app changes only the pack's metadata; the correction is intact.
+        File.WriteAllText(file, "# name: Team words renamed\n# category: Custom\npattern,replacement\nkube,Kubernetes\n");
+        File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddMinutes(1));
+
+        // Settings opens on the stored settings, which still list the pack. Its catalog load adopts the changed file as
+        // replaced outside Scribe: the pack is turned off and the stored list no longer has it.
+        var window = _settings.Load();
+        Assert.Contains("team-terms", window.EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
+        var page = new LegacyLibraryPageContainment(window.EnabledDictionaryLibraryIds);
+        var loaded = _libraries.GetLibraries();
+        var stored = LegacyLibraryPageContainment.StoredIds(_settings);
+        Assert.NotNull(stored);
+        Assert.DoesNotContain("team-terms", stored, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("team-terms", _settings.Load().EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
+
+        // The page takes the stored list the load left before it shows a row, so the pack counts as off.
+        page.CatalogLoaded(stored);
+        Assert.False(page.IsCommitted("team-terms"));
+        Assert.Equal(stored, page.CommittedIds);
+
+        // Judged against the list the window was opened with, as round 2's prompt judged it, the correction looks redundant;
+        // against what is stored, nothing does. And the page removes nothing a library covers in any case.
+        var entries = _dictionary.GetAll().Append(DictionaryEntry.New("quillmoor", "Quillmoor")).ToList();
+        var opened = DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(entries, loaded, window.EnabledDictionaryLibraryIds);
+        Assert.Contains(opened.Redundant, overlap => overlap.Pattern == "kube");
+        Assert.Equal(0, DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(entries, loaded, page.CommittedIds).RedundantCount);
+        Assert.False(LegacyLibraryPageContainment.RemovesCoveredEntries);
+
+        // The Save hands SaveBundle the rows' list, which the committed selection gave them, with the other edit and every
+        // entry kept; nothing reads as unstored, and dictation still writes Kubernetes.
+        var shown = loaded.Select(library => new KeyValuePair<string, bool>(library.Id, page.IsCommitted(library.Id))).ToList();
+        var on = loaded.Where(library => page.IsCommitted(library.Id));
+        window.EnabledDictionaryLibraryIds = [.. LibraryPrecedence.Order(on, library => library.Id, library => library.BuiltIn).Select(library => library.Id)];
+        _settings.SaveBundle(window, entries, null, new ExternalIntents(0, 0));
+        Assert.False(page.AfterSave(shown, window.EnabledDictionaryLibraryIds));
+        Assert.DoesNotContain("team-terms", window.EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
+        _processor.Reload(window.EnabledDictionaryLibraryIds);
+        Assert.Equal("deploy it on Kubernetes and Quillmoor", _processor.Process("deploy it on kube and quillmoor"));
+
+        // What round 2's prompt did on the list the window was opened with: the removal, stored by the same kind of Save,
+        // keeps the pack off and leaves neither writing kube.
+        var removed = entries
+            .Where(entry => !opened.Redundant.Any(overlap => string.Equals(overlap.Pattern, entry.Pattern.Trim(), StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        _settings.SaveBundle(window, removed, null, new ExternalIntents(0, 0));
+        _processor.Reload(window.EnabledDictionaryLibraryIds);
+        Assert.Equal("deploy it on kube and Quillmoor", _processor.Process("deploy it on kube and quillmoor"));
+    }
+
+    [Fact]
+    public void The_catalog_loads_stored_list_replaces_the_one_the_window_opened_with_and_a_document_that_cannot_be_used_keeps_it()
+    {
+        var page = new LegacyLibraryPageContainment(["ai-model-names", "team-terms"]);
+
+        page.CatalogLoaded(null);
+        Assert.Equal(["ai-model-names", "team-terms"], page.CommittedIds);
+
+        page.CatalogLoaded(["AI-Model-Names", "ai-model-names", " "]);
+        Assert.Equal(["AI-Model-Names"], page.CommittedIds);
+        Assert.False(page.IsCommitted("team-terms"));
+
+        // A session on defaults: no usable document, so its Save writes the window's own list, which stays the selection.
+        _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
+        Assert.Null(LegacyLibraryPageContainment.StoredIds(_settings));
+        _settings.Save(AppSettings.CreateDefault());
+        var stored = LegacyLibraryPageContainment.StoredIds(_settings);
+        Assert.NotNull(stored);
+        Assert.Equal(AppSettings.CreateDefault().EnabledDictionaryLibraryIds, stored);
+    }
+
+    [Fact]
+    public void The_committed_selection_is_the_stored_list_and_a_save_moves_it()
     {
         var page = new LegacyLibraryPageContainment(["ai-model-names", "AI-Model-Names", " ", null, "team-terms"]);
 
@@ -144,6 +231,7 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
     {
         Assert.Contains("can't change them", LegacyLibraryPageContainment.PageNotice, StringComparison.Ordinal);
         Assert.Contains("Word packs page", LegacyLibraryPageContainment.PageNotice, StringComparison.Ordinal);
+
         Assert.Equal(
             "Imported \"Team\" with 3 terms. It is stored and switched off: switching libraries on comes with the new Word packs page.",
             LegacyLibraryPageContainment.Imported("Team", 3));
@@ -205,7 +293,8 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
         Assert.Contains("LegacyLibraryPageContainment.PageTip", contain, StringComparison.Ordinal);
         Assert.Contains("LegacyLibraryPageContainment.RemoveToolTip", contain, StringComparison.Ordinal);
 
-        // b. The badges, the glossary count and the Save prompt judge the committed selection, and nothing judges the rows.
+        // b. The badges and the glossary count judge the committed selection, and nothing judges the rows. The Save prompt's
+        // judgment is kept for the page the containment leaves behind, but the prompt returns before it (round 3, below).
         foreach (var judgment in new[]
                  {
                      "DictionaryLibraryOverlapAnalyzer.Coverage(_loadedLibraries, _libraryContainment.CommittedIds)",
@@ -267,6 +356,41 @@ public sealed class LegacyLibraryPageContainmentTests : IDisposable
                 check >= 0 && check < said && said < otherwiseAt && otherwiseAt < body.IndexOf(otherwise, otherwiseAt, StringComparison.Ordinal),
                 $"{handler} does not say a reset row before it reports the save.");
         }
+    }
+
+    [Fact]
+    public void The_old_settings_window_removes_nothing_a_library_covers_and_takes_the_stored_list_its_catalog_load_leaves()
+    {
+        var root = RepositoryRoot();
+        var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+
+        // The Save prompt returns before it judges or removes anything, while the containment says the page removes no
+        // entry a library covers (Astra's A2).
+        var prompt = Body(code, "private async Task<bool> ConfirmDictionaryOverlapAsync()");
+        const string Contained = "if (!LegacyLibraryPageContainment.RemovesCoveredEntries)";
+        var contained = prompt.IndexOf(Contained, StringComparison.Ordinal);
+        Assert.True(contained >= 0, "The Save prompt does not ask the containment first.");
+        var returned = prompt.IndexOf("return true;", contained, StringComparison.Ordinal);
+        Assert.Matches(@"^\s*\{\s*$", prompt[(contained + Contained.Length)..returned]);
+        Assert.True(
+            returned < prompt.IndexOf("DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(", StringComparison.Ordinal) &&
+            returned < prompt.IndexOf("_rows.Remove(", StringComparison.Ordinal) &&
+            returned < prompt.IndexOf("ConfirmRiskyAsync(", StringComparison.Ordinal),
+            "The Save prompt judges, asks or removes before it returns.");
+
+        // The stored list is read after the catalog load, whose adoption can switch a pack off, and becomes the committed
+        // selection before any row is shown.
+        var load = Body(code, "private async void LoadLibrariesAsync()");
+        var catalog = load.IndexOf("_libraries.GetLibraries()", StringComparison.Ordinal);
+        var read = load.IndexOf("LegacyLibraryPageContainment.StoredIds(_settingsRepository)", StringComparison.Ordinal);
+        var publish = load.IndexOf("_libraryLoad.CanPublish(ticket)", StringComparison.Ordinal);
+        var refreshed = load.IndexOf("_libraryContainment.CatalogLoaded(storedLibraryIds);", StringComparison.Ordinal);
+        var rows = load.IndexOf("_libraryRows.Add(NewLibraryRow(library, _libraryContainment.IsCommitted(library.Id)));", StringComparison.Ordinal);
+        Assert.True(
+            catalog >= 0 && catalog < read && read < publish && publish < refreshed && refreshed < rows,
+            "The stored list is not read after the catalog load and taken before the rows are built.");
+        Assert.Single(Regex.Matches(code, Regex.Escape("_libraryContainment.CatalogLoaded(")));
+        Assert.Single(Regex.Matches(code, Regex.Escape("LegacyLibraryPageContainment.StoredIds(")));
     }
 
     // A member's text, from its signature to the closing brace at its own indentation.

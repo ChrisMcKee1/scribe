@@ -11,14 +11,18 @@ namespace Scribe.Core.Libraries;
 /// a switch. It went on judging the Dictionary page's badges, the glossary count, the Save prompt's redundant entries and
 /// the cleanup against its check boxes, said "Settings saved." and kept the ticks: an imported pack stored off but ticked
 /// made a personal correction look redundant, the prompt removed it, and after the Save neither the pack nor the
-/// dictionary wrote it (integration review, A1 and G1). So the page's switches are read-only, every figure on it is judged
-/// against <see cref="CommittedIds"/>, the stored list as the window last read or saved it and never its rows, the cleanup
-/// never switches a library off or copies a library's terms, and after every Save the rows show the stored list again.
+/// dictionary wrote it (integration review, A1 and G1). So the page's switches are read-only, the Dictionary page's badges
+/// and glossary count are judged against <see cref="CommittedIds"/> and never the rows, the cleanup never switches a
+/// library off or copies a library's terms, and after every Save the rows show the stored list again.
 /// </para>
 /// <para>
-/// The committed selection can lag an adoption that changes the stored list while the window is open (a library file
-/// replaced, removed or unreadable on disk): the next Save hands the stored list back, and the page follows it. The Word
-/// packs page, whose Save checks the library generation, replaces the old page, and this type goes with it.
+/// The committed selection is the stored list as the window last read it: when its catalog load finished
+/// (<see cref="CatalogLoaded"/>), since that load runs the adoption, which turns a file changed outside Scribe off and
+/// patches the stored list, and then as each Save hands it back. It is not what the next Save will use: an adoption after
+/// the catalog load (a library file replaced, removed or unreadable on disk while the window is open) reaches it only at
+/// that Save. So nothing on the page acts on it: the page never removes a personal entry because a library covers it
+/// (<see cref="RemovesCoveredEntries"/>; round 3, Astra's A2), and the selection only draws figures. The Word packs page,
+/// whose Save checks the library generation, replaces the old page, and this type goes with it.
 /// </para>
 /// </remarks>
 public sealed class LegacyLibraryPageContainment
@@ -54,13 +58,45 @@ public sealed class LegacyLibraryPageContainment
     public LegacyLibraryPageContainment(IEnumerable<string?>? storedIds) => (_committed, _committedSet) = Distinct(storedIds);
 
     /// <summary>
-    /// The libraries every coverage badge, glossary count, overlap prompt and cleanup on the page is judged against: the
-    /// stored list, in its stored order without repeats, never the page's rows.
+    /// Whether the page removes a personal entry because a library covers it: never, while this type exists. The library can
+    /// be switched off behind the window, by the adoption its own catalog load runs or by one while it is open, and a Save
+    /// that removed the entry would leave neither the library nor the dictionary writing the term (round 3, Astra's A2). The
+    /// Dictionary page's badges still show the overlap.
+    /// </summary>
+    public static bool RemovesCoveredEntries => false;
+
+    /// <summary>
+    /// The libraries the Dictionary page's coverage badges and glossary count are judged against: the stored list as the
+    /// window last read it, in its stored order without repeats, never the page's rows.
     /// </summary>
     public IReadOnlyList<string> CommittedIds => _committed;
 
     /// <summary>Whether <paramref name="id"/> is in <see cref="CommittedIds"/>, compared without case, as the stored list is read.</summary>
     public bool IsCommitted(string? id) => id is not null && _committedSet.Contains(id);
+
+    /// <summary>
+    /// The stored settings document's enabled-library list, read without <c>Load</c>'s side effects, or null when the document
+    /// cannot be used (a session on defaults, whose Save writes the window's own list). For <see cref="CatalogLoaded"/>, read
+    /// after the catalog load.
+    /// </summary>
+    public static IReadOnlyList<string>? StoredIds(Persistence.ISettingsRepository settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return settings.ReadLibrarySettings().DocumentEnabledIds;
+    }
+
+    /// <summary>
+    /// After the catalog load that lists the page's libraries, before any row is shown: that load runs the adoption, which
+    /// can turn a pack off and patch the stored list, so the list read after it (<see cref="StoredIds"/>) replaces the one the
+    /// window was opened with. Null, for a document that cannot be used, keeps it.
+    /// </summary>
+    public void CatalogLoaded(IEnumerable<string?>? storedIds)
+    {
+        if (storedIds is not null)
+        {
+            (_committed, _committedSet) = Distinct(storedIds);
+        }
+    }
 
     /// <summary>
     /// After a Save that stored the document: the enabled-library list the save handed back becomes

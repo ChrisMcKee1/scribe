@@ -1102,19 +1102,22 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
   only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it.
 - **The old Settings window's Libraries page is contained until W2's Word packs page replaces it.** It cannot store a
-  switch, since its settings-only Save keeps the stored list, so it must not look as if it can (review findings A1 and
-  G1: it said "Settings saved.", kept the ticks, and its Save prompt removed a personal correction as covered by a pack
-  ticked on but stored off, leaving neither writing it). `LegacyLibraryPageContainment` holds the decision and the
-  window uses it (`LegacyLibraryPageContainmentTests` runs that scenario over the real parts and pins the window's
-  source): the On column is read-only, its box disabled so UI Automation cannot toggle it either, with a notice under
-  the page's subtitle; the Dictionary page's badges, the glossary count, the Save prompt and the cleanup are judged
-  against the committed selection (the stored list as the window loaded it, replaced by the list each Save hands
-  back), never the rows; the dictionary cleanup reviews no library and never switches one off or copies its terms, and
-  says so; an import says the pack is stored and off; and after every Save the rows show the stored list again, with a
-  notice in place of "Settings saved." (and the window left open by Save and close) if a row showed otherwise. Import,
-  export and remove work as before. An adoption that changes the stored list while the window is open (a file
-  replaced, removed or unreadable on disk) reaches the page at its next Save. Never make the list write work here:
-  that is W2's library payload.
+  switch, since its settings-only Save keeps the stored list, so it must not look as if it can, nor act on a selection a
+  Save may not keep (review findings A1 and G1: it said "Settings saved.", kept the ticks, and its Save prompt removed a
+  personal correction as covered by a pack ticked on but stored off, leaving neither writing it; and A2: the window's own
+  catalog load, whose adoption turns a pack changed outside Scribe off, left the prompt judging the list the window
+  opened with). `LegacyLibraryPageContainment` holds the decision and the window uses it
+  (`LegacyLibraryPageContainmentTests` runs both scenarios over the real parts and pins the window's source): the On
+  column is read-only, its box disabled so UI Automation cannot toggle it either, with a notice under the page's
+  subtitle; the Save prompt removes nothing a library covers, and asks nothing (the badges still show the
+  overlap); the Dictionary page's badges and the glossary count are judged against the committed selection, never the
+  rows: the stored list read when the page's catalog load finishes, then the one each Save hands back. That selection
+  only draws figures and is not what the next Save uses: an adoption later in the window's life (a file replaced,
+  removed or unreadable on disk) reaches it at that Save. The dictionary cleanup reviews no library and never switches
+  one off or copies its terms, and says so; an import says the pack is stored and off; and after every Save the rows
+  show the stored list again, with a notice in place of "Settings saved." (and the window left open by Save and close)
+  if a row showed otherwise. Import, export and remove work as before. Never make the list write work here: that is
+  W2's library payload.
 - **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
   packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
   the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything
