@@ -72,12 +72,14 @@ public sealed class OverlayPillSourceTests
     }
 
     [Fact]
-    public void The_colour_scan_passes_the_palette_Transparent_and_theme_resources()
+    public void The_colour_scan_passes_the_palette_Transparent_theme_resources_and_words_that_are_no_XAML_colour()
     {
+        // Highlight and Window name system colours, which XAML does not accept as colour names; here they are a name and
+        // a text.
         var colours = Colours(InGrid(
             "<Border Background='Transparent' BorderBrush='{ThemeResource PillErrorEdgeBrush}'>" +
             "<Border.Background><SolidColorBrush Color='#1A2744'/></Border.Background></Border>" +
-            "<TextBlock Text='Typed' TextTrimming='CharacterEllipsis' VerticalAlignment='Center'/>")).ToArray();
+            "<TextBlock x:Name='Highlight' Text='Window' TextTrimming='CharacterEllipsis' VerticalAlignment='Center'/>")).ToArray();
 
         Assert.Equal(["Transparent", "#1A2744"], colours.Select(c => c.Value));
         Assert.All(colours, c => Assert.True(c.Approved));

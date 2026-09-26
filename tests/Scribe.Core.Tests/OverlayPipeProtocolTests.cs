@@ -160,9 +160,16 @@ public sealed class OverlayPipeProtocolTests
         {
             var body = Body(client, method);
             Assert.Contains(published, body, StringComparison.Ordinal);
-            Assert.Contains("_desired = desired;", body, StringComparison.Ordinal);
-            Assert.Matches(new Regex(@"Enqueue\([^;]*, desired, "), body);
+
+            // Published before it is queued: the consumer judges a command against the latest state, so a command queued
+            // first could be taken, judged stale and skipped, and the state it was made for would never be shown.
+            Assert.Matches(new Regex(@"_desired = desired;[\s\S]*Enqueue\([^;]*, desired, "), body);
         }
+
+        // The queue carries each command's state; without it no command is ever judged stale.
+        Assert.Matches(
+            new Regex(@"private void Enqueue\(string text, DesiredState\? state,[^)]*\) =>\s*EnqueueStamped\(new Command\([^;]*State: state\)\);"),
+            client);
 
         // Judged before the decision (a stale command launches nothing) and again right before the write, after any launch.
         var handle = Body(client, "private void HandleState(Command item)");
