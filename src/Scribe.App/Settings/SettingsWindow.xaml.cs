@@ -2109,10 +2109,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var statsFailed = false;
         try
         {
+            var entries = _history.GetRecent(1000);
             stats = Scribe.Core.Diagnostics.DictationStats.Compute(
-                _history.GetRecent(1000),
+                entries,
                 since,
                 currentModelId,
+                currentModelAvailable: SelectedSpeechModelAvailable(currentModelId),
                 readLimit: 1000);
         }
         catch (Exception ex)
@@ -2122,6 +2124,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         return new(capability, stats, statsFailed);
+    }
+
+    private bool SelectedSpeechModelAvailable(string? selectedModelId)
+    {
+        var selected = TranscriptionModelCatalog.Resolve(selectedModelId);
+        return string.Equals(selected.Id, TranscriptionModelCatalog.DefaultId, StringComparison.OrdinalIgnoreCase) ||
+            _transcriptionModelInstaller.IsInstalled(selected);
     }
 
     private void ShowPerformanceStats(

@@ -43,6 +43,7 @@ public static class DiagnosticsSpeedText
     public const string FailureDescription = "Couldn't read the statistics.";
     public const string TryAgain = "Try again";
     public const string NoneYet = "None yet";
+    public const string NoDictationsForModel = "No dictations with this speech model in the last 7 days.";
     public const string CapLine = "Only your latest 1,000 dictations are counted.";
     public const string SpeechRecognitionHint = "Speech recognition time only. AI cleanup isn't counted here.";
     public const string CleanupHint = "AI cleanup time after speech recognition finishes.";
@@ -61,6 +62,10 @@ public static class DiagnosticsSpeedText
     public static DiagnosticsSpeedTextView ForStats(DictationStats.Snapshot stats)
     {
         ArgumentNullException.ThrowIfNull(stats);
+        if (stats.Count == 0)
+        {
+            return EmptyView(DescriptionFor(stats) + " " + NoDictationsForModel, showRetry: false);
+        }
 
         var speech = Step(
             SpeechRecognitionHint,

@@ -183,6 +183,7 @@ public partial class SettingsWindow
     {
         RefreshHistoryEmptyTextFromCommitted();
         RefreshUsageInsightAvailability();
+        LoadPerformanceStats();
     }
 
     private void RefreshHistoryEmptyTextFromCommitted()
@@ -492,5 +493,4 @@ public partial class SettingsWindow
             Rating = entry.AiRating,
         };
     }
-
 }

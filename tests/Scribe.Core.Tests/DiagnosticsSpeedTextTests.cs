@@ -64,6 +64,25 @@ public sealed class DiagnosticsSpeedTextTests
     }
 
     [Fact]
+    public void Exclusion_only_snapshot_names_the_model_and_distinguishes_it_from_empty_history()
+    {
+        var text = DiagnosticsSpeedText.ForStats(Snapshot(
+            speech: null,
+            cleanup: null,
+            combined: null,
+            hasOtherModels: true,
+            count: 0));
+
+        Assert.Equal(
+            "Speech model: Parakeet TDT 0.6B v3. Earlier dictations with another speech model aren't counted. " +
+            "No dictations with this speech model in the last 7 days.",
+            text.Description);
+        Assert.False(text.ShowRetry);
+        Assert.False(text.ShowTable);
+        Assert.False(text.ShowDetails);
+    }
+
+    [Fact]
     public void Speed_section_source_avoids_old_overclaiming_words()
     {
         var settings = Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings");
@@ -86,6 +105,15 @@ public sealed class DiagnosticsSpeedTextTests
             Assert.DoesNotContain(phrase, method, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(phrase, speedXaml, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void Saving_committed_settings_restarts_the_diagnostics_speed_read()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.History.cs"));
+        var method = ExtractMethod(source, "private void OnCommittedSettingsChanged");
+
+        Assert.Contains("LoadPerformanceStats();", method, StringComparison.Ordinal);
     }
 
     private static DictationStats.Snapshot Snapshot(
