@@ -35,7 +35,7 @@ public sealed partial class OverlayWindow : Window
 
     private OverlayState _state = OverlayState.Hidden;
     private OverlayAnchor _anchor = OverlayAnchor.BottomCenter;
-    private bool _activatedOnce;
+    private bool _shownOnce;
 
     private DispatcherQueueTimer? _failedTimer;
     private DispatcherQueueTimer? _recordingWarningTimer;
@@ -404,7 +404,7 @@ public sealed partial class OverlayWindow : Window
         // never CREATED and fails once it has been SHOWN, with the backdrop and HWND_TOPMOST both
         // ruled out. This switch separates the two remaining possibilities: whether the mere
         // EXISTENCE of the layered/transparent window breaks the screen-snip capture, or whether it
-        // takes the act of showing it (AppWindow.Show / the first Activate()).
+        // takes the act of showing it (AppWindow.Show).
         if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NEVERSHOW") == "1")
         {
             OverlayLog.Write("OverlayWindow.EnsureShown DIAG: show suppressed (window exists, stays hidden)");
@@ -414,17 +414,22 @@ public sealed partial class OverlayWindow : Window
         // Re-assert size/position in case the monitor/DPI changed between shows.
         SizeAndPosition();
 
-        if (!_activatedOnce)
-        {
-            _activatedOnce = true;
-            Activate(); // realises and shows the content (NOACTIVATE style avoids stealing focus)
-            OverlayLog.Write("OverlayWindow.EnsureShown first Activate()");
-        }
-        else
-        {
-            _appWindow.Show(activateWindow: false);
-            OverlayLog.Write("OverlayWindow.EnsureShown AppWindow.Show(activate:false)");
-        }
+        // Every show, the first included, is AppWindow.Show without activation. The first show used to call
+        // Window.Activate(), which "Attempts to activate the application window by bringing it to the foreground and
+        // setting the input focus to it"; WinUI implements it as ShowWindow(SW_SHOW) and SetActiveWindow, and
+        // WS_EX_NOACTIVATE does not stop an explicit activation ("To activate the window, use the SetActiveWindow or
+        // SetForegroundWindow function"). The log recorded OverlayWindow.Activated state=CodeActivated during the first
+        // dictation after every overlay launch. Whenever Windows allowed the foreground to move (SetForegroundWindow lists
+        // when it does), the window being dictated into would lose it mid-recording, and with it a Remote Desktop client
+        // its activation. AppWindow.Show is a supported way to show a XAML window (microsoft-ui-xaml#10995 is one shown
+        // that way, which differs from an activated one in what activation brings, such as tooltips); the pill takes no
+        // input and shows no tooltip.
+        var first = !_shownOnce;
+        _shownOnce = true;
+        _appWindow.Show(activateWindow: false);
+        OverlayLog.Write(first
+            ? "OverlayWindow.EnsureShown first show AppWindow.Show(activate:false)"
+            : "OverlayWindow.EnsureShown AppWindow.Show(activate:false)");
 
         AssertTopMost();
     }

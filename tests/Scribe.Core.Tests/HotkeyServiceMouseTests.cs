@@ -338,12 +338,11 @@ public partial class HotkeyServiceTests
 
         service.SetCaptureMode(true);
         AwaitRenewal(service); // the hook thread has applied capture
-        var passes = service.ReconcilePassesRun;
+        var passes = ReconcilePassCounts.Of(service);
         Assert.False(engine.OnKeyEvent(LeftCtrlKey, isDown: true).Suppress);
         Assert.False(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
 
-        Assert.True(
-            SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The forgiving press started no pass.");
+        AwaitReconcilePass(service, passes, "The forgiving press started no pass");
         Assert.Empty(injected);
         Assert.Equal(0, engine.OwedButtonReleases);
     }
@@ -369,10 +368,10 @@ public partial class HotkeyServiceTests
 
         service.SetCaptureMode(true);
         AwaitRenewal(service);
-        var passes = service.ReconcilePassesRun;
+        var passes = ReconcilePassCounts.Of(service);
         Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONUP, message));
 
-        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The release started no pass.");
+        AwaitReconcilePass(service, passes, "The release started no pass");
         Assert.Empty(injected);
         Assert.Equal(0, engine.OwedButtonReleases);
     }
@@ -401,7 +400,8 @@ public partial class HotkeyServiceTests
         service.UpdateBindings(ChordOf(LeftCtrlKey, PageDownKey), null);
         AwaitRenewal(service);
         Assert.True(service.MouseHookInstalled, "The mouse hook was removed while a swallowed press still owed its release.");
-        var passes = service.ReconcilePassesRun;
+        var passes = ReconcilePassCounts.Of(service);
+        var posted = service.MouseHookRefreshesForTests.Posted;
 
         switch (settled)
         {
@@ -416,9 +416,52 @@ public partial class HotkeyServiceTests
                 break;
         }
 
-        AwaitMouseHookRemoved(service, allowUpkeep: false);
-        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The settle started no pass.");
+        AwaitDrainOnlyHookRemovedByThePass(service, passes, posted);
         Assert.Empty(injected);
+    }
+
+    // The drain-only hook's removal after a settle, one side at a time, each named if it stalls (review round 2, item 8: the
+    // 10 s wait for the hook to go could not tell which side had failed, once, on CI): the reconcile pass the settle asked
+    // for, run on the pool; its WM_HOTKEY_REFRESH, posted to the hook thread; the hook thread's handling of every refresh
+    // posted up to it; and the removal that handling makes.
+    private static void AwaitDrainOnlyHookRemovedByThePass(HotkeyService service, ReconcilePassCounts passesBefore, long postedBefore)
+    {
+        AwaitReconcilePass(service, passesBefore, "Stalled before the pass the settle asked for");
+        var refreshes = service.MouseHookRefreshesForTests;
+        Assert.True(
+            refreshes.Posted > postedBefore,
+            $"Stalled in the pass: it ran but posted no refresh (refused posts: {refreshes.PostFailures}, hook still installed: " +
+            $"{service.MouseHookInstalled}).");
+        Assert.True(
+            SpinWait.SpinUntil(() => service.MouseHookRefreshesForTests.Handled >= refreshes.Posted, HookTimeout),
+            $"Stalled on the hook thread: {refreshes.Posted} refresh(es) posted, {service.MouseHookRefreshesForTests.Handled} handled.");
+        Assert.False(service.MouseHookInstalled, "The hook thread handled the refresh and kept the drain-only mouse hook.");
+    }
+
+    // The reconcile pass counts a Start_ test takes before the event that asks for a pass. These tests run the production
+    // path (the reconcile signal's pool wait, then the pool's run after its 25 ms settle), so a pass that does not come is
+    // reported by where it stalled (review round 3, item 6): never scheduled, or scheduled and never finished.
+    private readonly record struct ReconcilePassCounts(long Scheduled, long RepairsScheduled, long Run)
+    {
+        public static ReconcilePassCounts Of(HotkeyService service) =>
+            new(service.ReconcilePassesScheduledForTests, service.RepairPassesScheduledForTests, service.ReconcilePassesRun);
+    }
+
+    private static void AwaitReconcilePass(HotkeyService service, ReconcilePassCounts before, string what)
+    {
+        if (SpinWait.SpinUntil(() => service.ReconcilePassesRun > before.Run, HookTimeout))
+        {
+            return;
+        }
+
+        var scheduled = service.ReconcilePassesScheduledForTests - before.Scheduled;
+        var repairs = service.RepairPassesScheduledForTests - before.RepairsScheduled;
+        Assert.Fail(
+            scheduled == 0
+                ? $"{what}: no pass was scheduled within {HookTimeout.TotalSeconds:0} s (nothing asked the reconcile signal, " +
+                  "or its pool wait never handed the request on)."
+                : $"{what}: {scheduled} pass(es) scheduled ({repairs} with the leaked-key repair), and none finished within " +
+                  $"{HookTimeout.TotalSeconds:0} s (the pool never ran it after its settle, or it is still running).");
     }
 
     // Round 9 (A11): a repair that capture stopped is not run again when capture ends, through the real hook thread and
@@ -444,9 +487,9 @@ public partial class HotkeyServiceTests
         service.Start();
         service.SetCaptureMode(true);
         AwaitRenewal(service); // the hook thread has applied capture
-        var passes = service.ReconcilePassesRun;
+        var passes = ReconcilePassCounts.Of(service);
         service.ReconcileSignalForTests!.Signal(service.CurrentEngineForTests!.KeyViewEpoch); // asked for during the capture
-        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The repair never ran.");
+        AwaitReconcilePass(service, passes, "The repair asked for during the capture never ran");
         var asked = service.RepairRequestsAskedForTests;
         var scheduled = service.RepairPassesScheduledForTests;
 

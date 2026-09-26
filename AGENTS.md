@@ -382,8 +382,10 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
     TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower; DictationInsertion adds the
-                                    space after a dictation); push-to-talk hotkeys
-                                    (HotkeyEngine, HotkeyCommandRouter; KeyNames and HotkeyText name the keys)
+                                    space after a dictation; RemoteClientProcesses, TypingPace and KeyScanCodes for
+                                    Remote Desktop and virtual machine targets); push-to-talk hotkeys
+                                    (HotkeyEngine, HotkeyCommandRouter, KeyboardHookPrecedence; KeyNames and
+                                    HotkeyText name the keys)
     Persistence/                    SQLite store, HistoryWriter + OrderedHistoryRepository, StorageMaintenance
     Security/ Infrastructure/ Models/ DependencyInjection/
   src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
@@ -729,7 +731,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   command adds a dictation-only binding; the mouse callback's move and wheel fast path, an unbound
   button, the owed-release decision and a key no binding uses allocate nothing (`MouseButtonHotkeyTests`
   measures it warm, and `MouseButtonRound8Tests` measures the first call of each cold, in a load context
-  of its own with fresh copies of Scribe.Core and the tests, so no other test can have warmed it). The
+  of its own with fresh copies of Scribe.Core and the tests, so no other test can have warmed it;
+  `RemoteDesktopHookPathTests` does the same for what stream RD added to the keyboard callback: the
+  field reads, the echo check, the route through either registration, an uncertain key-down's route right after a
+  move, and the foreground notice's hop). The
   runtime's one-time work for the two P/Invokes the callbacks call, `CallNextHookEx` and
   `GetAsyncKeyState`, is done before either hook exists (`NativeMethods.PrelinkHookCalls`,
   `Marshal.Prelink`: "Executes one-time method setup tasks without calling the method"); on a first
@@ -758,6 +763,138 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
   other threads can only post the router's wake to a thread that already has a queue, and the
   documentation is not consistent about whether `SetWindowsHookEx` creates one.
+- **A Remote Desktop or virtual machine client's keyboard hook runs before Scribe's until Scribe moves ahead of it**
+  (stream RD). Windows calls the newest hook first: `SetWindowsHookEx` "always installs a hook procedure at the beginning
+  of a hook chain", and a procedure passes an event on only by calling `CallNextHookEx` (Hooks Overview). A Remote Desktop
+  client can register a low-level keyboard hook of its own (`mstscax.dll`, the Remote Desktop control that mstsc,
+  VMConnect and RDCMan host, imports `SetWindowsHookExW`, `UnhookWindowsHookEx` and `CallNextHookEx`, and its
+  `KeyboardHookMode` applies Windows key combinations such as Alt+Tab in the remote session when in focus or in full
+  screen; the hook itself is not documented by Microsoft, and AutoHotkey documents reinstalling a hook "has the effect of
+  giving it precedence over any hooks previously installed by other processes"), and once it has registered after
+  Scribe's, it sees every key first: the push-to-talk key reaches the remote session before Scribe can swallow it, or
+  never reaches Scribe, and the probe goes unanswered. The user's 0.4.3 log showed the watchdog reinstalling every 1 to
+  10 minutes all day in front of msrdc. So the hook thread also listens for `EVENT_SYSTEM_FOREGROUND` (a WinEvent on its
+  own thread, like the desktop switch's, whose callback only hands the window to the pool through `ForegroundNotice`);
+  the service hands it the window in front too as each hook installs; and `KeyboardHookPrecedence`, on the pool, looks
+  the window's process up (`WindowOwners`, `RemoteClientProcesses`; never on the hook thread) and asks the hook thread to
+  **move ahead** 250 ms later, after the client's own registration, again 2 s after that in case it registered late, then
+  to release what the moves replaced, and for as long as the client stays in front, to move ahead again every 30 s, each
+  followed by its release, in case the client registers once more without leaving the front. That keeps Scribe's hook
+  ahead as a bound, not a seal: until the first move, and until the next one after a registration the client makes while
+  it stays in front, the client's hook is still first, and a press in that gap can reach the session. Every step is taken
+  only if a remote client is still in front when it falls due, and the same remote window noticed again, with no other
+  window published since the last decision, keeps its sequence as scheduled rather than start it over (review round 2,
+  item 3); a window in between, or a step that finds no remote client in front, forgets it, so its return starts over.
+  Notices coalesce (the handler reads only the latest window), so the same window alone does not prove that nothing
+  else was in front: `ForegroundPublication` counts each publication whose window differs from the one it replaces, and
+  the count travels with the notice (review round 3, item 2). Notices and ticks are decided by revision (round 2, item
+  4): `ForegroundNotice` publishes each notice with a revision (an interlocked exchange of the window, the change count
+  when it differs, then the revision, then the SetEvent; the handler reads the revision, then the count, then the
+  window), a notice no newer than the last one decided changes nothing (the notice's pool callbacks can overlap: a
+  repeating registered wait re-arms before it runs its callback, stream MB's round 11), and each schedule records its own
+  number and its due time, as `ClosableTimer` does, so neither a tick of an earlier schedule nor an early tick can take a
+  newer one. A decision that keeps the step (the same window, or another window at the release, the one step it leaves
+  in place) re-arms that step to run at once when its tick was taken and is still in flight, so a tick that read the
+  foreground before the notice cannot apply what it judged then (round 3, item 2). And while no step is scheduled, the
+  watchdog's recovery poll (`KeyboardHookPrecedence.RecoverIfIdle`, from `MaintainKeyboardHookLocked`) looks at what is
+  in front once a period, so a sequence that ended while a client stayed in front (a step that read the foreground as a
+  window was losing activation, when Windows has none) starts over within 30 s. It publishes no notice: a publication takes
+  the notice's one window slot and advances the revision, which let a late watchdog sample cancel a real notice's sequence
+  or drop a move judged on it (round 4, item 1). It reads the revision, then the window, and starts the sequence only if,
+  under the gate, still no step is scheduled and no notice was published since; it then decides that revision, so a notice
+  published before its look and decided late changes nothing. Each move carries the foreground
+  revision and the window its step judged (`WM_HOTKEY_MOVE_AHEAD`'s wParam and lParam), and the hook thread drops it,
+  right before registering, unless no notice was published since and that window is still in front (one
+  `GetForegroundWindow` through the service's delegate, between messages, which also covers a change whose WinEvent the
+  thread has not been handed yet; no process is looked up there): a move posted, or held back, before the user left for
+  a local app is not made (round 2, item 5). Requests are posted thread messages (`WM_HOTKEY_MOVE_AHEAD`,
+  `WM_HOTKEY_MOVE_RETRY`, `WM_HOTKEY_RELEASE_RETIRED`); nothing waits for the hook thread. No new setting: it is automatic,
+  and `KeyboardHookPrecedenceTests` drives it on a clock the test owns. Each time a sequence starts for a remote client,
+  one Information line records, by its process name, that the client is in front and a move is scheduled (not that one
+  was made), and says so with "no move scheduled" when the recovery poll started it; the watchdog reports a refused move (Warning) and a move that waited or was dropped (Debug) by count.
+- **A move does not strand a keystroke that a hook ahead of Scribe's may have seen begin.** Such a hook may have forwarded
+  the press into a remote session; if Scribe swallowed the rest of that keystroke after moving ahead, the session would
+  keep the key down, and pressing it again would not help, because Scribe swallows that key (for a push-to-talk Right
+  Ctrl: every key typed in the session becomes a Ctrl shortcut, and the wheel zooms). Three rules keep such a keystroke
+  whole. First, `HookInstallation.MoveAhead` waits while the engine holds a key whose press it swallowed
+  (`HotkeyEngine.HoldsSwallowedKey`, from the machines' swallowed sets, keys only: a mouse button's order is the mouse
+  hook's), so a keystroke Scribe swallowed ends through the same hooks it began in; the wait is counted, the move is kept
+  on the hook thread with its revision and window, and the reconcile pass that follows that key's swallowed release asks
+  for it again (`RetryDeferredMoveAhead`), as does the watchdog once a period, and each retry judges it afresh; a later
+  move asked for meanwhile replaces it. Second, each registration has its own delegate
+  (`HookInstallation.KeyboardRegistration`), so the callback knows which one an event came through, and
+  `KeyboardHookFilter.Route` lets a registration the move replaced judge but never swallow an event that reaches only it
+  (`HotkeyEngine.OnKeyEvent(..., mayBeSwallowed: false)`, which also leaves nothing swallowed for the rest of the
+  keystroke): such an event entered the chain before the move and has passed every hook registered between the two.
+  Third (review round 2, item 1), a press the hook ahead kept is one Scribe never saw, so neither the engine nor
+  `GetAsyncKeyState` knows the key is held (a kept low-level event never reaches the asynchronous state), and its next
+  autorepeat reaches Scribe's new registration first. So once the hook becomes the newest registration (a move, or a
+  reinstall's registration; the first install replaces none and opens nothing), for a window a key-down of a key the
+  engine neither holds nor has seen go up since is uncertain (`HotkeyEngine.OnRegisteredAhead`): judged, so a dictation
+  still starts or ends, but never swallowed, and neither is the rest of its keystroke, so the hook that forwarded the
+  press also gets the release. The engine keeps such a keystroke itself until its release (`PassesWholeKeystroke`;
+  review round 3, item 1): a key-down judged uncertain, or one that reached only a replaced registration, marks its key,
+  and every repeat and the release of that keystroke pass whatever clears the machines' view meanwhile (new bindings,
+  capture's start and end, a desktop switch), since the machines alone would take the next repeat for a fresh press and
+  swallow it with its release. The judgement is made on the view the machines then use: `OnKeyEvent` applies the pending
+  commands once, first, then judges, then processes, with no second drain between (the mouse path keeps its order). The
+  cost fails open: a key whose release went unseen (let go on the lock screen) stays marked, so its next press passes
+  once, whole. The window is how long an autorepeat of a key held across the move can take to arrive,
+  from the user's keyboard settings (`KeyRepeatTiming`: SystemParametersInfo's SPI_GETKEYBOARDDELAY, "approximately 250
+  ms" to "approximately 1 second", and SPI_GETKEYBOARDSPEED, "approximately 2.5" to "approximately 30" repetitions per second, "hardware-dependent" and off a
+  linear scale "by as much as 20%"; read off the hook thread and published to the engine): the longer of the delay and
+  the period, a quarter more, plus 250 ms, so 875 ms for Windows' defaults and 1.5 s at most, measured on the events' own
+  time stamps (the tick count, compared signed). What can still reach the session: a press inside a window, of a key
+  Scribe has not seen go up since that move, passes through whole, for as long as it is held (a bound Page Down pages
+  the session and keeps paging while it is held, its repeats passing with it; a bound Right Ctrl is pressed and released
+  there; the dictation still starts and ends); a key held across a move whose repeat comes later than the window allows
+  is judged as a fresh press; an event stamped far in the future (KEYBDINPUT.time is the caller's) closes the window
+  early; a key held at the instant Scribe first installs its hook opens no window. `KeyboardHookMoveSafetyTests`,
+  `KeyboardHookUncertaintyTests`, `KeyboardHookUncertaintyOrderTests` and `KeyboardHookPassingKeystrokeTests` pin the
+  rules in memory; the CI tests
+  `Start_lets_a_key_already_on_its_way_to_a_replaced_registration_through_and_still_judges_it` (a real press held inside
+  a hook ahead of Scribe's while the move lands) and
+  `Start_lets_the_rest_of_a_keystroke_a_hook_ahead_of_it_kept_through_after_a_move` (a hook that forwards and keeps a key
+  held across the move must get its repeats and its release) measure them on real hooks.
+- **A move ahead keeps the engine and judges each key once.** `MoveAhead` runs between messages: it registers afresh
+  (so ahead of every hook registered before, the client's included) and keeps the registration it replaced
+  (`RetiredHookRegistrations`) instead of releasing it, because an event already on its way to the old registration
+  (inside the client's hook when the new one landed) would otherwise reach no registration of Scribe's. No key state,
+  epoch, key view or latch changes. While both are registered, an event the new registration judged and passed on comes
+  back through the old one, nested inside the new one's `CallNextHookEx`: the callback recognizes that echo
+  (`KeyEventPassOn`, which records the vkCode, scanCode, flags and time of every event the thread is passing on right
+  now, all nested passes, because injected input runs the hooks in the injecting thread's context and can hand the thread
+  a different event mid-pass) and passes it untouched. Only a replaced registration is asked: an event entering the
+  current registration is always judged as new, because those four fields do not name one event (KEYBDINPUT.time is the
+  caller's, so a key remapper behind Scribe's hook can synthesize a press and release identical to an event Scribe is
+  still passing on; review round 2, item 2). A replaced registration is released no sooner than 2 s after it was
+  replaced: twice LowLevelHooksTimeout's 1 s maximum, which is each hook's timeout, not the chain's ("If the hook
+  procedure times out, the system passes the message to the next hook", LowLevelKeyboardProc), so the grace covers an
+  event held by up to two slow hooks between the two registrations, not a longer chain. It is released at the next move,
+  at the sequence's release, or at the watchdog's next tick, and never sooner: at most four are kept, and when all four
+  are still inside their grace a move registers nothing and waits, kept like a move a key holds back, until the oldest
+  grace ends, when a thread timer of the hook thread's own (`SetTimer` with no window and no TimerProc, so `WM_TIMER`
+  reaches its loop) retries it; later moves coalesce into it (review round 2, item 3). Five delegate slots are made with
+  the installation (the current registration, four kept, and the new one while fewer than four are kept), and the grace
+  is timed on the service's `TimeProvider`, so the tests drive it. One that is already gone when released means Windows
+  removed it, so for a while no registration may have seen the keys: the watchdog reinstalls with a fresh engine
+  (`MaintainKeyboardHookLocked`), as for a hook that stopped receiving events. A retired engine moves nothing. The CI
+  tests `Start_sees_keys_first_again_once_moved_ahead_of_a_hook_that_keeps_them` and
+  `Start_decides_each_key_once_while_a_replaced_registration_is_kept` measure the chain order and the echo on real hooks.
+- **The watchdog's probe stops at Scribe's hook.** The keyboard callback counts every event, the probe included, and then
+  swallows exactly Scribe's own marker-tagged key-up of `VK_PROBE` (`KeyboardHookFilter.IsProbe`), through whichever
+  registration it reaches first: passed on, a Remote Desktop client behind Scribe's hook would forward a key-up of an
+  unassigned key with scan code 0 into the remote session every watchdog period. Text Scribe types and every other
+  marked event pass as before. Scribe's own keyboard input is its marker whole or exactly its low half
+  (`KeyboardHookFilter.IsScribesOwn`): Windows keeps only the low 32 bits of a mouse event's extra information (above),
+  while for a keyboard event it hands the hook the whole value, measured on both CI runners by
+  `Start_measures_the_marker_windows_hands_a_keyboard_hook_for_scribe_s_own_key` (run 36188289247), so the low half is
+  accepted only in case a later Windows narrows it too. The watchdog's warning no longer asserts a missed deadline: it
+  says the hook stopped receiving events either because Windows removed it or because another program's keyboard hook,
+  such as a Remote Desktop client's, now receives keys first, and names the process in front and whether it is a remote
+  client. `Start_judges_a_key_through_a_replaced_registration_without_swallowing_it` calls each registration's own
+  delegate on a private desktop, so the wiring of the rule above that a replaced registration never swallows is pinned
+  without injected input.
 - **The mouse hook exists only while a binding presses a mouse button.** A middle, Back or Forward
   button (`MouseButtons`, stored as VK_MBUTTON, VK_XBUTTON1 or VK_XBUTTON2 in the existing binding) is
   read by a `WH_MOUSE_LL` hook on the same hook thread, feeding the same engine
@@ -984,7 +1121,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   the acknowledgment that capture's end is applied: no sleep, and no drain through the pool, whose
   registered wait re-arms before its callback runs, so a later pass proves nothing about an earlier
   callback (review round 11, A13). `Start_serves_the_current_installation_s_repair_whatever_an_obsolete_one_asks_for`
-  pins A14.
+  pins A14. In memory, `HotkeyEngineHarness` takes the passes its service schedules through the service's internal
+  `scheduleReconcilePass` seam, on the thread that schedules, and a test runs them on its own thread
+  (`RunReconcilePasses`), so no in-memory test waits on the pool (review round 3, item 6: a 10 s wait for the pool's pass
+  failed under load) and no harness pass runs after its test; production keeps `Task.Run` and the 25 ms settle, and the
+  `Start_` tests that wait for it there say whether it was never scheduled or scheduled and never finished. The mouse
+  filter's tests read what it asks for on the asking thread (the signal's `RepairRequests` and `SyncRequestsForTests`, and
+  the word its hold keeps), so only the signal's own tests wait for its pool delivery. Nothing a pass throws leaves the
+  signal's pool callback (`HotkeyReconcileSignal.RunPass`): an exception escaping a pool callback ends the process, which a
+  test's disposed recorder once did to the whole test host.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
@@ -1098,7 +1243,45 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   degraded mode that trusts sequence numbers alone.
 - The paste log line carries enum names, counts and booleans only: nothing of the clipboard's content,
   length or format names.
+- **A Remote Desktop or virtual machine client never reaches this path**: it is always typed into (see "Typing into a
+  Remote Desktop or virtual machine session" below), because a remote session reads a pasted clipboard only when it
+  pastes, which can be after the restore.
 
+## Typing into a Remote Desktop or virtual machine session (read before touching TextInjector's pace or key events)
+
+- **Which targets are remote clients is a curated list** (`RemoteClientProcesses`, pure, by process name, like
+  `InjectionTextFormatter.IsTerminalProcess`): mstsc, msrdc (the Remote Desktop client for Windows and the Windows App,
+  whose session windows belong to msrdc), RDCMan and vmconnect (both host the Remote Desktop control), vmware, vmplayer,
+  vmware-view and vmware-remotemks, VirtualBoxVM, wfica32 and CDViewer. Add a name only with evidence that its window
+  forwards the local keyboard into another machine; `RemoteClientProcessesTests` holds the expected list by hand.
+- **Every VK-based event Scribe injects carries a real scan code** (`KeyScanCodes`): text insertion's Shift, Return, Ctrl
+  and V (`InjectionKeys`, read once per insertion from the foreground window's layout through
+  `IInjectionPlatform.ScanCodeOf`), and the leaked-key repair's key-ups (`NativeMethods.MarkedKeyEvent`). Remote clients
+  forward keys by scan code ([MS-RDPBCGR]: a keyboard event's keyCode is "the scancode of the key"), so with wScan 0 a
+  remote session received scan code 0 for all of them. The code is `MapVirtualKeyEx` with `MAPVK_VK_TO_VSC_EX`; an 0xE0
+  prefix sets `KEYEVENTF_EXTENDEDKEY`, as does the list of keys the repair always sent extended (the navigation keys share
+  their scan codes with the keypad); an 0xE1 key (Pause) keeps none. `KEYEVENTF_SCANCODE` is never set, so Windows still
+  takes the key from wVk and a local app gets the same keys as before. The watchdog's probe keeps no scan code.
+- **Typing into a remote client is paced for the remote session** (`TypingPace`): at most 16 code units per SendInput
+  call (`TextInjector.RemoteChunkChars`), 20 ms apart (`RemoteSettleMs`), with no word-boundary backoff, against 50 units
+  5 ms apart for every other target, which is unchanged. The user's 0.4.3 log showed 184 characters (368 events) typed
+  into msrdc in 99 ms, in four calls of up to 100 events, and the remote input stack wedged about a second later; nothing
+  documents a rate a remote session can take, so the remote pace stays far below that burst. The extra time is the
+  settles, measured over the same text: 220 ms for 184 characters (15 ms locally) and 940 ms for 766 (75 ms); the events
+  are the same. `ChunkLength` never splits a CRLF pair or, for every target, a surrogate pair: a local batch ends one
+  unit earlier only where a 50-unit cut would have fallen inside a pair, which it used to (`TypingPaceTests`).
+- **The log says what it was, shapes only.** The recording-start line carries `remote=True|False`, and the `text.inject`
+  trace carries `inject.remote`, `inject.paste_bypassed`, `inject.batch_units` and `inject.batches` (typing), and the counts
+  `inject.line_breaks`, `inject.surrogate_pairs` and `inject.control_chars` (`InjectedTextShape`), all allowlisted in
+  `TraceTagPolicy`. Never the text, never a window title.
+- **A remote client is always typed into, never pasted into, whatever the insertion setting** (review round 2, item 6).
+  The Remote Desktop clipboard uses delayed rendering ([MS-RDPECLIP]: "The data associated with the Clipboard Format is
+  sent only if a paste operation is executed"), so the remote app's paste reads the local clipboard over the connection,
+  after its Ctrl+V has crossed it, while Scribe restores the user's clipboard 130 ms after its Ctrl+V
+  (`PasteSettleDelayMs`); with real scan codes the Ctrl+V does reach the session, so it could paste what was put back,
+  possibly something private, instead of the dictation. So `TextInjector` types whenever `TypingPace.For` gives the remote
+  pace, never borrows the clipboard there, and the trace says so (`inject.remote=True`, `inject.paste_bypassed=True`;
+  `RemoteInsertionDiagnosticsTests`, `TypingPaceTests`). Every other target keeps the setting's method exactly.
 ## Storage maintenance (read before touching history or the database)
 
 - **The schema stays at `user_version` 7; never raise it for an additive change** (pattern P-11 in the
@@ -1485,6 +1668,18 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   applied position on the first engine command after one.
 - **Never tie the helper to `DictationController.ModelsReleased`.** Releasing the speech models and
   ending the pill are separate decisions; the old wiring could end a newer recording's pill.
+- **The pill never activates itself.** Every show, the first after a launch included, is `AppWindow.Show(activateWindow:
+  false)`. The first show used to call `Window.Activate()`, which "Attempts to activate the application window by
+  bringing it to the foreground and setting the input focus to it" (WinUI's implementation is `ShowWindow(SW_SHOW)` and
+  `SetActiveWindow`), and `WS_EX_NOACTIVATE` does not stop an explicit activation ("To activate the window, use the
+  SetActiveWindow or SetForegroundWindow function"): the log recorded `OverlayWindow.Activated state=CodeActivated`
+  during the first dictation after every launch. Whenever Windows allowed the foreground to move (the cases
+  `SetForegroundWindow` lists), the window being dictated into would lose it mid-recording, and a Remote Desktop client
+  its activation. The user's 0.4.3 log shows the dictated window still in front at each insertion, so that did not
+  happen there. `AppWindow.Show` is a supported way to show a XAML window (microsoft-ui-xaml#10995 shows one that way);
+  since WinUI raises `VisibilityChanged` only on a window's first activation, that line no longer follows a launch, and
+  the first-show line is now `OverlayWindow.EnsureShown first show AppWindow.Show(activate:false)`.
+  `OverlayNeverActivatesTests` pins the overlay's source. Not yet seen on a live desktop: the first pill after a launch.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,

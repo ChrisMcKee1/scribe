@@ -21,4 +21,10 @@ internal interface IInjectionPlatform
     bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow);
 
     void Sleep(int milliseconds);
+
+    /// <summary>
+    /// The scan code the foreground window's keyboard layout gives <paramref name="virtualKey"/>
+    /// (<see cref="KeyScanCodes.ForForegroundLayout"/>), for the VK-based events Scribe injects.
+    /// </summary>
+    KeyScanCode ScanCodeOf(ushort virtualKey);
 }

@@ -587,19 +587,30 @@ public sealed class MouseButtonHotkeyTests
         h.Engine.OnKeyEvent(0x41, isDown: true);
         h.Engine.OnKeyEvent(0x41, isDown: false);
 
+        // Then the same loop once, unmeasured (review round 4, item 5): what the runtime does once on this thread as the loop
+        // runs hot, tier promotion or on-stack replacement, lands here and not in the measurement (a one-time 7,672 bytes did,
+        // once, on x64 CI). It hides nothing the measurement is for: a per-event allocation allocates in the measured loop
+        // too, and so does any branch the loop takes that the warm-up did not.
+        RunEvents();
+
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 10_000; i++)
-        {
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
-            h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
-            h.Engine.OnKeyEvent(0x41, isDown: false);
-        }
+        RunEvents();
 
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
         Assert.Empty(h.TakeTransitions());
+
+        void RunEvents()
+        {
+            for (var i = 0; i < 10_000; i++)
+            {
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
+                h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
+                h.Engine.OnKeyEvent(0x41, isDown: false);
+            }
+        }
     }
 
     [Theory]
@@ -666,23 +677,27 @@ public sealed class MouseButtonHotkeyTests
     [Fact]
     public void A_swallowed_release_asks_for_the_leak_check()
     {
+        // Observed where the request is made, on this thread (review round 3, item 6): the signal counts the repair it is
+        // asked for, and the hold keeps the epoch it asks it for, so the test waits for no pass on the pool.
         using var h = new HotkeyEngineHarness(Bare(Middle));
         using var hook = new HookMessage();
-        using var checkRan = new ManualResetEventSlim(false);
-        using var signal = new HotkeyReconcileSignal(repairAt =>
+        using var hold = new ManualResetEventSlim(false);
+        using var signal = new HotkeyReconcileSignal(_ => { }) { HoldBeforeTakingForTests = hold };
+        try
         {
-            if (repairAt == h.Engine.KeyViewEpoch)
-            {
-                checkRan.Set();
-            }
-        });
-        hook.Set(0);
+            hook.Set(0);
 
-        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, hook.Pointer, h.Engine, signal));
-        Assert.False(checkRan.IsSet);
-        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, hook.Pointer, h.Engine, signal));
+            Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, hook.Pointer, h.Engine, signal));
+            Assert.Equal((0L, 0L), (signal.RepairRequests, signal.SyncRequestsForTests));
+            Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, hook.Pointer, h.Engine, signal));
 
-        Assert.True(checkRan.Wait(TimeSpan.FromSeconds(10)), "The swallowed release never asked for the leak check.");
+            Assert.Equal((1L, 0L), (signal.RepairRequests, signal.SyncRequestsForTests));
+            Assert.Equal(h.Engine.KeyViewEpoch, signal.PendingRepairAtForTests);
+        }
+        finally
+        {
+            hold.Set();
+        }
     }
 
     [Fact]

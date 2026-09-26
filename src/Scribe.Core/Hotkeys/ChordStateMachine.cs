@@ -127,7 +127,7 @@ internal sealed class ChordStateMachine
         }
     }
 
-    public ChordUpdate Process(uint virtualKey, bool isDown)
+    public ChordUpdate Process(uint virtualKey, bool isDown, bool mayBeSwallowed = true)
     {
         // Binding capture in Settings owns the keyboard: every event passes through untouched
         // so the capture box can see the current push-to-talk key, and nothing can start a
@@ -166,9 +166,11 @@ internal sealed class ChordStateMachine
         // the pairing). Letting half of one through leaves other apps holding an orphaned key-up,
         // or a key the system believes is stuck down. So pre-emption judges only a fresh press: a
         // Windows key pressed while paused and still held at resume must not have a later repeat
-        // pre-empted, or its release is swallowed too and the shell keeps Win held down.
+        // pre-empted, or its release is swallowed too and the shell keeps Win held down. An event that
+        // may not be swallowed (see HotkeyEngine.OnKeyEvent) is passed and leaves nothing swallowed, so
+        // the rest of its keystroke passes too.
         var shouldSuppress = false;
-        if (isDown && _binding.Suppress && isBindingKey &&
+        if (mayBeSwallowed && isDown && _binding.Suppress && isBindingKey &&
             ((!repeated && !_paused && _binding.SuppressChordMembers && NeedsPreemptiveSuppression(virtualKey)) ||
              (!_paused && !otherCommand && !wasSatisfied && satisfied) ||
              (repeated && _suppressed.Contains(virtualKey))))
@@ -178,7 +180,7 @@ internal sealed class ChordStateMachine
         }
         else if (!isDown && _suppressed.Remove(virtualKey))
         {
-            shouldSuppress = true;
+            shouldSuppress = mayBeSwallowed;
         }
 
         return new ChordUpdate(transition, shouldSuppress, _generation);
@@ -249,6 +251,12 @@ internal sealed class ChordStateMachine
 
     /// <summary>Owner thread: whether a hold is held or a toggle is on in this machine's view.</summary>
     public bool IsLatched => _active;
+
+    /// <summary>
+    /// Owner thread: whether a key whose press this machine swallowed is still held, so its release will be swallowed too.
+    /// A mouse button is not a key: the keyboard hook's place in the chain decides nothing about it.
+    /// </summary>
+    public bool HoldsSwallowedKey => _suppressed.ContainsAnyExcept(MouseButtons.Middle, MouseButtons.Back, MouseButtons.Forward);
 
     /// <summary>
     /// Enters or leaves pause. Pausing cancels a hold or toggle latch WITHOUT reporting a

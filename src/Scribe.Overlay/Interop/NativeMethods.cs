@@ -17,7 +17,7 @@ internal static class NativeMethods
     internal const long WS_EX_TRANSPARENT = 0x00000020; // mouse messages pass through (click-through)
     internal const long WS_EX_TOOLWINDOW = 0x00000080; // no taskbar button, hidden from Alt-Tab
     internal const long WS_EX_LAYERED = 0x00080000; // layered (DWM-composited here, not legacy ULW)
-    internal const long WS_EX_NOACTIVATE = 0x08000000; // never steals focus from the typing target
+    internal const long WS_EX_NOACTIVATE = 0x08000000; // not activated by a click or the switcher; Scribe never activates it either (EnsureShown)
 
     // SetWindowPos special HWNDs and flags.
     internal static readonly IntPtr HWND_TOPMOST = new(-1);

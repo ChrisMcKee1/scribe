@@ -233,7 +233,9 @@ public sealed class MouseButtonRound10Tests
     }
 
     // The consumer's repair after a dictation's release carries the epoch the release was seen at, the same way: a clear
-    // before the consumer gets to it stops the pass; with no clear the leaked key is released.
+    // before the consumer gets to it stops the pass; with no clear the leaked key is released. The pass the consumer's step
+    // asks for is queued by the harness and run here, on the test's thread, so no pool delay is waited on (review round 3,
+    // item 6: the pool's run after its 25 ms settle, waited for with a 10 s bound, missed it in full runs under load).
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -243,16 +245,20 @@ public sealed class MouseButtonRound10Tests
         using var h = Scripted(HotkeyBinding.DefaultDictation, key => key == PageDown, injected);
         Assert.True(h.Down(PageDown).Suppress);
         Assert.True(h.Up(PageDown).Suppress); // Windows still holds Page Down: a leak the hook saw released
+        var seenAt = h.Engine.KeyViewEpoch;
         if (clearedBeforeDispatch)
         {
             h.Engine.OnDesktopSwitch();
+            Assert.NotEqual(seenAt, h.Engine.KeyViewEpoch);
         }
 
-        var passes = h.Service.ReconcilePassesRun;
-        h.DispatchAll(); // the consumer's step: the Deactivated asks for a pass
-        Assert.True(SpinWait.SpinUntil(() => h.Service.ReconcilePassesRun > passes, Bound), "The release asked for no pass.");
+        var release = Assert.Single(h.DispatchAll(), transition => transition.Transition == HotkeyTransition.Deactivated);
+        Assert.True(release.AllowReconcile);
+        Assert.Equal(seenAt, release.KeyViewEpoch);
+        Assert.Equal([seenAt], h.RunReconcilePasses()); // the consumer's step asked for one pass, at the release's epoch
 
         Assert.Equal(clearedBeforeDispatch ? [] : new[] { PageDown }, injected);
+        Assert.Empty(h.TakeReconcilePasses());
     }
 
     // No replay (A13): capture's end queues no transition that could ask the consumer for a repair, and asking for the end
@@ -273,6 +279,7 @@ public sealed class MouseButtonRound10Tests
 
         Assert.DoesNotContain(h.TakeTransitions(), transition => transition.AllowReconcile);
         Assert.Equal(scheduled, h.Service.RepairPassesScheduledForTests);
+        Assert.Empty(h.TakeReconcilePasses());
         Assert.Empty(injected);
     }
 

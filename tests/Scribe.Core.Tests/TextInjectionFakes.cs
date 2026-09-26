@@ -389,6 +389,30 @@ internal static class TextInjectionFakes
             OnSleep?.Invoke(milliseconds);
         }
 
+        /// <summary>
+        /// The scan codes a US layout gives the keys text insertion sends, so a test can tell a real scan code from none.
+        /// Replace it to script another layout.
+        /// </summary>
+        public Func<ushort, KeyScanCode> ScanCodes { get; set; } = UsLayout;
+
+        /// <summary>Every key <see cref="ScanCodeOf"/> was asked about, in order.</summary>
+        public List<ushort> ScanCodeRequests { get; } = [];
+
+        public KeyScanCode ScanCodeOf(ushort virtualKey)
+        {
+            ScanCodeRequests.Add(virtualKey);
+            return ScanCodes(virtualKey);
+        }
+
+        public static KeyScanCode UsLayout(ushort virtualKey) => virtualKey switch
+        {
+            VK_SHIFT => new(0x2A, false),
+            VK_RETURN => new(0x1C, false),
+            VK_CONTROL => new(0x1D, false),
+            VK_V => new(0x2F, false),
+            _ => KeyScanCode.None,
+        };
+
         private static bool IsCtrlVChord(INPUT[] batch) =>
             batch.Length == 4 &&
             batch[0].U.ki is { wVk: VK_CONTROL, dwFlags: 0 } &&
