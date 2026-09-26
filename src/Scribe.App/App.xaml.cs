@@ -1351,10 +1351,12 @@ public partial class App : Application
     {
         var settings = _controller?.CurrentSettings;
         var mode = report.ShortcutMode;
+
+        // The shortcut that started the dictation names the key: the one without AI cleanup has its own key and mode.
         var notice = DictationProblemText.Describe(
             report,
             mode,
-            settings?.Hotkey is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
+            (report.Shortcut ?? settings?.Hotkey) is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
         var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
         if (routing == DictationProblemSurface.PillAndNotice)
         {

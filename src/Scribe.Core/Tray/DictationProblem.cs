@@ -29,7 +29,8 @@ public sealed record DictationProblemReport(
     string? UsedDevice = null,
     int Minutes = 10,
     HotkeyMode ShortcutMode = HotkeyMode.Hold,
-    long RecordingRevision = 0);
+    long RecordingRevision = 0,
+    HotkeyBinding? Shortcut = null);
 
 public sealed record DictationProblemNotice(string Title, string Body, TrayNoticeKind Kind, TrayNoticeAction Action = TrayNoticeAction.None);
 

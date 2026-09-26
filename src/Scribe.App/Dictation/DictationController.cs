@@ -631,6 +631,7 @@ internal sealed class DictationController : IDisposable
                     Stopwatch.GetTimestamp(),
                     e.Activation,
                     binding?.Mode ?? HotkeyMode.Hold,
+                    binding,
                     _vocabulary.Current);
             },
             () => _hotkeys.CancelToggle(e.Activation));
@@ -954,6 +955,7 @@ internal sealed class DictationController : IDisposable
             capture.StartedTimestamp,
             reason,
             capture.ShortcutMode,
+            capture.Shortcut,
             capture.Vocabulary);
 
         // Everything from here to the hand-off is guarded: the admission is ended only by the processing task, so a
@@ -1105,7 +1107,7 @@ internal sealed class DictationController : IDisposable
                 // support log showed this exact misdirection: the device took five seconds to open,
                 // the user let go, and Scribe blamed their hardware.
                 pillProblem = heldSeconds < 1.0
-                    ? new DictationProblemReport(DictationProblem.TooQuick, ShortcutMode: session.ShortcutMode)
+                    ? new DictationProblemReport(DictationProblem.TooQuick, ShortcutMode: session.ShortcutMode, Shortcut: session.Shortcut)
                     : device is null
                         ? new DictationProblemReport(DictationProblem.NoAudio)
                         : new DictationProblemReport(DictationProblem.NoAudioFromDevice, Device: device);
@@ -1840,6 +1842,7 @@ internal sealed class DictationController : IDisposable
         long StartedTimestamp,
         DictationStopReason StopReason,
         HotkeyMode ShortcutMode,
+        HotkeyBinding? Shortcut,
         VocabularyGeneration Vocabulary);
 
     // Everything a recording needs to remember from the moment it started, captured under the lifecycle's gate
@@ -1853,6 +1856,7 @@ internal sealed class DictationController : IDisposable
         long StartedTimestamp,
         long HotkeyActivation,
         HotkeyMode ShortcutMode,
+        HotkeyBinding? Shortcut,
         VocabularyGeneration Vocabulary);
 
     [DllImport("user32.dll")]

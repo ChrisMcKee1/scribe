@@ -42,6 +42,12 @@ public sealed class DictationOutcomeHandOffTests
         Assert.Contains("ShortcutMode: session.ShortcutMode", process, StringComparison.Ordinal);
         Assert.Contains("PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, session.ShortcutMode)", process, StringComparison.Ordinal);
         Assert.DoesNotContain("PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, settings.Hotkey.Mode)", process, StringComparison.Ordinal);
+
+        // The notice names the key of the shortcut that started the dictation, not always the dictation shortcut's.
+        Assert.Contains("capture.Shortcut,", stop, StringComparison.Ordinal);
+        Assert.Contains("Shortcut: session.Shortcut", process, StringComparison.Ordinal);
+        var app = ReadSource("src", "Scribe.App", "App.xaml.cs");
+        Assert.Contains("(report.Shortcut ?? settings?.Hotkey) is { } hotkey ? HotkeyText.SentenceName(hotkey) : null", app, StringComparison.Ordinal);
     }
 
     [Fact]
