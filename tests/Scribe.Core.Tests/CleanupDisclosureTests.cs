@@ -31,7 +31,7 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("with every cleanup request", text, StringComparison.Ordinal);
         Assert.Contains("the text Scribe recognized for that dictation", text, StringComparison.Ordinal);
         Assert.Contains("writing style", text, StringComparison.Ordinal);
-        Assert.Contains("enabled dictionary and library terms", text, StringComparison.Ordinal);
+        Assert.Contains("your dictionary plus the word packs you let AI cleanup use", text, StringComparison.Ordinal);
         Assert.Contains(
             $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {N(CleanupPrompt.MaxGlossaryChars)} characters",
             text, StringComparison.Ordinal);
@@ -187,6 +187,7 @@ public sealed class CleanupDisclosureTests
         var policy = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md")));
 
         Assert.Contains("every cleanup request sends that provider", policy, StringComparison.Ordinal);
+        Assert.Contains("the word packs you let AI cleanup use", policy, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions any of it", policy, StringComparison.Ordinal);
         Assert.Contains("whether or not post-processing is switched on", policy, StringComparison.Ordinal);
         Assert.Contains(

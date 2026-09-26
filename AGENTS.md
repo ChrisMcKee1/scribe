@@ -12,8 +12,8 @@ speak, release: punctuated text is typed into whatever app has focus. Audio is c
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
-text, the cleanup instructions and the vocabulary glossary (every enabled dictionary and library term,
-within its budget), whether or not the dictation mentions them; see
+text, the cleanup instructions and the vocabulary glossary (your dictionary and the word packs you let
+AI cleanup use, within its budget), whether or not the dictation mentions them; see
 [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
