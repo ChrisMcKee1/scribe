@@ -194,7 +194,9 @@ public sealed class MouseButtonRound9Tests
     }
 
     // The control: once capture has fully ended, a real leak (Windows holds a key the engine saw released, or never saw)
-    // is repaired as before. Nothing ran by itself when capture ended: a pass capture stopped is not replayed.
+    // is repaired as before. Nothing ran by itself when capture ended: a pass capture stopped is not replayed. The harness
+    // queues every pass the service schedules, on the thread that schedules it, so a replay would be in the queue as soon
+    // as the end is applied, with no pool delay to wait out (review round 3, item 6).
     [Fact]
     public void A_repair_after_capture_has_fully_ended_still_releases_a_leaked_key()
     {
@@ -206,8 +208,12 @@ public sealed class MouseButtonRound9Tests
         h.Service.SetCaptureMode(false);
         h.Service.RunReconcilePassForTests(repairKeys: true); // its end requested, not applied
         var passes = h.Service.ReconcilePassesRun;
+        var scheduled = h.Service.RepairPassesScheduledForTests;
         h.Engine.OnWake();
+        h.DispatchAll();
 
+        Assert.Empty(h.TakeReconcilePasses());
+        Assert.Equal(scheduled, h.Service.RepairPassesScheduledForTests);
         Assert.Equal(passes, h.Service.ReconcilePassesRun);
         Assert.Empty(injected);
 

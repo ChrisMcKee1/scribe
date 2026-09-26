@@ -31,6 +31,7 @@ public sealed class HotkeyService : IHotkeyService
     private readonly Func<nint, string?> _processNameOfWindow;
     private readonly TimeProvider _time;
     private readonly Func<int> _keyRepeatWindowMs;
+    private readonly Action<long>? _scheduleReconcilePass;
     private readonly object _sync = new();
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
@@ -73,6 +74,7 @@ public sealed class HotkeyService : IHotkeyService
     private Timer? _watchdog;
     private long _hookCallbackCount;
     private long _reconcilePasses;
+    private long _reconcilePassesScheduled;
     private long _repairPassesScheduled;
     private int _captureAdmissions;
     private TimeSpan _captureAdmissionWait = TimeSpan.FromMilliseconds(250);
@@ -131,6 +133,12 @@ public sealed class HotkeyService : IHotkeyService
     /// How long after the keyboard hook becomes the newest registration an unseen key-down is uncertain
     /// (<see cref="KeyRepeatTiming.ReadUncertaintyWindowMs"/>, read off the hook thread); a test scripts it.
     /// </param>
+    /// <param name="scheduleReconcilePass">
+    /// Takes each reconcile pass asked for, by the key view epoch it judges (0 for the mouse hook's sync alone), on the
+    /// thread that asks, in place of the pool's run after a 25 ms settle, which stays the production path; a test that plays
+    /// the hook thread queues the passes and runs them on its own thread (<see cref="RunReconcilePassForTests(long)"/>), so
+    /// nothing it asserts waits on the pool.
+    /// </param>
     internal HotkeyService(
         ILogger<HotkeyService> logger,
         HotkeyCommandRouter router,
@@ -140,7 +148,8 @@ public sealed class HotkeyService : IHotkeyService
         Func<nint>? foregroundWindow = null,
         Func<nint, string?>? processNameOfWindow = null,
         TimeProvider? time = null,
-        Func<int>? keyRepeatWindowMs = null)
+        Func<int>? keyRepeatWindowMs = null,
+        Action<long>? scheduleReconcilePass = null)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
@@ -148,6 +157,7 @@ public sealed class HotkeyService : IHotkeyService
         _processNameOfWindow = processNameOfWindow ?? WindowOwners.ProcessNameOf;
         _time = time ?? TimeProvider.System;
         _keyRepeatWindowMs = keyRepeatWindowMs ?? KeyRepeatTiming.ReadUncertaintyWindowMs;
+        _scheduleReconcilePass = scheduleReconcilePass;
         _router = router;
         _reconciler = CreateReconciler(
             _router,
@@ -308,6 +318,12 @@ public sealed class HotkeyService : IHotkeyService
 
     /// <summary>How many passes asking for the leaked-key repair have been scheduled, from any source; for tests.</summary>
     internal long RepairPassesScheduledForTests => Interlocked.Read(ref _repairPassesScheduled);
+
+    /// <summary>
+    /// How many reconcile passes have been scheduled, with the repair or for the mouse hook's sync alone, from any source;
+    /// for tests that must say whether a pass they wait for was never scheduled or was scheduled and never ran.
+    /// </summary>
+    internal long ReconcilePassesScheduledForTests => Interlocked.Read(ref _reconcilePassesScheduled);
 
     /// <summary>
     /// How many leaked-key repairs the hook side has asked for, counted where each is asked, on the asking thread: the
@@ -774,12 +790,20 @@ public sealed class HotkeyService : IHotkeyService
     // returns), and the input queue needs a beat to settle after the final suppressed key-up. The hook
     // callbacks never call this themselves; they signal HotkeyReconcileSignal, whose pool wait thread does.
     // The consumer asks for the repair on a dictation's release. repairAt is the key view epoch the repair
-    // was asked for in (HotkeyEngine.KeyViewEpoch), or 0 for the mouse hook's sync alone.
+    // was asked for in (HotkeyEngine.KeyViewEpoch), or 0 for the mouse hook's sync alone. A test that plays the hook
+    // thread takes the pass instead (the constructor's scheduleReconcilePass) and runs it on its own thread.
     private void ScheduleReconcile(long repairAt)
     {
+        Interlocked.Increment(ref _reconcilePassesScheduled);
         if (repairAt != 0)
         {
             Interlocked.Increment(ref _repairPassesScheduled);
+        }
+
+        if (_scheduleReconcilePass is { } schedule)
+        {
+            schedule(repairAt);
+            return;
         }
 
         _ = Task.Run(async () =>
