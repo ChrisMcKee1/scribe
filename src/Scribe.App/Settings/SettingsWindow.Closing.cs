@@ -464,9 +464,15 @@ public partial class SettingsWindow
                 {
                     DictionaryGrid.SelectedItem = row;
                     DictionaryGrid.ScrollIntoView(row);
-                    FocusDictionarySpokenCell(row);
+
+                    // Only a blocking issue opens the editor: a warning lets the Save go on, and starting an edit then
+                    // would change the draft the Save captured and read as a change made while saving.
+                    if (issue.Severity == ValidationSeverity.Blocking)
+                    {
+                        FocusDictionarySpokenCell(row);
+                    }
                 }
-                else
+                else if (issue.Severity == ValidationSeverity.Blocking)
                 {
                     DictionaryGrid.Focus();
                 }

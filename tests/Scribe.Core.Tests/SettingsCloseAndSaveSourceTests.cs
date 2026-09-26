@@ -49,10 +49,14 @@ public sealed class SettingsCloseAndSaveSourceTests
         // Item 13: a word pack edited while the Save waited (for Start with Windows, or an earlier save) was stored and
         // marked saved, though it was never validated.
         var save = Body(Window, "private async Task<bool> TrySaveAsync()");
-        var check = save.IndexOf("_wordPackWorkspace?.EditRevision != preflight.WorkspaceRevision", StringComparison.Ordinal);
-        Assert.True(check >= 0, "The Save must compare the workspace's revision with the preflight's.");
+        var check = save.IndexOf("if (WordPackDraftMovedSincePreflight(preflight))", StringComparison.Ordinal);
+        Assert.True(check >= 0, "The Save must compare the workspace with the preflight's.");
         Assert.True(check < save.IndexOf("_wordPackSaveProtocol.SaveAsync(", StringComparison.Ordinal));
         Assert.Contains("_wordPackWorkspace, _wordPackWorkspace?.EditRevision);", Window, StringComparison.Ordinal);
+
+        // The first load arriving during the wait is not an edit.
+        var moved = Body(Window, "private bool WordPackDraftMovedSincePreflight(");
+        Assert.Contains("return current is not null && (current.EditRevision != 0 || current.HasUnsavedChanges);", moved, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -95,6 +99,11 @@ public sealed class SettingsCloseAndSaveSourceTests
         // Item 10: the message pointed at a row, but focus stayed on the grid.
         var show = Body(Window, "private void ShowValidationIssue(ValidationIssue issue)");
         Assert.Contains("FocusDictionarySpokenCell(row);", show, StringComparison.Ordinal);
+
+        // A warning lets the Save continue; opening an editor then would read as a change made while saving.
+        Assert.True(
+            show.IndexOf("if (issue.Severity == ValidationSeverity.Blocking)", StringComparison.Ordinal) <
+            show.IndexOf("FocusDictionarySpokenCell(row);", StringComparison.Ordinal));
         var focus = Body(Window, "private void FocusDictionarySpokenCell(DictionaryRow row)");
         Assert.Contains("DictionaryGrid.BeginEdit();", focus, StringComparison.Ordinal);
     }

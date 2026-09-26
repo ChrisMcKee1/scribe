@@ -6166,7 +6166,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // The protocol captures the word pack draft when this call starts. An edit made while the Save waited above
             // (for Start with Windows, or an earlier save to settle) isn't in what was validated, so this Save stops here
             // with the edit kept, and the next Save includes it.
-            if (!ReferenceEquals(_wordPackWorkspace, preflight.Workspace) || _wordPackWorkspace?.EditRevision != preflight.WorkspaceRevision)
+            if (WordPackDraftMovedSincePreflight(preflight))
             {
                 ShowInfo(WordPackDraftChangedBeforeSave);
                 return false;
@@ -6410,6 +6410,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Start with Windows applies the moment its switch is flipped and stores its preference itself (StartupPreference), so a
     // Save never takes it from a draft captured earlier: the live value stays, and Save reconciles it with what Windows says.
+    // The word pack draft moved on after the preflight captured it: edited, or replaced. The first load arriving during the
+    // wait (no workspace at the preflight, a clean one now) is not an edit, so it doesn't stop the Save.
+    private bool WordPackDraftMovedSincePreflight(SavePreflightInput preflight)
+    {
+        var current = _wordPackWorkspace;
+        if (preflight.Workspace is null)
+        {
+            return current is not null && (current.EditRevision != 0 || current.HasUnsavedChanges);
+        }
+
+        return !ReferenceEquals(current, preflight.Workspace) || current.EditRevision != preflight.WorkspaceRevision;
+    }
+
     private static void CopySettings(AppSettings source, AppSettings target)
     {
         var copy = source.Clone();
