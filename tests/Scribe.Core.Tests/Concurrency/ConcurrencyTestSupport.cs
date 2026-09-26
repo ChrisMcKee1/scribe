@@ -113,6 +113,9 @@ internal sealed class ManualTimeProvider : TimeProvider
     public void Advance(TimeSpan by) =>
         Interlocked.Add(ref _timestamp, (long)(by.TotalSeconds * TimestampFrequency));
 
+    /// <summary>Runs with each timer as it is created, on the creating thread, once it is recorded: lets a test wait for one.</summary>
+    public Action<ManualTimer>? Created { get; set; }
+
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ManualTimer(callback, state, dueTime);
@@ -121,6 +124,7 @@ internal sealed class ManualTimeProvider : TimeProvider
             _timers.Add(timer);
         }
 
+        Created?.Invoke(timer);
         return timer;
     }
 }

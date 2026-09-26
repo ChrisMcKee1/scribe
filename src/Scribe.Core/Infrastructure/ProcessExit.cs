@@ -26,14 +26,23 @@ public static class ProcessExit
     /// Waits until <paramref name="process"/> exits, then up to <paramref name="outputLimit"/> for the end of its
     /// redirected output. <paramref name="cancellationToken"/> cancels either wait.
     /// </summary>
-    public static async Task WaitAsync(Process process, TimeSpan outputLimit, CancellationToken cancellationToken)
+    public static Task WaitAsync(Process process, TimeSpan outputLimit, CancellationToken cancellationToken) =>
+        WaitAsync(process, outputLimit, TimeProvider.System, cancellationToken);
+
+    /// <summary>
+    /// The same wait with <paramref name="outputLimit"/> counted on <paramref name="time"/>. On the system clock, which the
+    /// public overload passes, the limit's source arms the same timer <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>
+    /// did, from the same point; a test passes a clock only it moves, so it decides when the limit passes.
+    /// </summary>
+    internal static async Task WaitAsync(Process process, TimeSpan outputLimit, TimeProvider time, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(time);
 
         await WaitForTheExitAloneAsync(process, cancellationToken).ConfigureAwait(false);
 
-        using var output = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        output.CancelAfter(outputLimit);
+        using var limit = new CancellationTokenSource(outputLimit, time);
+        using var output = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, limit.Token);
         try
         {
             // The process has exited, so this now waits only for the end of its output.
