@@ -2840,10 +2840,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // A rebuild of the picker (a catalog refresh) selects programmatically, and a failed Load must keep its error row
-        // through it; only a real choice of another model retires the last operation's outcome.
-        if (!_suppressComboFilter &&
-            !string.Equals(SelectedFoundryModelAlias, _foundryOperationAlias, StringComparison.OrdinalIgnoreCase))
+        // A rebuild of the picker (a catalog refresh) selects programmatically: a failed or running operation keeps its row
+        // through it, and any other outcome is retired so the service's progress and the catalog's loaded state show. A
+        // real choice of another model retires the last operation's outcome whatever it was.
+        var keepsOutcome = _suppressComboFilter &&
+            _foundryOperationStatus is { } outcome &&
+            FoundryLocalSetup.KeepsThroughPickerRebuild(outcome) &&
+            string.Equals(SelectedFoundryModelAlias, _foundryOperationAlias, StringComparison.OrdinalIgnoreCase);
+        if (!keepsOutcome)
         {
             _foundryOperationStatus = null;
             _foundryOperationAlias = null;
@@ -5528,6 +5532,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 snippets,
                 new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
             _committedSettings = _settings.Clone();
+
+            // A Save that makes Foundry Local serve the model an earlier Set up or Load was for starts a new setup, and the
+            // row shows that setup's own progress and result from now on.
+            if (_foundryOperationStatus is { } foundryOutcome &&
+                _foundryOperationAlias is { } foundryOutcomeAlias &&
+                SavedActiveFoundryModelMatches(foundryOutcomeAlias) &&
+                FoundryLocalSetup.RetiredBySaveThatServesIt(foundryOutcome))
+            {
+                _foundryOperationStatus = null;
+                _foundryOperationAlias = null;
+            }
+
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;

@@ -60,6 +60,28 @@ public static class FoundryLocalSetup
         return description with { Stage = stage };
     }
 
+    /// <summary>
+    /// Whether the outcome of an explicit Set up, Load or Unload stays on the status row through a rebuild of the model
+    /// picker (a catalog refresh, which selects programmatically). A failure stays until the user acts on it and an
+    /// operation still running keeps its row; a settled success or information line is retired, so the service's own
+    /// progress and the catalog's loaded state show from then on.
+    /// </summary>
+    public static bool KeepsThroughPickerRebuild(FoundryLocalSetupDescription outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        return outcome.Kind is AiCleanupStatusKind.Error or AiCleanupStatusKind.Busy;
+    }
+
+    /// <summary>
+    /// Whether a Save that makes Foundry Local serve the outcome's model retires the outcome: that Save starts a new setup,
+    /// whose progress and result the row shows from then on. An operation still running keeps its row until it finishes.
+    /// </summary>
+    public static bool RetiredBySaveThatServesIt(FoundryLocalSetupDescription outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        return outcome.Kind != AiCleanupStatusKind.Busy;
+    }
+
     public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached) =>
         FromCleanupStatus(status, runtimeReady, modelCached, modelLoaded: null);
 
