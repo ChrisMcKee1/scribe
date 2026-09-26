@@ -149,6 +149,7 @@ public sealed class RemoteDesktopHookPathTests
         }
 
         yield return typeof(ForegroundNotice).GetMethod(nameof(ForegroundNotice.Notify), Any)!;
+        yield return typeof(ForegroundPublication).GetMethod(nameof(ForegroundPublication.Publish), Any)!;
     }
 
     // What the hook thread runs between messages for a move ahead and its clean-up. Since review round 2 (item 5) the move

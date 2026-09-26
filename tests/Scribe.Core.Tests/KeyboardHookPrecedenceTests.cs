@@ -110,7 +110,7 @@ public class KeyboardHookPrecedenceTests
 
         var line = Assert.Single(rig.Log.Entries);
         Assert.StartsWith(
-            "Information: Remote desktop client msrdc came to the front; a move of the keyboard hook ahead of its hook is " +
+            "Information: Remote desktop client msrdc is in front; a move of the keyboard hook ahead of its hook is " +
             "scheduled, and repeated while it stays in front.",
             line);
     }
@@ -283,7 +283,7 @@ public class KeyboardHookPrecedenceTests
         rig.Time.Timer.Fire();
         Assert.Equal(["move", "move", "move", "move", "release"], rig.Requests);
         Assert.Equal(2, rig.Log.Entries.Count);
-        Assert.Contains("Remote desktop client vmconnect came to the front", rig.Log.Entries[1]);
+        Assert.Contains("Remote desktop client vmconnect is in front", rig.Log.Entries[1]);
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         rig.Time.Timer.Fire();
 
-        rig.Publish(); // a newer notice, published but not yet handled when the second move falls due
+        rig.Publish(RemoteWindow); // a newer notice, published but not yet handled when the second move falls due
         rig.Time.Timer.Fire();
 
         Assert.Equal([(1L, RemoteWindow), (2L, RemoteWindow)], rig.Moves);
@@ -347,8 +347,11 @@ public class KeyboardHookPrecedenceTests
             }
         };
         rig.Foreground = RemoteWindow;
-        var local = rig.Publish();
-        var older = new Thread(() => rig.Precedence.OnForegroundChanged(LocalWindow, local)) { IsBackground = true };
+        var local = rig.Publish(LocalWindow);
+        var older = new Thread(() => rig.Precedence.OnForegroundChanged(LocalWindow, local.Revision, local.Changes))
+        {
+            IsBackground = true,
+        };
         older.Start();
         Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The older lookup never started.");
 
@@ -367,12 +370,12 @@ public class KeyboardHookPrecedenceTests
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
-        var first = rig.Publish();
-        var second = rig.Publish();
+        var first = rig.Publish(LocalWindow);
+        var second = rig.Publish(RemoteWindow);
 
-        rig.Precedence.OnForegroundChanged(RemoteWindow, second);
-        rig.Precedence.OnForegroundChanged(LocalWindow, first);
-        rig.Precedence.OnForegroundChanged(LocalWindow, second);
+        rig.Precedence.OnForegroundChanged(RemoteWindow, second.Revision, second.Changes);
+        rig.Precedence.OnForegroundChanged(LocalWindow, first.Revision, first.Changes);
+        rig.Precedence.OnForegroundChanged(LocalWindow, second.Revision, second.Changes);
 
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         Assert.Single(rig.Log.Entries);
@@ -444,8 +447,8 @@ public class KeyboardHookPrecedenceTests
     [Fact]
     public void Each_foreground_notice_is_published_at_once_with_a_newer_revision_which_its_handler_receives()
     {
-        var seen = new System.Collections.Concurrent.ConcurrentQueue<(nint Window, long Revision)>();
-        using var notice = new ForegroundNotice((window, revision) => seen.Enqueue((window, revision)));
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<(nint Window, long Revision, long Changes)>();
+        using var notice = new ForegroundNotice((window, revision, changes) => seen.Enqueue((window, revision, changes)));
         Assert.Equal(0, notice.PublishedRevision);
 
         notice.Notify(RemoteWindow);
@@ -454,13 +457,184 @@ public class KeyboardHookPrecedenceTests
         notice.Notify(LocalWindow);
         Assert.Equal(2, notice.PublishedRevision);
         Assert.True(SpinWait.SpinUntil(() => seen.Count == 2, TimeSpan.FromSeconds(10)), "The second notice was not handled.");
+        notice.Notify(LocalWindow);
+        Assert.True(SpinWait.SpinUntil(() => seen.Count == 3, TimeSpan.FromSeconds(10)), "The third notice was not handled.");
 
-        Assert.Equal([(RemoteWindow, 1L), (LocalWindow, 2L)], seen.ToArray());
+        Assert.Equal([(RemoteWindow, 1L, 1L), (LocalWindow, 2L, 2L), (LocalWindow, 3L, 2L)], seen.ToArray());
+    }
+
+    [Fact]
+    public void A_publication_counts_a_change_only_when_its_window_differs_from_the_one_published_before_it()
+    {
+        // Review round 3, item 2 (A7): what tells a repeat of the same window from that window back in front after another.
+        var publication = new ForegroundPublication();
+        Assert.Equal(((nint)0, 0L, 0L), publication.Read());
+
+        publication.Publish(RemoteWindow);
+        publication.Publish(RemoteWindow);
+        Assert.Equal((RemoteWindow, 2L, 1L), publication.Read());
+
+        publication.Publish(LocalWindow);
+        publication.Publish(RemoteWindow);
+        Assert.Equal((RemoteWindow, 4L, 3L), publication.Read());
+        Assert.Equal(4, publication.Revision);
+        Assert.Equal(3, publication.Changes);
+    }
+
+    [Fact]
+    public void The_client_back_in_front_after_a_window_whose_notice_coalesced_away_cannot_lose_its_first_move()
+    {
+        // Review round 3, item 2 (A7), sequence one. R's first move falls due; its tick takes the schedule and, the
+        // foreground having gone to a local window L, looks L up (held here). The foreground returns to R. L's notice and R's
+        // coalesced (a ForegroundNotice hands its handler only the latest window), so R's notice looked like a repeat of the
+        // window the sequence served: it was kept as it was, the tick then found L, and armed nothing, and R stayed in front
+        // with no move scheduled. The change count tells R's return from a repeat, so the sequence starts over, and the tick
+        // in flight finds its schedule gone.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        using var atLookup = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        rig.BeforeLookup = window =>
+        {
+            if (window == LocalWindow)
+            {
+                atLookup.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        rig.Foreground = LocalWindow;
+        var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
+        tick.Start();
+        Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The tick never looked the local window up.");
+
+        rig.Publish(LocalWindow); // L's notice, coalesced into R's: never handled on its own
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+        release.Set();
+        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+
+        Assert.Empty(rig.Requests);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move"], rig.Requests);
+    }
+
+    [Fact]
+    public void The_client_back_in_front_after_a_window_whose_notice_coalesced_away_starts_over_from_the_keep_ahead_wait()
+    {
+        // Review round 3, item 2 (A7), sequence two: R, then L, then R again, quickly, with L's notice coalesced away. The
+        // return kept the long keep-ahead wait instead of the first move a return gets (the client may register its hook
+        // again on its activation).
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+        rig.Time.Timer.Fire();
+        rig.Time.Timer.Fire();
+        Assert.Equal(KeyboardHookPrecedence.KeepAheadPeriod, rig.Time.Timer.Due);
+
+        rig.Publish(LocalWindow);
+        rig.Notice(RemoteWindow);
+
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move", "move", "release", "move"], rig.Requests);
+    }
+
+    [Fact]
+    public void A_tick_in_flight_when_the_same_window_is_noticed_again_cannot_apply_what_it_judged_before()
+    {
+        // Review round 3, item 2 (A7): a tick in flight when a newer notice is decided must not apply its outcome, on the
+        // same-window path too. R's first move falls due; its tick reads the window in front at a moment R is losing
+        // activation and Windows has none (GetForegroundWindow: "The foreground window can be NULL in certain
+        // circumstances, such as when a window is losing activation"), and R's notice of regaining it, with no other window
+        // published between, is decided while that tick is still in flight. A repeat of the same window keeps the sequence,
+        // and the tick then ended it: nothing scheduled while R stays in front. Now the notice takes the step back, to run at
+        // once on a fresh read.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        using var atRead = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        rig.AfterForegroundRead = window =>
+        {
+            if (window == 0)
+            {
+                atRead.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        rig.Foreground = 0;
+        var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
+        tick.Start();
+        Assert.True(atRead.Wait(TimeSpan.FromSeconds(10)), "The tick never read the window in front.");
+
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow); // the same window, and nothing else published since: a repeat
+        release.Set();
+        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+
+        Assert.Empty(rig.Requests);
+        Assert.Equal(TimeSpan.Zero, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move"], rig.Requests);
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+    }
+
+    [Fact]
+    public void A_tick_in_flight_when_another_window_is_noticed_cannot_apply_what_it_judged_before()
+    {
+        // R's release falls due; its tick finds R in front and is still looking R up when a local window's notice is decided.
+        // The release stays due (moves were made), and the tick used to go on to release and schedule a keep-ahead move for
+        // R, 30 s later, with L in front. Now the notice takes the step back, and a fresh tick releases and ends the sequence.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+        rig.Time.Timer.Fire();
+        Assert.Equal(KeyboardHookPrecedence.RetiredGrace, rig.Time.Timer.Due);
+        using var atLookup = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var hold = 1;
+        rig.BeforeLookup = window =>
+        {
+            if (window == RemoteWindow && Interlocked.Exchange(ref hold, 0) == 1)
+            {
+                atLookup.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
+        tick.Start();
+        Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The tick never looked the client up.");
+
+        rig.Foreground = LocalWindow;
+        rig.Notice(LocalWindow);
+        release.Set();
+        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+
+        Assert.Equal(["move", "move"], rig.Requests);
+        Assert.Equal(TimeSpan.Zero, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        Assert.Equal(["move", "move", "release"], rig.Requests);
+        Assert.Null(rig.Time.Timer.Due);
+    }
+
+    [Fact]
+    public void The_sequence_says_whether_it_is_idle()
+    {
+        var rig = new Rig { Foreground = RemoteWindow };
+        Assert.True(rig.Precedence.IsIdle);
+
+        rig.Notice(RemoteWindow);
+        Assert.False(rig.Precedence.IsIdle);
+
+        rig.Foreground = LocalWindow;
+        rig.Notice(LocalWindow);
+        Assert.True(rig.Precedence.IsIdle);
     }
 
     private sealed class Rig
     {
-        private long _revision;
+        // The publication a ForegroundNotice makes, with its rule for what counts as a change; delivered synchronously here.
+        private readonly ForegroundPublication _publication = new();
 
         public Rig()
         {
@@ -468,7 +642,9 @@ public class KeyboardHookPrecedenceTests
                 () =>
                 {
                     BeforeForegroundRead?.Invoke();
-                    return Foreground;
+                    var window = Foreground;
+                    AfterForegroundRead?.Invoke(window);
+                    return window;
                 },
                 window =>
                 {
@@ -486,7 +662,7 @@ public class KeyboardHookPrecedenceTests
                         _ => null,
                     };
                 },
-                () => Interlocked.Read(ref _revision),
+                () => _publication.Revision,
                 (revision, window) =>
                 {
                     Moves.Add((revision, window));
@@ -504,6 +680,9 @@ public class KeyboardHookPrecedenceTests
         /// <summary>Runs on the thread of a step's foreground read, before it (a step's lookup only).</summary>
         public Action? BeforeForegroundRead { get; set; }
 
+        /// <summary>Runs on the thread of a step's foreground read, with the window it read, before the step goes on.</summary>
+        public Action<nint>? AfterForegroundRead { get; set; }
+
         /// <summary>Runs on the thread of every process lookup, a notice's or a step's, before it.</summary>
         public Action<nint>? BeforeLookup { get; set; }
 
@@ -518,11 +697,31 @@ public class KeyboardHookPrecedenceTests
 
         public KeyboardHookPrecedence Precedence { get; }
 
-        /// <summary>The revision the next notice gets, published the way the hook thread's notice publishes it.</summary>
-        public long Publish() => Interlocked.Increment(ref _revision);
+        /// <summary>
+        /// A notice for <paramref name="window"/> published as the hook thread's WinEvent callback publishes one, and not
+        /// handled: a later notice's handler reads only the latest window, so this one coalesces into it. Returns what a
+        /// handler reading now would be handed.
+        /// </summary>
+        public (long Revision, long Changes) Publish(nint window)
+        {
+            _publication.Publish(window);
+            var (_, revision, changes) = _publication.Read();
+            return (revision, changes);
+        }
 
-        /// <summary>A foreground notice for <paramref name="window"/>, handled on this thread with a newer revision.</summary>
-        public void Notice(nint window) => Precedence.OnForegroundChanged(window, Publish());
+        /// <summary>The notice's handler, run on this thread, for the latest publication.</summary>
+        public void Deliver()
+        {
+            var (window, revision, changes) = _publication.Read();
+            Precedence.OnForegroundChanged(window, revision, changes);
+        }
+
+        /// <summary>A foreground notice for <paramref name="window"/>, published and handled on this thread.</summary>
+        public void Notice(nint window)
+        {
+            Publish(window);
+            Deliver();
+        }
     }
 
     /// <summary>

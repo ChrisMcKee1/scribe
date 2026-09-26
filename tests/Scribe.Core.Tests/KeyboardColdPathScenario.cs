@@ -21,7 +21,7 @@ public static class KeyboardColdPathScenario
     /// <list type="number">
     /// <item>KeyboardHookFilter's reads of a key event's identity and its extra information, and the probe test;</item>
     /// <item>the echo check and a pass on and off (KeyEventPassOn), as the callback makes them around CallNextHookEx;</item>
-    /// <item>the foreground notice's hop to the pool (a volatile write and a SetEvent);</item>
+    /// <item>the foreground notice's hop to the pool (an interlocked exchange, one or two increments and a SetEvent);</item>
     /// <item>the callback's route for a key no binding uses, through the current registration, down and up;</item>
     /// <item>the route of an echo through a replaced registration;</item>
     /// <item>the route of an uncertain key-down and its release, right after the hook became the newest registration.</item>
@@ -35,7 +35,7 @@ public static class KeyboardColdPathScenario
         RuntimeHelpers.RunClassConstructor(typeof(HotkeyService).TypeHandle);
         using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         var passOn = new KeyEventPassOn();
-        using var notice = new ForegroundNotice(static (_, _) => { });
+        using var notice = new ForegroundNotice(static (_, _, _) => { });
         var message = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.KBDLLHOOKSTRUCT>());
         try
         {

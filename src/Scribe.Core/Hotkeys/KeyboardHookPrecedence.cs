@@ -24,9 +24,12 @@ namespace Scribe.Core.Hotkeys;
 /// client stays in front, to move ahead again every <see cref="KeepAheadPeriod"/>, each followed by its release, in case it
 /// registers once more without leaving the front. Every move and every keep-ahead step is made only if a remote client
 /// is still in front when it falls due, and carries the foreground revision and the window it was judged on, which the
-/// hook thread checks are still current right before it registers. The same remote window coming to the front again, with
-/// nothing else in front since, does not start the sequence over; a notice or a tick older than the newest decision
-/// changes nothing (review round 2, items 3 to 5). The moves themselves, the rule that a move waits while a key whose
+/// hook thread checks are still current right before it registers. The same remote window noticed again, with no other
+/// window published since the last decision (a count the notice carries, since notices coalesce), does not start the
+/// sequence over; a notice or a tick older than the newest decision changes nothing (review round 2, items 3 to 5); and a
+/// tick in flight when a newer notice is decided cannot apply what it judged before (review round 3, item 2). While no step
+/// is scheduled, the watchdog hands the window in front on once a period, as a notice, so a sequence lost while a client
+/// stayed in front is restored at the next upkeep. The moves themselves, the rule that a move waits while a key whose
 /// press Scribe swallowed is held or while every kept registration is inside its grace, and the rules for an event on its
 /// way to a replaced registration are the hook thread's (<c>HotkeyService.HookInstallation</c>). Nothing here waits for the
 /// hook thread: a request is a posted thread message. Nothing thrown here reaches the pool thread, which would end the
@@ -68,12 +71,14 @@ internal sealed class KeyboardHookPrecedence : IDisposable
 
     // Under _gate: the step the sequence is at; the remote window it serves (zero once one that is not a remote client came
     // to the front, or a step found none in front); the newest foreground revision decided (a notice's revision is its
-    // publication's, ForegroundNotice); the schedule, one number per Arm, so a tick knows whether the schedule it read is
-    // still the one in force; and when that schedule is due, on _time's clock, or null once its one tick was taken or while
-    // nothing is armed (ClosableTimer keeps its schedules the same way).
+    // publication's, ForegroundNotice) and the publication's change count with it (ForegroundPublication); the schedule, one
+    // number per Arm, so a tick knows whether the schedule it read is still the one in force; and when that schedule is due,
+    // on _time's clock, or null once its one tick was taken or while nothing is armed (ClosableTimer keeps its schedules the
+    // same way).
     private int _step;
     private nint _client;
     private long _decided;
+    private long _decidedChanges;
     private long _schedule;
     private long? _dueTimestamp;
     private bool _disposed;
@@ -109,14 +114,19 @@ internal sealed class KeyboardHookPrecedence : IDisposable
     }
 
     /// <summary>
-    /// Pool thread: the foreground window changed to <paramref name="window"/>, or a hook installed with it in front, as the
-    /// notice published with <paramref name="revision"/>. A remote client starts the sequence over; any other window cancels
-    /// a move not made yet and the keep-ahead moves, and keeps the release due if a move was made. The notice's pool
-    /// callbacks can overlap (.NET re-arms a registered wait before it runs its callback), and the lookup runs before the
-    /// gate, so a slow lookup can finish after a newer notice was decided: a revision no newer than the last one decided
-    /// changes nothing (review round 2, item 4), or an older local window's lookup would cancel a newer remote schedule.
+    /// Pool thread: the foreground window changed to <paramref name="window"/>, or a hook installed with it in front, or the
+    /// watchdog handed on the window in front while no step was scheduled, as the notice published with
+    /// <paramref name="revision"/> and <paramref name="changes"/> (<see cref="ForegroundPublication"/>). A remote client
+    /// starts the sequence over; any other window cancels a move not made yet and the keep-ahead moves, and keeps the release
+    /// due if a move was made. The notice's pool callbacks can overlap (.NET re-arms a registered wait before it runs its
+    /// callback), and the lookup runs before the gate, so a slow lookup can finish after a newer notice was decided: a
+    /// revision no newer than the last one decided changes nothing (review round 2, item 4), or an older local window's lookup
+    /// would cancel a newer remote schedule. Only the remote window the sequence serves, with no other window published since
+    /// the last decision, keeps its sequence as scheduled: notices coalesce, so the same window alone does not prove that
+    /// nothing else was in front meanwhile (review round 3, item 2). And a decision that keeps the step reclaims a tick that
+    /// took the step's schedule and is still in flight, since that tick judged a foreground older than this notice.
     /// </summary>
-    public void OnForegroundChanged(nint window, long revision)
+    public void OnForegroundChanged(nint window, long revision, long changes)
     {
         try
         {
@@ -129,11 +139,14 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                     return;
                 }
 
+                var noOtherWindowSince = changes == _decidedChanges;
                 _decided = revision;
-                if (remote && window == _client && _step is FirstMoveDue or SecondMoveDue or ReleaseDue or KeepAheadDue)
+                _decidedChanges = changes;
+                if (remote && noOtherWindowSince && window == _client && _step != Idle)
                 {
-                    // The same remote window again, with nothing else in front since: its sequence goes on as scheduled
-                    // (review round 2, item 3), rather than start over and add a move for every repeated notice.
+                    // The same remote window again, with no other window published since: its sequence goes on as
+                    // scheduled (review round 2, item 3), rather than start over and add a move for every repeated notice.
+                    ReclaimTickInFlight();
                     return;
                 }
 
@@ -153,20 +166,36 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                     {
                         Arm(ReleaseDue, RetiredGrace);
                     }
+                    else
+                    {
+                        ReclaimTickInFlight();
+                    }
                 }
             }
 
             if (remote)
             {
                 _logger.LogInformation(
-                    "Remote desktop client {App} came to the front; a move of the keyboard hook ahead of its hook is " +
-                    "scheduled, and repeated while it stays in front.",
+                    "Remote desktop client {App} is in front; a move of the keyboard hook ahead of its hook is scheduled, " +
+                    "and repeated while it stays in front.",
                     name);
             }
         }
         catch (Exception)
         {
             // A process that went away, or a logger that failed: the next notice or the watchdog makes up for it.
+        }
+    }
+
+    /// <summary>Any thread but the hook thread (it takes the gate): whether no step is scheduled or in flight.</summary>
+    public bool IsIdle
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _step == Idle;
+            }
         }
     }
 
@@ -303,24 +332,36 @@ internal sealed class KeyboardHookPrecedence : IDisposable
             : _time.GetTimestamp() + (long)(due.TotalSeconds * _time.TimestampFrequency);
         _timer.Change(due, Timeout.InfiniteTimeSpan);
     }
+
+    // Callers hold _gate, deciding a notice that keeps the step. A step with no due time has had its one tick taken, and that
+    // tick is still in flight: it read the foreground before this notice was decided, and would apply what it judged then
+    // (review round 3, item 2). The step is armed afresh to run at once, so that tick finds its schedule replaced and does
+    // nothing, and a new tick judges the step on a fresh read.
+    private void ReclaimTickInFlight()
+    {
+        if (_step != Idle && _dueTimestamp is null)
+        {
+            Arm(_step, TimeSpan.Zero);
+        }
+    }
 }
 /// <summary>
-/// The hop from the hook thread to the pool for a foreground change: the WinEvent callback, on the hook thread, makes one
-/// volatile write, one interlocked increment and a SetEvent, and the handler, which looks the window's process up, runs on
-/// a pool thread. Each notice is published with a revision (<see cref="PublishedRevision"/>), which the handler is handed
-/// with the window, so it can tell an older notice's decision from a newer one's; the pool callbacks of a repeating
-/// registered wait can overlap. Notices that arrive before the handler runs coalesce into the latest window, which is all
-/// the handler needs. Nothing thrown by the handler reaches the pool thread.
+/// The hop from the hook thread to the pool for a foreground change: the WinEvent callback, on the hook thread, makes an
+/// interlocked exchange, one or two interlocked increments and a SetEvent, and the handler, which looks the window's process
+/// up, runs on a pool thread. Each notice is published with a revision (<see cref="PublishedRevision"/>), which the handler
+/// is handed with the window, so it can tell an older notice's decision from a newer one's; the pool callbacks of a repeating
+/// registered wait can overlap. Notices that arrive before the handler runs coalesce into the latest window, and the change
+/// count handed with it says whether another window was published between (<see cref="ForegroundPublication"/>, review round
+/// 3, item 2). Nothing thrown by the handler reaches the pool thread.
 /// </summary>
 internal sealed class ForegroundNotice : IDisposable
 {
     private readonly AutoResetEvent _signal = new(false);
     private readonly RegisteredWaitHandle _registration;
-    private readonly Action<nint, long> _onNotice;
-    private nint _window;
-    private long _revision;
+    private readonly Action<nint, long, long> _onNotice;
+    private readonly ForegroundPublication _publication = new();
 
-    public ForegroundNotice(Action<nint, long> onNotice)
+    public ForegroundNotice(Action<nint, long, long> onNotice)
     {
         ArgumentNullException.ThrowIfNull(onNotice);
         _onNotice = onNotice;
@@ -336,14 +377,12 @@ internal sealed class ForegroundNotice : IDisposable
     /// Any thread: how many notices have been published, which is each notice's revision: the hook thread reads it right
     /// before a move ahead, and the handler is handed it with the window.
     /// </summary>
-    public long PublishedRevision => Interlocked.Read(ref _revision);
+    public long PublishedRevision => _publication.Revision;
 
     /// <summary>Any thread, the hook thread's WinEvent callback included: the window now in front. Never waits or throws.</summary>
     public void Notify(nint window)
     {
-        // The window before the revision: a reader that sees this revision sees this window or a newer one.
-        Volatile.Write(ref _window, window);
-        Interlocked.Increment(ref _revision);
+        _publication.Publish(window);
         try
         {
             _signal.Set();
@@ -360,20 +399,62 @@ internal sealed class ForegroundNotice : IDisposable
         _signal.Dispose();
     }
 
-    // The revision first, then the window, so the window is at least as new as the revision says: a newer notice published
-    // between the two reads hands this call its window with an older revision, which the handler decides too, and then
-    // again with the newer revision in the call that newer notice's SetEvent brings. Read the other way round, an older
-    // window could be handed on with the newer revision, and the newer notice's own call would then be ignored as no newer.
+    // The revision first, then the change count, then the window (ForegroundPublication.Read), so the window is at least as
+    // new as the revision says: a newer notice published between the reads hands this call its window with an older
+    // revision, which the handler decides too, and then again with the newer revision in the call that newer notice's
+    // SetEvent brings. Read the other way round, an older window could be handed on with the newer revision, and the newer
+    // notice's own call would then be ignored as no newer. A change counted between the reads is seen by that later call.
     private void Run()
     {
         try
         {
-            var revision = Interlocked.Read(ref _revision);
-            _onNotice(Volatile.Read(ref _window), revision);
+            var (window, revision, changes) = _publication.Read();
+            _onNotice(window, revision, changes);
         }
         catch (Exception)
         {
             // An exception escaping a pool callback would end the process.
         }
+    }
+}
+
+/// <summary>
+/// What a foreground notice publishes, lock-free: the latest window, a revision per notice, and a count of changes, the
+/// notices whose window differed from the one published before it (review round 3, item 2). Notices coalesce, since the
+/// handler reads only the latest window, so two of them for one window with another one's between can reach the handler as
+/// one; the change count still tells them apart from a repeat. Publish exchanges the window, counts a change when the window
+/// it replaced was another, then counts the revision; Read takes the revision first, then the change count, then the window,
+/// so each is at least as new as the one read before it. No lock, no allocation: it runs in the hook thread's WinEvent
+/// callback.
+/// </summary>
+internal sealed class ForegroundPublication
+{
+    private nint _window;
+    private long _changes;
+    private long _revision;
+
+    /// <summary>Any thread: how many notices have been published.</summary>
+    public long Revision => Interlocked.Read(ref _revision);
+
+    /// <summary>Any thread: how many of them published a window other than the one before it.</summary>
+    public long Changes => Interlocked.Read(ref _changes);
+
+    /// <summary>Any thread: publishes <paramref name="window"/>.</summary>
+    public void Publish(nint window)
+    {
+        if (Interlocked.Exchange(ref _window, window) != window)
+        {
+            Interlocked.Increment(ref _changes);
+        }
+
+        Interlocked.Increment(ref _revision);
+    }
+
+    /// <summary>Any thread: the revision, the change count and the window, in that order.</summary>
+    public (nint Window, long Revision, long Changes) Read()
+    {
+        var revision = Interlocked.Read(ref _revision);
+        var changes = Interlocked.Read(ref _changes);
+        return (Volatile.Read(ref _window), revision, changes);
     }
 }
