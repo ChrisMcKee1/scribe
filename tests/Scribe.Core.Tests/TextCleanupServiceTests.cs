@@ -17,6 +17,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class TextCleanupServiceTests
 {
+    // A hang guard, never the verdict: every wait below is for a change that is certain to come.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Theory]
     [InlineData("http://localhost:11434/v1", true)]
     [InlineData("http://127.0.0.1:1234/v1", true)]
@@ -225,7 +228,7 @@ public sealed class TextCleanupServiceTests
             AzureEndpoint = "not a URL",
             AzureDeployment = "gpt-6-astra",
         });
-        await unavailable.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await unavailable.Task.WaitAsync(Bound);
 
         Assert.NotNull(duringInitialization);
         Assert.Equal(CleanupOutcome.Skipped, (await duringInitialization).Outcome);
