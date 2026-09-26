@@ -1111,7 +1111,6 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(expected, state.StatusLine);
     }
 
-
     [Theory]
     [InlineData("Azure rejected the API key (401). Check that the key belongs to this resource.")]
     [InlineData("Azure could not find the deployment 'gpt-4o' (404). Check the endpoint and exact deployment name.")]

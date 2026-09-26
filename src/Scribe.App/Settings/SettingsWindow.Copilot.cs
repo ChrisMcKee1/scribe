@@ -80,7 +80,7 @@ public partial class SettingsWindow
                         ? RemoteActivityPolicy.CaptureAutomaticContact(authorizedSettings, authorizedDraft, RemoteActivityTrigger.WindowOpen, status.Path)
                         : null;
                     if (status.Found && !_copilotModelsLoaded &&
-                        RemoteActivityPolicy.IsStillAuthorized(authorization, _committedSettings, SelectedProvider, status.Path))
+                        RemoteActivityPolicy.IsStillAuthorized(authorization, _committedSettings, CurrentAiDraftSettings(), status.Path))
                     {
                         LoadCopilotModels();
                     }

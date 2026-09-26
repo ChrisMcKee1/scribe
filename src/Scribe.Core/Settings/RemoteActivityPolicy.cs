@@ -190,14 +190,21 @@ public static class RemoteActivityPolicy
             savedSettings.AiCleanupProvider == CleanupProvider.GitHubCopilot ? EmptyToNull(savedSettings.AiCleanupCopilotModel) : null);
     }
 
+    /// <summary>
+    /// Whether an automatic contact captured earlier may still run: the saved settings still have that provider on with the
+    /// configuration it was captured for, and the page still shows exactly those saved settings. A draft edited meanwhile
+    /// (cleanup unticked, another model, another provider) withdraws it, even though nothing was saved.
+    /// </summary>
     public static bool IsStillAuthorized(
         RemoteActivityAuthorization? authorization,
         AppSettings committedSettings,
-        CleanupProvider shownProvider,
+        AppSettings currentDraft,
         string? cliPath = null)
     {
         ArgumentNullException.ThrowIfNull(committedSettings);
-        if (authorization is null || !committedSettings.EnableAiCleanup || committedSettings.AiCleanupProvider != authorization.Provider || shownProvider != authorization.Provider)
+        ArgumentNullException.ThrowIfNull(currentDraft);
+        if (authorization is null || !committedSettings.EnableAiCleanup || committedSettings.AiCleanupProvider != authorization.Provider ||
+            !IsSavedAndActive(committedSettings, currentDraft))
         {
             return false;
         }
@@ -258,8 +265,12 @@ public static class RemoteActivityPolicy
             Same(EmptyToNull(saved.AiCleanupAzureSubscriptionTenantId), EmptyToNull(draft.AiCleanupAzureSubscriptionTenantId)) &&
             saved.AiCleanupAzureAuthMode == draft.AiCleanupAzureAuthMode &&
             Same(EmptyToNull(saved.AiCleanupAzureTenantId), EmptyToNull(draft.AiCleanupAzureTenantId)) &&
-            Same(EmptyToNull(saved.AiCleanupAzureClientId), EmptyToNull(draft.AiCleanupAzureClientId)) &&
-            Same(RawEmptyToNull(saved.AiCleanupAzureClientSecret), RawEmptyToNull(draft.AiCleanupAzureClientSecret));
+
+            // The app registration counts only for a service principal: Azure CLI stores none (AzureSignInFields), so a
+            // field its mode hides can't make saved settings read as unsaved.
+            (saved.AiCleanupAzureAuthMode != AzureAuthMode.ServicePrincipal ||
+                (Same(EmptyToNull(saved.AiCleanupAzureClientId), EmptyToNull(draft.AiCleanupAzureClientId)) &&
+                 Same(RawEmptyToNull(saved.AiCleanupAzureClientSecret), RawEmptyToNull(draft.AiCleanupAzureClientSecret))));
     }
 
     private static string? EmptyToNull(string? value) =>

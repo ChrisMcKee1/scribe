@@ -2703,6 +2703,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCopilotRadio.IsChecked = provider == CleanupProvider.GitHubCopilot;
     }
 
+    // The sign-in fields for the method shown, as Save stores them: the draft and the Save read them only through this.
+    private AzureSignInFields.Stored ShownAzureSignInFields => AzureSignInFields.For(
+        SelectedAzureAuthMode,
+        IsAzureApiKeySelected,
+        AzureTenantBox?.Text,
+        SpTenantBox?.Text,
+        SpClientIdBox?.Text,
+        SpClientSecretBox?.Password,
+        SelectedAzureApiKey);
+
     private AppSettings CurrentAiDraftSettings()
     {
         var draft = _settings.Clone();
@@ -2712,10 +2722,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
         draft.AiCleanupAzureEndpoint = AzureEndpointBox?.Text;
         draft.AiCleanupAzureDeployment = AzureDeploymentBox?.Text;
-        draft.AiCleanupAzureTenantId = IsAzureApiKeySelected ? null : (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal ? SpTenantBox?.Text : AzureTenantBox?.Text);
-        draft.AiCleanupAzureClientId = SpClientIdBox?.Text;
-        draft.AiCleanupAzureClientSecret = SpClientSecretBox?.Password;
-        draft.AiCleanupAzureApiKey = IsAzureApiKeySelected ? AzureApiKeyBox?.Password : string.Empty;
+        var signIn = ShownAzureSignInFields;
+        draft.AiCleanupAzureTenantId = signIn.TenantId;
+        draft.AiCleanupAzureClientId = signIn.ClientId;
+        draft.AiCleanupAzureClientSecret = signIn.ClientSecret;
+        draft.AiCleanupAzureApiKey = signIn.ApiKey;
         draft.AiCleanupCustomEndpoint = CustomEndpointBox?.Text;
         draft.AiCleanupCustomModel = CustomModelBox?.Text;
         draft.AiCleanupCustomApiKey = CustomApiKeyBox?.Password;
@@ -2829,8 +2840,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        _foundryOperationStatus = null;
-        _foundryOperationAlias = null;
+        // A rebuild of the picker (a catalog refresh) selects programmatically, and a failed Load must keep its error row
+        // through it; only a real choice of another model retires the last operation's outcome.
+        if (!_suppressComboFilter &&
+            !string.Equals(SelectedFoundryModelAlias, _foundryOperationAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            _foundryOperationStatus = null;
+            _foundryOperationAlias = null;
+        }
+
         // The editable Text lags SelectionChanged; read it after the combo commits.
         Dispatcher.BeginInvoke(UpdateAiModelHint);
     }
@@ -3589,6 +3607,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // busy state, which the retired verification no longer can, so Verify is usable again at once.
         var verifying = _azureSignInAttempts.IsBusy;
         _azureSignInAttempts.Retire();
+
+        // The row reads the typed outcome, which belongs to the details it was reached for.
+        if (_servicePrincipalOutcome.Kind is AzureVerificationOutcomeKind.Succeeded or AzureVerificationOutcomeKind.Failed)
+        {
+            _servicePrincipalOutcome = AzureVerificationOutcome.ChangedSince;
+        }
+
         if ((_azureSignInStatus.IsSignedIn || verifying) && SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             // Also replaces "Verifying the service principal…", which nothing would replace any more.
@@ -5442,16 +5467,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 NullIfBlank(SelectedFoundryModelAlias) ?? CleanupModelCatalog.DefaultAlias;
             _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
-            _settings.AiCleanupAzureApiKey = NullIfBlank(SelectedAzureApiKey);
             _settings.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
-            // One tenant setting, edited from whichever box the active mode shows.
-            _settings.AiCleanupAzureTenantId = IsAzureApiKeySelected
-                ? null
-                : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-                    ? NullIfBlank(SpTenantBox.Text)
-                    : NullIfBlank(AzureTenantBox.Text);
-            _settings.AiCleanupAzureClientId = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal && !IsAzureApiKeySelected ? NullIfBlank(SpClientIdBox.Text) : null;
-            _settings.AiCleanupAzureClientSecret = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal && !IsAzureApiKeySelected ? NullIfBlank(SpClientSecretBox.Password) : null;
+
+            // One tenant setting, edited from whichever box the active mode shows, and the app registration and key only
+            // for their own modes: the same projection the draft uses, so what is stored is what the page compares.
+            var signIn = ShownAzureSignInFields;
+            _settings.AiCleanupAzureApiKey = signIn.ApiKey;
+            _settings.AiCleanupAzureTenantId = signIn.TenantId;
+            _settings.AiCleanupAzureClientId = signIn.ClientId;
+            _settings.AiCleanupAzureClientSecret = signIn.ClientSecret;
             // The credential is cached for token reuse, so a changed identity has to drop it or the
             // next dictation would keep authenticating as the previous one.
             AzureCredentialInvalidation.Invalidate();

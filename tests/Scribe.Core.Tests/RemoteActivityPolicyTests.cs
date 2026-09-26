@@ -126,7 +126,6 @@ public sealed class RemoteActivityPolicyTests
         }
     }
 
-
     [Fact]
     public void Captured_copilot_auto_list_is_rejected_after_committed_provider_changes()
     {
@@ -136,7 +135,7 @@ public sealed class RemoteActivityPolicyTests
         var committed = Complete(CleanupProvider.OpenAiCompatible);
 
         Assert.NotNull(authorization);
-        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, committed, CleanupProvider.GitHubCopilot, @"C:\Tools\copilot.cmd"));
+        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, committed, draft, @"C:\Tools\copilot.cmd"));
     }
 
     [Fact]
@@ -146,12 +145,54 @@ public sealed class RemoteActivityPolicyTests
         var draft = saved.Clone();
         var authorization = RemoteActivityPolicy.CaptureAutomaticContact(saved, draft, RemoteActivityTrigger.WindowOpen, @"C:\Tools\copilot.cmd");
 
-        Assert.True(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, CleanupProvider.GitHubCopilot, @"C:\Tools\copilot.cmd"));
-        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, CleanupProvider.GitHubCopilot, @"C:\Other\copilot.cmd"));
+        Assert.True(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, draft, @"C:\Tools\copilot.cmd"));
+        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, draft, @"C:\Other\copilot.cmd"));
 
         var otherModel = saved.Clone();
         otherModel.AiCleanupCopilotModel = "other";
-        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, otherModel, CleanupProvider.GitHubCopilot, @"C:\Tools\copilot.cmd"));
+        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, otherModel, otherModel.Clone(), @"C:\Tools\copilot.cmd"));
+    }
+
+    [Fact]
+    public void A_captured_copilot_auto_list_is_withdrawn_by_a_draft_edited_meanwhile()
+    {
+        var saved = Complete(CleanupProvider.GitHubCopilot);
+        var authorization = RemoteActivityPolicy.CaptureAutomaticContact(saved, saved.Clone(), RemoteActivityTrigger.WindowOpen, @"C:\Tools\copilot.cmd");
+        Assert.NotNull(authorization);
+
+        // The reviewer's cases: cleanup unticked, or another model typed, while the detection was held. Nothing was saved.
+        var unticked = saved.Clone();
+        unticked.EnableAiCleanup = false;
+        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, unticked, @"C:\Tools\copilot.cmd"));
+
+        var otherModel = saved.Clone();
+        otherModel.AiCleanupCopilotModel = "another-model";
+        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, otherModel, @"C:\Tools\copilot.cmd"));
+
+        var otherProvider = saved.Clone();
+        otherProvider.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        Assert.False(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, otherProvider, @"C:\Tools\copilot.cmd"));
+
+        Assert.True(RemoteActivityPolicy.IsStillAuthorized(authorization, saved, saved.Clone(), @"C:\Tools\copilot.cmd"));
+    }
+
+    [Fact]
+    public void Azure_cli_saved_settings_ignore_a_hidden_app_registration_in_the_draft()
+    {
+        var saved = Complete(CleanupProvider.AzureFoundry);
+        saved.AiCleanupAzureApiKey = null;
+        saved.AiCleanupAzureAuthMode = AzureAuthMode.AzureCli;
+        saved.AiCleanupAzureClientId = null;
+        saved.AiCleanupAzureClientSecret = null;
+        var draft = saved.Clone();
+        draft.AiCleanupAzureClientId = "stale-client";
+        draft.AiCleanupAzureClientSecret = "stale-secret";
+
+        Assert.True(RemoteActivityPolicy.IsSavedAndActive(saved, draft));
+
+        saved.AiCleanupAzureAuthMode = AzureAuthMode.ServicePrincipal;
+        draft.AiCleanupAzureAuthMode = AzureAuthMode.ServicePrincipal;
+        Assert.False(RemoteActivityPolicy.IsSavedAndActive(saved, draft));
     }
 
     [Fact]
