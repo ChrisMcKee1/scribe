@@ -146,40 +146,6 @@ public sealed class SettingsSectionLoadTests
     }
 
     [Fact]
-
-    public void Failed_read_after_save_keeps_rows_out_of_the_next_save()
-
-    {
-
-        var section = new SettingsSectionLoad();
-
-        Assert.True(section.TryBegin(string.Empty, out var ticket));
-
-        Assert.True(section.Publish(ticket, "saved-old"));
-
-        Assert.True(section.HasChanges("saved-new"));
-
-
-
-        section.MarkFailedAfterSave("saved-new");
-
-
-
-        Assert.Equal(SettingsSectionState.Failed, section.State);
-
-        Assert.Equal("saved-new", section.Snapshot);
-
-        Assert.False(section.HasChanges(string.Empty));
-
-        Assert.False(section.HasChanges("anything else on screen"));
-
-        Assert.True(section.TryBegin("anything else on screen", out var retry));
-
-    }
-
-
-
-    [Fact]
     public void Save_moves_the_snapshot_only_once_the_section_has_loaded()
     {
         var section = new SettingsSectionLoad();

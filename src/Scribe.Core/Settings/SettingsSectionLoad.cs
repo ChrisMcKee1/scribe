@@ -145,17 +145,6 @@ public sealed class SettingsSectionLoad
         }
     }
 
-    /// <summary>
-    /// Records that storage holds <paramref name="signature"/>, but the section could not be read back.
-    /// The shown draft rows are left alone, and Save treats the section as unchanged until a later read succeeds.
-    /// </summary>
-    public void MarkFailedAfterSave(string signature)
-    {
-        ArgumentNullException.ThrowIfNull(signature);
-        Snapshot = signature;
-        State = SettingsSectionState.Failed;
-    }
-
     /// <summary>The owner closed: no read may publish or start after this.</summary>
     public void Close()
     {

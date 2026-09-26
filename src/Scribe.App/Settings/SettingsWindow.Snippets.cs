@@ -122,30 +122,17 @@ public partial class SettingsWindow
     }
 
     private void SnippetEmptyActionButton_Click(object sender, RoutedEventArgs e)
-
     {
-
         if (_snippetLoad.State == SettingsSectionState.Failed)
-
         {
-
             SnippetEmptyHint.Text = "Loading snippets...";
-
             SnippetEmptyActionButton.Visibility = Visibility.Collapsed;
-
             LoadSnippetsAsync();
-
             return;
-
         }
 
-
-
         SnippetAddButton_Click(sender, e);
-
     }
-
-
 
     private async void SnippetDeleteButton_Click(object sender, RoutedEventArgs e)
     {
@@ -259,103 +246,36 @@ public partial class SettingsWindow
         HideValidation(SnippetTemplateValidation, SnippetTemplateValidationText, SnippetTemplateBox);
     }
 
-    private void StartSnippetRowsRefreshAfterSave(string storedSignature)
+    // What a Save read from each snippet row, taken where it builds the list it stores, so the rows can adopt exactly that
+    // as their saved baseline once it is stored. An edit made after the Save read the rows isn't in what was stored, so it
+    // stays unsaved.
+    private sealed record SnippetSubmission(SnippetRow Row, string Phrase, string Template, bool Enabled);
 
+    private IReadOnlyList<SnippetSubmission> CaptureSnippetSubmission() =>
+        [.. _snippetRows.Select(row => new SnippetSubmission(row, row.Phrase, row.Template, row.Enabled))];
+
+    // The Save stored the submitted rows, so each one still in the list takes what was submitted as its saved baseline, in
+    // memory, as the profile rows do. Nothing is read back from storage: a failed or slow read after a committed Save once
+    // emptied the list, or replaced edits made meanwhile, and a retried Save then stored that. A new row keeps Id 0, which
+    // is safe: SnippetRepository.SaveAll keeps rows by id, deletes the rest and inserts rows with no id, so the next Save
+    // replaces the row this one inserted instead of duplicating it.
+    private void MarkSnippetRowsSaved(IReadOnlyList<SnippetSubmission> submission)
     {
-
-        _ = RefreshSnippetRowsFromStorageAfterSaveAsync(storedSignature);
-
-    }
-
-
-
-    private async Task RefreshSnippetRowsFromStorageAfterSaveAsync(string storedSignature)
-
-    {
-
-        IReadOnlyList<Snippet> stored;
-
-        try
-
+        foreach (var submitted in submission)
         {
-
-            stored = await Task.Run(() => _snippets.GetAll());
-
-        }
-
-        catch (Exception ex)
-
-        {
-
-            TryLog(ex, "Could not read snippets after saving Settings.");
-
-            _snippetLoad.MarkFailedAfterSave(storedSignature);
-
-            SnippetList.SelectedItem = null;
-
-            SnippetEmptyHint.Text = "Couldn't load your snippets.";
-
-            SnippetEmptyActionButton.Content = "Try again";
-
-            SnippetEmptyActionButton.Visibility = Visibility.Visible;
-
-            SnippetEmptyState.Visibility = Visibility.Visible;
-
-            SetSnippetsEditable(false);
-
-            return;
-
-        }
-
-
-
-        var selectedPhrase = SelectedSnippet?.Phrase;
-
-        _snippetRows.Clear();
-
-        foreach (var snippet in stored)
-
-        {
-
-            _snippetRows.Add(new SnippetRow
-
+            if (!_snippetRows.Contains(submitted.Row))
             {
+                continue;
+            }
 
-                Id = snippet.Id,
-
-                Phrase = snippet.Phrase,
-
-                Template = snippet.Template,
-
-                Enabled = snippet.Enabled,
-
-                Origin = DraftRowOrigin.Saved,
-
-                LoadedPhrase = snippet.Phrase,
-
-                LoadedTemplate = snippet.Template,
-
-                LoadedEnabled = snippet.Enabled,
-
-            });
-
+            submitted.Row.Origin = DraftRowOrigin.Saved;
+            submitted.Row.LoadedPhrase = submitted.Phrase;
+            submitted.Row.LoadedTemplate = submitted.Template;
+            submitted.Row.LoadedEnabled = submitted.Enabled;
         }
-
-
-
-        SnippetEmptyActionButton.Content = "Add snippet";
-
-        _snippetLoad.MarkSaved(SnippetSignature());
-
-        SnippetList.SelectedItem = _snippetRows.FirstOrDefault(row => string.Equals(row.Phrase, selectedPhrase, StringComparison.OrdinalIgnoreCase));
-
-        SetSnippetsEditable(true);
 
         RefreshSnippetEmptyState();
-
     }
-
-
 
     private IReadOnlyList<SnippetDraftRow> SnippetDraftRows() =>
         _snippetLoad.IsLoaded

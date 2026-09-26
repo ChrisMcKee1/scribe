@@ -5160,10 +5160,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         List<Snippet>? snippets = null;
+        IReadOnlyList<SnippetSubmission>? snippetSubmission = null;
         SnippetRow? duplicateSnippet = null;
         if (snippetsDirty)
         {
             snippets = BuildSnippets(out duplicateSnippet);
+            snippetSubmission = CaptureSnippetSubmission();
         }
 
         if (duplicateSnippet is not null)
@@ -5376,7 +5378,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (snippets is not null)
             {
                 _snippetLoad.MarkSaved(snippetSignature);
-                StartSnippetRowsRefreshAfterSave(snippetSignature);
+                MarkSnippetRowsSaved(snippetSubmission ?? []);
             }
 
             MarkProfileRowsSaved();
