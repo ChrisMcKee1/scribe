@@ -27,6 +27,7 @@ public sealed class SaveDraftCoverageTests
         ["Hotkey"] = "_pendingBinding with { Mode = SelectedMode }",
         ["DictationOnlyHotkey"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
         ["EnableAiCleanup"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
+        ["AiCleanupModel"] = "SelectedFoundryModelAlias",
         ["AiCleanupAzureSubscriptionId"] = Subscription,
         ["AiCleanupAzureSubscriptionName"] = Subscription,
         ["AiCleanupAzureSubscriptionTenantId"] = Subscription,
@@ -112,6 +113,33 @@ public sealed class SaveDraftCoverageTests
         Assert.Contains("_dictionaryLoad.HasChanges(DictionarySignature())", draft, StringComparison.Ordinal);
         Assert.Contains("RowEditInProgress(DictionaryGrid)", draft, StringComparison.Ordinal);
         Assert.Contains("_snippetLoad.HasChanges(SnippetSignature())", draft, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ai_cleanup_radio_buttons_have_accessible_names_and_help_text()
+    {
+        var xaml = Document().Descendants()
+            .Where(element => element.Attribute(X + "Name") is not null)
+            .ToDictionary(element => element.Attribute(X + "Name")!.Value, element => element);
+        var radios = new Dictionary<string, (string Title, string Description)>
+        {
+            ["AiProviderLocalRadio"] = ("AiProviderLocalTitle", "AiProviderLocalDescription"),
+            ["AiProviderCopilotRadio"] = ("AiProviderCopilotTitle", "AiProviderCopilotDescription"),
+            ["AiProviderFoundryRadio"] = ("AiProviderFoundryTitle", "AiProviderFoundryDescription"),
+            ["AiProviderCustomRadio"] = ("AiProviderCustomTitle", "AiProviderCustomDescription"),
+            ["AzureCliRadio"] = ("AzureCliRadioTitle", "AzureCliRadioDescription"),
+            ["AzureServicePrincipalRadio"] = ("AzureServicePrincipalRadioTitle", "AzureServicePrincipalRadioDescription"),
+            ["AzureApiKeyRadio"] = ("AzureApiKeyRadioTitle", "AzureApiKeyRadioDescription"),
+        };
+
+        foreach (var (radioName, (title, description)) in radios)
+        {
+            var radio = xaml[radioName];
+            Assert.Equal($"{{Binding ElementName={title}}}", Attribute(radio, "AutomationProperties.LabeledBy"));
+            Assert.Equal($"{{Binding Text, ElementName={description}}}", Attribute(radio, "AutomationProperties.HelpText"));
+            Assert.True(xaml.ContainsKey(title), title);
+            Assert.True(xaml.ContainsKey(description), description);
+        }
     }
 
     [Fact]
@@ -370,6 +398,9 @@ public sealed class SaveDraftCoverageTests
     }
 
     private static string Squash(string code) => Regex.Replace(code, @"\s+", string.Empty);
+
+    private static string? Attribute(XElement element, string localName) =>
+        element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == localName)?.Value;
 
     private static (string Window, string Save, string Draft, IReadOnlyCollection<string> Skipped, IReadOnlyDictionary<string, XElement> Xaml) Sources()
     {

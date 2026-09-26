@@ -169,16 +169,25 @@ public partial class SettingsWindow
         draft.TranscriptionModelId = ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ?? TranscriptionModelCatalog.DefaultId;
         draft.EnableAiCleanup = _externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true);
         draft.AiCleanupProvider = SelectedProvider;
-        draft.AiCleanupModel = NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
+        draft.AiCleanupModel = NullIfBlank(SelectedFoundryModelAlias) ?? CleanupModelCatalog.DefaultAlias;
         draft.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
         draft.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
-        draft.AiCleanupAzureApiKey = NullIfBlank(SelectedAzureApiKey);
         draft.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
-        draft.AiCleanupAzureTenantId = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-            ? NullIfBlank(SpTenantBox.Text)
-            : NullIfBlank(AzureTenantBox.Text);
-        draft.AiCleanupAzureClientId = NullIfBlank(SpClientIdBox.Text);
-        draft.AiCleanupAzureClientSecret = NullIfBlank(SpClientSecretBox.Password);
+
+        // As Save stores them: a field the shown sign-in method hides is no part of the draft.
+        var signIn = ShownAzureSignInFields;
+        draft.AiCleanupAzureApiKey = signIn.ApiKey;
+        draft.AiCleanupAzureTenantId = signIn.TenantId;
+        draft.AiCleanupAzureClientId = signIn.ClientId;
+        draft.AiCleanupAzureClientSecret = signIn.ClientSecret;
+        var azureSubscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
+            _selectedAzureDeployment,
+            SelectedAzureSubscription,
+            AzureEndpointBox.Text,
+            AzureDeploymentBox.Text);
+        draft.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
+        draft.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
+        draft.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
         draft.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
         draft.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
         draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);

@@ -586,4 +586,42 @@ public sealed class AzureSettingsAccessTests
         Assert.Equal(Client, principal.ClientId);
         Assert.Equal("  spaced-secret  ", principal.ClientSecret);
     }
+    [Fact]
+    public void Service_principal_shows_endpoint_without_discovery_or_api_key_fields()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false,
+            authMode: AzureAuthMode.ServicePrincipal,
+            servicePrincipalComplete: false,
+            apiKeySelected: false);
+
+        Assert.True(state.ShowEndpointPanel);
+        Assert.False(state.ShowDiscovery);
+        Assert.False(state.ShowApiKeyPanel);
+        Assert.False(state.ShowManualToggleButton);
+    }
+
+    [Fact]
+    public void Azure_cli_manual_details_follow_the_core_toggle_state()
+    {
+        var closed = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: true,
+            manualConfigurationRequested: false,
+            hasApiKey: false);
+        var open = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: true,
+            manualConfigurationRequested: true,
+            hasApiKey: false);
+
+        Assert.True(closed.ShowManualToggleButton);
+        Assert.False(closed.ShowEndpointPanel);
+        Assert.True(open.ShowManualToggleButton);
+        Assert.True(open.ShowEndpointPanel);
+    }
+
 }

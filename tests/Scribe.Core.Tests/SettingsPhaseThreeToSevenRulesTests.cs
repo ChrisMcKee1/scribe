@@ -72,34 +72,55 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Ai_cleanup_off_rows_cover_complete_incomplete_and_empty_setup()
     {
-        var empty = AiCleanupPageState.Describe(
-            false,
-            CleanupProvider.FoundryLocal,
-            CleanupProvider.FoundryLocal,
-            CleanupStatus.Disabled,
-            draftComplete: false);
+        var saved = AppSettings.CreateDefault();
+        var draft = saved.Clone();
+        draft.EnableAiCleanup = false;
+        var empty = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Disabled);
         Assert.False(empty.ShowProviderSetup);
         Assert.Equal("Off. Scribe types what it hears, with your dictionary and snippets.", empty.StatusLine);
         Assert.Equal("Turn on AI cleanup to choose where it runs and set your writing style.", empty.OffHelperText);
 
+        saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        saved.AiCleanupAzureEndpoint = "https://example.test";
+        saved.AiCleanupAzureDeployment = "gpt-4o";
+        var completeDraft = saved.Clone();
+        completeDraft.EnableAiCleanup = false;
         var complete = AiCleanupPageState.Describe(
-            false,
-            CleanupProvider.AzureFoundry,
-            CleanupProvider.AzureFoundry,
+            saved,
+            completeDraft,
             CleanupStatus.Ready,
-            draftComplete: true,
-            AiCleanupSetupState.Complete,
-            "Microsoft Foundry (gpt-4o)");
+            savedSetupState: AiCleanupPageState.SavedSetupState(saved),
+            providerSummary: AiCleanupPageState.ProviderSetupSummary(saved));
         Assert.Equal("Set up to use Microsoft Foundry (gpt-4o).", complete.OffHelperText);
 
+        saved.AiCleanupAzureEndpoint = null;
+        saved.EnableAiCleanup = true;
+        var incompleteDraft = saved.Clone();
+        incompleteDraft.EnableAiCleanup = false;
         var incomplete = AiCleanupPageState.Describe(
-            false,
-            CleanupProvider.AzureFoundry,
-            CleanupProvider.AzureFoundry,
+            saved,
+            incompleteDraft,
             CleanupStatus.Disabled,
-            draftComplete: false,
-            AiCleanupSetupState.Incomplete);
+            savedSetupState: AiCleanupSetupState.Incomplete,
+            providerSummary: "Microsoft Foundry");
         Assert.Equal("Partly set up for Microsoft Foundry. Turn on AI cleanup to finish setting it up.", incomplete.StatusLine);
+    }
+
+    [Fact]
+    public void Ai_cleanup_setup_summary_and_completeness_are_core_owned()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        settings.AiCleanupAzureEndpoint = "https://example.test";
+        settings.AiCleanupAzureDeployment = "gpt-4o";
+
+        Assert.True(AiCleanupPageState.HasProviderConfiguration(settings, CleanupProvider.AzureFoundry));
+        Assert.Equal(AiCleanupSetupState.Complete, AiCleanupPageState.SavedSetupState(settings));
+        Assert.Equal("Microsoft Foundry (gpt-4o)", AiCleanupPageState.ProviderSetupSummary(settings));
+
+        settings.AiCleanupAzureDeployment = null;
+        Assert.False(AiCleanupPageState.HasProviderConfiguration(settings, CleanupProvider.AzureFoundry));
+        Assert.Equal(AiCleanupSetupState.NothingConfigured, AiCleanupPageState.SavedSetupState(settings));
     }
 
     [Theory]
@@ -110,12 +131,19 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(CleanupStatus.Unavailable, "On, but not ready. Until it's ready, Scribe types what it hears.", AiCleanupStatusKind.Error, "Try again")]
     public void Ai_cleanup_foundry_state_table(CleanupStatus status, string line, AiCleanupStatusKind kind, string? action)
     {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.FoundryLocal;
+        saved.AiCleanupModel = "qwen3-1.7b";
+        var setup = FoundryLocalSetup.Describe(
+            FoundryLocalSetup.FromCleanupStatus(status, runtimeReady: status != CleanupStatus.Disabled, modelCached: status == CleanupStatus.Ready, modelLoaded: status == CleanupStatus.Ready),
+            "Qwen3 1.7B",
+            "about 1.3 GB");
         var description = AiCleanupPageState.Describe(
-            true,
-            CleanupProvider.FoundryLocal,
-            CleanupProvider.FoundryLocal,
+            saved,
+            saved.Clone(),
             status,
-            draftComplete: true,
+            foundrySetup: setup,
             modelName: "Qwen3 1.7B");
 
         Assert.True(description.ShowProviderSetup);
@@ -185,12 +213,36 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
         Assert.Contains(choices, choice =>
             choice.Alias == "qwen3-1.7b" &&
-            choice.Label == "Qwen3 1.7B, about 1.3 GB, recommended, downloaded" &&
+            choice.Label == "Qwen3 1.7B, about 1.3 GB (recommended), downloaded" &&
             choice.Hint == "About 1.3 GB. Scribe's recommended default.");
         Assert.Contains(choices, choice =>
             choice.Alias == "mistral-nemo-12b-instruct" &&
             choice.Label == "Mistral NeMo 12B, about 7 GB, large download" &&
             choice.IsSelected);
+    }
+
+    [Fact]
+    public void Foundry_model_choices_keep_a_saved_alias_outside_the_catalog()
+    {
+        var choices = FoundryModelChoices.Build("team-custom-model", CleanupModelCatalog.Curated, []);
+
+        var selected = Assert.Single(choices, choice => choice.IsSelected);
+        Assert.Equal("team-custom-model", selected.Alias);
+        Assert.Equal("team-custom-model", selected.Label);
+        Assert.Equal("Custom Foundry Local model.", selected.Hint);
+    }
+
+    [Theory]
+    [InlineData(FoundryLocalSetupStage.NotSetUp, AiCleanupStatusKind.Warning, "Set up")]
+    [InlineData(FoundryLocalSetupStage.RuntimeReady, AiCleanupStatusKind.Info, "Download and load")]
+    [InlineData(FoundryLocalSetupStage.CachedUnloaded, AiCleanupStatusKind.Info, "Load")]
+    [InlineData(FoundryLocalSetupStage.ModelFailed, AiCleanupStatusKind.Error, "Try again")]
+    public void Foundry_setup_rows_distinguish_setup_download_cache_and_failure(FoundryLocalSetupStage stage, AiCleanupStatusKind kind, string action)
+    {
+        var setup = FoundryLocalSetup.Describe(stage, "Qwen3 1.7B", "about 1.3 GB");
+
+        Assert.Equal(kind, setup.Kind);
+        Assert.Equal(action, setup.ActionText);
     }
 
     [Fact]
@@ -1018,22 +1070,23 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         { AzureSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Check sign-in", true, null },
         { AzureSetupResult.CheckingSignIn, AiCleanupStatusKind.Busy, "Checking your Azure sign-in...", null, false, null },
-        { AzureSetupResult.CliMissing, AiCleanupStatusKind.Warning, "Azure CLI isn't installed.", "Install Azure CLI", true, "Use an API key instead" },
+        { AzureSetupResult.CliMissing, AiCleanupStatusKind.Warning, "Azure CLI isn't installed. Scribe uses it to sign you in and find your models.", "Install Azure CLI", true, "Use an API key instead" },
         { AzureSetupResult.NotSignedIn, AiCleanupStatusKind.Info, "Not signed in to Azure.", "Sign in", true, "Use an API key instead" },
         { AzureSetupResult.SigningIn, AiCleanupStatusKind.Busy, "Finish signing in in your browser.", null, false, null },
         { AzureSetupResult.SignedIn, AiCleanupStatusKind.Success, "Signed in.", "Refresh models", true, null },
         { AzureSetupResult.ListingModels, AiCleanupStatusKind.Busy, "Finding your models...", null, false, null },
         { AzureSetupResult.ListingFailed, AiCleanupStatusKind.Error, "Couldn't list your models. no access", "Try again", true, null },
+        { AzureSetupResult.Verifying, AiCleanupStatusKind.Busy, "Verifying...", null, false, null },
         { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
         { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },
         { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Verify again.", "Verify", true, null },
+        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
         { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Verified.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Verify again.", "Verify", true, null },
+        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
     };
 
     [Theory]
@@ -1063,12 +1116,13 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
     public static TheoryData<CopilotSetupResult, AiCleanupStatusKind, string, string?, string?> CopilotRows => new()
     {
-        { CopilotSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Get models", null },
+        { CopilotSetupResult.NotChecked, AiCleanupStatusKind.Busy, "Looking for GitHub Copilot...", null, null },
         { CopilotSetupResult.ToolNotFound, AiCleanupStatusKind.Warning, "GitHub Copilot isn't installed on this PC.", "Install", "Check again" },
+        { CopilotSetupResult.Outdated, AiCleanupStatusKind.Warning, "GitHub Copilot needs an update.", "Update", "Check again" },
         { CopilotSetupResult.Installing, AiCleanupStatusKind.Info, "The installer is open. Finish it, then choose Check again.", "Check again", null },
-        { CopilotSetupResult.Installed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Sign in", "Get models" },
-        { CopilotSetupResult.SignedIn, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Get models", null },
-        { CopilotSetupResult.ModelsListed, AiCleanupStatusKind.Success, "GitHub Copilot is ready.", "Get models", null },
+        { CopilotSetupResult.Installed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Sign in", null },
+        { CopilotSetupResult.SignedIn, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", null, null },
+        { CopilotSetupResult.ModelsListed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", null, null },
     };
 
     [Theory]
@@ -1089,7 +1143,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     [Theory]
-    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection")]
+    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", null)]
     [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing...", null)]
     [InlineData(CustomEndpointTestResult.Connected, AiCleanupStatusKind.Success, "Connected. qwen answered.", "Test connection")]
     [InlineData(CustomEndpointTestResult.Failed, AiCleanupStatusKind.Error, "Connection refused.", "Try again")]
@@ -1143,6 +1197,55 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(expected, state.StatusLine);
     }
 
+    [Theory]
+    [InlineData("Azure rejected the API key (401). Check that the key belongs to this resource.")]
+    [InlineData("Azure could not find the deployment 'gpt-4o' (404). Check the endpoint and exact deployment name.")]
+    [InlineData("Azure is throttling requests (429). The deployment is reachable but over quota. Wait and retry.")]
+    [InlineData("Azure returned a server error (500). This is usually transient; try again shortly.")]
+    [InlineData("The service principal secret was rejected. Check the secret's Value.")]
+    [InlineData("The service principal secret has expired. Create a new secret and paste its Value.")]
+    [InlineData("The app registration was not found. Check the application ID and tenant ID.")]
+    public void Azure_verification_failures_are_typed_errors_not_message_parsing(string reason)
+    {
+        var outcome = AzureVerificationOutcome.Failed(reason);
+
+        var apiRow = ActiveAzure(new AzureAiSetupState(outcome.ToApiKeyResult(complete: true), ApiKeySelected: true, SafeReason: outcome.SafeMessage)).StatusRow!;
+        Assert.Equal(AiCleanupStatusKind.Error, apiRow.Kind);
+        Assert.Equal(reason, apiRow.Text);
+
+        var spRow = ActiveAzure(new AzureAiSetupState(outcome.ToServicePrincipalResult(complete: true), AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: outcome.SafeMessage)).StatusRow!;
+        Assert.Equal(AiCleanupStatusKind.Error, spRow.Kind);
+        Assert.Equal(reason, spRow.Text);
+    }
+
+    [Fact]
+    public void Azure_verification_changed_since_maps_to_verify_again()
+    {
+        var outcome = AzureVerificationOutcome.ChangedSince;
+
+        Assert.Equal(AzureSetupResult.ApiKeyVerifyAgain, outcome.ToApiKeyResult(complete: true));
+        Assert.Equal(AzureSetupResult.ServicePrincipalVerifyAgain, outcome.ToServicePrincipalResult(complete: true));
+        Assert.Equal(AzureSetupResult.ApiKeyIncomplete, outcome.ToApiKeyResult(complete: false));
+    }
+
+    [Fact]
+    public void Reapplying_the_same_off_page_projection_keeps_configured_provider_summary()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        saved.AiCleanupCustomEndpoint = "http://localhost:11434/v1";
+        saved.AiCleanupCustomModel = "synthetic-model";
+        var draft = saved.Clone();
+        draft.EnableAiCleanup = false;
+        var setup = AiCleanupPageState.SavedSetupState(saved);
+        var summary = AiCleanupPageState.ProviderSetupSummary(saved);
+
+        var first = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, savedSetupState: setup, providerSummary: summary);
+        var second = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, savedSetupState: setup, providerSummary: summary);
+
+        Assert.Equal("Set up to use Another AI service (synthetic-model).", first.OffHelperText);
+        Assert.Equal(first, second);
+    }
     private static AiCleanupPageDescription ActiveAzure(AzureAiSetupState setup, CleanupStatus status = CleanupStatus.Ready, string? safeReason = null)
     {
         var saved = AppSettings.CreateDefault();

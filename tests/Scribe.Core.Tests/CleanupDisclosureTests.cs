@@ -58,6 +58,14 @@ public sealed class CleanupDisclosureTests
     }
 
     [Theory]
+    [InlineData(CleanupProvider.FoundryLocal, "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.")]
+    [InlineData(CleanupProvider.AzureFoundry, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to your Microsoft Foundry deployment. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.OpenAiCompatible, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to the address you enter. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.GitHubCopilot, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to GitHub. Audio never leaves this PC.")]
+    public void Provider_summary_names_the_destination_and_never_audio(CleanupProvider provider, string expected) =>
+        Assert.Equal(expected, CleanupDisclosure.SummaryFor(provider));
+
+    [Theory]
     [InlineData(CleanupProvider.AzureFoundry, "to your Microsoft Foundry deployment.")]
     [InlineData(CleanupProvider.OpenAiCompatible, "to the OpenAI-compatible endpoint you set up.")]
     [InlineData(CleanupProvider.GitHubCopilot, "to GitHub, through your Copilot sign-in.")]
@@ -83,6 +91,7 @@ public sealed class CleanupDisclosureTests
             CleanupDisclosure.WhatCleanupSends, CleanupDisclosure.WhatCleanupNeverSends, CleanupDisclosure.SuggestionConsentTitle,
         };
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SuggestionConsentFor));
+        texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SummaryFor));
 
         foreach (var text in texts)
         {

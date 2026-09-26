@@ -26,16 +26,16 @@ public static class CleanupModelCatalog
 
     public static IReadOnlyList<CleanupModel> Curated { get; } = new[]
     {
-        new CleanupModel("qwen3-1.7b", "Qwen3 1.7B (recommended)", "Newest-gen, ~1.3 GB. Fast and accurate for everyday dictation."),
-        new CleanupModel("qwen2.5-1.5b", "Qwen2.5 1.5B", "Proven and very fast, ~1.3 GB. A safe lightweight choice."),
-        new CleanupModel("qwen3.5-2b-text", "Qwen3.5 2B", "Latest Qwen3.5 text model, ~1.4 GB. Slightly higher quality."),
-        new CleanupModel("qwen3-4b", "Qwen3 4B", "Higher quality, ~2.7 GB. Slower; best on a GPU."),
-        new CleanupModel("phi-4-mini", "Phi-4 Mini", "Microsoft Phi-4 Mini, ~3.6 GB. Strong grammar, larger download."),
+        new CleanupModel("qwen3-1.7b", "Qwen3 1.7B (recommended)", "About 1.3 GB. Scribe's recommended default."),
+        new CleanupModel("qwen2.5-1.5b", "Qwen2.5 1.5B", "About 1.3 GB. Proven and very fast. A safe lightweight choice."),
+        new CleanupModel("qwen3.5-2b-text", "Qwen3.5 2B", "About 1.4 GB. Slightly better writing, a little slower."),
+        new CleanupModel("qwen3-4b", "Qwen3 4B", "About 2.7 GB. Higher quality. Slower."),
+        new CleanupModel("phi-4-mini", "Phi-4 Mini", "About 3.6 GB. Strong grammar."),
         // Golden-suite winners (docs/model-leaderboard.md). Larger downloads than the lightweight
         // defaults, but they top the on-device board: mistral-nemo-12b at ~1.0 s median is the
         // fastest usable local model, and phi-4 earns the best offline quality grade.
-        new CleanupModel("mistral-nemo-12b-instruct", "Mistral NeMo 12B", "Fastest usable on-device model, ~7 GB. Real-time feel with solid quality.", "Best on-device balance"),
-        new CleanupModel("phi-4", "Phi-4", "Microsoft Phi-4, ~9 GB. Best offline quality; slower and a larger download.", "Best on-device quality"),
+        new CleanupModel("mistral-nemo-12b-instruct", "Mistral NeMo 12B", "About 7 GB, large download. Fastest usable on-device model. Real-time feel with solid quality.", "Best on-device balance"),
+        new CleanupModel("phi-4", "Phi-4", "About 9 GB, large download. Best offline quality. Slower and a larger download.", "Best on-device quality"),
     };
 
     /// <summary>Resolves an alias to its descriptor, falling back to the default when unknown.</summary>
