@@ -1,5 +1,6 @@
 using Scribe.Core.Models;
 using Scribe.Core.Transcription;
+using Scribe.Core.Hotkeys;
 
 namespace Scribe.Core.Settings;
 
@@ -30,6 +31,13 @@ public static class ShortcutCaveats
         if (binding is null)
         {
             return null;
+        }
+
+        // Only a button bound on its own, with no modifier, is swallowed whenever it is pressed. In a chord the first input
+        // still reaches the app, and with a modifier the button alone still does its usual job, so neither gets this line.
+        if (binding.Modifiers == KeyModifiers.None && binding.SecondaryVirtualKey is null && MouseButtons.IsBindable(binding.VirtualKey))
+        {
+            return "While Scribe runs, this mouse button doesn't do its usual job in other apps, unless you hold Ctrl, Shift, Alt or the Windows key.";
         }
 
         if (binding.Modifiers == KeyModifiers.None && binding.SecondaryVirtualKey is null)
@@ -76,8 +84,8 @@ public static class TranscriptionModelChoices
                 var installed = installedModelIds.Contains(model.Id);
                 return new TranscriptionModelChoice(
                     model.Id,
-                    model.DisplayName,
-                    $"{model.Languages}. {FormatSize(model.DownloadSize)}. {(installed ? "Downloaded." : "Choose Install to download.")}",
+                    LabelFor(model),
+                    $"{HintFor(model)} {FormatSize(model.DownloadSize)}. {(installed ? "Downloaded." : "Not downloaded.")}",
                     model.Id == selected,
                     installed,
                     ShowInstall: !installed,
@@ -85,6 +93,22 @@ public static class TranscriptionModelChoices
             })
             .ToList();
     }
+
+    private static string LabelFor(TranscriptionModel model) => model.Id switch
+    {
+        TranscriptionModelCatalog.DefaultId => "Parakeet, 25 languages (recommended)",
+        "moonshine-base-en-int8" => "Moonshine Base, English only",
+        "moonshine-tiny-en-int8" => "Moonshine Tiny, English only",
+        _ => model.DisplayName,
+    };
+
+    private static string HintFor(TranscriptionModel model) => model.Id switch
+    {
+        TranscriptionModelCatalog.DefaultId => "Understands about 25 European languages.",
+        "moonshine-base-en-int8" => "Smaller and fast. English only.",
+        "moonshine-tiny-en-int8" => "Smallest and fastest. English only.",
+        _ => model.Description,
+    };
 
     private static string FormatSize(long bytes)
     {

@@ -228,6 +228,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
 
         InitializeComponent();
+        InitializeNavigation();
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -342,22 +343,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 // Packaged but sideloaded: the Store has no record of this install, so offering a
                 // check would only ever fail.
                 UpdateStatusText.Text =
-                    $"Scribe {UpdateService.RunningVersion} was installed from a package. Updates are managed outside the app.";
+                    "Updates are managed outside the app for this package install.";
                 UpdateCheckButton.Visibility = Visibility.Collapsed;
                 UpdateApplyButton.Visibility = Visibility.Collapsed;
                 return;
             }
 
             UpdateStatusText.Text =
-                $"Scribe {UpdateService.RunningVersion} is installed from Microsoft Store.";
+                "Scribe does not look for updates until you ask.";
             UpdateCheckButton.Visibility = Visibility.Visible;
+            UpdateApplyButton.Content = "Install update";
             UpdateApplyButton.Visibility = Visibility.Collapsed;
             return;
         }
 
         UpdateStatusText.Text = _updates?.PendingVersion is { } pending
-            ? $"Scribe {UpdateService.RunningVersion}. {pending} is downloaded and ready to install."
-            : $"Scribe {UpdateService.RunningVersion}. Use Check for updates when you want to connect.";
+            ? $"{pending} is downloaded and ready to install."
+            : "Scribe does not look for updates until you ask.";
         UpdateApplyButton.Visibility = _updates?.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
         if (_updates is not null)
         {
@@ -578,12 +580,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (_updates is null)
         {
-            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} (dev build, updates apply to installed builds only).";
+            UpdateStatusText.Text = "Dev build. Updates apply to installed builds only.";
             return;
         }
 
         UpdateCheckButton.IsEnabled = false;
-        UpdateStatusText.Text = "Checking for updates…";
+        UpdateStatusText.Text = "Checking for updates...";
         try
         {
             UpdateStatusText.Text = await _updates.CheckAndDownloadAsync();
@@ -601,7 +603,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StoreUpdateService>.Instance);
 
         UpdateCheckButton.IsEnabled = false;
-        UpdateStatusText.Text = "Checking Microsoft Store for updates…";
+        UpdateStatusText.Text = "Checking Microsoft Store for updates...";
         try
         {
             var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -611,7 +613,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // deliberately does not name one rather than risk showing the wrong number.
             UpdateStatusText.Text = available
                 ? "An update is available from Microsoft Store."
-                : $"Scribe {UpdateService.RunningVersion} is up to date.";
+                : "Scribe is up to date.";
             UpdateApplyButton.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
         }
         finally
@@ -632,7 +634,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // relaunches on the new version.
         if (_updates is null || !_updates.ApplyNowAndRestart())
         {
-            UpdateStatusText.Text = "Couldn't restart into the update. It will install when you quit Scribe.";
+            UpdateStatusText.Text = "Couldn't restart to update. The update will install when you quit Scribe.";
         }
     }
 
@@ -644,7 +646,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateApplyButton.IsEnabled = false;
-        UpdateStatusText.Text = "Installing the update from Microsoft Store…";
+        UpdateStatusText.Text = "Installing the update from Microsoft Store...";
         try
         {
             // Windows shows its own consent and progress dialogs here, and may close Scribe to
@@ -653,10 +655,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var outcome = await _storeUpdates.ApplyAsync(hwnd);
             UpdateStatusText.Text = outcome switch
             {
-                StoreUpdateOutcome.Completed => "The update is installed. Restart Scribe to run the new version.",
-                StoreUpdateOutcome.Canceled => "The update was cancelled.",
-                StoreUpdateOutcome.NothingToDo => $"Scribe {UpdateService.RunningVersion} is up to date.",
-                _ => "The update could not be installed. Try again from the Microsoft Store app.",
+                StoreUpdateOutcome.Completed => "The update is installed. Restart Scribe to use the new version.",
+                StoreUpdateOutcome.Canceled => "The update was canceled.",
+                StoreUpdateOutcome.NothingToDo => "Scribe is up to date.",
+                _ => "Couldn't install the update. Try again from the Microsoft Store app.",
             };
             UpdateApplyButton.Visibility = outcome == StoreUpdateOutcome.Completed
                 ? Visibility.Collapsed
@@ -668,12 +670,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // --- Playground ------------------------------------------------------------------------
+    // --- Try dictation ------------------------------------------------------------------------
 
     internal void ShowPlaygroundPipeline(DictationPipelineReport report)
     {
         if (!IsVisible ||
-            SectionPlayground.Visibility != Visibility.Visible ||
+            SectionTryDictation.Visibility != Visibility.Visible ||
             new WindowInteropHelper(this).Handle != report.TargetWindow)
         {
             return;
@@ -848,46 +850,74 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Navigation rail -------------------------------------------------------------------
 
-    // Nav order must match the ListBoxItem order in XAML.
-    private Grid[] SectionPanels =>
-    [
-        SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
-        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionPlayground, SectionHistory,
-        SectionUsage, SectionDiagnostics, SectionAbout,
-    ];
-
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Fires during InitializeComponent (SelectedIndex is set in XAML) before the panels parse.
         if (SectionDiagnostics is null)
         {
             return;
         }
 
-        var panels = SectionPanels;
-        var selected = Math.Clamp(NavList.SelectedIndex, 0, panels.Length - 1);
-        for (var i = 0; i < panels.Length; i++)
+        if (CurrentNavigationPage() is { } page)
         {
-            panels[i].Visibility = i == selected ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        if (panels[selected] == SectionHistory)
-        {
-            LoadHistory();
-        }
-        else if (panels[selected] == SectionUsage)
-        {
-            LoadUsage();
+            ShowPage(page);
         }
     }
 
-    /// <summary>Navigates the rail to the given section, e.g. to show where a save error lives.</summary>
+    /// <summary>Navigates the rail to the given page, optionally focusing a named control on it.</summary>
+    internal void ShowPage(SettingsPage page, string? focusName = null)
+    {
+        if (!PagePanels.TryGetValue(page, out var selected))
+        {
+            return;
+        }
+
+        foreach (var panel in AllSectionPanels)
+        {
+            panel.Visibility = ReferenceEquals(panel, selected) ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (!Equals(NavList.SelectedValue, page))
+        {
+            NavList.SelectedValue = page;
+        }
+
+        selected.BringIntoView();
+        if (page == SettingsPage.History)
+        {
+            LoadHistory();
+        }
+        else if (page == SettingsPage.Usage)
+        {
+            LoadUsage();
+        }
+
+        if (!string.IsNullOrWhiteSpace(focusName) && FindName(focusName) is IInputElement target)
+        {
+            _ = target.Focus();
+        }
+    }
+
+    /// <summary>Navigates to a section still addressed by older validation code.</summary>
     private void ShowSection(Grid section)
     {
-        var index = Array.IndexOf(SectionPanels, section);
-        if (index >= 0)
+        // Both callers report a problem in a row of Your words, which the Word packs tab would hide.
+        if (ReferenceEquals(section, SectionDictionary))
         {
-            NavList.SelectedIndex = index;
+            DictionaryTabs.SelectedItem = YourWordsTab;
+        }
+
+        foreach (var pair in PagePanels)
+        {
+            if (ReferenceEquals(pair.Value, section))
+            {
+                ShowPage(pair.Key);
+                return;
+            }
+        }
+
+        foreach (var panel in AllSectionPanels)
+        {
+            panel.Visibility = ReferenceEquals(panel, section) ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
@@ -1000,23 +1030,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PopulateChoices()
     {
-        ModeCombo.ItemsSource = new[] { "Hold", "Toggle" };
-        DictationOnlyModeCombo.ItemsSource = new[] { "Hold", "Toggle" };
-        TranscriptionModelCombo.ItemsSource = TranscriptionModelCatalog.Curated;
+        ModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
+        DictationOnlyModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
+        TranscriptionModelCombo.DisplayMemberPath = nameof(TranscriptionModelChoice.Label);
 
         InjectionCombo.DisplayMemberPath = nameof(InjectionChoice.Label);
         InjectionCombo.ItemsSource = new[]
         {
-            new InjectionChoice(InjectionMethod.UnicodeType, "Type it in (recommended, works everywhere)"),
-            new InjectionChoice(InjectionMethod.ClipboardPaste, "Paste it in (faster for long text)"),
+            new InjectionChoice(InjectionMethod.UnicodeType, "Type the text (recommended)"),
+            new InjectionChoice(InjectionMethod.ClipboardPaste, "Paste the text"),
         };
 
         NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
         NewlineCombo.ItemsSource = new[]
         {
-            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart: one line in terminals (recommended)"),
-            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line, never send Enter"),
-            new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
+            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Automatic: one line in command windows (recommended)"),
+            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line"),
+            new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks"),
         };
     }
 
@@ -1031,36 +1061,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
             DictationOnlyModeCombo.SelectedIndex = ModeIndex(_pendingDictationOnlyBinding?.Mode ?? HotkeyMode.Hold);
-            DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Hint;
-            MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;
+            DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Caption;
+            HideMouseButtonsHint();
+            UpdateShortcutRows();
+            UpdateFirstRunHint();
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
-            VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
             AutoStopCheck.IsChecked = _settings.AutoStopOnSilence;
-            PostCheck.IsChecked = _settings.ApplyPostProcessing;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             StoreAudioHintText.Text = StorageRetentionPolicy.StoredAudioHint;
-            ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
             SpaceAfterDictationCheck.IsChecked = _settings.AddSpaceAfterDictation;
-            MaxDictationBox.Value = Math.Clamp(_settings.MaxDictationMinutes, 0, 1440);
-            IdleReleaseBox.Value = Math.Clamp(_settings.ReleaseModelsAfterIdleMinutes, 0, 120);
-            HistoryRetentionBox.Value = Math.Clamp(_settings.HistoryRetentionDays, 0, 3650);
+            LoadDurationChoices(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, _settings.HistoryRetentionDays);
             HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
-
-            var items = (InjectionChoice[])InjectionCombo.ItemsSource;
-            InjectionCombo.SelectedItem =
-                items.FirstOrDefault(i => i.Method == _settings.InjectionMethod) ?? items[0];
-
-            var newlineItems = (NewlineChoice[])NewlineCombo.ItemsSource;
-            NewlineCombo.SelectedItem =
-                newlineItems.FirstOrDefault(i => i.Mode == _settings.NewlineHandling) ?? newlineItems[0];
-
-            ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
-            UpdateThreadsLabel();
-            TranscriptionModelCombo.SelectedItem =
-                TranscriptionModelCatalog.Resolve(_settings.TranscriptionModelId);
-            UpdateTranscriptionModelUi();
+            LoadAdvancedControls(_settings);
+            UpdateAdvancedSectionHeaders(_settings);
 
             LoadAiSettings();
         }
@@ -1068,6 +1083,103 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _loadingUi = false;
         }
+    }
+
+    private void UpdateAdvancedSectionHeaders(AppSettings source)
+    {
+        AdvancedSpeechHeader.Text = SectionHeaderText("Speech recognition", AdvancedSection.SpeechRecognition, source);
+        AdvancedRecordingHeader.Text = SectionHeaderText("Recording", AdvancedSection.Recording, source);
+        AdvancedTypingHeader.Text = SectionHeaderText("Typing into apps", AdvancedSection.TypingIntoApps, source);
+        AdvancedTextChangesHeader.Text = SectionHeaderText("Text changes", AdvancedSection.TextChanges, source);
+        AdvancedAppearanceHeader.Text = SectionHeaderText("Appearance", AdvancedSection.Appearance, source);
+    }
+
+    private static string SectionHeaderText(string title, AdvancedSection section, AppSettings source)
+    {
+        var suffix = AdvancedDefaults.SectionHeader(section, source);
+        return string.IsNullOrEmpty(suffix) ? title : $"{title}  {suffix}";
+    }
+
+    private void UpdateFirstRunHint()
+    {
+        // Until RefreshFirstRunHint has read the count, and after a failed read, the count is unknown and counts as not
+        // empty, so the hint stays hidden.
+        var state = FirstRunHint.ShouldShow(
+            SettingsLoadState.Loaded,
+            _firstRunHistoryCount ?? 1,
+            dismissed: false,
+            ShortcutInstruction(_pendingBinding with { Mode = SelectedMode }));
+        FirstRunHintBar.Title = state.Title;
+        FirstRunHintBar.Message = state.Message;
+        FirstRunHintBar.IsOpen = state.Show;
+        FirstRunHintHost.Visibility = state.Show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static string ShortcutInstruction(HotkeyBinding binding)
+    {
+        var shortcut = HotkeyText.SentenceName(binding);
+        return binding.Mode == HotkeyMode.Toggle
+            ? $"Click in any text box, press {shortcut} and speak. Press it again to type."
+            : $"Click in any text box, hold {shortcut} and speak. Let go to type.";
+    }
+
+    private void UpdateShortcutRows()
+    {
+        HotkeyDescriptionText.Text = _settings.EnableAiCleanup
+            ? "Types your words with AI cleanup."
+            : "Types your words. AI cleanup is off.";
+        SetCaveat(HotkeyCaveatText, ShortcutCaveats.For(_pendingBinding));
+
+        var hasSecondShortcut = _pendingDictationOnlyBinding is not null;
+        DictationOnlyClearButton.IsEnabled = hasSecondShortcut;
+        DictationOnlyModeCombo.IsEnabled = hasSecondShortcut;
+        DictationOnlyDescriptionText.Text = hasSecondShortcut
+            ? _settings.EnableAiCleanup
+                ? "Optional. Types exactly what Scribe hears, with your dictionary and snippets."
+                : "AI cleanup is off, so this works like the dictation shortcut."
+            : "Set a shortcut first.";
+        SetCaveat(DictationOnlyCaveatText, ShortcutCaveats.For(_pendingDictationOnlyBinding));
+        UpdateSilenceStop();
+    }
+
+    private static void SetCaveat(TextBlock textBlock, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            textBlock.Text = string.Empty;
+            textBlock.Margin = new Thickness(0);
+            textBlock.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        textBlock.Text = text;
+        textBlock.Margin = new Thickness(0, 6, 0, 0);
+        textBlock.Visibility = Visibility.Visible;
+    }
+
+    private void ShowMouseButtonsHint()
+    {
+        MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;
+        MouseButtonsHintText.Margin = new Thickness(0, 16, 0, 0);
+        MouseButtonsHintText.Visibility = Visibility.Visible;
+    }
+
+    private void HideMouseButtonsHint()
+    {
+        MouseButtonsHintText.Text = string.Empty;
+        MouseButtonsHintText.Margin = new Thickness(0);
+        MouseButtonsHintText.Visibility = Visibility.Collapsed;
+    }
+
+    private void LoadTranscriptionModelChoices(string? selectedModelId)
+    {
+        var installed = TranscriptionModelCatalog.Curated
+            .Where(model => _transcriptionModelInstaller.IsInstalled(model))
+            .Select(model => model.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var choices = TranscriptionModelChoices.Build(selectedModelId, installed);
+        TranscriptionModelCombo.ItemsSource = choices;
+        TranscriptionModelCombo.SelectedItem = choices.FirstOrDefault(choice => choice.IsSelected) ?? choices[0];
     }
 
     // Runs on Loaded and on every activation, so coming back from Windows Settings > Apps > Startup
@@ -1599,7 +1711,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PostCheck_Toggled(object sender, RoutedEventArgs e) => UpdateDictionaryGlossaryHint();
 
-    // --- Libraries -----------------------------------------------------------------------
+    // --- Word packs -----------------------------------------------------------------------
 
     private void InitializeLibraryGrid()
     {
@@ -1932,7 +2044,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (report is null)
             {
-                SystemCapabilityText.Text = "Hardware details unavailable.";
+                SystemCapabilityText.Text = "This PC details aren't available.";
                 return;
             }
 
@@ -1952,7 +2064,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // Hardware detection is descriptive only; never let it break the diagnostics page.
             TryLog(ex, "Compute capability detection failed.");
-            SystemCapabilityText.Text = "Hardware details unavailable.";
+            SystemCapabilityText.Text = "This PC details aren't available.";
         }
     }
 
@@ -2073,7 +2185,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CleanupSummaryHint.Text = "No AI cleanup runs in this period yet.";
                 CleanupMetricsGrid.Visibility = Visibility.Collapsed;
                 CleanupNoDataText.Visibility = Visibility.Visible;
-                CleanupSpeedExpander.IsExpanded = false;
+                SpeedDetailsExpander.IsExpanded = false;
             }
 
             if (stats.CombinedMs is { } combined)
@@ -2094,7 +2206,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CombinedSummaryHint.Text = "No cleanup-enabled runs in this period yet.";
                 CombinedMetricsGrid.Visibility = Visibility.Collapsed;
                 CombinedNoDataText.Visibility = Visibility.Visible;
-                CombinedSpeedExpander.IsExpanded = false;
+                SpeedDetailsExpander.IsExpanded = false;
             }
 
             StatsGrid.Visibility = Visibility.Visible;
@@ -2135,7 +2247,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ClearFailuresButton.IsEnabled = false;
 
         _statsSummaryEmptyText = StatsSummaryText.Text;
-        StatsSummaryText.Text = "Calculating from local history...";
+        StatsSummaryText.Text = "Reading your statistics...";
     }
 
     private async void LoadFailures()
@@ -2148,14 +2260,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IReadOnlyList<CleanupFailure> failures;
         try
         {
-            failures = await Task.Run(() => _failureLog.GetRecent(50));
+            failures = await Task.Run(() => _failureLog.GetRecent(10_000));
         }
         catch (Exception ex)
         {
             if (_failureLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load the AI cleanup failure log for Settings.");
-                NoFailuresText.Text = "Couldn't load the failure list. Close Settings and open it again to retry.";
+                NoFailuresText.Text = "Couldn't load the list.";
                 NoFailuresText.Visibility = Visibility.Visible;
                 ClearFailuresButton.IsEnabled = true;
             }
@@ -2169,7 +2281,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _failures.Clear();
-        foreach (var failure in failures)
+        foreach (var failure in failures.Take(20))
         {
             _failures.Add(new FailureRow
             {
@@ -2182,11 +2294,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         NoFailuresText.Text = _noFailuresText;
         NoFailuresText.Visibility = _failures.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        FailuresCountText.Text = failures.Count > _failures.Count
+            ? $"Showing the 20 most recent of {failures.Count:N0} failures."
+            : string.Empty;
         ClearFailuresButton.IsEnabled = true;
     }
 
     private async void ClearFailuresButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!await ConfirmRiskyAsync(
+                "Clear the list of AI cleanup problems?",
+                "This doesn't change your settings.",
+                "Clear list"))
+        {
+            return;
+        }
+
         ClearFailuresButton.IsEnabled = false;
         try
         {
@@ -2197,6 +2320,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _failures.Clear();
+            FailuresCountText.Text = string.Empty;
             NoFailuresText.Text = _noFailuresText;
             NoFailuresText.Visibility = Visibility.Visible;
 
@@ -2207,7 +2331,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not clear the failure log:\n{ex.Message}");
+                TryLog(ex, "Could not clear the AI cleanup failure log.");
+                ShowInfo("Couldn't clear the list. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
                 ClearFailuresButton.IsEnabled = true;
             }
         }
@@ -2235,6 +2360,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         _pendingDictationOnlyBinding = null;
         DictationOnlyHotkeyBox.Text = string.Empty;
+        UpdateShortcutRows();
     }
 
     // Stages the shipped hotkeys like any other edit on this page: nothing is stored until Save, and Cancel discards
@@ -2259,6 +2385,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ModeCombo.SelectedIndex = ModeIndex(restored.Dictation.Mode);
         DictationOnlyHotkeyBox.Text = HotkeyCapture.Describe(restored.DictationOnly);
         DictationOnlyModeCombo.SelectedIndex = ModeIndex(restored.DictationOnly.Mode);
+        UpdateShortcutRows();
+        UpdateFirstRunHint();
 
         // The default severity, as for the other "done, now Save" notices here: the bar floats over the page title, and
         // WPF-UI fills the informational one almost transparently (#08FFFFFF in the dark theme), so the title would
@@ -2296,6 +2424,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturing = true;
         _finalized = false;
         _capture = HotkeyCapture.NewSession();
+        ShowMouseButtonsHint();
 
         // Put the global hook into pass-through first: the current push-to-talk key must reach
         // this capture box as an ordinary key instead of being suppressed or starting a recording.
@@ -2443,6 +2572,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _setHotkeyCaptureMode(false);
         ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = HotkeyCapture.Describe(binding);
+        HideMouseButtonsHint();
+        UpdateShortcutRows();
+        UpdateFirstRunHint();
         Keyboard.ClearFocus();
 
         var risk = HotkeyCapture.AccessibilityRisk(binding);
@@ -2469,6 +2601,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _setHotkeyCaptureMode(false);
         ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = CurrentHotkeyDescription();
+        HideMouseButtonsHint();
+        UpdateShortcutRows();
         Keyboard.ClearFocus();
     }
 
@@ -2512,9 +2646,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Threads -------------------------------------------------------------------------
 
-    private void ThreadsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
-        UpdateThreadsLabel();
-
     private void TranscriptionModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_loadingUi)
@@ -2525,26 +2656,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UpdateTranscriptionModelUi()
     {
-        if (TranscriptionModelCombo.SelectedItem is not TranscriptionModel model)
+        if (TranscriptionModelCombo.SelectedItem is not TranscriptionModelChoice choice)
         {
             return;
         }
 
-        var installed = _transcriptionModelInstaller.IsInstalled(model);
-        var size = model.IsBundled ? "Bundled" : $"{model.DownloadSize / 1_000_000} MB download";
-        TranscriptionModelHint.Text =
-            $"{model.Description} Languages: {model.Languages}. {size}. " +
-            (installed ? "Ready." : "Not installed.");
-        TranscriptionModelInstallButton.Visibility = model.IsBundled ? Visibility.Collapsed : Visibility.Visible;
-        TranscriptionModelInstallButton.IsEnabled = !installed && !_transcriptionModelOp;
-        TranscriptionModelInstallButton.Content = installed ? "Installed" : "Install";
+        TranscriptionModelHint.Text = choice.Hint;
+        TranscriptionModelInstallButton.Visibility = choice.ShowInstall ? Visibility.Visible : Visibility.Collapsed;
+        TranscriptionModelInstallButton.IsEnabled = choice.ShowInstall && !_transcriptionModelOp;
+        TranscriptionModelInstallButton.Content = choice.IsInstalled ? "Downloaded" : "Download";
     }
 
     private async void TranscriptionModelInstallButton_Click(object sender, RoutedEventArgs e)
     {
         if (_transcriptionModelOp ||
-            TranscriptionModelCombo.SelectedItem is not TranscriptionModel model ||
-            model.IsBundled)
+            TranscriptionModelCombo.SelectedItem is not TranscriptionModelChoice choice)
+        {
+            return;
+        }
+
+        var model = TranscriptionModelCatalog.Resolve(choice.Id);
+        if (model.IsBundled)
         {
             return;
         }
@@ -2557,7 +2689,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             await _transcriptionModelInstaller.InstallAsync(model, progress);
-            ShowInfo($"{model.DisplayName} is installed. Restart Scribe after saving to use it.");
+            ShowInfo($"{model.DisplayName} is downloaded. Save, then restart Scribe to use it.");
+            LoadTranscriptionModelChoices(model.Id);
         }
         catch (Exception ex)
         {
@@ -2569,17 +2702,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TranscriptionModelProgress.Visibility = Visibility.Collapsed;
             UpdateTranscriptionModelUi();
         }
-    }
-
-    private void UpdateThreadsLabel()
-    {
-        if (ThreadsLabel is null)
-        {
-            return;
-        }
-
-        var value = (int)ThreadsSlider.Value;
-        ThreadsLabel.Text = value == 0 ? "Auto" : value.ToString();
     }
 
     // --- AI cleanup ----------------------------------------------------------------------
@@ -3630,7 +3752,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not write the diagnostics bundle.");
-            ShowInfo($"Couldn't save the diagnostics: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't save diagnostics. Choose another location or try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -3645,13 +3767,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             Clipboard.SetText(path);
-            ShowInfo($"Copied the {label}.");
+            ShowInfo($"Copied {label}.");
         }
         catch (Exception ex)
         {
             // Another process can hold the clipboard open; that is not worth a crash.
             TryLog(ex, "Could not copy a path to the clipboard.");
-            ShowInfo($"Couldn't copy the {label}: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo($"Couldn't copy {label}. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -3665,7 +3787,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (!Directory.Exists(folder))
         {
-            ShowInfo($"That folder doesn't exist yet: {folder}", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            ShowInfo("That folder doesn't exist yet.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
             return;
         }
 
@@ -3680,7 +3802,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not open the folder.");
-            ShowInfo($"Couldn't open the folder: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't open the folder. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -5018,7 +5140,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (duplicateSnippet is not null)
         {
-            ShowSection(SectionSnippets);
+            ShowSection(SectionVoiceSnippets);
             SnippetList.SelectedItem = duplicateSnippet;
             SnippetList.ScrollIntoView(duplicateSnippet);
             ShowThemedMessage(
@@ -5035,10 +5157,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
         if (dictationOnlyBinding is not null && SamePhysicalBinding(standardBinding, dictationOnlyBinding))
         {
-            ShowSection(SectionGeneral);
+            ShowSection(SectionDictation);
             ShowThemedMessage(
                 "Hotkey conflict",
                 "The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.");
+            return false;
+        }
+
+        // A custom duration outside its range blocks the Save and focuses its box, rather than being clamped or stored.
+        if (!ValidateDurationChoices())
+        {
             return false;
         }
 
@@ -5091,15 +5219,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
             _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
+            _settings.AccentSource = AccentSourceCheck.IsChecked == true ? AccentSource.Windows : AccentSource.Scribe;
             _settings.AddSpaceAfterDictation = SpaceAfterDictationCheck.IsChecked == true;
             // NumberBox.Value is a nullable double: a cleared box falls back to the saved value
             // rather than silently becoming 0, which here means "off/forever".
             _settings.MaxDictationMinutes =
-                ClampNumberBox(MaxDictationBox.Value, _settings.MaxDictationMinutes, 1440);
+                SelectedDurationValue(MaxDictationCombo, MaxDictationCustomBox, _settings.MaxDictationMinutes);
             _settings.ReleaseModelsAfterIdleMinutes =
-                ClampNumberBox(IdleReleaseBox.Value, _settings.ReleaseModelsAfterIdleMinutes, 120);
+                SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, _settings.ReleaseModelsAfterIdleMinutes);
             _settings.HistoryRetentionDays =
-                ClampNumberBox(HistoryRetentionBox.Value, _settings.HistoryRetentionDays, 3650);
+                SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, _settings.HistoryRetentionDays);
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =
@@ -5112,9 +5241,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
             }
 
-            _settings.DecodeThreads = (int)ThreadsSlider.Value;
+            _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
-                ((TranscriptionModel?)TranscriptionModelCombo.SelectedItem)?.Id ??
+                ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
                 TranscriptionModelCatalog.DefaultId;
 
             _settings.EnableAiCleanup = aiCleanupEnabled;
@@ -5586,7 +5715,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public override string ToString() => Label;
     }
 
-    // --- Overlay position picker -----------------------------------------------------------
+    // --- Recording indicator position picker -----------------------------------------------------------
 
     private void LoadOverlayPosition(OverlayPosition position)
     {
