@@ -380,7 +380,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         Closed += OnClosed;
         Loaded += RefreshStartupStatus;
+        Loaded += (_, _) => UpdateProfileLayout();
         Activated += RefreshStartupStatus;
+        SectionAppProfiles.SizeChanged += (_, _) => UpdateProfileLayout();
+        ProfileBodyGrid.SizeChanged += (_, _) => UpdateProfileLayout();
 
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>

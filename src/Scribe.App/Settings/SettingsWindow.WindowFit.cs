@@ -30,7 +30,13 @@ public partial class SettingsWindow
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
     }
 
-    private void TextScale_Changed(object? sender, EventArgs e) => ApplyWindowFit(GetWindowMonitor(), center: false);
+    private void TextScale_Changed(object? sender, EventArgs e)
+    {
+        ApplyWindowFit(GetWindowMonitor(), center: false);
+        UpdateProfileLayout();
+        UpdateUsageMetricLayout();
+        ApplyWordPackLayout();
+    }
 
     private void ScheduleMonitorFit()
     {

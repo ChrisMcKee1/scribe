@@ -23,4 +23,22 @@ public sealed class ProfileLayoutPlannerTests
 
         Assert.Equal(expected, ProfileLayoutPlanner.UseCompact(input));
     }
+
+    [Theory]
+    [InlineData(473.3, 1.5, 109.8, 28, 146.8, true)]
+    [InlineData(760, 1.5, 109.8, 28, 146.8, false)]
+    public void UseCompact_is_a_fixed_point_when_compact_moves_notice_and_hint_into_the_scroller(
+        double availableHeight,
+        double scale,
+        double noticeHeight,
+        double hintHeight,
+        double toolbarHeight,
+        bool expected)
+    {
+        var expanded = new ProfileLayoutInput(availableHeight, scale, noticeHeight, hintHeight, toolbarHeight);
+        var compact = expanded with { NoticeHeight = noticeHeight, HintHeight = hintHeight };
+
+        Assert.Equal(expected, ProfileLayoutPlanner.UseCompact(expanded));
+        Assert.Equal(expected, ProfileLayoutPlanner.UseCompact(compact));
+    }
 }

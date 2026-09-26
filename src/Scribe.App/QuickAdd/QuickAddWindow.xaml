@@ -24,9 +24,6 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
-        <Style TargetType="AccessText" BasedOn="{StaticResource {x:Type AccessText}}">
-            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
-        </Style>
         <Style TargetType="Border" x:Key="CalloutBorder">
             <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}"/>
@@ -319,6 +316,5 @@
         </Border>
     </Grid>
 </ui:FluentWindow>
-
 
 

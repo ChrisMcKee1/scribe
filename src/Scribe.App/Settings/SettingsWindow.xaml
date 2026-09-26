@@ -1864,12 +1864,12 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
+                        <StackPanel x:Name="ProfilesHeaderPanel" Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="ProfilesPageTitle" Text="App profiles" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Use a different writing style or line-break rule in specific apps, like Outlook or Teams."/>
                         </StackPanel>
-                        <Grid Grid.Row="1">
+                        <Grid x:Name="ProfileBodyGrid" Grid.Row="1">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
@@ -1883,13 +1883,13 @@
                                 <ui:InfoBar x:Name="ProfileAiCleanupInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Informational" Title="AI cleanup is off"/>
                                 <ui:Button x:Name="ProfileAiCleanupActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="120" Content="Go to AI cleanup" Click="ProfileAiCleanupButton_Click"/>
                             </Grid>
-                            <Grid Grid.Row="1">
+                            <Grid x:Name="ProfileMainGrid" Grid.Row="1">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="270"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
 
-                                <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
+                                <ui:Card x:Name="ProfileListCard" Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="*"/>
@@ -1908,7 +1908,7 @@
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
                                         </ListBox>
-                                        <WrapPanel Grid.Row="1" Margin="0,8,0,0">
+                                        <WrapPanel x:Name="ProfileToolbar" Grid.Row="1" Margin="0,8,0,0">
                                             <ui:Button x:Name="ProfileAddButton" Content="Add" MinWidth="70" Margin="0,0,8,8" Click="ProfileAddButton_Click"/>
                                             <ui:Button x:Name="ProfileDeleteButton" Content="Delete..." MinWidth="78" Margin="0,0,8,8" Click="ProfileDeleteButton_Click"/>
                                             <ui:Button x:Name="ProfileMoveUpButton" Content="Move up" MinWidth="82" Margin="0,0,8,8" Click="ProfileMoveUpButton_Click"/>
@@ -1917,9 +1917,20 @@
                                     </Grid>
                                 </ui:Card>
 
-                                <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
+                                <ui:Card x:Name="ProfileEditorCard" Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
                                     <Grid>
                                         <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <StackPanel>
+                                            <Grid x:Name="ProfileCompactAiCleanupNotice" Visibility="Collapsed" Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <ui:InfoBar x:Name="ProfileCompactAiCleanupInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Informational" Title="AI cleanup is off"/>
+                                                <ui:Button x:Name="ProfileCompactAiCleanupActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="120" Content="Go to AI cleanup" Click="ProfileAiCleanupButton_Click"/>
+                                            </Grid>
+                                            <TextBlock x:Name="ProfileCompactOrderHint" Style="{StaticResource CardDescription}" Margin="0,0,0,12" Visibility="Collapsed"
+                                                       Text="When an app matches more than one profile, Scribe uses the one higher in the list."/>
                                             <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                                 <TextBlock x:Name="ProfileNameTitle" Text="Name" Style="{StaticResource CardTitle}"/>
                                                 <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
@@ -2018,6 +2029,7 @@
                                                 <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                           AutomationProperties.LabeledBy="{Binding ElementName=ProfileNewlineTitle}"
                                                           SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
+                                            </StackPanel>
                                             </StackPanel>
                                         </ScrollViewer>
                                         <StackPanel x:Name="ProfileEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
