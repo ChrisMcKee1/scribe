@@ -2,11 +2,20 @@ using System.Collections.Concurrent;
 using Scribe.Core.Libraries;
 using Scribe.Core.Settings;
 using Scribe.Core.Vocabulary;
+using HangGuard = Scribe.Core.Tests.Concurrency.HangGuard;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Scribe.Core.Tests.Libraries.Deciders;
 
 public sealed class WordPackSaveProtocolTests
 {
+    // A hang guard, never the verdict: work that was told to hold always reaches its hold (stream TR round 7).
+    private static readonly TimeSpan HoldBound = TimeSpan.FromSeconds(30);
+
+    // The pump's hang guard (stream TR round 7b): an owner thread that has run nothing for this long while its test still
+    // waits is stuck. Twice the hold guard, so that a save that never reaches its hold fails there first, naming the hold;
+    // this one ends a test stuck anywhere else, such as in an await of the save itself.
+    private static readonly TimeSpan PumpIdleBound = HoldBound + HoldBound;
     public static TheoryData<string> ValidationFailures => new()
     {
         "dictionary", "snippet", "hotkey", "duration", "provider", "word pack",
@@ -581,9 +590,6 @@ public sealed class WordPackSaveProtocolTests
 
     private sealed class ProtocolHarness : IDisposable
     {
-        // A hang guard, never the verdict: work that was told to hold always reaches its hold (stream TR round 7).
-        private static readonly TimeSpan HoldBound = TimeSpan.FromSeconds(30);
-
         private readonly int _owner;
         private readonly Dictionary<string, Hold> _holds = new(StringComparer.OrdinalIgnoreCase);
 
@@ -678,13 +684,13 @@ public sealed class WordPackSaveProtocolTests
 
         public void Hold(string name) => _holds[name] = new Hold();
 
-        // Fails the test when the work never reaches its hold. Going on after a timeout, as a 5 s wait whose result was
-        // ignored once did, would judge a save that had not got there yet, as if it had.
+        // Fails the test, naming the hold, when the work never reaches it. Going on after a timeout, as a 5 s wait whose
+        // result was ignored once did, would judge a save that had not got there yet, as if it had.
         public async Task WaitForHoldAsync(string name)
         {
             if (_holds.TryGetValue(name, out var hold))
             {
-                await hold.Hit.Task.WaitAsync(HoldBound);
+                Assert.True(await HangGuard.Completes(hold.Hit.Task, HoldBound), $"The work never reached its \"{name}\" hold.");
             }
         }
 
@@ -823,6 +829,8 @@ public sealed class WordPackSaveProtocolTests
     {
         private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = [];
 
+        // Runs the owner's posted work until the test's task completes. A test whose owner thread has run nothing for
+        // PumpIdleBound while the test is still waiting fails, instead of pumping for ever and stopping the run.
         public static async Task RunAsync(Func<int, Task> action)
         {
             var previous = Current;
@@ -831,12 +839,21 @@ public sealed class WordPackSaveProtocolTests
             var owner = Environment.CurrentManagedThreadId;
             var task = action(owner);
             _ = task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
+            var lastRan = Stopwatch.GetTimestamp();
             while (!task.IsCompleted || context._queue.Count > 0)
             {
                 if (context._queue.TryTake(out var work, 50))
                 {
                     SetSynchronizationContext(context);
                     work.Callback(work.State);
+                    lastRan = Stopwatch.GetTimestamp();
+                }
+                else if (!task.IsCompleted && Stopwatch.GetElapsedTime(lastRan) > PumpIdleBound)
+                {
+                    SetSynchronizationContext(previous);
+                    Assert.Fail(
+                        $"The test never finished: nothing ran on its owner thread for {PumpIdleBound.TotalSeconds:0} s " +
+                        "while it was still waiting.");
                 }
             }
 

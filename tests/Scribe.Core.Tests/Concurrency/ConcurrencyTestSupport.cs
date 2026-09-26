@@ -141,6 +141,27 @@ internal static class BlockedThreads
 }
 
 /// <summary>
+/// A hang guard for a task certain to complete (stream TR round 7b): true once it has, false only if it has not within the
+/// bound, so the test fails with its own message instead of waiting for ever and stopping the run. Never a latency check:
+/// the bound only turns a hang into a failure. What the task threw is rethrown, a TimeoutException of its own included.
+/// </summary>
+internal static class HangGuard
+{
+    public static async Task<bool> Completes(Task task, TimeSpan bound)
+    {
+        try
+        {
+            await task.WaitAsync(bound).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException timeout) when (!ReferenceEquals(timeout, task.Exception?.InnerException))
+        {
+            return false; // the bound ran out: the task's own TimeoutException is not this one, and is rethrown
+        }
+    }
+}
+
+/// <summary>
 /// Sets a test's gates on every way out of the scope it is declared in (stream TR round 4, A5). A thread a test holds at a
 /// gate (a production thread, a fake's, or one the test started to run production code) waits for its release and for
 /// nothing else, because what the test asserts rests on that thread staying where it is until the test lets it go; so a

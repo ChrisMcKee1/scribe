@@ -1,9 +1,13 @@
 using Scribe.Core.Settings;
+using HangGuard = Scribe.Core.Tests.Concurrency.HangGuard;
 
 namespace Scribe.Core.Tests;
 
 public sealed class QuickAddOpenGateTests
 {
+    // A hang guard, never the verdict: both requests are certain to finish once the held open is released.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Fact]
     public async Task Concurrent_requests_await_the_same_held_open()
     {
@@ -35,7 +39,9 @@ public sealed class QuickAddOpenGateTests
             Assert.Equal(1, opens);
 
             release.SetResult();
-            await Task.WhenAll(first, second);
+            Assert.True(
+                await HangGuard.Completes(Task.WhenAll(first, second), Bound),
+                "The held open, or the request coalesced behind it, never finished once the open was released.");
         }
         finally
         {
