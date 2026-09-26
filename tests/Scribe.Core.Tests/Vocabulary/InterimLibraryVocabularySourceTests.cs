@@ -137,33 +137,3 @@ public sealed class InterimLibraryVocabularySourceTests : IDisposable
         [.. entries.Select(entry => $"{entry.Pattern}|{entry.Replacement}|{entry.WholeWord}|{entry.Enabled}")];
 }
 
-/// <summary>
-/// The vocabulary folder is new, and LogPrivacyGuardTests does not scan it yet (the request is in stream W-V's report):
-/// the same scanner runs over it here, so nothing in it logs an exception object, its text or its data.
-/// </summary>
-public sealed class VocabularyLogPrivacyTests
-{
-    [Fact]
-    public void No_log_call_in_the_vocabulary_folder_passes_an_exception_or_its_text()
-    {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
-        {
-            root = root.Parent;
-        }
-
-        Assert.NotNull(root);
-        var folder = Path.Combine(root.FullName, "src", "Scribe.Core", "Vocabulary");
-        var calls = 0;
-        var offenders = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(folder, "*.cs", SearchOption.AllDirectories))
-        {
-            var source = File.ReadAllText(file);
-            calls += LogCallScanner.Find(source).Count();
-            offenders.AddRange(LogCallScanner.Check(source).Select(offence => $"{Path.GetFileName(file)}: {offence.Reason}: {offence.Call}"));
-        }
-
-        Assert.True(calls >= 6, $"The scanner found only {calls} log calls in the vocabulary folder, so it is not reading it.");
-        Assert.True(offenders.Count == 0, string.Join(Environment.NewLine, offenders));
-    }
-}

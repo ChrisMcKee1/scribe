@@ -531,8 +531,9 @@ cause of one.**
   `FailureShape.DescribeWithStack` adds the stack frames, frame lines only, for failures that point at
   a defect, such as crashes, unhandled exceptions and handlers that threw.
   `LogPrivacyGuardTests` runs `LogCallScanner`, a source-level guard, over all of `src/Scribe.App`, the
-  Core folders `Cleanup`, `Diagnostics`, `Feedback` and `Settings`, and
-  `PostProcessing/AiDictionarySuggester.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
+  Core folders `Cleanup`, `Diagnostics`, `Feedback`, `Libraries`, `Settings` and `Vocabulary`, the library
+  service family (`PostProcessing/DictionaryLibrary*.cs`), and `PostProcessing/AiDictionarySuggester.cs`,
+  `PostProcessing/TextPostProcessor.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
   a log call that passes an exception object (cast or not), reads an exception's `.Message`,
   `.StackTrace`, inner exceptions or `.Data`, renders an object with `.ToString()`, interpolates an
   exception, or does not start with a literal message template, and on a logging helper handed an
@@ -1145,8 +1146,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   before any destination is opened, so a refusal never truncates a file. The personal dictionary's export keeps its
   replacing encoder until the editor refuses ill-formed text there too.
 - **Logging.** The library service logs counts, generations, enum names and `FailureShape` text only, never a name, id,
-  term, file name or path; `LogPrivacyGuardTests` scans `Core\Libraries`, `Core\Settings` and
-  `PostProcessing\DictionaryLibrary*.cs`, and `LogCallScanner` holds the one file-failure template.
+  term, file name or path; `LogPrivacyGuardTests` scans `Core\Libraries`, `Core\Settings`, `Core\Vocabulary`,
+  `PostProcessing\DictionaryLibrary*.cs` and `PostProcessing\TextPostProcessor.cs`, and `LogCallScanner` holds the one
+  file-failure template.
 - **Release gate: no release contains this library model without W-V's vocabulary publication.** Until W-V lands,
   dictation still selects word packs through release 0.4.4's seam (`GetEnabledLibraryEntries(ids)` with the document's
   list, which is now the projection), so an enabled word pack kept from AI cleanup, or a remapped twin, is not applied on
