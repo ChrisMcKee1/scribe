@@ -1380,13 +1380,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         SetSelectedProviderRadio(_settings.AiCleanupProvider);
 
+        _foundryCuratedByAlias.Clear();
+        foreach (var curated in CleanupModelCatalog.Curated)
+        {
+            _foundryCuratedByAlias[curated.Alias] = curated;
+        }
+        SetFoundryModelItems([]);
+
         var savedModel = CleanupModelCatalog.Curated
             .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
         AiModelBox.SelectedValue = savedModel?.Alias
             ?? (string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
                 ? CleanupModelCatalog.Curated[0].Alias
                 : _settings.AiCleanupModel.Trim());
-        AiModelBox.Text = SelectedFoundryModelAlias;
 
         // Manual endpoint/deployment/key are the source of truth Save reads; discovery just autofills
         // them. Populate from saved settings (key is decrypted in memory by AppSettings).
@@ -2749,7 +2755,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (_savedAiProvider != CleanupProvider.FoundryLocal)
             {
-                AiStatusText.Text = FoundryIdleStatus;
+                FoundryStatusRow.Show(new(AiCleanupStatusKind.Info, FoundryIdleStatus));
             }
 
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
@@ -2851,7 +2857,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string SelectedFoundryModelAlias =>
         (AiModelBox.SelectedItem as FoundryModelChoice)?.Alias ??
         AiModelBox.SelectedValue as string ??
-        AiModelBox.Text?.Trim() ?? CleanupModelCatalog.DefaultAlias;
+        NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
 
     private void SetFoundryModelItems(IReadOnlyList<FoundryModelOption> liveCatalog)
     {
@@ -2861,10 +2867,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var selected = SelectedFoundryModelAlias;
             AiModelBox.DisplayMemberPath = nameof(FoundryModelChoice.Label);
             AiModelBox.SelectedValuePath = nameof(FoundryModelChoice.Alias);
-            AiModelBox.ItemsSource = FoundryModelChoices.Build(selected, CleanupModelCatalog.Curated, liveCatalog);
+            var choices = FoundryModelChoices.Build(selected, CleanupModelCatalog.Curated, liveCatalog);
+            AiModelBox.ItemsSource = choices;
             AiModelBox.Items.Filter = null;
-            AiModelBox.SelectedValue = selected;
-            AiModelBox.Text = selected;
+            AiModelBox.SelectedItem = choices.FirstOrDefault(choice => string.Equals(choice.Alias, selected, StringComparison.OrdinalIgnoreCase));
+            if (AiModelBox.SelectedItem is null)
+            {
+                AiModelBox.Text = selected;
+            }
         }
         finally
         {
@@ -2947,46 +2957,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // The local status row has one next action chosen by FoundryLocalSetup. The action is the only page path
     // that may start the Foundry Local runtime or download a model.
-    private async void AiLocalActionButton_Click(object sender, RoutedEventArgs e)
-    {
-        var action = AiLocalActionButton.Content as string;
-        if (action is "Set up" or "Try again")
-        {
-            await SetupFoundryLocalAsync();
-        }
-        else if (action is "Download and load" or "Load")
-        {
-            await LoadFoundryModelAsync();
-        }
-        else if (action == "Unload")
-        {
-            await UnloadFoundryModelAsync();
-        }
-    }
-
-    private void SetAiLocalAction(string? text, bool enabled)
-    {
-        if (AiLocalActionButton is null)
-        {
-            return;
-        }
-
-        AiLocalActionButton.Content = text ?? string.Empty;
-        AiLocalActionButton.Visibility = string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
-        AiLocalActionButton.IsEnabled = enabled && !_foundryModelOp;
-    }
-
     private async Task SetupFoundryLocalAsync()
     {
-        AiLocalActionButton.IsEnabled = false;
-        AiStatusText.Text = "Setting up. The first time can take a while.";
+        FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, "Setting up. The first time can take a while."));
         try
         {
             var available = await Task.Run(() => _cleanup.ProbeAsync());
             if (!available)
             {
-                AiStatusText.Text = "Couldn't set up AI on this PC. Try again, or choose another AI service.";
-                SetAiLocalAction("Try again", enabled: true);
+                FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, "Couldn't set up AI on this PC. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again")));
                 return;
             }
 
@@ -2996,17 +2975,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? $"Ready to download {DisplayNameForFoundryAlias(SelectedFoundryModelAlias)}."
                 : $"{loaded.Alias} is ready.";
 
-            AiStatusText.Text = count switch
+            FoundryStatusRow.Show(new(AiCleanupStatusKind.Info, count switch
             {
                 null => $"Foundry Local is running, but its model list could not be read. {running}",
                 0 => "Foundry Local is running but reported no models. Check that it finished starting, then try again.",
                 _ => $"Foundry Local is running. {count} models are in the dropdown above. {running}",
-            };
+            }, new(AiCleanupActionId.Load, "Load")));
         }
         catch
         {
-            AiStatusText.Text = "Couldn't set up AI on this PC. Try again, or choose another AI service.";
-            SetAiLocalAction("Try again", enabled: true);
+            FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, "Couldn't set up AI on this PC. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again")));
         }
     }
 
@@ -3046,22 +3024,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UpdateFoundryLoadedText(string? loadedAlias, string? deviceLabel = null)
     {
-        if (AiLoadedModelText is null)
-        {
-            return;
-        }
-
-        AiLoadedModelText.Text = string.IsNullOrWhiteSpace(loadedAlias)
-            ? "No model is loaded."
-            : $"{DisplayNameForFoundryAlias(loadedAlias)} is ready.";
-
         var modelName = DisplayNameForFoundryAlias(string.IsNullOrWhiteSpace(loadedAlias) ? SelectedFoundryModelAlias : loadedAlias);
         var stage = string.IsNullOrWhiteSpace(loadedAlias)
             ? FoundryLocalSetupStage.CachedUnloaded
             : FoundryLocalSetupStage.Loaded;
         var setup = FoundryLocalSetup.Describe(stage, modelName, ModelSizeForAlias(SelectedFoundryModelAlias));
-        AiStatusText.Text = setup.Text;
-        SetAiLocalAction(setup.ActionText, setup.ActionText != "Unload" || setup.CanUnload);
+        FoundryStatusRow.Show(new AiCleanupStatusRow(setup.Kind, setup.Text, setup.ActionText is null ? null : new(setup.ActionText == "Load" ? AiCleanupActionId.Load : AiCleanupActionId.Unload, setup.ActionText, setup.ActionText != "Unload" || setup.CanUnload)));
     }
 
     private async Task LoadFoundryModelAsync()
@@ -3073,29 +3041,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _foundryModelOp = true;
-        AiLocalActionButton.IsEnabled = false;
+        FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, "Loading the model..."));
         try
         {
             string? lastMessage = null;
             var progress = new Progress<string>(message =>
             {
                 lastMessage = message;
-                AiStatusText.Text = message;
+                FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, message));
             });
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
             var ok = await _cleanup.LoadFoundryModelAsync(alias, progress, cts.Token);
             if (!ok)
             {
-                AiStatusText.Text = string.IsNullOrWhiteSpace(lastMessage)
+                FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, string.IsNullOrWhiteSpace(lastMessage)
                     ? $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model."
-                    : lastMessage;
-                SetAiLocalAction("Try again", enabled: true);
+                    : lastMessage, new(AiCleanupActionId.TryAgain, "Try again")));
             }
         }
         catch
         {
-            AiStatusText.Text = $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model.";
-            SetAiLocalAction("Try again", enabled: true);
+            FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model.", new(AiCleanupActionId.TryAgain, "Try again")));
         }
         finally
         {
@@ -3110,20 +3076,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             return;
         }
-
         _foundryModelOp = true;
-        AiLocalActionButton.IsEnabled = false;
-        AiStatusText.Text = "Freeing model memory...";
+        _foundryModelOp = true;
+        FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, "Freeing model memory..."));
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             var loaded = await _cleanup.GetLoadedFoundryModelAsync(cts.Token);
             _ = await _cleanup.UnloadFoundryModelAsync(loaded, cts.Token);
-            AiStatusText.Text = "Model memory freed.";
+            FoundryStatusRow.Show(new(AiCleanupStatusKind.Success, "Model memory freed.", new(AiCleanupActionId.Load, "Load")));
         }
         catch
         {
-            AiStatusText.Text = "Couldn't free model memory. Try again.";
+            FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, "Couldn't free model memory. Try again.", new(AiCleanupActionId.TryAgain, "Try again")));
         }
         finally
         {
@@ -3132,7 +3097,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private async void AzureRefreshButton_Click(object sender, RoutedEventArgs e)
+    private async Task RunAzurePrimaryActionAsync()
     {
         if (IsAzureApiKeySelected)
         {
@@ -3150,17 +3115,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             allowInteractiveLogin: true,
             listModels: true,
             forceListModels: true);
-    }
-
-    private void AzureManualButton_Click(object sender, RoutedEventArgs e)
-    {
-        _azureManualConfiguration = true;
-        AzureApiKeyRadio.IsChecked = true;
-        ApplyAzureSettingsAccess();
-        UpdateAzureProjectApiKeyHint();
-        AzureStatusText.Text =
-            "Manual setup is open. Enter an endpoint, deployment name, and API key.";
-        AzureEndpointBox.Focus();
     }
 
     private void AzureEndpointBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -3528,7 +3482,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void AzureUseApiKeyButton_Click(object sender, RoutedEventArgs e)
     {
         AzureApiKeyRadio.IsChecked = true;
-        AzureManualButton_Click(sender, e);
+        _azureManualConfiguration = true;
+        ApplyAzureSettingsAccess();
+        UpdateAzureProjectApiKeyHint();
+        AzureEndpointBox.Focus();
     }
 
     private AzureSettingsAccess.State CurrentAzureSettingsAccess =>
@@ -3543,11 +3500,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void ApplyAzureSettingsAccess()
     {
-        if (AzureCliSetupPanel is null ||
-            AzureDiscoveryPanel is null ||
-            AzureConfigurationPanel is null ||
-            AzureManualButton is null ||
-            AzureRefreshButton is null)
+        if (AzureDiscoveryPanel is null || AzureConfigurationPanel is null)
         {
             return;
         }
@@ -3555,20 +3508,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var access = CurrentAzureSettingsAccess;
         var servicePrincipal = access.ShowServicePrincipalFields;
         var apiKeyMode = IsAzureApiKeySelected;
-        AzureCliSetupPanel.Visibility =
-            !apiKeyMode && _azureConnectionKnown && access.ShowCliSetup ? Visibility.Visible : Visibility.Collapsed;
-        AzureDiscoveryPanel.Visibility = !apiKeyMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
-        AzureConfigurationPanel.Visibility = apiKeyMode || access.ShowConfiguration ? Visibility.Visible : Visibility.Collapsed;
+        var cliMode = !apiKeyMode && SelectedAzureAuthMode == AzureAuthMode.AzureCli;
+
+        AzureDiscoveryPanel.Visibility = cliMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
+        AzureConfigurationPanel.Visibility = (apiKeyMode || servicePrincipal || (cliMode && access.ShowConfiguration)) ? Visibility.Visible : Visibility.Collapsed;
         if (AzureConfigurationPanel is Wpf.Ui.Controls.CardExpander manualDetails)
         {
-            manualDetails.IsExpanded = access.ManualDetailsExpanded;
+            manualDetails.IsExpanded = apiKeyMode || servicePrincipal || access.ManualDetailsExpanded;
         }
-        AzureManualButton.Visibility =
-            !apiKeyMode && access.ShowManualConfigurationAction ? Visibility.Visible : Visibility.Collapsed;
 
         if (AzureServicePrincipalPanel is not null)
         {
-            AzureServicePrincipalPanel.Visibility = !apiKeyMode && servicePrincipal ? Visibility.Visible : Visibility.Collapsed;
+            AzureServicePrincipalPanel.Visibility = servicePrincipal ? Visibility.Visible : Visibility.Collapsed;
         }
 
         if (AzureApiKeyPanel is not null)
@@ -3576,36 +3527,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AzureApiKeyPanel.Visibility = apiKeyMode ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // The optional CLI tenant sits with the sign-in method, outside every panel that waits for a
-        // sign-in, so this is the only thing that decides whether it shows.
         if (AzureCliTenantPanel is not null)
         {
             AzureCliTenantPanel.Visibility = access.ShowCliTenant ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        if (AzureStatusTitle is not null)
+        if (AzureEndpointHint is not null)
         {
-            AzureStatusTitle.Text = apiKeyMode
-                ? "Use an API key"
-                : servicePrincipal ? "Use a service principal" : "Use your Azure sign-in";
+            AzureEndpointHint.Text = cliMode ? "Filled in when you choose a model." : "Copy it from your resource in the Azure portal.";
         }
 
-        AzureRefreshButton.Visibility = Visibility.Visible;
-        AzureRefreshButton.Content = apiKeyMode
-            ? _azureApiKeyVerified ? "Verify" : "Verify"
-            : servicePrincipal
-            ? _azureSignInStatus.IsSignedIn ? "Verify" : "Verify"
-            : _azureSignInStatus.IsSignedIn ? "Refresh models" : "Check sign-in";
-
-        // Verifying an app registration is a direct Entra call, so unlike the CLI path it does not
-        // have to wait on the Azure CLI probe that _azureConnectionKnown tracks.
-        AzureRefreshButton.IsEnabled = !_azureSignInAttempts.IsBusy && (
-            apiKeyMode
-                ? CanVerifyAzureApiKey
-                : access.CanStartSignIn && (servicePrincipal || _azureConnectionKnown));
-
-        UpdateServicePrincipalValidation(!apiKeyMode && servicePrincipal);
+        UpdateServicePrincipalValidation(servicePrincipal);
         UpdateAzureProjectApiKeyHint();
+        RefreshAiStatus();
     }
 
     // Shows the first unmet requirement while the user is still typing, but stays quiet on an
@@ -4184,7 +4118,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var loadVersion = ++_azureDeploymentLoadVersion;
-        AzureRefreshButton.IsEnabled = false;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -4266,7 +4199,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (loadVersion == _azureDeploymentLoadVersion)
             {
-                AzureRefreshButton.IsEnabled = true;
+                RefreshAiStatus();
             }
         }
     }
@@ -4478,44 +4411,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void AzureCliButton_Click(object sender, RoutedEventArgs e)
     {
-        AzureCliButton.IsEnabled = false;
-        AzureCliStatusText.Text = "Installing or updating the Azure CLI via winget… this can take a minute.";
+        ShowInfo("Installing or updating the Azure CLI. Finish in the terminal, then choose Check sign-in.");
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
             var (ok, message) = await _azureCliInstaller.InstallOrUpdateAsync(cts.Token);
-            AzureCliStatusText.Text = message;
+            ShowInfo(message);
             if (ok)
             {
                 _azureCliInstalled = true;
                 _azureConnectionKnown = true;
-                ApplyAzureSettingsAccess();
-                await RefreshAzureConnectionAsync(
-                    allowInteractiveLogin: false,
-                    listModels: true,
-                    forceListModels: true);
             }
-        }
-        catch (OperationCanceledException)
-        {
-            AzureCliStatusText.Text =
-                "Azure CLI install timed out. Try again, or install it from https://aka.ms/installazurecliwindows.";
         }
         catch (Exception ex)
         {
-            TryLog(ex, "Could not install or update Azure CLI.");
-            AzureCliStatusText.Text =
-                "Couldn't run the installer. Install the Azure CLI from https://aka.ms/installazurecliwindows.";
+            TryLog(ex, "Could not start the Azure CLI installer.");
+            ShowInfo("Couldn't start the Azure CLI installer. Try again, or use an API key instead.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
         finally
         {
-            AzureCliButton.IsEnabled = true;
+            _azureCliInstalled = await _azureCliInstaller.IsInstalledAsync();
+            _azureConnectionKnown = true;
+            ApplyAzureSettingsAccess();
         }
     }
 
-    // By shape only (FailureShape): most of what arrives here came back from the endpoint, Azure or Entra being
-    // configured, and those messages quote the host (.NET 10 appends "(host:port)"), the tenant, the account or
-    // resource names.
     private void TryLog(Exception ex, string message)
     {
         try
@@ -4658,6 +4578,80 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private FoundryLocalSetupDescription CurrentFoundrySetup()
+    {
+        var alias = SelectedFoundryModelAlias;
+        _foundryExecutionBuilds.TryGetValue(alias, out var selected);
+        var runtimeReady = _foundryExecutionBuilds.Count > 0;
+        var stage = FoundryLocalSetup.FromCleanupStatus(_cleanup.Status, runtimeReady, selected?.Cached == true, selected?.Loaded);
+        return FoundryLocalSetup.Describe(stage, DisplayNameForFoundryAlias(alias), ModelSizeForAlias(alias), _cleanup.StatusDetail);
+    }
+
+    private AzureAiSetupState CurrentAzureSetup()
+    {
+        if (IsAzureApiKeySelected)
+        {
+            if (!CanVerifyAzureApiKey)
+            {
+                return new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true);
+            }
+
+            return _azureApiKeyVerified
+                ? new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true)
+                : _azureSignInStatus.IsSignedIn
+                    ? new(AzureSetupResult.ApiKeyVerifyAgain, ApiKeySelected: true)
+                    : new(AzureSetupResult.ApiKeyComplete, ApiKeySelected: true);
+        }
+
+        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            if (CurrentServicePrincipal is null)
+            {
+                return new(AzureSetupResult.ServicePrincipalIncomplete, AuthMode: AzureAuthMode.ServicePrincipal);
+            }
+
+            return _azureSignInStatus.IsSignedIn
+                ? new(AzureSetupResult.ServicePrincipalVerified, AuthMode: AzureAuthMode.ServicePrincipal)
+                : new(AzureSetupResult.ServicePrincipalComplete, AuthMode: AzureAuthMode.ServicePrincipal);
+        }
+
+        if (_azureSignInAttempts.IsBusy)
+        {
+            return new(AzureSetupResult.CheckingSignIn);
+        }
+
+        if (!_azureConnectionKnown)
+        {
+            return new(AzureSetupResult.NotChecked);
+        }
+
+        if (!_azureCliInstalled)
+        {
+            return new(AzureSetupResult.CliMissing);
+        }
+
+        return _azureSignInStatus.IsSignedIn
+            ? new(AzureSetupResult.SignedIn, Account: _azureSignInStatus.Account)
+            : new(AzureSetupResult.NotSignedIn);
+    }
+
+    private CopilotSetupState CurrentCopilotSetup()
+    {
+        if (!_copilotChecked)
+        {
+            return new(CopilotSetupResult.NotChecked);
+        }
+
+        if (!_copilotCli.Found)
+        {
+            return new(CopilotSetupResult.ToolNotFound);
+        }
+
+        return _copilotModelsLoaded ? new(CopilotSetupResult.ModelsListed) : new(CopilotSetupResult.Installed);
+    }
+
+    private static CustomEndpointSetupState CurrentCustomSetup() => new(CustomEndpointTestResult.NotTested);
+
     private void UpdateAiEnabledState()
     {
         var draft = CurrentAiDraftSettings();
@@ -4668,9 +4662,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings,
             draft,
             _cleanup.Status,
+            foundrySetup: CurrentFoundrySetup(),
+            azureSetup: CurrentAzureSetup(),
+            copilotSetup: CurrentCopilotSetup(),
+            customSetup: CurrentCustomSetup(),
             savedSetupState: savedSetup,
             providerSummary: offProviderSummary,
-            modelName: DisplayNameForFoundryAlias(AiModelBox?.Text));
+            modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias));
 
         AiCleanupDescription.Text = page.StatusLine;
         AiOffHelperText.Text = page.OffHelperText ?? string.Empty;
@@ -4682,6 +4680,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiAdvancedCard.Visibility = setupVisibility;
         AiProviderSummaryText.Text = providerSummary;
         UpdateAiWritingStyleSummary();
+        RefreshAiStatus();
     }
 
     private AiCleanupSetupState SavedAiSetupState()
@@ -4864,23 +4863,96 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void RefreshAiStatus()
     {
-        var detail = _cleanup.StatusDetail;
-        if (_cleanup.Status == CleanupStatus.Disabled || string.IsNullOrWhiteSpace(detail))
+        if (FoundryStatusRow is null)
         {
             return;
         }
 
-        // Surface the live engine status on the panel of the provider that is running, which is the saved
-        // one. Only Foundry Local and Microsoft Foundry have a status line: another provider's status in the
-        // Foundry Local panel would describe an engine that is not running, and stay there once the user
-        // switched back.
-        switch (_savedAiProvider)
+        var draft = CurrentAiDraftSettings();
+        var page = AiCleanupPageState.Describe(
+            _settings,
+            draft,
+            _cleanup.Status,
+            foundrySetup: CurrentFoundrySetup(),
+            azureSetup: CurrentAzureSetup(),
+            copilotSetup: CurrentCopilotSetup(),
+            customSetup: CurrentCustomSetup(),
+            modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias),
+            safeReason: _cleanup.StatusDetail);
+
+        FoundryStatusRow.Show(SelectedProvider == CleanupProvider.FoundryLocal ? page.StatusRow : null);
+        AzureSignInStatusRow.Show(SelectedProvider == CleanupProvider.AzureFoundry && SelectedAzureAuthMode == AzureAuthMode.AzureCli && !IsAzureApiKeySelected ? page.StatusRow : null);
+        AzureVerifyStatusRow.Show(SelectedProvider == CleanupProvider.AzureFoundry && (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal || IsAzureApiKeySelected) ? page.StatusRow : null);
+        CopilotStatusRow.Show(SelectedProvider == CleanupProvider.GitHubCopilot ? page.StatusRow : null);
+        CustomStatusRow.Show(SelectedProvider == CleanupProvider.OpenAiCompatible ? page.StatusRow : null);
+    }
+
+    private async void FoundryStatusRow_PrimaryActionInvoked(object? sender, AiCleanupActionId e) => await InvokeFoundryActionAsync(e);
+
+    private async void FoundryStatusRow_SecondaryActionInvoked(object? sender, AiCleanupActionId e) => await InvokeFoundryActionAsync(e);
+
+    private async Task InvokeFoundryActionAsync(AiCleanupActionId action)
+    {
+        switch (action)
         {
-            case CleanupProvider.AzureFoundry:
-                AzureCleanupStatusText.Text = detail;
+            case AiCleanupActionId.SetUp:
+            case AiCleanupActionId.TryAgain:
+                await SetupFoundryLocalAsync();
                 break;
-            case CleanupProvider.FoundryLocal:
-                AiStatusText.Text = detail;
+            case AiCleanupActionId.DownloadAndLoad:
+            case AiCleanupActionId.Load:
+                await LoadFoundryModelAsync();
+                break;
+            case AiCleanupActionId.Unload:
+                await UnloadFoundryModelAsync();
+                break;
+        }
+    }
+
+    private async void AzureStatusRow_PrimaryActionInvoked(object? sender, AiCleanupActionId e) => await InvokeAzureActionAsync(e);
+
+    private async void AzureStatusRow_SecondaryActionInvoked(object? sender, AiCleanupActionId e) => await InvokeAzureActionAsync(e);
+
+    private async Task InvokeAzureActionAsync(AiCleanupActionId action)
+    {
+        switch (action)
+        {
+            case AiCleanupActionId.CheckSignIn:
+            case AiCleanupActionId.SignIn:
+            case AiCleanupActionId.RefreshModels:
+            case AiCleanupActionId.Verify:
+                await RunAzurePrimaryActionAsync();
+                break;
+            case AiCleanupActionId.InstallAzureCli:
+                AzureCliButton_Click(this, new RoutedEventArgs());
+                break;
+            case AiCleanupActionId.UseApiKeyInstead:
+                AzureApiKeyRadio.IsChecked = true;
+                _azureManualConfiguration = true;
+                ApplyAzureSettingsAccess();
+                UpdateAzureProjectApiKeyHint();
+                AzureEndpointBox.Focus();
+                break;
+        }
+    }
+
+    private void CopilotStatusRow_PrimaryActionInvoked(object? sender, AiCleanupActionId e) => InvokeCopilotAction(e);
+
+    private void CopilotStatusRow_SecondaryActionInvoked(object? sender, AiCleanupActionId e) => InvokeCopilotAction(e);
+
+    private void InvokeCopilotAction(AiCleanupActionId action)
+    {
+        switch (action)
+        {
+            case AiCleanupActionId.InstallCopilot:
+            case AiCleanupActionId.UpdateCopilot:
+                CopilotInstallButton_Click(this, new RoutedEventArgs());
+                break;
+            case AiCleanupActionId.CheckAgain:
+                RefreshCopilotCliStatus();
+                break;
+            case AiCleanupActionId.SignInCopilot:
+                CopilotSignInButton_Click(this, new RoutedEventArgs());
                 break;
         }
     }

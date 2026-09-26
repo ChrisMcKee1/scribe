@@ -22,6 +22,8 @@ public partial class SettingsWindow
     /// <summary>What the last detection found, so the save path can warn without re-probing.</summary>
     private GitHubCopilotCliStatus _copilotCli = GitHubCopilotCliStatus.Missing;
 
+    private bool _copilotChecked;
+
     /// <summary>
     /// Whether the model list has already been fetched for this window.
     /// </summary>
@@ -49,10 +51,9 @@ public partial class SettingsWindow
     /// </remarks>
     private void RefreshCopilotCliStatus()
     {
-        CopilotCliBar.Severity = InfoBarSeverity.Informational;
-        CopilotCliBar.Title = "Checking for the GitHub Copilot command-line tool...";
-        CopilotCliBar.Message = string.Empty;
-        CopilotRecheckButton.IsEnabled = false;
+        _copilotChecked = false;
+        CopilotLoadModelsButton.IsEnabled = false;
+        UpdateAiEnabledState();
 
         _ = Task.Run(GitHubCopilotCli.Detect).ContinueWith(
             task =>
@@ -69,41 +70,10 @@ public partial class SettingsWindow
                 _ = Dispatcher.InvokeAsync(() =>
                 {
                     _copilotCli = status;
-                    CopilotRecheckButton.IsEnabled = true;
-
-                    if (status.Found)
-                    {
-                        CopilotCliBar.Severity = InfoBarSeverity.Success;
-                        CopilotCliBar.Title = "GitHub Copilot CLI found";
-                        CopilotCliBar.Message = status.Version is { } version
-                            ? $"{version} at {status.Path}"
-                            : status.Path ?? string.Empty;
-                        CopilotInstallButton.Content = "Update the CLI";
-                    }
-                    else
-                    {
-                        CopilotCliBar.Severity = InfoBarSeverity.Warning;
-                        CopilotCliBar.Title = "GitHub Copilot CLI not found";
-                        CopilotCliBar.Message =
-                            "This provider runs cleanup through the Copilot CLI. Install it, sign in once, " +
-                            "then choose Check again.";
-                        CopilotInstallButton.Content = "Install the CLI";
-                    }
-
-                    // The model list and the sign-in prompt both need the CLI, so they follow it.
+                    _copilotChecked = true;
                     CopilotLoadModelsButton.IsEnabled = status.Found;
-                    CopilotSignInButton.IsEnabled = status.Found;
+                    UpdateAiEnabledState();
 
-                    /*
-                     * Populate the models straight away rather than waiting to be asked.
-                     *
-                     * The list is the whole point of choosing this provider, and everything needed to
-                     * fetch it is known the moment detection succeeds. Making the reader press a
-                     * button first is asking them to do the work the panel already knows how to do,
-                     * and an empty dropdown reads as "no models available" rather than "not fetched
-                     * yet". The button stays for the case the button is actually for: re-reading
-                     * after an install or a sign-in changed the answer.
-                     */
                     if (status.Found && !_copilotModelsLoaded &&
                         RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen))
                     {
@@ -111,7 +81,6 @@ public partial class SettingsWindow
                     }
                     else if (!status.Found)
                     {
-                        // A CLI that went away invalidates whatever was listed from the old one.
                         _copilotModelsLoaded = false;
                     }
                 });
@@ -145,11 +114,9 @@ public partial class SettingsWindow
             return;
         }
 
-        CopilotCliBar.Severity = InfoBarSeverity.Informational;
-        CopilotCliBar.Title = "Installer running";
-        CopilotCliBar.Message =
-            "Finish in the terminal window, then choose Check again. A new install also needs `copilot` " +
-            "run once to sign in.";
+        ShowInfo("The installer is open. Finish it, then choose Check again.");
+        _copilotChecked = true;
+        UpdateAiEnabledState();
     }
 
     /// <summary>
@@ -168,9 +135,9 @@ public partial class SettingsWindow
 
         if (TryRunInTerminal($"\"{_copilotCli.Path}\"", "Could not start the Copilot CLI."))
         {
-            CopilotCliBar.Severity = InfoBarSeverity.Informational;
-            CopilotCliBar.Title = "Copilot CLI opened";
-            CopilotCliBar.Message = "Sign in there if prompted, then close it and choose Refresh models.";
+            ShowInfo("Sign in there if prompted, then close it and choose Get models.");
+            _copilotChecked = true;
+            UpdateAiEnabledState();
         }
     }
 
@@ -271,9 +238,7 @@ public partial class SettingsWindow
         catch (Exception ex)
         {
             _log.LogWarning("Could not launch a terminal for the Copilot CLI ({Failure}).", FailureShape.Describe(ex));
-            CopilotCliBar.Severity = InfoBarSeverity.Error;
-            CopilotCliBar.Title = failureTitle;
-            CopilotCliBar.Message = "Run it yourself in a terminal: " + command;
+            ShowInfo(failureTitle + " Run it yourself in a terminal.", InfoBarSeverity.Error);
             return false;
         }
     }

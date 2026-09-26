@@ -170,7 +170,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
         Assert.Contains(choices, choice =>
             choice.Alias == "qwen3-1.7b" &&
-            choice.Label == "Qwen3 1.7B, about 1.3 GB, recommended, downloaded" &&
+            choice.Label == "Qwen3 1.7B, about 1.3 GB (recommended), downloaded" &&
             choice.Hint == "About 1.3 GB. Scribe's recommended default.");
         Assert.Contains(choices, choice =>
             choice.Alias == "mistral-nemo-12b-instruct" &&
@@ -384,7 +384,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         { AzureSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Check sign-in", true, null },
         { AzureSetupResult.CheckingSignIn, AiCleanupStatusKind.Busy, "Checking your Azure sign-in...", null, false, null },
-        { AzureSetupResult.CliMissing, AiCleanupStatusKind.Warning, "Azure CLI isn't installed.", "Install Azure CLI", true, "Use an API key instead" },
+        { AzureSetupResult.CliMissing, AiCleanupStatusKind.Warning, "Azure CLI isn't installed. Scribe uses it to sign you in and find your models.", "Install Azure CLI", true, "Use an API key instead" },
         { AzureSetupResult.NotSignedIn, AiCleanupStatusKind.Info, "Not signed in to Azure.", "Sign in", true, "Use an API key instead" },
         { AzureSetupResult.SigningIn, AiCleanupStatusKind.Busy, "Finish signing in in your browser.", null, false, null },
         { AzureSetupResult.SignedIn, AiCleanupStatusKind.Success, "Signed in.", "Refresh models", true, null },
@@ -394,12 +394,12 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },
         { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Verify again.", "Verify", true, null },
+        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
         { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Verified.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Verify again.", "Verify", true, null },
+        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
     };
 
     [Theory]
@@ -429,12 +429,12 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
     public static TheoryData<CopilotSetupResult, AiCleanupStatusKind, string, string?, string?> CopilotRows => new()
     {
-        { CopilotSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Get models", null },
+        { CopilotSetupResult.NotChecked, AiCleanupStatusKind.Busy, "Looking for GitHub Copilot...", null, null },
         { CopilotSetupResult.ToolNotFound, AiCleanupStatusKind.Warning, "GitHub Copilot isn't installed on this PC.", "Install", "Check again" },
         { CopilotSetupResult.Installing, AiCleanupStatusKind.Info, "The installer is open. Finish it, then choose Check again.", "Check again", null },
-        { CopilotSetupResult.Installed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Sign in", "Get models" },
-        { CopilotSetupResult.SignedIn, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Get models", null },
-        { CopilotSetupResult.ModelsListed, AiCleanupStatusKind.Success, "GitHub Copilot is ready.", "Get models", null },
+        { CopilotSetupResult.Installed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Sign in", null },
+        { CopilotSetupResult.SignedIn, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", null, null },
+        { CopilotSetupResult.ModelsListed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", null, null },
     };
 
     [Theory]
@@ -455,7 +455,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     [Theory]
-    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection")]
+    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", null)]
     [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing...", null)]
     [InlineData(CustomEndpointTestResult.Connected, AiCleanupStatusKind.Success, "Connected. qwen answered.", "Test connection")]
     [InlineData(CustomEndpointTestResult.Failed, AiCleanupStatusKind.Error, "Connection refused.", "Try again")]

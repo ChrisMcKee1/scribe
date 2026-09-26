@@ -51,7 +51,7 @@ public static class CleanupDisclosure
     };
 
     private static string RemoteSummary(string destination) =>
-        $"Each cleanup sends {destination} the text Scribe heard, your writing style and your dictionary and word pack words as vocabulary. Audio never leaves this PC.";
+        $"Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to {destination}. Audio never leaves this PC.";
 
     /// <summary>The title of the confirmation shown before AI dictionary suggestions send dictation text.</summary>
     public const string SuggestionConsentTitle = "Send recent dictations to your AI provider?";

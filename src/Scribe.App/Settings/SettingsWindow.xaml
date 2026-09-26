@@ -1049,28 +1049,9 @@
 
                                 <TextBlock x:Name="AiOffHelperText" Style="{StaticResource CardDescription}" Margin="2,4,2,12" Text="Turn on AI cleanup to choose where it runs and set your writing style."/>
 
-                                <ui:CardExpander x:Name="AiDisclosureCard" Margin="0,0,0,4" IsExpanded="False"
-                                                 AutomationProperties.Name="What AI cleanup sends">
-                                    <ui:CardExpander.Header>
-                                        <StackPanel>
-                                            <TextBlock Text="What AI cleanup sends" Style="{StaticResource CardTitle}"/>
-                                        </StackPanel>
-                                    </ui:CardExpander.Header>
-                                    <StackPanel Margin="0,4,0,0">
-                                        <!-- The wording lives in Core (CleanupDisclosure), next to the limits it quotes, so a test holds it to the code. -->
-                                        <TextBlock Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0">
-                                            <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md" RequestNavigate="Hyperlink_RequestNavigate">Read the privacy policy</Hyperlink>
-                                        </TextBlock>
-                                    </StackPanel>
-                                </ui:CardExpander>
-
                                 <ui:Card x:Name="AiProviderCard" Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock x:Name="AiProviderTitle" Text="Where AI cleanup runs" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}"
-                                                   Text="Choose where Scribe sends text for AI cleanup. Choosing one only changes this draft."/>
                                         <StackPanel Margin="0,10,0,0">
                                             <RadioButton x:Name="AiProviderLocalRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked">
                                                 <StackPanel>
@@ -1098,35 +1079,34 @@
                                             </RadioButton>
                                         </StackPanel>
                                         <TextBlock x:Name="AiProviderSummaryText" Style="{StaticResource CardDescription}" Margin="0,10,0,0"/>
+                                        <ui:CardExpander x:Name="AiDisclosureCard" Margin="0,0,0,4" IsExpanded="False"
+                                                 AutomationProperties.Name="What AI cleanup sends">
+                                    <ui:CardExpander.Header>
+                                        <StackPanel>
+                                            <TextBlock Text="What AI cleanup sends" Style="{StaticResource CardTitle}"/>
+                                        </StackPanel>
+                                    </ui:CardExpander.Header>
+                                    <StackPanel Margin="0,4,0,0">
+                                        <!-- The wording lives in Core (CleanupDisclosure), next to the limits it quotes, so a test holds it to the code. -->
+                                        <TextBlock Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0">
+                                            <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md" RequestNavigate="Hyperlink_RequestNavigate">Read the privacy policy</Hyperlink>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </ui:CardExpander>
+
                                         <!-- Foundry Local (on-device) -->
                                         <StackPanel x:Name="FoundryPanel">
                                             <TextBlock x:Name="AiModelTitle" Text="Model" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                             <ComboBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                       AutomationProperties.LabeledBy="{Binding ElementName=AiModelTitle}"
-                                                      IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                                      IsEditable="False"
                                                       SelectionChanged="AiModelBox_SelectionChanged"
                                                       DropDownOpened="ModelCombo_DropDownOpened"/>
                                             <TextBlock x:Name="AiModelHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
-                                            <!-- Benchmark guidance so users don't pick blind (see docs/model-leaderboard.md). -->
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                                       Text="" Visibility="Collapsed"/>
 
-                                            <TextBlock x:Name="AiLoadedModelText" Visibility="Collapsed"/>
-                                            <Border Style="{StaticResource CalloutBorder}">
-                                                <Grid MinHeight="32">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                        <TextBlock x:Name="AiStatusText" Style="{StaticResource CardDescription}"
-                                                                   Text="Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB."/>
-                                                    </StackPanel>
-                                                    <ui:Button x:Name="AiLocalActionButton" Grid.Column="1" Content="Set up"
-                                                               MinWidth="96" VerticalAlignment="Center"
-                                                               Click="AiLocalActionButton_Click"/>
-                                                </Grid>
-                                            </Border>
+                                            <settings:SettingsStatusRow x:Name="FoundryStatusRow" PrimaryActionInvoked="FoundryStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="FoundryStatusRow_SecondaryActionInvoked"/>
                                             <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource CardDescription}" Margin="0,8,0,0"
                                                        Text="Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it."/>
                                         </StackPanel>
@@ -1156,6 +1136,7 @@
                                             </StackPanel>
                                             <TextBlock x:Name="AzureAuthModeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Choose how Scribe signs in to the Azure resource that runs your model."/>
+                                            <TextBlock x:Name="AzureStatusText" Visibility="Collapsed"/>
 
                                             <!-- The Azure CLI identity, beside where a service principal's fields go. The tenant is an input
                                                  to signing in ("Sign in and find models" passes it to az login when no subscription is
@@ -1206,46 +1187,7 @@
                                                 </TextBlock>
                                             </StackPanel>
 
-                                            <Border Style="{StaticResource CalloutBorder}">
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                        <TextBlock x:Name="AzureStatusTitle" Text="Not checked yet." Style="{StaticResource CardTitle}" />
-                                                        <TextBlock x:Name="AzureStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                                   Text="Check sign-in"/>
-                                                    </StackPanel>
-                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <ui:Button x:Name="AzureManualButton" Content="Use an API key instead"
-                                                                   MinWidth="118" Margin="0,0,8,0" Appearance="Secondary"
-                                                                   Click="AzureManualButton_Click"/>
-                                                        <ui:Button x:Name="AzureRefreshButton" Content="Sign in and find models"
-                                                                   MinWidth="124" Appearance="Primary" IsEnabled="False"
-                                                                   Click="AzureRefreshButton_Click"/>
-                                                    </StackPanel>
-                                                </Grid>
-                                            </Border>
-
-                                            <Border x:Name="AzureCliSetupPanel" Style="{StaticResource CalloutBorder}" Visibility="Collapsed">
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                        <TextBlock Text="Azure CLI isn't installed" Style="{StaticResource CardTitle}" />
-                                                        <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                                   Text="Scribe uses Azure CLI to sign you in and find your models. You can use an API key instead."/>
-                                                    </StackPanel>
-                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                        <ui:Button x:Name="AzureCliButton" Content="Install Azure CLI" MinWidth="112" Click="AzureCliButton_Click"/>
-                                                        <ui:Button Content="Use an API key instead" Margin="8,0,0,0" MinWidth="150" Click="AzureUseApiKeyButton_Click"/>
-                                                    </StackPanel>
-                                                </Grid>
-                                            </Border>
-
+                                            <settings:SettingsStatusRow x:Name="AzureSignInStatusRow" PrimaryActionInvoked="AzureStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="AzureStatusRow_SecondaryActionInvoked"/>
                                             <StackPanel x:Name="AzureDiscoveryPanel" Visibility="Collapsed">
                                                 <TextBlock Text="Subscription" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                                 <ComboBox x:Name="AzureSubscriptionBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
@@ -1279,7 +1221,7 @@
                                                             PlaceholderText="https://my-resource.services.ai.azure.com/"
                                                             AutomationProperties.LabeledBy="{Binding ElementName=AzureEndpointTitle}"
                                                             TextChanged="AzureEndpointBox_TextChanged"/>
-                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                <TextBlock x:Name="AzureEndpointHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                            Text="Filled in when you choose a model."/>
 
                                                 <TextBlock x:Name="AzureDeploymentTitle" Text="Deployment name" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
@@ -1304,6 +1246,7 @@
                                                                Visibility="Collapsed"
                                                                Text="With an API key, Scribe uses your resource's main address instead of the project address. That's expected."/>
                                                 </StackPanel>
+                                                <settings:SettingsStatusRow x:Name="AzureVerifyStatusRow" PrimaryActionInvoked="AzureStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="AzureStatusRow_SecondaryActionInvoked"/>
                                                 </StackPanel>
                                             </ui:CardExpander>
                                         </StackPanel>
@@ -1333,28 +1276,14 @@
                                                             AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Enter a key if your service needs one. Saved encrypted on this PC with your Windows account."/>
-                                            <Border Style="{StaticResource CalloutBorder}">
-                                                <TextBlock x:Name="CustomStatusText" Style="{StaticResource CardDescription}" Text="Not tested yet."/>
-                                            </Border>
+                                            <settings:SettingsStatusRow x:Name="CustomStatusRow"/>
                                         </StackPanel>
 
                                         <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">
                                             <!-- The CLI this provider runs on. Shown first because
                                                  nothing below it works without it, and because it is
                                                  the one dependency Scribe cannot install silently. -->
-                                            <ui:InfoBar x:Name="CopilotCliBar" Margin="0,12,0,0"
-                                                        IsOpen="True" IsClosable="False"
-                                                        Title="On. Choose Get models to see what your subscription includes."/>
-                                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                                <ui:Button x:Name="CopilotInstallButton" Content="Install"
-                                                           MinWidth="150" Click="CopilotInstallButton_Click"/>
-                                                <ui:Button x:Name="CopilotRecheckButton" Content="Check again"
-                                                           Margin="8,0,0,0" MinWidth="120"
-                                                           Click="CopilotRecheckButton_Click"/>
-                                                <ui:Button x:Name="CopilotSignInButton" Content="Sign in"
-                                                           Margin="8,0,0,0" MinWidth="110"
-                                                           Click="CopilotSignInButton_Click"/>
-                                            </StackPanel>
+                                            <settings:SettingsStatusRow x:Name="CopilotStatusRow" PrimaryActionInvoked="CopilotStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="CopilotStatusRow_SecondaryActionInvoked"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0"
                                                        Text="Uses your own GitHub Copilot subscription and the models it includes. Scribe never asks for or stores a GitHub token."/>
 

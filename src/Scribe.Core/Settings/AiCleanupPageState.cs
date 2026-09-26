@@ -20,23 +20,38 @@ public enum AiCleanupStatusKind
     Busy,
 }
 
-public sealed record AiCleanupStatusRow(AiCleanupStatusKind Kind, string Text, string? ActionText = null);
+public enum AiCleanupActionId
+{
+    SetUp,
+    DownloadAndLoad,
+    Load,
+    Unload,
+    TryAgain,
+    CheckSignIn,
+    SignIn,
+    RefreshModels,
+    InstallAzureCli,
+    UseApiKeyInstead,
+    Verify,
+    InstallCopilot,
+    UpdateCopilot,
+    CheckAgain,
+    SignInCopilot,
+    TestConnection,
+}
 
-public sealed record AiCleanupAction(string Text, bool IsEnabled = true);
+public sealed record AiCleanupAction(AiCleanupActionId Id, string Text, bool IsEnabled = true);
 
-public sealed record AiCleanupStatusRow2(
+public sealed record AiCleanupStatusRow(
     AiCleanupStatusKind Kind,
     string Text,
-    AiCleanupAction? PrimaryAction = null,
-    AiCleanupAction? SecondaryAction = null)
+    AiCleanupAction? Primary = null,
+    AiCleanupAction? Secondary = null)
 {
-    public string? ActionText => PrimaryAction?.Text;
-    public bool ActionEnabled => PrimaryAction?.IsEnabled ?? false;
-    public string? SecondaryActionText => SecondaryAction?.Text;
-    public bool SecondaryActionEnabled => SecondaryAction?.IsEnabled ?? false;
-
-    public static implicit operator AiCleanupStatusRow(AiCleanupStatusRow2 row) =>
-        new(row.Kind, row.Text, row.PrimaryAction?.Text);
+    public string? ActionText => Primary?.Text;
+    public bool ActionEnabled => Primary?.IsEnabled ?? false;
+    public string? SecondaryActionText => Secondary?.Text;
+    public bool SecondaryActionEnabled => Secondary?.IsEnabled ?? false;
 }
 
 public enum AzureSetupResult
@@ -72,6 +87,7 @@ public enum CopilotSetupResult
 {
     NotChecked,
     ToolNotFound,
+    Outdated,
     Installing,
     Installed,
     SignedIn,
@@ -94,7 +110,7 @@ public sealed record AiCleanupPageDescription(
     bool ShowProviderSetup,
     string StatusLine,
     string? OffHelperText,
-    AiCleanupStatusRow2? StatusRow);
+    AiCleanupStatusRow? StatusRow);
 
 public static class AiCleanupPageState
 {
@@ -206,15 +222,15 @@ public static class AiCleanupPageState
                 true,
                 "On, but not set up yet. Until it's ready, Scribe types what it hears.",
                 null,
-                new(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new("Set up"))),
+                new(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new(AiCleanupActionId.SetUp, "Set up"))),
             CleanupStatus.Initializing => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, "Setting up. The first time can take a while.")),
             CleanupStatus.Downloading => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, progressText ?? "Loading the model...")),
-            CleanupStatus.Ready => new(true, $"On. Using {model} on this PC.", null, new(AiCleanupStatusKind.Success, $"{model} is ready.", new("Unload"))),
+            CleanupStatus.Ready => new(true, $"On. Using {model} on this PC.", null, new(AiCleanupStatusKind.Success, $"{model} is ready.", new(AiCleanupActionId.Unload, "Unload"))),
             CleanupStatus.Unavailable => new(
                 true,
                 "On, but not ready. Until it's ready, Scribe types what it hears.",
                 null,
-                new(AiCleanupStatusKind.Error, "Couldn't start the on-device AI runtime. Try again, or choose another AI service.", new("Try again"))),
+                new(AiCleanupStatusKind.Error, "Couldn't start the on-device AI runtime. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again"))),
             _ => new(true, "On. Getting ready...", null, null),
         };
     }
@@ -222,8 +238,8 @@ public static class AiCleanupPageState
     private static AiCleanupPageDescription DescribeFoundry(FoundryLocalSetupDescription? setup, string? modelName)
     {
         var row = setup is null
-            ? new AiCleanupStatusRow2(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new("Set up"))
-            : new AiCleanupStatusRow2(setup.Kind, setup.Text, setup.ActionText is null ? null : new(setup.ActionText, setup.CanUnload || setup.ActionText != "Unload"));
+            ? new AiCleanupStatusRow(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new(AiCleanupActionId.SetUp, "Set up"))
+            : new AiCleanupStatusRow(setup.Kind, setup.Text, setup.ActionText is null ? null : ActionFor(setup.ActionText, setup.CanUnload || setup.ActionText != "Unload"));
         var model = string.IsNullOrWhiteSpace(modelName) ? "the selected model" : modelName;
 
         // The top card follows the setup stage (the 6.2.1 rows), not the row's color: "Ready to download" is an Info row
@@ -263,7 +279,7 @@ public static class AiCleanupPageState
     {
         return status switch
         {
-            CleanupStatus.Ready => new(true, "On. AI cleanup is ready.", null, new(AiCleanupStatusKind.Success, "Connected.", action is null ? null : new(action))),
+            CleanupStatus.Ready => new(true, "On. AI cleanup is ready.", null, new(AiCleanupStatusKind.Success, "Connected.", action is null ? null : ActionFor(action))),
             CleanupStatus.Initializing or CleanupStatus.Downloading => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, "Checking...")),
             CleanupStatus.Unavailable => new(
                 true,
@@ -271,22 +287,22 @@ public static class AiCleanupPageState
                     ? "On, but not ready. Until it's ready, Scribe types what it hears."
                     : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
                 null,
-                new(AiCleanupStatusKind.Error, safeReason ?? "AI cleanup isn't ready yet.", action is null ? null : new(action))),
-            _ => new(true, notCheckedStatus, null, new(AiCleanupStatusKind.Info, "Not checked yet.", action is null ? null : new(action))),
+                new(AiCleanupStatusKind.Error, safeReason ?? "AI cleanup isn't ready yet.", action is null ? null : ActionFor(action))),
+            _ => new(true, notCheckedStatus, null, new(AiCleanupStatusKind.Info, "Not checked yet.", action is null ? null : ActionFor(action))),
         };
     }
 
-    private static AiCleanupStatusRow2 DraftStatusRow(CleanupProvider provider) => DraftStatusRow(provider, null, null, null, null);
+    private static AiCleanupStatusRow DraftStatusRow(CleanupProvider provider) => DraftStatusRow(provider, null, null, null, null);
 
-    private static AiCleanupStatusRow2 DraftStatusRow(
+    private static AiCleanupStatusRow DraftStatusRow(
         CleanupProvider provider,
         FoundryLocalSetupDescription? foundry,
         AzureAiSetupState? azure,
         CopilotSetupState? copilot,
         CustomEndpointSetupState? custom) => provider switch
     {
-        CleanupProvider.FoundryLocal when foundry is not null => new(foundry.Kind, foundry.Text, foundry.ActionText is null ? null : new(foundry.ActionText, foundry.CanUnload || foundry.ActionText != "Unload")),
-        CleanupProvider.FoundryLocal => new(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new("Set up")),
+        CleanupProvider.FoundryLocal when foundry is not null => new(foundry.Kind, foundry.Text, foundry.ActionText is null ? null : ActionFor(foundry.ActionText, foundry.CanUnload || foundry.ActionText != "Unload")),
+        CleanupProvider.FoundryLocal => new(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new(AiCleanupActionId.SetUp, "Set up")),
         CleanupProvider.AzureFoundry => AzureRow(azure ?? new(AzureSetupResult.NotChecked)),
         CleanupProvider.OpenAiCompatible => CustomRow(custom ?? new(CustomEndpointTestResult.NotTested)),
         CleanupProvider.GitHubCopilot => CopilotRow(copilot ?? new(CopilotSetupResult.NotChecked)),
@@ -306,22 +322,22 @@ public static class AiCleanupPageState
         return new(true, LiveRemoteLine(liveStatus, knownCause, safeReason), null, AzureRow(setup));
     }
 
-    private static AiCleanupStatusRow2 AzureRow(AzureAiSetupState setup) => setup.Result switch
+    private static AiCleanupStatusRow AzureRow(AzureAiSetupState setup) => setup.Result switch
     {
         AzureSetupResult.CheckingSignIn => new(AiCleanupStatusKind.Busy, "Checking your Azure sign-in..."),
-        AzureSetupResult.CliMissing => new(AiCleanupStatusKind.Warning, "Azure CLI isn't installed.", new("Install Azure CLI"), new("Use an API key instead")),
-        AzureSetupResult.NotSignedIn => new(AiCleanupStatusKind.Info, "Not signed in to Azure.", new("Sign in"), new("Use an API key instead")),
+        AzureSetupResult.CliMissing => new(AiCleanupStatusKind.Warning, "Azure CLI isn't installed. Scribe uses it to sign you in and find your models.", new(AiCleanupActionId.InstallAzureCli, "Install Azure CLI"), new(AiCleanupActionId.UseApiKeyInstead, "Use an API key instead")),
+        AzureSetupResult.NotSignedIn => new(AiCleanupStatusKind.Info, "Not signed in to Azure.", new(AiCleanupActionId.SignIn, "Sign in"), new(AiCleanupActionId.UseApiKeyInstead, "Use an API key instead")),
         AzureSetupResult.SigningIn => new(AiCleanupStatusKind.Busy, "Finish signing in in your browser."),
-        AzureSetupResult.SignedIn => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Account) ? "Signed in." : $"Signed in as {setup.Account}.", new("Refresh models")),
+        AzureSetupResult.SignedIn => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Account) ? "Signed in." : $"Signed in as {setup.Account}.", new(AiCleanupActionId.RefreshModels, "Refresh models")),
         AzureSetupResult.ListingModels => new(AiCleanupStatusKind.Busy, "Finding your models..."),
-        AzureSetupResult.ListingFailed => new(AiCleanupStatusKind.Error, $"Couldn't list your models. {setup.SafeReason ?? "Try again."}", new("Try again")),
-        AzureSetupResult.ApiKeyIncomplete or AzureSetupResult.ServicePrincipalIncomplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new("Verify", IsEnabled: false)),
-        AzureSetupResult.ApiKeyComplete or AzureSetupResult.ServicePrincipalComplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new("Verify")),
-        AzureSetupResult.ApiKeyVerified => new(AiCleanupStatusKind.Success, "Azure accepted the key.", new("Verify")),
-        AzureSetupResult.ServicePrincipalVerified => new(AiCleanupStatusKind.Success, "Verified.", new("Verify")),
-        AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't verify the details.", new("Verify")),
-        AzureSetupResult.ApiKeyVerifyAgain or AzureSetupResult.ServicePrincipalVerifyAgain => new(AiCleanupStatusKind.Info, "Verify again.", new("Verify")),
-        _ => new(AiCleanupStatusKind.Info, "Not checked yet.", new("Check sign-in")),
+        AzureSetupResult.ListingFailed => new(AiCleanupStatusKind.Error, $"Couldn't list your models. {setup.SafeReason ?? "Try again."}", new(AiCleanupActionId.TryAgain, "Try again")),
+        AzureSetupResult.ApiKeyIncomplete or AzureSetupResult.ServicePrincipalIncomplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new(AiCleanupActionId.Verify, "Verify", IsEnabled: false)),
+        AzureSetupResult.ApiKeyComplete or AzureSetupResult.ServicePrincipalComplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new(AiCleanupActionId.Verify, "Verify")),
+        AzureSetupResult.ApiKeyVerified => new(AiCleanupStatusKind.Success, "Azure accepted the key.", new(AiCleanupActionId.Verify, "Verify")),
+        AzureSetupResult.ServicePrincipalVerified => new(AiCleanupStatusKind.Success, "Verified.", new(AiCleanupActionId.Verify, "Verify")),
+        AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't verify the details.", new(AiCleanupActionId.Verify, "Verify")),
+        AzureSetupResult.ApiKeyVerifyAgain or AzureSetupResult.ServicePrincipalVerifyAgain => new(AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", new(AiCleanupActionId.Verify, "Verify")),
+        _ => new(AiCleanupStatusKind.Info, "Not checked yet.", new(AiCleanupActionId.CheckSignIn, "Check sign-in")),
     };
 
     private static AiCleanupPageDescription DescribeCopilot(CleanupStatus liveStatus, CopilotSetupState setup, string? safeReason)
@@ -332,25 +348,41 @@ public static class AiCleanupPageState
         return new(true, LiveRemoteLine(liveStatus, knownCause, safeReason), null, CopilotRow(setup));
     }
 
-    private static AiCleanupStatusRow2 CopilotRow(CopilotSetupState setup) => setup.Result switch
+    private static AiCleanupStatusRow CopilotRow(CopilotSetupState setup) => setup.Result switch
     {
-        CopilotSetupResult.ToolNotFound => new(AiCleanupStatusKind.Warning, "GitHub Copilot isn't installed on this PC.", new("Install"), new("Check again")),
-        CopilotSetupResult.Installing => new(AiCleanupStatusKind.Info, "The installer is open. Finish it, then choose Check again.", new("Check again")),
-        CopilotSetupResult.Installed => new(AiCleanupStatusKind.Success, "GitHub Copilot is installed.", new("Sign in"), new("Get models")),
-        CopilotSetupResult.SignedIn => new(AiCleanupStatusKind.Success, "GitHub Copilot is installed.", new("Get models")),
-        CopilotSetupResult.ModelsListed => new(AiCleanupStatusKind.Success, "GitHub Copilot is ready.", new("Get models")),
-        _ => new(AiCleanupStatusKind.Info, "Not checked yet.", new("Get models")),
+        CopilotSetupResult.ToolNotFound => new(AiCleanupStatusKind.Warning, "GitHub Copilot isn't installed on this PC.", new(AiCleanupActionId.InstallCopilot, "Install"), new(AiCleanupActionId.CheckAgain, "Check again")),
+        CopilotSetupResult.Outdated => new(AiCleanupStatusKind.Warning, "GitHub Copilot needs an update.", new(AiCleanupActionId.UpdateCopilot, "Update"), new(AiCleanupActionId.CheckAgain, "Check again")),
+        CopilotSetupResult.Installing => new(AiCleanupStatusKind.Info, "The installer is open. Finish it, then choose Check again.", new(AiCleanupActionId.CheckAgain, "Check again")),
+        CopilotSetupResult.Installed => new(AiCleanupStatusKind.Success, "GitHub Copilot is installed.", new(AiCleanupActionId.SignInCopilot, "Sign in")),
+        CopilotSetupResult.SignedIn => new(AiCleanupStatusKind.Success, "GitHub Copilot is installed."),
+        CopilotSetupResult.ModelsListed => new(AiCleanupStatusKind.Success, "GitHub Copilot is installed."),
+        _ => new(AiCleanupStatusKind.Busy, "Looking for GitHub Copilot..."),
     };
 
     private static AiCleanupPageDescription DescribeCustom(CleanupStatus liveStatus, CustomEndpointSetupState setup, string? safeReason) =>
         new(true, LiveRemoteLine(liveStatus, knownCause: null, safeReason), null, CustomRow(setup));
 
-    private static AiCleanupStatusRow2 CustomRow(CustomEndpointSetupState setup) => setup.Result switch
+    private static AiCleanupStatusRow CustomRow(CustomEndpointSetupState setup) => setup.Result switch
     {
         CustomEndpointTestResult.Testing => new(AiCleanupStatusKind.Busy, "Testing..."),
-        CustomEndpointTestResult.Connected => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Model) ? "Connected." : $"Connected. {setup.Model} answered.", new("Test connection")),
-        CustomEndpointTestResult.Failed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't connect.", new("Try again")),
-        _ => new(AiCleanupStatusKind.Info, "Not tested yet.", new("Test connection")),
+        CustomEndpointTestResult.Connected => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Model) ? "Connected." : $"Connected. {setup.Model} answered.", new(AiCleanupActionId.TestConnection, "Test connection")),
+        CustomEndpointTestResult.Failed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't connect.", new(AiCleanupActionId.TryAgain, "Try again")),
+        _ => new(AiCleanupStatusKind.Info, "Not tested yet."),
+    };
+
+    private static AiCleanupAction? ActionFor(string? text, bool enabled = true) => text switch
+    {
+        "Set up" => new(AiCleanupActionId.SetUp, text, enabled),
+        "Download and load" => new(AiCleanupActionId.DownloadAndLoad, text, enabled),
+        "Load" => new(AiCleanupActionId.Load, text, enabled),
+        "Unload" => new(AiCleanupActionId.Unload, text, enabled),
+        "Try again" => new(AiCleanupActionId.TryAgain, text, enabled),
+        "Check sign-in" => new(AiCleanupActionId.CheckSignIn, text, enabled),
+        "Sign in" => new(AiCleanupActionId.SignIn, text, enabled),
+        "Refresh models" => new(AiCleanupActionId.RefreshModels, text, enabled),
+        "Test connection" => new(AiCleanupActionId.TestConnection, text, enabled),
+        null => null,
+        _ => null,
     };
 
     private static string ProviderName(CleanupProvider provider) => provider switch
