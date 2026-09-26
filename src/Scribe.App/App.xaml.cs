@@ -417,14 +417,14 @@ public partial class App : Application
                     ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
                 }
             });
-        _controller.Error += message =>
+        _controller.Error += report =>
         {
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(message, recordingRevision: 0, pillText: null, controllerError: true));
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: true));
         };
-        _controller.Warning += warning =>
+        _controller.Warning += report =>
         {
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(warning.Message, warning.RecordingRevision, warning.PillText, controllerError: false));
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: false));
         };
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -974,20 +974,43 @@ public partial class App : Application
     /// it belongs to is still what the pill shows. Showing a warning puts the pill in its recording state, so one that ran
     /// after a pause or a stop had been shown would bring back a recording pill that nothing would ever hide.
     /// </summary>
-    private void OnRecordingWarning(long recordingRevision, string reason)
+    private void ShowRecordingWarningOrNotice(DictationProblemReport report, string reason, DictationProblemNotice notice)
     {
-        if (recordingRevision <= 0)
+        if (_dictationState is not { } relay)
         {
-            return; // the recording was already over when the warning was raised
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
         }
 
-        _dictationState?.PublishIfCurrent(recordingRevision, () =>
+        // The same revision twice on purpose: here only a warning for a recording that was already over (revision 0) is
+        // decided. Whether its recording is still the one shown is decided by PublishIfCurrent below, in queue order after
+        // that recording's own change has rendered; reading the relay's last revision here could run ahead of it.
+        if (DictationProblemRouting.DecideRecordingWarning(
+                report.Problem,
+                recordingIndicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
+                report.RecordingRevision,
+                report.RecordingRevision) == DictationProblemSurface.Notice)
         {
-            if (_controller?.CurrentSettings.ShowOverlay == true)
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
+        }
+
+        // The indicator is judged again when the warning's turn comes: a Save can turn it off between here and there, and
+        // then the notice is the one place the warning shows.
+        relay.PublishIfCurrent(
+            report.RecordingRevision,
+            () =>
             {
-                _overlay?.ShowRecordingWarning(reason);
-            }
-        });
+                if (_controller?.CurrentSettings.ShowOverlay == true)
+                {
+                    _overlay?.ShowRecordingWarning(reason);
+                }
+                else
+                {
+                    ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+                }
+            },
+            () => ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action)));
     }
 
     /// <summary>
@@ -1336,41 +1359,48 @@ public partial class App : Application
         }
     }
 
-    private void ShowDictationProblem(string legacyMessage, long recordingRevision, string? pillText, bool controllerError)
+    private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
     {
-        var problem = DictationProblemText.FromLegacy(legacyMessage) ?? DictationProblem.RecognitionFailed;
-        var settings = _controller?.CurrentSettings;
-        var notice = DictationProblemText.Describe(
-            problem,
-            settings?.Hotkey.Mode ?? HotkeyMode.Hold,
-            settings?.Hotkey is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
-        if (problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete)
+        // Posted from the dictation path, so it can run after shutdown began; nobody is left to read a notice then.
+        if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
         {
-            _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            return;
+        }
+
+        var settings = _controller?.CurrentSettings;
+        var mode = report.ShortcutMode;
+
+        // The shortcut that started the dictation names the key: the one without AI cleanup has its own key and mode.
+        var notice = DictationProblemText.Describe(
+            report,
+            mode,
+            (report.Shortcut ?? settings?.Hotkey) is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
+        var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
+        if (routing == DictationProblemSurface.PillAndNotice)
+        {
+            // Only a notice that offers Copy last dictation binds the entry it copies: a no-model notice (Open Settings)
+            // must not rebind a Copy notice still on screen to whatever is newest now.
+            if (notice.Action == TrayNoticeAction.CopyLastDictation)
+            {
+                _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            }
+
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
             return;
         }
 
-        // With the recording indicator on, the pill's outcome says what the dictation did, so a controller error needs no
-        // notice of its own, unless the outcome can't carry it (a disconnect mid-recording, whose outcome then describes
-        // the insertion). A controller error the indicator doesn't carry is a notice, never a pill warning.
-        if (controllerError && settings?.ShowOverlay == true && DictationProblemText.CarriedByPillOutcome(problem))
+        if (controllerError && routing == DictationProblemSurface.PillOutcome)
         {
             return;
         }
 
-        var decision = _trayFeedback.Decide(
-            problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete
-                ? TrayFeedbackEvent.TypingFailure
-                : TrayFeedbackEvent.DictationProblem,
-            !controllerError && settings?.ShowOverlay == true);
-        if (decision.Channel == TrayFeedbackChannel.Pill)
+        if (!controllerError && routing == DictationProblemSurface.RecordingPill)
         {
-            OnRecordingWarning(recordingRevision, pillText ?? notice.PillText ?? notice.Title);
+            ShowRecordingWarningOrNotice(report, DictationProblemText.PillLine(report, mode) ?? notice.Title, notice);
             return;
         }
 
-        if (decision.Channel == TrayFeedbackChannel.Notice)
+        if (routing == DictationProblemSurface.Notice || routing == DictationProblemSurface.PillOutcome)
         {
             if (notice.Action == TrayNoticeAction.CopyLastDictation)
             {

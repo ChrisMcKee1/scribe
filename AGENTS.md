@@ -1856,9 +1856,11 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   because that is information. Nothing runs while the pill is hidden: hiding stops the dots and both timers, and a
   fade out ends in the hide. `ProcessingStoryboard` is the only repeating animation; `PulseStoryboard` is gone.
 - **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
-  produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and the cleanup's
-  diagnostics-safe reason, never its display detail), or Nothing typed / Not all of it was typed (an error icon and
-  the next step: "Copy it from the tray menu" after an insertion that failed, otherwise the failure's own message);
+  produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and always the one fixed line
+  `PillOutcome.CleanupDidNotRun`, "See Settings, AI cleanup": never the cleanup's reason, which is a sentence the pill
+  cuts off, and never its display detail), or Nothing typed / Not all of it was typed (an error icon and the next
+  step from `DictationProblemText.PillLine`: "Copy it from the tray menu" after an insertion that failed, otherwise the
+  problem's own line, each measured to fit the pill);
   notices hold 1.3 s. The truth rules: a check only after the whole insertion succeeded, the space after the
   dictation included; a partial insertion or a dictation left for the recovery copy is the error state; a
   dictation discarded quietly (the speech detector found no speech in audio that was not digital silence, or

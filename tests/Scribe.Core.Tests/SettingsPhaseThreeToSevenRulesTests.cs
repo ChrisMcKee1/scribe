@@ -560,8 +560,16 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             TryDictationReportClassifier.StageSpeechRecognition,
             TryDictationReportClassifier.NoSpeechRecognized));
         Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageVoiceActivityDetection,
+            TryDictationReportClassifier.SilenceTrimmingFailed));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.SpeechRecognitionFailed));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
             TryDictationReportClassifier.StageSpeechRecognition,
             "The speech recognizer crashed."));
+        Assert.Equal(TryDictationReportClassifier.SilenceTrimmingFailed, TryDictationReportClassifier.FailureReasonForStage(TryDictationReportClassifier.StageVoiceActivityDetection));
+        Assert.Equal(TryDictationReportClassifier.SpeechRecognitionFailed, TryDictationReportClassifier.FailureReasonForStage(TryDictationReportClassifier.StageSpeechRecognition));
         Assert.Equal(FailureStage.TextInsertion, TryDictationReportClassifier.StageFrom(TryDictationReportClassifier.StageTextInsertion));
         Assert.True(TryDictationReportClassifier.IsMicrophoneProblem(TryDictationReportClassifier.StageAudioCapture));
     }
@@ -749,8 +757,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     private static IReadOnlyList<string> ExtractCurrentStageAssignments(string source) =>
         [.. ReadCurrentStageAssignments(source).Where(stage => stage is not null).Select(stage => stage!)];
 
-    // Every assignment to currentStage: its plain literal, or null for anything else (an interpolated string, a variable,
-    // a call), which the contract can't check and so rejects.
+    // Every assignment to currentStage: its plain literal, an approved classifier constant, or null for anything else
+    // (an interpolated string, a variable, a call), which the contract can't check and so rejects.
     private static IReadOnlyList<string?> ReadCurrentStageAssignments(string source)
     {
         var tokens = Tokenize(source);
@@ -768,7 +776,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
                 end++;
             }
 
-            stages.Add(end == t + 3 && tokens[t + 2].IsPlainLiteral ? tokens[t + 2].Text : null);
+            stages.Add(ConstantValue(tokens.GetRange(t + 2, end - (t + 2))));
         }
 
         return stages;
@@ -778,7 +786,48 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         !token.IsString && string.Equals(token.Text, text, StringComparison.Ordinal);
 
     private static string? Literal(List<List<SourceToken>> arguments, int index) =>
-        index < arguments.Count && arguments[index] is [{ IsPlainLiteral: true } only] ? only.Text : null;
+        index < arguments.Count ? ConstantValue(arguments[index]) : null;
+
+    private static string? ConstantValue(IReadOnlyList<SourceToken> tokens)
+    {
+        if (tokens is [{ IsPlainLiteral: true } only])
+        {
+            return only.Text;
+        }
+
+        if (tokens.Count == 3 &&
+            IsCode(tokens[0], "TryDictationReportClassifier") &&
+            IsCode(tokens[1], ".") &&
+            !tokens[2].IsString)
+        {
+            return tokens[2].Text switch
+            {
+                nameof(TryDictationReportClassifier.StageAudioCapture) => TryDictationReportClassifier.StageAudioCapture,
+                nameof(TryDictationReportClassifier.StageVoiceActivityDetection) => TryDictationReportClassifier.StageVoiceActivityDetection,
+                nameof(TryDictationReportClassifier.StageSpeechRecognition) => TryDictationReportClassifier.StageSpeechRecognition,
+                nameof(TryDictationReportClassifier.StageAiCleanup) => TryDictationReportClassifier.StageAiCleanup,
+                nameof(TryDictationReportClassifier.StageDictionaryAndSnippets) => TryDictationReportClassifier.StageDictionaryAndSnippets,
+                nameof(TryDictationReportClassifier.StageTextInsertion) => TryDictationReportClassifier.StageTextInsertion,
+                nameof(TryDictationReportClassifier.NoSpeechDetected) => TryDictationReportClassifier.NoSpeechDetected,
+                nameof(TryDictationReportClassifier.NoSpeechRecognized) => TryDictationReportClassifier.NoSpeechRecognized,
+                nameof(TryDictationReportClassifier.SilenceTrimmingFailed) => TryDictationReportClassifier.SilenceTrimmingFailed,
+                nameof(TryDictationReportClassifier.SpeechRecognitionFailed) => TryDictationReportClassifier.SpeechRecognitionFailed,
+                nameof(TryDictationReportClassifier.AudioCaptureFailed) => TryDictationReportClassifier.AudioCaptureFailed,
+                nameof(TryDictationReportClassifier.SilentCapture) => TryDictationReportClassifier.SilentCapture,
+                nameof(TryDictationReportClassifier.AiCleanupFailed) => TryDictationReportClassifier.AiCleanupFailed,
+                nameof(TryDictationReportClassifier.DictionaryAndSnippetsFailed) => TryDictationReportClassifier.DictionaryAndSnippetsFailed,
+                nameof(TryDictationReportClassifier.TextInsertionFailed) => TryDictationReportClassifier.TextInsertionFailed,
+                _ => null,
+            };
+        }
+
+        if (tokens is [{ Text: "TryDictationSummary", IsString: false }, { Text: ".", IsString: false }, { Text: nameof(TryDictationSummary.EmptyTextReason), IsString: false }])
+        {
+            return TryDictationSummary.EmptyTextReason;
+        }
+
+        return null;
+    }
 
     // Enough of a C# lexer for these scans: comments are dropped, string literals of every form (regular, verbatim,
     // interpolated, raw) and char literals are single tokens, never code, and everything else is an identifier or one
