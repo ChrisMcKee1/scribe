@@ -532,15 +532,37 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left navigation rail. A ListBox is one Tab stop and the arrow keys move along it. Each item
-                 names itself for screen readers: an item that holds a panel instead of text is otherwise
-                 announced by its type name, "System.Windows.Controls.ListBoxItem". -->
-            <ListBox x:Name="NavList" Grid.Column="0" Margin="8,4,4,16"
-                     Background="Transparent" BorderThickness="0"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     KeyboardNavigation.TabNavigation="Once"
-                     AutomationProperties.Name="Settings pages"
-                     SelectionChanged="NavList_SelectionChanged">
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <ui:AutoSuggestBox x:Name="SettingsSearchBox" Grid.Row="0"
+                                   Margin="8,4,4,8"
+                                   PlaceholderText="Find a setting"
+                                   AutomationProperties.Name="Find a setting"
+                                   MaxSuggestionListHeight="320"
+                                   UpdateTextOnSelect="False"
+                                   TextChanged="SettingsSearchBox_TextChanged"
+                                   QuerySubmitted="SettingsSearchBox_QuerySubmitted"
+                                   SuggestionChosen="SettingsSearchBox_SuggestionChosen">
+                    <ui:AutoSuggestBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayText}"/>
+                        </DataTemplate>
+                    </ui:AutoSuggestBox.ItemTemplate>
+                </ui:AutoSuggestBox>
+
+                <!-- The rail remains one Tab stop after Find a setting; arrow keys move between pages. Each item
+                     names itself for screen readers: an item that holds a panel instead of text is otherwise
+                     announced by its type name, "System.Windows.Controls.ListBoxItem". -->
+                <ListBox x:Name="NavList" Grid.Row="1" Margin="8,0,4,16"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         KeyboardNavigation.TabNavigation="Once"
+                         AutomationProperties.Name="Settings pages"
+                         SelectionChanged="NavList_SelectionChanged">
                 <ListBox.Resources>
                     <Style TargetType="ui:SymbolIcon">
                         <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
@@ -603,8 +625,9 @@
                             </DataTemplate>
                         </GroupStyle.HeaderTemplate>
                     </GroupStyle>
-                </ListBox.GroupStyle>
-            </ListBox>
+                    </ListBox.GroupStyle>
+                </ListBox>
+            </Grid>
 
             <!-- Right: the selected section + a persistent Save/Cancel footer -->
             <Grid Grid.Column="1" Margin="12,4,24,16">

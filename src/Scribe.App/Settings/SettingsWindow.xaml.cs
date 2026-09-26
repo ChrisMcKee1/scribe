@@ -262,6 +262,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         InitializeComponent();
         InitializeNavigation();
+        InitializeSettingsSearch();
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -815,6 +816,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// <summary>Navigates the rail to the given page, optionally focusing a named control on it.</summary>
     internal void ShowPage(SettingsPage page, string? focusName = null)
     {
+        ClearSettingsSearchHiddenHint();
         if (!PagePanels.TryGetValue(page, out var selected))
         {
             return;
