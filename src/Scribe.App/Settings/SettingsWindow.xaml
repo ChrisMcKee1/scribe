@@ -549,9 +549,14 @@
                                    SuggestionChosen="SettingsSearchBox_SuggestionChosen">
                     <ui:AutoSuggestBox.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding DisplayText}"/>
+                            <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"/>
                         </DataTemplate>
                     </ui:AutoSuggestBox.ItemTemplate>
+                    <ui:AutoSuggestBox.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="IsEnabled" Value="{Binding IsSelectable}"/>
+                        </Style>
+                    </ui:AutoSuggestBox.ItemContainerStyle>
                 </ui:AutoSuggestBox>
 
                 <!-- The rail remains one Tab stop after Find a setting; arrow keys move between pages. Each item
@@ -2842,3 +2847,4 @@
         </Grid>
     </Grid>
 </ui:FluentWindow>
+
