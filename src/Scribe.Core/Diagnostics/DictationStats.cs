@@ -21,6 +21,9 @@ public static class DictationStats
     public sealed record Snapshot(
         int Count,
         TimeSpan TotalAudio,
+        string CurrentModelId,
+        string CurrentModelName,
+        bool HasEarlierModelDictations,
         int ParakeetDecodeCount,
         MetricSummary? ParakeetDecodeMs,
         int CleanupCount,
@@ -89,6 +92,83 @@ public static class DictationStats
         return new Snapshot(
             Count: count,
             TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
+            CurrentModelId: TranscriptionModelCatalog.DefaultId,
+            CurrentModelName: TranscriptionModelCatalog.Resolve(TranscriptionModelCatalog.DefaultId).DisplayName,
+            HasEarlierModelDictations: false,
+            ParakeetDecodeCount: decodeMs.Count,
+            ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
+            CleanupCount: cleanupMs.Count,
+            CleanupMs: cleanupMs.Count > 0 ? Summarize(cleanupMs) : null,
+            CombinedCount: combinedMs.Count,
+            CombinedMs: combinedMs.Count > 0 ? Summarize(combinedMs) : null,
+            FastestRtf: rtf.FirstOrDefault(value => value > 0),
+            RtfP50: rtf.Count > 0 ? Percentile(rtf, 0.50) : 0,
+            RtfP95: rtf.Count > 0 ? Percentile(rtf, 0.95) : 0,
+            LongestAudioSeconds: longestAudioMs / 1000.0);
+    }
+
+    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since, string? currentModelId)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        var currentModel = TranscriptionModelCatalog.Resolve(currentModelId);
+        var decodeMs = new List<double>();
+        var rtf = new List<double>();
+        var cleanupMs = new List<double>();
+        var combinedMs = new List<double>();
+        var count = 0;
+        var allModelsCount = 0;
+        var otherModelCount = 0;
+        long totalAudioMs = 0;
+        double longestAudioMs = 0;
+
+        foreach (var entry in entries)
+        {
+            if (entry.TimestampUtc < since || entry.AudioMilliseconds <= 0)
+            {
+                continue;
+            }
+
+            allModelsCount++;
+            if (!string.Equals(
+                    entry.TranscriptionModelId,
+                    currentModel.Id,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                otherModelCount++;
+                continue;
+            }
+
+            count++;
+            decodeMs.Add(entry.DecodeMilliseconds);
+            rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
+
+            if (entry.CleanupMilliseconds is > 0)
+            {
+                cleanupMs.Add(entry.CleanupMilliseconds.Value);
+                combinedMs.Add(entry.DecodeMilliseconds + entry.CleanupMilliseconds.Value);
+            }
+
+            totalAudioMs += entry.AudioMilliseconds;
+            longestAudioMs = Math.Max(longestAudioMs, entry.AudioMilliseconds);
+        }
+
+        if (count == 0)
+        {
+            return null;
+        }
+
+        decodeMs.Sort();
+        rtf.Sort();
+        cleanupMs.Sort();
+        combinedMs.Sort();
+
+        return new Snapshot(
+            Count: count,
+            TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
+            CurrentModelId: currentModel.Id,
+            CurrentModelName: currentModel.DisplayName,
+            HasEarlierModelDictations: otherModelCount > 0 && allModelsCount > count,
             ParakeetDecodeCount: decodeMs.Count,
             ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
             CleanupCount: cleanupMs.Count,

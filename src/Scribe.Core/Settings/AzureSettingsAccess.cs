@@ -15,7 +15,9 @@ public static class AzureSettingsAccess
         bool CanStartSignIn,
         bool HasUsableAuthentication,
         bool ShowServicePrincipalFields,
-        bool ShowCliTenant);
+        bool ShowCliTenant,
+        bool ShowManualDetails,
+        bool ManualDetailsExpanded);
 
     public enum ValidationIssue
     {
@@ -73,7 +75,9 @@ public static class AzureSettingsAccess
                 CanStartSignIn: servicePrincipalComplete,
                 HasUsableAuthentication: servicePrincipalComplete || signedIn || hasApiKey,
                 ShowServicePrincipalFields: true,
-                ShowCliTenant: false);
+                ShowCliTenant: false,
+                ShowManualDetails: true,
+                ManualDetailsExpanded: true);
         }
 
         // The tenant is what an az login authenticates against: signing in passes it on whenever no
@@ -83,12 +87,14 @@ public static class AzureSettingsAccess
         return new State(
             ShowCliSetup: !cliInstalled,
             ShowDiscovery: signedIn,
-            ShowConfiguration: signedIn || manualConfigurationAvailable,
+            ShowConfiguration: apiKeySelected || signedIn || manualConfigurationAvailable,
             ShowManualConfigurationAction: !signedIn && !manualConfigurationAvailable,
             CanStartSignIn: cliInstalled,
             HasUsableAuthentication: signedIn || hasApiKey,
             ShowServicePrincipalFields: false,
-            ShowCliTenant: !apiKeySelected);
+            ShowCliTenant: !apiKeySelected,
+            ShowManualDetails: apiKeySelected || signedIn,
+            ManualDetailsExpanded: apiKeySelected || manualConfigurationRequested || hasApiKey);
     }
 
     public static ValidationIssue ValidateCleanup(
