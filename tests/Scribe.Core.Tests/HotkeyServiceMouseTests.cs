@@ -20,6 +20,13 @@ public partial class HotkeyServiceTests
     // A hang guard, never the verdict: each wait is for something certain to happen on the hook thread or the pool.
     private static readonly TimeSpan HookTimeout = TimeSpan.FromSeconds(30);
 
+    // The watchdog period of every service a Start_ test here waits on (review round 4 of stream TR, A4): its upkeep runs
+    // every 30 s from Start, and would meet a 30 s wait for what a command does (a mouse hook installed or removed, a
+    // replaced registration released, a move made, a move scheduled) when the command itself had failed. Off, the command
+    // is the only thing that can; the tests about the upkeep call it themselves (MaintainMouseHookNow,
+    // MaintainKeyboardHookNow), and Start_arms_the_watchdog_at_the_service_s_own_period is about the timer.
+    private static readonly TimeSpan NoWatchdog = Timeout.InfiniteTimeSpan;
+
     // Not Scribe's own marker: the service must take these as real input.
     private static readonly nuint TestInputMarker = unchecked((nuint)0x5343524954455354UL);
 
@@ -37,9 +44,29 @@ public partial class HotkeyServiceTests
         HotkeyCaptureSession.Build([button], mode);
 
     [Fact]
+    public void Start_arms_the_watchdog_at_the_service_s_own_period()
+    {
+        // The one service here whose watchdog ticks on its own, at a period short enough to watch: each tick's upkeep for a
+        // mouse binding asks the hook thread to renew the mouse hook, which counts a refresh. Two inside the hang guard mean
+        // Start armed the timer at the service's own period; at the 30 s default they would take a minute.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = TimeSpan.FromMilliseconds(250),
+        };
+        service.Start();
+
+        Assert.True(
+            SpinWait.SpinUntil(() => service.MouseHookRefreshesForTests.Handled >= 2, HookTimeout),
+            $"The watchdog did not tick at its period: {service.MouseHookRefreshesForTests.Handled} refresh(es) handled.");
+    }
+
+    [Fact]
     public void Start_installs_the_mouse_hook_only_while_a_binding_presses_a_mouse_button()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         // Keys alone: no system-wide mouse hook, so no pointer move ever waits for Scribe.
@@ -70,7 +97,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_with_a_mouse_binding_has_the_mouse_hook_before_it_returns()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Middle), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Middle), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         Assert.True(service.MouseHookInstalled);
@@ -81,7 +111,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_renews_the_mouse_hook_and_counts_a_registration_already_gone()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var first = service.MouseHookHandle;
 
@@ -114,7 +147,10 @@ public partial class HotkeyServiceTests
 
         const uint F20 = 0x83;
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         Inject(ButtonDown(MouseButtons.Back), Key(F20, up: false));
@@ -134,7 +170,10 @@ public partial class HotkeyServiceTests
     {
         // The renewal that finds the registration gone tells the engine, on the hook thread and before the renewal counts,
         // so a dictation a button was driving is ended there (MouseButtonRecoveryTests); a healthy renewal tells it nothing.
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         AwaitRenewal(service);
@@ -164,7 +203,10 @@ public partial class HotkeyServiceTests
 
         var held = new ConcurrentDictionary<uint, bool>();
         var router = new HotkeyCommandRouter(BareButton(MouseButtons.Middle), new object(), isLogicallyDown: null, held.ContainsKey);
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Middle, isDown: true).Suppress);
 
@@ -191,7 +233,10 @@ public partial class HotkeyServiceTests
         }
 
         const int BackBit = 1 << (int)MouseButtons.Back;
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress);
 
@@ -222,7 +267,10 @@ public partial class HotkeyServiceTests
             return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
         }
 
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var engine = service.CurrentEngineForTests!;
         Assert.True(engine.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress);
@@ -262,7 +310,10 @@ public partial class HotkeyServiceTests
 
         var windowsHoldsBack = settled == "let through";
         var router = new HotkeyCommandRouter(BareButton(MouseButtons.Back), new object(), isLogicallyDown: null, _ => windowsHoldsBack);
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         using var message = new XButtonMessage(0x0001);
         Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
@@ -296,7 +347,10 @@ public partial class HotkeyServiceTests
             return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
         }
 
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress);
         service.UpdateBindings(HotkeyBinding.DefaultDictation, null);
@@ -562,7 +616,10 @@ public partial class HotkeyServiceTests
             {
                 injected.Enqueue(key);
                 return true;
-            });
+            })
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
     }
 
     private static HotkeyBinding ChordOf(uint first, uint second) => HotkeyCaptureSession.Build([first, second], HotkeyMode.Hold);
@@ -594,7 +651,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
         service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger);
@@ -643,7 +703,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
         service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger + " " + e.Deactivation);
@@ -675,7 +738,10 @@ public partial class HotkeyServiceTests
         // The input-desktop query answers "lost input" for the notice, as it would under a UAC prompt, so the switch is
         // applied; the button is then released back on this desktop.
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => false);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => false)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
         service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger + " " + e.Deactivation);
@@ -708,7 +774,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedMouseGuard(); // installed first, so the service's hook runs before it
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(button), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(button), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
         service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger);
@@ -741,7 +810,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = 0;
         service.Activated += (_, _) => Interlocked.Increment(ref events);
         service.Start();
@@ -776,7 +848,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
@@ -822,7 +897,10 @@ public partial class HotkeyServiceTests
 
         using var guard = new InjectedMouseGuard();
         using var service = new HotkeyService(
-            NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Forward, HotkeyMode.Toggle), () => true);
+            NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Forward, HotkeyMode.Toggle), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
@@ -849,7 +927,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedMouseGuard();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Forward), () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Forward), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         // A button release carrying Scribe's own marker (Scribe injects no mouse input today, so only a test sends one):
@@ -876,7 +957,10 @@ public partial class HotkeyServiceTests
         }
 
         using var service = new HotkeyService(
-            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([key], HotkeyMode.Hold), () => true);
+            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([key], HotkeyMode.Hold), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
@@ -910,7 +994,10 @@ public partial class HotkeyServiceTests
         using var service = new HotkeyService(
             NullLogger<HotkeyService>.Instance,
             HotkeyCaptureSession.Build([0xA2, 0xA0, 0x7C], HotkeyMode.Hold),
-            () => true);
+            () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         var events = new ConcurrentQueue<string>();
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");

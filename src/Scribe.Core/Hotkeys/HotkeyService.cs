@@ -72,6 +72,7 @@ public sealed class HotkeyService : IHotkeyService
     private HookInstallation? _installation;
     private Thread? _consumerThread;
     private Timer? _watchdog;
+    private readonly TimeSpan _watchdogPeriod = WatchdogPeriod;
     private long _hookCallbackCount;
     private long _reconcilePasses;
     private long _reconcilePassesScheduled;
@@ -271,6 +272,21 @@ public sealed class HotkeyService : IHotkeyService
     {
         get => _captureAdmissionWait;
         set => _captureAdmissionWait = value;
+    }
+
+    /// <summary>
+    /// How often the watchdog ticks once <see cref="Start"/> arms it: every <see cref="WatchdogPeriod"/> (30 s) unless a test
+    /// sets another when it makes the service, and never on its own with <see cref="Timeout.InfiniteTimeSpan"/>, which leaves
+    /// the upkeep to the test's own calls (<see cref="MaintainMouseHookNow"/>, <see cref="MaintainKeyboardHookNow"/>), so a
+    /// wait for what a command does cannot be met by the upkeep instead. One service's own: tests run in parallel. The
+    /// probe's idle threshold and the log keep the 30 s period.
+    /// </summary>
+    internal TimeSpan WatchdogPeriodForTests
+    {
+        get => _watchdogPeriod;
+        init => _watchdogPeriod = value == Timeout.InfiniteTimeSpan || value > TimeSpan.Zero
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "A positive period, or Timeout.InfiniteTimeSpan for none.");
     }
 
     /// <summary>Whether a capture start is being admitted right now; for tests that pause the repair it waits for.</summary>
@@ -503,7 +519,7 @@ public sealed class HotkeyService : IHotkeyService
             // GC pause during ASR decode cannot permanently kill push-to-talk.
             Interlocked.Exchange(ref _hookCallbackCount, 0);
             _livenessProbe.Disarm();
-            _watchdog = new Timer(_ => WatchdogTick(), null, WatchdogPeriod, WatchdogPeriod);
+            _watchdog = new Timer(_ => WatchdogTick(), null, _watchdogPeriod, _watchdogPeriod);
 
             IsRunning = true;
             var binding = Binding;

@@ -26,7 +26,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_moves_the_keyboard_hook_ahead_on_its_own_thread_and_keeps_its_engine()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var engine = service.CurrentEngineForTests;
         var epoch = engine!.KeyViewEpoch;
@@ -54,7 +57,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_keeps_a_replaced_registration_until_its_grace_is_over()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         MoveAhead(service, 1);
 
@@ -145,7 +151,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_reinstalls_the_hook_when_a_replaced_registration_was_already_gone()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var engine = service.CurrentEngineForTests;
         var first = service.KeyboardHookHandle;
@@ -170,7 +179,10 @@ public partial class HotkeyServiceTests
         // The thread releases every registration it made, current and replaced, before it ends. Windows also removes a
         // thread's hooks when the thread ends, so this would hold without that release (mutation M5 in the RD report); the
         // release stays because the hooks documentation asks an application to unhook what it installed.
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var handles = new List<nint> { service.KeyboardHookHandle };
         MoveAhead(service, 1);
@@ -206,7 +218,10 @@ public partial class HotkeyServiceTests
                 asked.Enqueue(window);
                 return window == remote ? "msrdc" : null;
             },
-            time: clock);
+            time: clock)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         Assert.True(service.ForegroundNoticesInstalled, "The hook thread is not told of foreground changes.");
 
@@ -241,7 +256,10 @@ public partial class HotkeyServiceTests
             () => true,
             foregroundWindow: () => remote,
             processNameOfWindow: window => window == remote ? "msrdc" : null,
-            time: clock);
+            time: clock)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         Assert.True(
@@ -256,7 +274,10 @@ public partial class HotkeyServiceTests
     {
         // A move while a swallowed key is held would put Scribe's hook ahead of one that may have forwarded the press into
         // a remote session, and Scribe would swallow the release it never sees (see KeyboardHookMoveSafetyTests).
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var first = service.KeyboardHookHandle;
         var engine = service.CurrentEngineForTests!;
@@ -288,7 +309,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_makes_no_move_from_a_reconcile_pass_when_no_move_waited()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         service.RunReconcilePassForTests(repairKeys: false);
@@ -640,7 +664,10 @@ public partial class HotkeyServiceTests
                 ScriptedLocalWindow => "notepad",
                 _ => null,
             },
-            time: clock);
+            time: clock)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
 
     [Fact]
     public void Start_judges_a_key_through_a_replaced_registration_without_swallowing_it()
@@ -649,7 +676,10 @@ public partial class HotkeyServiceTests
         // hook thread between its messages). CallNextHookEx outside a hook returns 0, so a call that passes an event on
         // returns 0, and one that swallows it returns 1.
         var events = new ConcurrentQueue<string>();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
         service.Start();
@@ -690,7 +720,10 @@ public partial class HotkeyServiceTests
         // with the time stamps Windows would give: 0 is passed on, 1 swallowed. Right Ctrl was held before the move and a
         // hook ahead of Scribe's kept its press, so its next repeat, after the move, is the first of it Scribe sees.
         var events = new ConcurrentQueue<string>();
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
         service.Start();
@@ -725,7 +758,10 @@ public partial class HotkeyServiceTests
     [Fact]
     public void Start_opens_the_window_after_a_reinstall_but_not_at_its_first_install()
     {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.Legacy, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         var first = service.CurrentEngineForTests!;
         var current = service.KeyboardProcsForTests!.Value.Current;
@@ -762,7 +798,10 @@ public partial class HotkeyServiceTests
                 asked.Enqueue(window);
                 return window == local ? "notepad" : null;
             },
-            time: clock);
+            time: clock)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         NotifyWinEvent(EventSystemForeground, local, ObjectIdWindow, ChildIdSelf);
@@ -782,7 +821,10 @@ public partial class HotkeyServiceTests
 
         var events = new ConcurrentQueue<string>();
         using var service = new HotkeyService(
-            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true);
+            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
         service.Start();
@@ -821,7 +863,10 @@ public partial class HotkeyServiceTests
         var events = new ConcurrentQueue<string>();
         using var guard = new InjectedKeyboardHook(swallow: true);
         using var service = new HotkeyService(
-            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true);
+            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
         service.Start();
@@ -883,7 +928,10 @@ public partial class HotkeyServiceTests
         // The chain, newest first: Scribe's new registration, another program's hook that passes every key on, the
         // registration the move replaced, and the test's guard, which swallows whatever reaches it.
         using var guard = new InjectedKeyboardHook(swallow: true);
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
         using var other = new InjectedKeyboardHook(swallow: false);
         MoveAhead(service, 1);
@@ -914,7 +962,10 @@ public partial class HotkeyServiceTests
         }
 
         using var guard = new InjectedKeyboardHook(swallow: true);
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         // The watchdog's probe, then Scribe's own marked F20, the probe key from anyone else, and a test key to wait for:
@@ -965,7 +1016,10 @@ public partial class HotkeyServiceTests
         // replaced, and the test's guard, which swallows whatever reaches it.
         using var guard = new InjectedKeyboardHook(swallow: true);
         using var service = new HotkeyService(
-            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true);
+            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([F21], HotkeyMode.Hold), () => true)
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Activated += (_, _) => events.Enqueue("start");
         service.Deactivated += (_, _) => events.Enqueue("stop");
         service.Start();
