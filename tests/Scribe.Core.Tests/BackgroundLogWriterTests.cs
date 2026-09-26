@@ -9,6 +9,10 @@ public class BackgroundLogWriterTests
     // Generous bound for "this must happen"; the tests never sleep to make something happen.
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
+    // A writer bound that a test checks is still running out while the test holds the disk: longer than every guard here,
+    // so the test's release ends the wait and the bound never does (stream TR round 5, A9).
+    private static readonly TimeSpan Outlasting = TimeSpan.FromMinutes(10);
+
     private static readonly DateTime Now = new(2026, 9, 21, 14, 5, 9, 123);
 
     private static LogRecord Record(string text, LogLevel level = LogLevel.Information) => new(Now, level, text);
@@ -159,7 +163,7 @@ public class BackgroundLogWriterTests
         using var release = new ManualResetEventSlim(false);
         var sink = new GatedSink(release);
         using var writer = new BackgroundLogWriter(
-            sink, new BackgroundLogWriterOptions { MaxQueuedRecords = 1, PromptWriteTimeout = Patience });
+            sink, new BackgroundLogWriterOptions { MaxQueuedRecords = 1, PromptWriteTimeout = Outlasting });
         using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("1"));
@@ -289,7 +293,7 @@ public class BackgroundLogWriterTests
         using var release = new ManualResetEventSlim(false);
         var sink = new GatedSink(release);
         var writer = new BackgroundLogWriter(
-            sink, new BackgroundLogWriterOptions { DisposeTimeout = Patience, PromptWriteTimeout = Patience });
+            sink, new BackgroundLogWriterOptions { DisposeTimeout = Outlasting, PromptWriteTimeout = Outlasting });
         using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("before"));

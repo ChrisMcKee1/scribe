@@ -31,7 +31,10 @@ public sealed class AudioCaptureShutdownTests
         using var openMayFinish = new ManualResetEventSlim();
         using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
-        var service = stack.CreateService(BlockedThreads.SafetyTimeout);
+
+        // Disposal waits out the open for as long as this bound, and the test checks it is still waiting: longer than every guard
+        // here, so only the test's release ends the wait (stream TR round 5, A9).
+        var service = stack.CreateService(TimeSpan.FromMinutes(10));
 
         var hotkeyThread = BlockedThreads.Start(() => service.Start());
         Assert.True(stack.Devices.OpenEntered.Wait(BlockedThreads.SafetyTimeout));

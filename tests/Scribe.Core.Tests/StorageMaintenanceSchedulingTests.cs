@@ -3,6 +3,7 @@ using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.Tests.StorageTime;
 using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
+using TestThread = Scribe.Core.Tests.Concurrency.TestThread;
 
 namespace Scribe.Core.Tests;
 
@@ -316,33 +317,51 @@ public class StorageMaintenanceSchedulingTests
     private static TimeSpan Later(TimeSpan a, TimeSpan b) => a >= b ? a : b;
 
     [Fact]
-    public async Task Dispose_waits_for_the_pass_in_flight_and_nothing_runs_after_it()
+    public void Dispose_waits_for_the_pass_in_flight_and_nothing_runs_after_it()
     {
+        // Dispose stops waiting for a pass after the options' shutdown wait, 3 s by default, so an observer held up that long
+        // between the dispose and the check that it still waits would see it done on correct code (stream TR round 5, A9).
+        // Here the wait outlasts every guard in this class, and the pass and the disposal run on threads of their own rather
+        // than the pool, whose starvation once kept the disposal from starting at all. Both are let go and joined before the
+        // database closes, whatever ended the test.
         using var db = ScribeDatabase.CreateInMemory();
         var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var settings = new BlockingSettings();
         var recording = new BlockingHistoryMaintenance(block: false);
-        var maintenance = new StorageMaintenance(db, recording, new CleanupFailureLog(db), NullLogger.Instance, time, Options);
-        using var releaseAtExit = new ReleaseAtExit(settings.Release);
+        var maintenance = new StorageMaintenance(
+            db, recording, new CleanupFailureLog(db), NullLogger.Instance, time, Options with { ShutdownWait = TimeSpan.FromMinutes(10) });
         maintenance.Start(settings.Read);
         var timer = time.SingleTimer;
+        var pass = new TestThread(timer.Fire, "test-maintenance-pass");
+        var dispose = new TestThread(maintenance.Dispose, "test-maintenance-dispose");
+        try
+        {
+            pass.Start();
+            Assert.True(settings.Entered.Wait(Generous));
 
-        var pass = Task.Run(timer.Fire);
-        Assert.True(settings.Entered.Wait(Generous));
+            var activityBeforeDispose = db.ActivityCount;
+            dispose.Start();
 
-        var activityBeforeDispose = db.ActivityCount;
-        var dispose = Task.Run(maintenance.Dispose);
+            // Dispose disposes the timer, then stops and waits: the pass is still blocked, so it cannot
+            // return. The stop counts as activity, so the counter moving proves the stop was requested
+            // before the pass is released; the timer alone is disposed a step earlier.
+            Assert.True(SpinWait.SpinUntil(() => timer.Disposed, Generous));
+            Assert.True(SpinWait.SpinUntil(() => db.ActivityCount != activityBeforeDispose, Generous));
+            Assert.True(dispose.IsAlive, "Dispose stopped waiting for the pass in flight.");
 
-        // Dispose disposes the timer, then stops and waits: the pass is still blocked, so it cannot
-        // return. The stop counts as activity, so the counter moving proves the stop was requested
-        // before the pass is released; the timer alone is disposed a step earlier.
-        Assert.True(SpinWait.SpinUntil(() => timer.Disposed, Generous));
-        Assert.True(SpinWait.SpinUntil(() => db.ActivityCount != activityBeforeDispose, Generous));
-        Assert.False(dispose.IsCompleted);
+            settings.Release.Set();
+            Assert.True(dispose.Join(Generous), "Dispose never returned once the pass was let go.");
+            Assert.True(pass.Join(Generous), "The pass never returned once it was let go.");
+        }
+        finally
+        {
+            settings.Release.Set();
+            pass.Join(Generous);
+            dispose.Join(Generous);
+        }
 
-        settings.Release.Set();
-        await dispose.WaitAsync(Generous);
-        await pass.WaitAsync(Generous);
+        pass.ThrowIfFailed();
+        dispose.ThrowIfFailed();
 
         // The pass saw the stop before its first step and left the database alone.
         Assert.Equal(0, recording.Calls);

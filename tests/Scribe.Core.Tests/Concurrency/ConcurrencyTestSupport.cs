@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 
 namespace Scribe.Core.Tests.Concurrency;
@@ -110,6 +111,49 @@ internal sealed class ReleaseAtExit(params ManualResetEventSlim[] gates) : IDisp
             gate.Set();
         }
     }
+}
+
+/// <summary>
+/// A background thread of a test's own that keeps what its work throws instead of letting it end the test host, which would
+/// hide the failure (stream TR round 5): the test that started it joins it and then calls <see cref="ThrowIfFailed"/>. A
+/// join of one never started returns at once, so a finally can join every thread a test made whatever failed first.
+/// </summary>
+internal sealed class TestThread
+{
+    private readonly Thread _thread;
+    private ExceptionDispatchInfo? _failure;
+    private bool _started;
+
+    public TestThread(Action work, string name)
+    {
+        _thread = new Thread(() =>
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _failure, ExceptionDispatchInfo.Capture(ex));
+            }
+        })
+        {
+            IsBackground = true,
+            Name = name,
+        };
+    }
+
+    public bool IsAlive => _thread.IsAlive;
+
+    public void Start()
+    {
+        _started = true;
+        _thread.Start();
+    }
+
+    public bool Join(TimeSpan timeout) => !_started || _thread.Join(timeout);
+
+    public void ThrowIfFailed() => Volatile.Read(ref _failure)?.Throw();
 }
 
 /// <summary>A time provider whose clock and timers only move when a test says so.</summary>
