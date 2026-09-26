@@ -42,6 +42,12 @@ public interface ITextCleanupService : IAsyncDisposable
     void Configure(CleanupOptions options);
 
     /// <summary>
+    /// Tests a candidate remote cleanup configuration without changing the running service. The probe
+    /// carries the cleanup guardrails and writing style, but no glossary or vocabulary.
+    /// </summary>
+    Task<CleanupTestResult> TestAsync(CleanupOptions candidate, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cleans a single transcription. The returned <see cref="CleanupResult.Text"/> is always safe to
     /// inject; on a skip or a runtime failure it is the original input, and the
     /// <see cref="CleanupResult.Outcome"/> tells the caller whether the model ran, was skipped (disabled,

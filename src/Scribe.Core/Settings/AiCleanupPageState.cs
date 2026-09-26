@@ -150,7 +150,11 @@ public enum CustomEndpointTestResult
     Failed,
 }
 
-public sealed record CustomEndpointSetupState(CustomEndpointTestResult Result, string? Model = null, string? SafeReason = null);
+public sealed record CustomEndpointSetupState(
+    CustomEndpointTestResult Result,
+    string? Model = null,
+    string? SafeReason = null,
+    bool CanTest = true);
 
 public sealed record AiCleanupPageDescription(
     bool ShowProviderSetup,
@@ -399,13 +403,12 @@ public static class AiCleanupPageState
         AzureSetupResult.SignedIn => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Account) ? "Signed in." : $"Signed in as {setup.Account}.", new(AiCleanupActionId.RefreshModels, "Refresh models")),
         AzureSetupResult.ListingModels => new(AiCleanupStatusKind.Busy, "Finding your models..."),
         AzureSetupResult.ListingFailed => new(AiCleanupStatusKind.Error, $"Couldn't list your models. {setup.SafeReason ?? "Try again."}", new(AiCleanupActionId.TryAgain, "Try again")),
-        AzureSetupResult.Verifying => new(AiCleanupStatusKind.Busy, "Verifying..."),
-        AzureSetupResult.ApiKeyIncomplete or AzureSetupResult.ServicePrincipalIncomplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new(AiCleanupActionId.Verify, "Verify", IsEnabled: false)),
-        AzureSetupResult.ApiKeyComplete or AzureSetupResult.ServicePrincipalComplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new(AiCleanupActionId.Verify, "Verify")),
-        AzureSetupResult.ApiKeyVerified => new(AiCleanupStatusKind.Success, "Azure accepted the key.", new(AiCleanupActionId.Verify, "Verify")),
-        AzureSetupResult.ServicePrincipalVerified => new(AiCleanupStatusKind.Success, "Verified.", new(AiCleanupActionId.Verify, "Verify")),
-        AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't verify the details.", new(AiCleanupActionId.Verify, "Verify")),
-        AzureSetupResult.ApiKeyVerifyAgain or AzureSetupResult.ServicePrincipalVerifyAgain => new(AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", new(AiCleanupActionId.Verify, "Verify")),
+        AzureSetupResult.Verifying => new(AiCleanupStatusKind.Busy, "Testing the connection..."),
+        AzureSetupResult.ApiKeyIncomplete or AzureSetupResult.ServicePrincipalIncomplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Test connection.", new(AiCleanupActionId.TestConnection, "Test connection", IsEnabled: false)),
+        AzureSetupResult.ApiKeyComplete or AzureSetupResult.ServicePrincipalComplete => new(AiCleanupStatusKind.Info, "Not tested yet.", new(AiCleanupActionId.TestConnection, "Test connection")),
+        AzureSetupResult.ApiKeyVerified or AzureSetupResult.ServicePrincipalVerified => new(AiCleanupStatusKind.Success, "Connected.", new(AiCleanupActionId.TestConnection, "Test connection")),
+        AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't connect.", new(AiCleanupActionId.TryAgain, "Try again")),
+        AzureSetupResult.ApiKeyVerifyAgain or AzureSetupResult.ServicePrincipalVerifyAgain => new(AiCleanupStatusKind.Info, "Changed since the last test. Choose Test connection.", new(AiCleanupActionId.TestConnection, "Test connection")),
         _ => new(AiCleanupStatusKind.Info, "Not checked yet.", new(AiCleanupActionId.CheckSignIn, "Check sign-in")),
     };
 
@@ -433,10 +436,10 @@ public static class AiCleanupPageState
 
     private static AiCleanupStatusRow CustomRow(CustomEndpointSetupState setup) => setup.Result switch
     {
-        CustomEndpointTestResult.Testing => new(AiCleanupStatusKind.Busy, "Testing..."),
+        CustomEndpointTestResult.Testing => new(AiCleanupStatusKind.Busy, "Testing the connection..."),
         CustomEndpointTestResult.Connected => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Model) ? "Connected." : $"Connected. {setup.Model} answered.", new(AiCleanupActionId.TestConnection, "Test connection")),
         CustomEndpointTestResult.Failed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't connect.", new(AiCleanupActionId.TryAgain, "Try again")),
-        _ => new(AiCleanupStatusKind.Info, "Not tested yet."),
+        _ => new(AiCleanupStatusKind.Info, "Not tested yet.", new(AiCleanupActionId.TestConnection, "Test connection", setup.CanTest)),
     };
 
     private static AiCleanupAction? ActionFor(string? text, bool enabled = true) => text switch
