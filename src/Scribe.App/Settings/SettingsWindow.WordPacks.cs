@@ -27,6 +27,10 @@ public partial class SettingsWindow
 {
     private const int WmDpiChanged = 0x02E0;
 
+    // WPF-UI's close button clears the notice's IsOpen and raises no event, so the notice's actions watch IsOpen.
+    private static readonly DependencyPropertyDescriptor WordPackNoticeOpen =
+        DependencyPropertyDescriptor.FromProperty(Wpf.Ui.Controls.InfoBar.IsOpenProperty, typeof(Wpf.Ui.Controls.InfoBar));
+
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     private LibraryWorkspace? _wordPackWorkspace;
     private LibraryCatalog? _wordPackCatalog;
@@ -111,6 +115,8 @@ public partial class SettingsWindow
 
     private void InitializeLibraryGrid()
     {
+        WordPackNoticeOpen.AddValueChanged(WordPackNoticeBar, WordPackNoticeBar_IsOpenChanged);
+        Closed += (_, _) => WordPackNoticeOpen.RemoveValueChanged(WordPackNoticeBar, WordPackNoticeBar_IsOpenChanged);
         LibraryGrid.ItemsSource = _libraryRows;
         DataGridCheckBoxClick.Attach(LibraryGrid);
         DataGridTypingTab.Attach(LibraryTermsGrid);
@@ -1627,8 +1633,63 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         LibraryExportButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
         LibraryDetailMoreButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
         LibraryOffLine.Visibility = detailsSubpage ? Visibility.Collapsed : LibraryOffLine.Visibility;
-        WordPackNoticeBar.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
-        WordPackNoticeActionsPanel.Visibility = detailsSubpage ? Visibility.Collapsed : WordPackNoticeActionsPanel.Visibility;
+        // The subpage hides the notice through its host: WPF-UI's InfoBar shows and hides itself from IsOpen with a
+        // template trigger on its own Visibility, which a local Visibility value would override for good, leaving a
+        // closed notice on screen.
+        WordPackNoticeHost.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        ApplyWordPackNoticeActionsVisibility();
+    }
+
+    // The actions belong to the notice: they show while it is open and has some, unless the short composition's Word
+    // details subpage hides the notice. Closing the notice with its X changes only IsOpen, so the actions follow IsOpen.
+    private void ApplyWordPackNoticeActionsVisibility()
+    {
+        var detailsSubpage = _wordPackLayout?.Short == true && WordDetailsPanel.Visibility == Visibility.Visible;
+        WordPackNoticeActionsPanel.Visibility = !detailsSubpage && WordPackNoticeBar.IsOpen && WordPackNoticeActionsPanel.Children.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void WordPackNoticeBar_IsOpenChanged(object? sender, EventArgs e) => ApplyWordPackNoticeActionsVisibility();
+
+    // The card scrolls as a whole when its header and the words' minimum height don't fit, so its content is measured
+    // without a height bound, and a DataGrid measured that way realizes every row. The words grid therefore gets the
+    // height the viewport has left after the card's other rows, never less than its minimum, as an explicit Height
+    // (the XAML's is only the bound for the first layout): it fills the card as it did before the card could scroll,
+    // and its rows stay virtualized. ScrollChanged, not SizeChanged: the viewport and extent are current only once the
+    // ScrollViewer has updated them after layout, and a change of either (a resize, a header row growing) raises it.
+    private void WordPacksCardScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        // The words grid's own ScrollViewer raises ScrollChanged too, and it bubbles through this one.
+        if (ReferenceEquals(e.OriginalSource, WordPacksCardScroll) && (e.ViewportHeightChange != 0 || e.ExtentHeightChange != 0))
+        {
+            FitLibraryTermsGridToCard();
+        }
+    }
+
+    private void FitLibraryTermsGridToCard()
+    {
+        var viewport = WordPacksCardScroll.ViewportHeight;
+        if (viewport <= 0 || LibraryTermsGrid.Parent is not FrameworkElement wordsHost)
+        {
+            return;
+        }
+
+        var wordsRow = Grid.GetRow(wordsHost);
+        var otherRows = 0.0;
+        for (var row = 0; row < WordPacksCardContent.RowDefinitions.Count; row++)
+        {
+            if (row != wordsRow)
+            {
+                otherRows += WordPacksCardContent.RowDefinitions[row].ActualHeight;
+            }
+        }
+
+        var height = Math.Max(LibraryTermsGrid.MinHeight, Math.Floor(viewport - otherRows));
+        if (double.IsNaN(LibraryTermsGrid.Height) || Math.Abs(LibraryTermsGrid.Height - height) >= 1)
+        {
+            LibraryTermsGrid.Height = height;
+        }
     }
 
     private void ShowWordPackListPage()
