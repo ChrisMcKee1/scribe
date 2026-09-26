@@ -5,9 +5,12 @@ namespace Scribe.Core.Tests;
 public sealed class SettingsClosePromptTests
 {
     [Theory]
-    [InlineData(CloseTrigger.WindowClose, "Save changes before closing?", "Save and close")]
+    [InlineData(CloseTrigger.CancelButton, "Save changes before closing?", "Save and close")]
+    [InlineData(CloseTrigger.Escape, "Save changes before closing?", "Save and close")]
+    [InlineData(CloseTrigger.AltF4, "Save changes before closing?", "Save and close")]
+    [InlineData(CloseTrigger.CloseButton, "Save changes before closing?", "Save and close")]
     [InlineData(CloseTrigger.TrayQuit, "Save changes before quitting?", "Save and quit")]
-    [InlineData(CloseTrigger.RestartToUpdate, "Save changes before restarting?", "Save and restart")]
+    [InlineData(CloseTrigger.UpdateRestart, "Save changes before restarting?", "Save and restart")]
     public void Texts_per_trigger(CloseTrigger trigger, string title, string primary)
     {
         var prompt = SettingsClosePrompt.For(trigger);

@@ -12,8 +12,8 @@ namespace Scribe.Benchmarks;
 /// <summary>
 /// A library Save phase by phase (plan 3.14): one custom library of <see cref="Terms"/> terms, all enabled, with every
 /// built-in at its default, saved through the real journal over a real temp folder and a settings database on disk, with
-/// the service's default parts (the interim adapters in J's branch; the codec, overlay and composer at integration).
-/// 1,549 is the number of rows the built-in libraries ship, and 10,000 is the large-vocabulary notice.
+/// the service's default parts: since the integration commit the library CSV codec, the built-in overlay and the
+/// composer. 1,549 is the number of rows the built-in libraries ship, and 10,000 is the large-vocabulary notice.
 /// <list type="bullet">
 /// <item><see cref="Stage"/>: <see cref="ILibraryCatalogStore.PrepareSave"/>, which reads the folder, checks every
 /// pre-image and writes the redo image and the manifest, both flushed.</item>
@@ -29,6 +29,8 @@ namespace Scribe.Benchmarks;
 /// before the rules are rebuilt, so it is not readiness for the next dictation on its own.</item>
 /// <item><see cref="Readiness"/>: the whole Save and then the rules rebuilt from the published vocabulary: from the Save to
 /// the next dictation being able to use it.</item>
+/// <item><see cref="Dictate"/>: one short dictation post-processed through the rules the published vocabulary compiles
+/// to, what every dictation pays for the vocabulary's size.</item>
 /// </list>
 /// <see cref="Publish"/> measures a fresh service's first load, what a start pays, not a step of a Save.
 /// Each Save changes one term, so every file write is real. The iteration setups force one invocation per iteration,
@@ -190,12 +192,35 @@ public class LibrarySaveBenchmarks
     }
 
     // The whole Save and then the rules the next dictation matches with, rebuilt from the published vocabulary: from the
-    // user's Save to the next dictation being ready, with this branch's interim parts (integration measures the real ones).
+    // user's Save to the next dictation being ready.
     [Benchmark]
     public string Readiness()
     {
         FullSave();
         return Compile();
+    }
+
+    // A thirty-word dictation that mentions two of the library's terms, through the post-processor with the vocabulary's
+    // rules compiled once (the compile is Compile's; BenchmarkDotNet's warmup absorbs the first build).
+    [Benchmark]
+    public string Dictate()
+    {
+        _dictation ??= NewProcessor();
+        return _dictation.Process(
+            "so we reviewed term 000042 in the stand up and moved term 001234 to the next sprint because the build was red " +
+            "and the release notes still needed a pass before friday");
+    }
+
+    private TextPostProcessor? _dictation;
+
+    private TextPostProcessor NewProcessor()
+    {
+        var processor = new TextPostProcessor(
+            new RepresentativeWorkload.DictionaryStub([]),
+            NullLogger<TextPostProcessor>.Instance,
+            libraries: new VocabularyEntries(_service.Current.Entries));
+        processor.Reload();
+        return processor;
     }
 
     private DictionaryLibraryService NewService() => new(_paths, _settings, NullLogger<DictionaryLibraryService>.Instance);

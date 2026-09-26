@@ -1507,13 +1507,21 @@
                                 </Grid>
                             </TabItem>
                             <TabItem Header="Word packs">
-                                <Grid>
+                                <!-- Interim until Phase 3b's Word packs editor replaces this tab: LegacyLibraryPageContainment
+                                     finds the subtitle as the title's next sibling and the tip in row 3, as it did on the old
+                                     Libraries page, and 3b deletes the containment with this markup (release gate 3). -->
+                                <Grid x:Name="SectionLibraries">
                                     <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                        <StackPanel Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
+                            <TextBlock x:Name="LibrariesPageTitle" Text="Word packs" Style="{StaticResource CardTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}" Text=""/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                             <ui:Button x:Name="LibraryImportButton" Content="Import a word pack..."
                                        Icon="{ui:SymbolIcon ArrowDownload24}"
                                        Margin="0,0,8,0" Click="LibraryImportButton_Click"
@@ -1527,7 +1535,7 @@
                                        Click="LibraryRemoveButton_Click"
                                        ToolTip="Remove the selected imported word pack. Built-in libraries can only be turned off."/>
                         </StackPanel>
-                        <Grid Grid.Row="1">
+                        <Grid Grid.Row="2">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="3*"/>
                                 <ColumnDefinition Width="10"/>
@@ -1605,6 +1613,7 @@
                                 </Grid>
                             </ui:Card>
                         </Grid>
+                        <TextBlock Grid.Row="3" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
 
                                 </Grid>
                             </TabItem>

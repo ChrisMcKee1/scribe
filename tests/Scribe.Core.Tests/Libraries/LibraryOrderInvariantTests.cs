@@ -63,8 +63,10 @@ public sealed class LibraryOrderInvariantTests
 
             var fromDisplay = DictionaryLibraryComposer.ComposeLibraries(display.Where(l => enabled.Contains(l.Id)));
 
+            // Dictation passes the ids of the settings it runs on to release 0.4.4's seam until the vocabulary source
+            // replaces it (contract 9.4); the committed vocabulary's tiered order is pinned by the test after this one.
             Assert.True(
-                fixture.Service.GetEnabledLibraryEntries().SequenceEqual(fromDisplay),
+                fixture.Service.GetEnabledLibraryEntries(enabledIds).SequenceEqual(fromDisplay),
                 $"{scenario}: composing in display order gave different rules from the service");
         }
     }

@@ -135,9 +135,9 @@ internal sealed class JsonEditsOverlay : IBuiltInLibraryOverlay
 }
 
 /// <summary>The overlay double, recording every <c>Apply</c> made with no document, by library.</summary>
-internal sealed class RecordingOverlay : IBuiltInLibraryOverlay
+internal sealed class RecordingOverlay(IBuiltInLibraryOverlay? inner = null) : IBuiltInLibraryOverlay
 {
-    private readonly IBuiltInLibraryOverlay _inner = JsonEditsOverlay.Instance;
+    private readonly IBuiltInLibraryOverlay _inner = inner ?? JsonEditsOverlay.Instance;
     private readonly List<string> _nullApplies = [];
 
     /// <summary>Every <c>Apply(shipped, null)</c> so far, of any library.</summary>
@@ -261,6 +261,12 @@ internal sealed class LibraryStorageFixture : IDisposable
 
     public LibraryStateContext Context { get; set; }
 
+    /// <summary>
+    /// Services default to the real composer and overlay (C's and O's) instead of J's doubles, for the suites that run
+    /// with the real parts since the integration commit (contract 9.3: J-1 with the real parts).
+    /// </summary>
+    public bool RealParts { get; set; }
+
     public StorageLog<DictionaryLibraryService> Log { get; } = new();
 
     public string LibrariesDir => Paths.LibrariesDir;
@@ -273,7 +279,9 @@ internal sealed class LibraryStorageFixture : IDisposable
 
     public LibraryServiceParts Parts(
         ILibraryFileSystem? files = null, ILibraryComposer? composer = null, IBuiltInLibraryOverlay? overlay = null, ILibraryCsvCodec? codec = null) =>
-        new(codec ?? InterimCsvCodec.Instance, overlay ?? JsonEditsOverlay.Instance, composer ?? ContractComposer.Instance,
+        new(codec ?? LibraryCsvCodec.Instance,
+            overlay ?? (RealParts ? BuiltInLibraryOverlay.Instance : JsonEditsOverlay.Instance),
+            composer ?? (RealParts ? LibraryComposer.Instance : ContractComposer.Instance),
             files ?? PhysicalLibraryFileSystem.Instance, Time, () => Context, NextManifestId);
 
     /// <summary>A scripted, deterministic sequence of manifest ids.</summary>
@@ -324,8 +332,8 @@ internal sealed class LibraryStorageFixture : IDisposable
     public static LibraryContent Content(string id, string name, params (string Spoken, string Written)[] rows) =>
         new(id, false, name, "Custom", null, [.. rows.Select(row => LibraryRow.Custom(new TermValues(row.Spoken, row.Written)))]);
 
-    /// <summary>The bytes the interim codec writes for content, which is what the journal stages.</summary>
-    public static byte[] Managed(LibraryContent content) => InterimCsvCodec.Instance.WriteManaged(content);
+    /// <summary>The bytes the library CSV codec writes for content, which is what the journal stages.</summary>
+    public static byte[] Managed(LibraryContent content) => LibraryCsvCodec.Instance.WriteManaged(content);
 
     /// <summary>Every file under the libraries folder, relative, for "nothing else changed" assertions.</summary>
     public IReadOnlyList<string> AllFiles() =>
@@ -427,5 +435,48 @@ internal static class Changes
         }
 
         return (prepared, outcome, failure);
+    }
+}
+
+/// <summary>
+/// Built-in edits documents made with the real overlay (O's), the way the editor makes them: an edit of a shipped row, or
+/// an added row for a spoken form the built-in does not ship, collected into the version 1 document.
+/// </summary>
+internal static class RealEdits
+{
+    public static DictionaryLibrary Shipped(string libraryId) =>
+        BuiltInDictionaryLibraries.All.Single(library => string.Equals(library.Id, libraryId, StringComparison.OrdinalIgnoreCase));
+
+    public static BuiltInLibraryEdits Written(string libraryId, params (string Key, string Written)[] edits)
+    {
+        var overlay = BuiltInLibraryOverlay.Instance;
+        var shipped = Shipped(libraryId);
+        var rows = overlay.Apply(shipped, null).ToList();
+        foreach (var (key, written) in edits)
+        {
+            var index = rows.FindIndex(row => row.Key == LibraryTermKey.From(key));
+            if (index >= 0)
+            {
+                rows[index] = overlay.Edit(rows[index], rows[index].Values with { Written = written });
+            }
+            else
+            {
+                rows.Add(overlay.Add(new TermValues(key, written)));
+            }
+        }
+
+        return overlay.Collect(shipped, null, rows) ?? throw new InvalidOperationException("The edits made no document.");
+    }
+
+    public static byte[] Document(string libraryId, params (string Key, string Written)[] edits) =>
+        BuiltInLibraryOverlay.Instance.WriteEdits(Written(libraryId, edits));
+
+    /// <summary>A document whose only entry turns a shipped row off.</summary>
+    public static BuiltInLibraryEdits TurnedOff(string libraryId, string key)
+    {
+        var overlay = BuiltInLibraryOverlay.Instance;
+        var shipped = Shipped(libraryId);
+        var rows = overlay.Apply(shipped, null).Select(row => row.Key == LibraryTermKey.From(key) ? overlay.SetEnabled(row, false) : row).ToList();
+        return overlay.Collect(shipped, null, rows) ?? throw new InvalidOperationException("The edits made no document.");
     }
 }

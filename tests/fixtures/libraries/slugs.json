@@ -1,0 +1,26 @@
+{
+  "description": "Test vectors for the custom library id rule (W1b contracts 3.5.4, review finding G9). 'slugs' holds names and the slug LibraryNaming.Slug gives, which is exactly what DictionaryLibraryService.Slugify has always given; they were computed with that rule on .NET 10.0.12. 'newCustomIds' and 'remapIds' pin the suffix rule of LibraryNaming.NewCustomId and LibraryNaming.RemapId: the candidate, then -2, -3 and so on while it is taken, compared without case. The deciders stream owns this file; the storage stream's interim copy of the rule runs the same vectors.",
+  "slugs": [
+    { "name": "Team terms", "slug": "team-terms" },
+    { "name": "  Team   Terms  ", "slug": "team-terms" },
+    { "name": "C# & .NET", "slug": "c-net" },
+    { "name": "Zulu Notes 2", "slug": "zulu-notes-2" },
+    { "name": "Crème brûlée", "slug": "crème-brûlée" },
+    { "name": "---", "slug": "library" },
+    { "name": "", "slug": "library" },
+    { "name": "İstanbul", "slug": "İstanbul" },
+    { "name": "Team terms (changed outside Scribe)", "slug": "team-terms-changed-outside-scribe" }
+  ],
+  "newCustomIds": [
+    { "name": "Team terms", "taken": [], "id": "custom-team-terms" },
+    { "name": "Team terms", "taken": ["custom-team-terms"], "id": "custom-team-terms-2" },
+    { "name": "Team terms", "taken": ["CUSTOM-TEAM-TERMS", "custom-team-terms-2"], "id": "custom-team-terms-3" },
+    { "name": "GitHub - Copy", "taken": ["github"], "id": "custom-github-copy" },
+    { "name": "---", "taken": ["custom-library"], "id": "custom-library-2" }
+  ],
+  "remapIds": [
+    { "stem": "github", "taken": [], "id": "custom-github" },
+    { "stem": "GitHub", "taken": ["custom-github"], "id": "custom-GitHub-2" },
+    { "stem": "data-and-ai", "taken": ["custom-data-and-ai", "custom-data-and-ai-2"], "id": "custom-data-and-ai-3" }
+  ]
+}

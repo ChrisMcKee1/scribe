@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Libraries;
 
@@ -308,7 +309,7 @@ internal sealed class CustomLibraryStore
             }
 
             // The stem is an id recorded for another file that still exists: this file is the newcomer.
-            var id = InterimLibraryNaming.Suffixed(stem, candidate => taken.Contains(candidate) || assigned.Contains(candidate));
+            var id = LibraryNaming.Unique(stem, candidate => taken.Contains(candidate) || assigned.Contains(candidate));
             taken.Add(id);
             assigned.Add(id);
             ids[name] = id;
@@ -322,28 +323,13 @@ internal sealed class CustomLibraryStore
                 continue;
             }
 
-            var id = RemapId(stem, new HashSet<string>(taken.Concat(assigned), StringComparer.OrdinalIgnoreCase));
+            var id = LibraryNaming.RemapId(stem, taken.Concat(assigned));
             taken.Add(id);
             assigned.Add(id);
             ids[name] = id;
         }
 
         return ids;
-    }
-
-    /// <summary>
-    /// <c>custom-&lt;stem&gt;</c>, then <c>-2</c>, <c>-3</c> while taken, compared without case; the stem is kept as it is
-    /// (not slugged), so a remap is recognizable (contract 3.5.4, <c>LibraryNaming.RemapId</c>'s rule).
-    /// </summary>
-    public static string RemapId(string stem, IReadOnlySet<string> taken)
-    {
-        var candidate = "custom-" + stem;
-        for (var n = 2; taken.Contains(candidate); n++)
-        {
-            candidate = "custom-" + stem + "-" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        return candidate;
     }
 
     public static string Stem(string fileName) =>

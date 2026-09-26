@@ -4,6 +4,7 @@ using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.PostProcessing;
 
@@ -74,6 +75,12 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     // read the journal again rather than at the next load.
     private bool _publishedHeldBack;
     private readonly List<LibraryKeptVersion> _keptVersions = [];
+
+    // Under _libraryLock. Libraries a Save created or restored that another app's file pushed to their kept id
+    // (SavedUnderNewId): the settings transaction committed the draft's enabled state and AI choice under the planned id,
+    // before the collision could be seen, and completion writes no settings (decision 12), so the next adoption in this
+    // process carries them to the kept id with Scribe's content (contract 9.3). In memory only, as kept versions are (2.6).
+    private readonly List<(string PlannedId, string KeptId)> _carried = [];
     private readonly Dictionary<string, CustomRead> _lastCustom = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, BuiltInRead> _lastBuiltIn = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<long> _pendingChanged = [];
@@ -98,7 +105,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         _parts = parts;
         _journal = new LibraryJournal(parts.Files, paths, LogFileFailure);
         _store = new CustomLibraryStore(parts.Files, paths, LogFileFailure, parts.RetiredBuiltInIds);
-        Janitor = new LibraryJanitor(RunJanitor);
+        Janitor = new LibraryJanitor(RunJanitor, parts.Time);
     }
 
     public event Action<long>? Changed;
@@ -115,11 +122,12 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     /// </summary>
     public IReadOnlyList<DictionaryLibrary> GetLibraries() => [.. LoadCatalog().Libraries.Select(ToLegacyLibrary)];
 
-    public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries()
-    {
-        var stored = _settings.Load();
-        return _settings.LastLoadFailed ? [] : GetEnabledLibraryEntries(stored.EnabledDictionaryLibraryIds);
-    }
+    /// <summary>
+    /// The committed vocabulary's local entries (<see cref="Current"/>): what the library state enables, composed in
+    /// its tiers. On defaults that is what a surviving state row enables, or nothing, never the defaults standing in for
+    /// an unusable document (contract 3.1.1).
+    /// </summary>
+    public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries() => Current.Entries;
 
     public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries(IReadOnlyCollection<string> enabledIds)
     {
@@ -157,7 +165,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         // blank one is not: nothing would be written for it but U+FFFD.
         var name = file.Name
             ?? (string.IsNullOrWhiteSpace(suggestedName) || !LibraryText.IsWellFormed(suggestedName) ? null : suggestedName.Trim())
-            ?? "Imported library";
+            ?? LibraryNaming.ImportedLibraryBaseName;
         var category = file.Category ?? "Custom";
 
         string id;
@@ -165,7 +173,10 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         {
             var read = ReadForWrapper();
             var taken = TakenIds(read);
-            id = InterimLibraryNaming.ImportId(name, taken.Contains);
+
+            // Release 0.4.4's id for an import, the name's slug with the suffix rule, both LibraryNaming's; an import
+            // keeps producing the ids it always did (review finding G9), without the custom- prefix new libraries take.
+            id = LibraryNaming.Unique(LibraryNaming.Slug(name), taken.Contains);
             var rows = file.Entries.Select(entry => LibraryRow.Custom(TermValues.FromEntry(entry))).ToList();
             var content = new LibraryContent(id, BuiltIn: false, name, category, file.Description, rows);
 
@@ -453,6 +464,10 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         {
             Publish(read.Catalog, stored);
             _publishedHeldBack = read.Folder.HeldBack > 0;
+
+            // A publication that holds content back asks storage maintenance for a recovery pass now and on a bounded
+            // schedule while it lasts (contract 9.5); one that holds nothing back ends the retries. Only a request.
+            Janitor.Retry.NotePublished(_publishedHeldBack);
         }
 
         return read;
@@ -900,7 +915,11 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     // state is used in memory and planned again at the next load. Returns the read to use and the catalog as stored.
     private (CatalogRead Read, LibraryCatalog Stored) Adopt(CatalogRead read)
     {
-        var plan = _parts.Composer.PlanAdoption(read.Catalog, read.Context);
+        // Choices a Save made for a library another app's file pushed to its kept id travel to that id first (contract 9.3).
+        var carried = read.Context.RunningOnDefaults ? null : CarriedState(read.Catalog);
+        var planning = carried is null ? read.Catalog : WithState(read.Catalog, carried);
+        var plan = _parts.Composer.PlanAdoption(planning, read.Context)
+                   ?? (carried is null ? null : new LibraryAdoption(carried, LibraryAdoptionReasons.None, _carried.Count, 0));
         if (plan is null)
         {
             return (read, read.Catalog);
@@ -924,6 +943,11 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                     LogLevel.Information,
                     "Adopted {Libraries} librar(ies) into the library state ({Reasons}; {Markers} legacy marker(s)).",
                     plan.LibrariesAdopted, plan.Reasons, plan.MarkersAdded);
+                if (carried is not null)
+                {
+                    _carried.Clear();
+                }
+
                 var settings = ReadSettings();
                 var committed = ReadCatalog(settings, KeepWitnessInvariant(settings, ContextFor(settings)), read.Recovery);
                 return (committed, committed.Catalog);
@@ -1621,7 +1645,70 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             {
                 _keptVersions.Add(version);
             }
+
+            if (version is { Kind: LibraryKeptVersionKind.SavedUnderNewId, KeptAsId: { } keptId } &&
+                !_carried.Contains((version.LibraryId, keptId)))
+            {
+                _carried.Add((version.LibraryId, keptId));
+            }
         }
+    }
+
+    // The committed state with the choices of every library saved under another id carried from the planned id to the kept
+    // one, or null when nothing is left to carry. Only while the kept file holds exactly the content the planned id's
+    // choices were made for (its accepted hash: consent bound to content, A4) and the kept id has no choices of its own;
+    // otherwise the state has moved on, the carry is dropped, and the kept file is what the planner makes of it (a
+    // library that starts off). The planned id keeps nothing, so another app's file there reads as newly discovered.
+    private LibraryLocalState? CarriedState(LibraryCatalog catalog)
+    {
+        var state = catalog.LocalState;
+        if (_carried.Count == 0 || state.Health != LocalStateHealth.Ok)
+        {
+            return null;
+        }
+
+        var enabled = new HashSet<string>(state.EnabledIds, StringComparer.OrdinalIgnoreCase);
+        var permissions = new Dictionary<string, bool>(state.AiPermissions, StringComparer.OrdinalIgnoreCase);
+        var accepted = new Dictionary<string, LibraryContentHash>(state.AcceptedContent, StringComparer.OrdinalIgnoreCase);
+        var markers = state.LegacyMarkers.ToList();
+        var notice = new HashSet<string>(state.AiUpgradeNotice, StringComparer.OrdinalIgnoreCase);
+        var carried = false;
+        foreach (var (plannedId, keptId) in _carried.ToList())
+        {
+            if (catalog.Find(keptId) is not { Content.BuiltIn: false, ContentHash: { } keptContent } ||
+                !accepted.TryGetValue(plannedId, out var consented) || consented != keptContent ||
+                accepted.ContainsKey(keptId) || permissions.ContainsKey(keptId) || enabled.Contains(keptId))
+            {
+                _carried.Remove((plannedId, keptId));
+                continue;
+            }
+
+            if (enabled.Remove(plannedId))
+            {
+                enabled.Add(keptId);
+            }
+
+            if (permissions.Remove(plannedId, out var permitted))
+            {
+                permissions[keptId] = permitted;
+            }
+
+            if (notice.Remove(plannedId))
+            {
+                notice.Add(keptId);
+            }
+
+            accepted.Remove(plannedId);
+            accepted[keptId] = keptContent;
+            markers = [.. markers.Select(marker =>
+                string.Equals(marker.LibraryId, plannedId, StringComparison.OrdinalIgnoreCase) ? marker with { LibraryId = keptId } : marker)];
+            carried = true;
+        }
+
+        return carried
+            ? LibraryLocalState.Create(
+                enabled, state.LegacyEnabledIds, permissions, markers, notice, state.Health, accepted, state.AiPermissionsLost)
+            : null;
     }
 
     private void LogKept(List<LibraryKeptVersion> kept)

@@ -24,10 +24,12 @@ public interface IDictionaryLibraryService
     IReadOnlyList<DictionaryLibrary> GetLibraries();
 
     /// <summary>
-    /// The de-duplicated entries of every library the stored settings switch on, for a caller that has no settings in
-    /// use to pass. None while the stored settings cannot be used (<see cref="Persistence.ISettingsRepository.LastLoadFailed"/>):
-    /// the defaults standing in for an unreadable or lost document are not the user's choice. Dictation never asks
-    /// here; it passes its own selection to <see cref="GetEnabledLibraryEntries(IReadOnlyCollection{string})"/>.
+    /// The de-duplicated entries of every library the committed library state switches on, composed in its tiers (the
+    /// library vocabulary's <see cref="Libraries.LibraryVocabulary.Entries"/>), for a caller that has no settings in use to
+    /// pass. In a session on defaults, where the stored settings cannot be used
+    /// (<see cref="Persistence.ISettingsRepository.LastLoadFailed"/>), that is what a surviving library state row enables,
+    /// or nothing: the defaults standing in for an unreadable or lost document are not the user's choice. Dictation never
+    /// asks here; it passes its own selection to <see cref="GetEnabledLibraryEntries(IReadOnlyCollection{string})"/>.
     /// </summary>
     IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries();
 
