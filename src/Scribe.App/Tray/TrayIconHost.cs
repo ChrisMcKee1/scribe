@@ -54,7 +54,9 @@ internal sealed class TrayIconHost : IDisposable
     public event Action? AddToDictionaryRequested;
     public event Action? CopyLastDictationRequested;
     public event Action<string>? CopyRecentDictationRequested;
+    public event Action<Guid, string>? CopyRecentDictationByIdRequested;
     public Func<IReadOnlyList<string>>? RecentDictationsProvider { get; set; }
+    public Func<IReadOnlyList<LastTranscriptStore.RetainedTranscript>>? RecentTranscriptProvider { get; set; }
     public event Action? WelcomeRequested;
     public event Action? OpenStoreRequested;
     public event Action? ShareAppRequested;
@@ -164,7 +166,8 @@ internal sealed class TrayIconHost : IDisposable
 
         ApplyMenuTheme();
         _menu.Items.Clear();
-        var recent = ReadRecentDictations();
+        var recentEntries = ReadRecentTranscripts();
+        var recent = recentEntries.Select(entry => entry.Text).ToArray();
         _updateReady = UpdateReadyProvider?.Invoke() ?? _updateReady;
         _updateVersion = UpdateVersionProvider?.Invoke() ?? _updateVersion;
         _condition = ConditionProvider?.Invoke() ?? _condition;
@@ -177,8 +180,27 @@ internal sealed class TrayIconHost : IDisposable
 
         foreach (var item in TrayMenu.Build(state).Items)
         {
-            AddMenuItem(_menu.Items, item, recent);
+            AddMenuItem(_menu.Items, item, recent, recentEntries);
         }
+    }
+
+    private IReadOnlyList<LastTranscriptStore.RetainedTranscript> ReadRecentTranscripts()
+    {
+        try
+        {
+            if (RecentTranscriptProvider is { } provider)
+            {
+                return provider();
+            }
+        }
+        catch
+        {
+            return [];
+        }
+
+        return ReadRecentDictations()
+            .Select(text => new LastTranscriptStore.RetainedTranscript(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow))
+            .ToArray();
     }
 
     private IReadOnlyList<string> ReadRecentDictations()
@@ -210,7 +232,7 @@ internal sealed class TrayIconHost : IDisposable
         return new TrayAiCleanupItem(TrayAiCleanupKind.Toggle, "AI cleanup", _aiCleanupEnabled, true);
     }
 
-    private void AddMenuItem(ItemCollection target, TrayMenuItem item, IReadOnlyList<string> recent)
+    private void AddMenuItem(ItemCollection target, TrayMenuItem item, IReadOnlyList<string> recent, IReadOnlyList<LastTranscriptStore.RetainedTranscript> recentEntries)
     {
         if (item.Kind == TrayItemKind.Separator)
         {
@@ -238,7 +260,7 @@ internal sealed class TrayIconHost : IDisposable
         {
             for (var i = 0; i < item.Children.Count; i++)
             {
-                AddRecentMenuChild(menuItem.Items, item.Children[i], i, recent);
+                AddRecentMenuChild(menuItem.Items, item.Children[i], i, recent, recentEntries);
             }
         }
         else if (item.Command is { } command)
@@ -249,7 +271,7 @@ internal sealed class TrayIconHost : IDisposable
         target.Add(menuItem);
     }
 
-    private void AddRecentMenuChild(ItemCollection target, TrayMenuItem item, int index, IReadOnlyList<string> recent)
+    private void AddRecentMenuChild(ItemCollection target, TrayMenuItem item, int index, IReadOnlyList<string> recent, IReadOnlyList<LastTranscriptStore.RetainedTranscript> recentEntries)
     {
         if (item.Kind == TrayItemKind.Separator)
         {
@@ -265,8 +287,8 @@ internal sealed class TrayIconHost : IDisposable
         ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
         if (item.Command == TrayCommand.CopyRecentDictation && index < recent.Count)
         {
-            var text = recent[index];
-            menuItem.Click += (_, _) => RunCommand(TrayCommand.CopyRecentDictation, menuItem, text);
+            var entry = recentEntries[index];
+            menuItem.Click += (_, _) => CopyRecentDictationByIdRequested?.Invoke(entry.Id, entry.Text);
         }
         else if (item.Command is { } command)
         {

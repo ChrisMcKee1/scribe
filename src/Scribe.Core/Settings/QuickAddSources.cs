@@ -30,4 +30,7 @@ public static class QuickAddSources
 
     public static QuickAddSourceState Clear(bool hasSavableCorrection) =>
         new([], CurrentRemoved: true, KeepCorrection: hasSavableCorrection, hasSavableCorrection ? RemovedMessage : null);
+
+    public static QuickAddSourceState ClearCurrent(bool hasSavableCorrection) =>
+        new([], CurrentRemoved: true, KeepCorrection: hasSavableCorrection, hasSavableCorrection ? RemovedMessage : null);
 }

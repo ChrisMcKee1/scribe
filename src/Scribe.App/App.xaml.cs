@@ -75,6 +75,7 @@ public partial class App : Application
     private readonly TrayFeedbackPolicy _trayFeedback = new();
     private TrayCondition _trayCondition;
     private bool _foundryDownloadedModel;
+    private readonly FoundryModelCacheRefresh _foundryRefresh = new();
     private Guid? _noticeCopyEntryId;
 
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
@@ -355,9 +356,13 @@ public partial class App : Application
         _tray.SettingsRequested += OpenSettings;
         _tray.CopyLastDictationRequested += CopyLastDictation;
         _tray.CopyRecentDictationRequested += CopyRecentDictation;
+        _tray.CopyRecentDictationByIdRequested += CopyRecentDictation;
         _tray.RecentDictationsProvider = () => _host is null
             ? []
             : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecent();
+        _tray.RecentTranscriptProvider = () => _host is null
+            ? []
+            : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecentEntries();
         _tray.CopyLastAvailableProvider = HasRecentDictationForTray;
         _tray.AddToDictionaryRequested += ShowQuickAdd;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
@@ -486,7 +491,7 @@ public partial class App : Application
         // pushed here before the warmup can arm it, and again with every state change.
         _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes);
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
-        SeedRecentDictationsAsync(services);
+        SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
         UpdateTrayShortcut(_controller.CurrentSettings);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
         // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
@@ -1267,6 +1272,7 @@ public partial class App : Application
         }
 
         var services = _host.Services;
+        var revision = _foundryRefresh.Next();
         _ = Task.Run(() =>
         {
             try
@@ -1279,6 +1285,11 @@ public partial class App : Application
 
                 Dispatcher.BeginInvoke(() =>
                 {
+                    if (!_foundryRefresh.IsLatest(revision))
+                    {
+                        return;
+                    }
+
                     _foundryDownloadedModel = hasModel;
                     if (_tray is not null)
                     {
@@ -1298,8 +1309,9 @@ public partial class App : Application
         _tray?.SetShortcutSentence(HotkeyText.SentenceName(settings.Hotkey), settings.Hotkey.Mode);
     }
 
-    private void SeedRecentDictationsAsync(IServiceProvider services)
+    private void SeedRecentDictationsAsync(IServiceProvider services, HistoryDeletionNotifier deletions, int attempt = 1)
     {
+        var revision = deletions.Revision;
         _ = Task.Run(() =>
         {
             try
@@ -1318,7 +1330,10 @@ public partial class App : Application
                 {
                     if (_controller?.IsClosing == false)
                     {
-                        services.GetRequiredService<LastTranscriptStore>().SeedHistory(recent);
+                        if (!services.GetRequiredService<LastTranscriptStore>().SeedHistory(recent, revision, () => deletions.Revision) && attempt < 3)
+                        {
+                            SeedRecentDictationsAsync(services, deletions, attempt + 1);
+                        }
                     }
                 });
             }
@@ -1337,6 +1352,13 @@ public partial class App : Application
             problem,
             settings?.Hotkey.Mode ?? HotkeyMode.Hold,
             settings?.Hotkey is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
+        if (problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete)
+        {
+            _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
+        }
+
         if (controllerError && settings?.ShowOverlay == true)
         {
             _overlay?.ShowFailed(pillText ?? notice.PillText ?? notice.Title);
@@ -1476,9 +1498,9 @@ public partial class App : Application
         switch (deletion.Kind)
         {
             case HistoryDeletionKind.Entry when deletion.Entry is { } entry:
-                store.Forget(entry.Text);
+                var removed = store.Forget(entry.Text);
                 quickAdd = _quickAddWindow;
-                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ForgetTranscript(entry.Text));
+                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ForgetTranscriptIds(removed));
                 break;
             case HistoryDeletionKind.Clear:
                 store.Clear();
@@ -1486,7 +1508,9 @@ public partial class App : Application
                 quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ClearTranscripts());
                 break;
             case HistoryDeletionKind.OlderThan when deletion.CutoffUtc is { } cutoff:
-                store.ForgetOlderThan(cutoff);
+                var removedOlder = store.ForgetOlderThan(cutoff);
+                quickAdd = _quickAddWindow;
+                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ForgetTranscriptIds(removedOlder));
                 break;
         }
     }
@@ -1704,6 +1728,32 @@ public partial class App : Application
         }
     });
 
+    private void CopyRecentDictation(Guid id, string text) => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var copied = ScribeClipboard.SetText(text);
+            if (!copied)
+            {
+                _noticeCopyEntryId = id;
+            }
+
+            ShowTrayNotice(copied ? TrayNotices.CopiedRecentDictation() : TrayNotices.ClipboardBusy());
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning("Copying a recent dictation failed ({Failure}).", FailureShape.Describe(ex));
+            _noticeCopyEntryId = id;
+            ShowTrayNotice(TrayNotices.ClipboardBusy());
+        }
+    });
+
     /// <summary>
     /// Opens the Store listing through the ms-windows-store protocol so it lands in the Store app
     /// rather than a browser tab.
@@ -1886,25 +1936,25 @@ public partial class App : Application
             var scope = services.GetRequiredService<StorageMaintenance>().EnterForegroundWork();
             foreground = scope;
             var store = services.GetRequiredService<LastTranscriptStore>();
-            var recent = store.GetRecent();
+            var recent = store.GetRecentEntries();
             if (recent.Count == 0)
             {
                 // Same idea as CopyLastDictation: the in-memory ring is empty on a fresh start, but
                 // history still holds what was dictated before the last restart.
-                recent = services.GetRequiredService<IHistoryRepository>()
+                var history = services.GetRequiredService<IHistoryRepository>()
                     .GetRecent(LastTranscriptStore.Capacity)
-                    .Select(h => h.Text)
-                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Where(h => !string.IsNullOrWhiteSpace(h.Text))
                     .ToList();
 
                 // Seed rather than just display. A correction saved against a transcript that only
                 // exists in history would otherwise find nothing to repair in the ring, so the fix
                 // would look like it worked while "copy last dictation" still returned the mistake.
-                store.Seed(recent);
+                store.SeedHistory(history);
+                recent = store.GetRecentEntries();
             }
 
             var window = new QuickAdd.QuickAddWindow(
-                recent,
+                recent.Select(source => new QuickAdd.QuickAddWindow.QuickAddSource(source.Id, source.HistoryText, source.Text)).ToList(),
                 loadExisting: () =>
                 {
                     var baseEntries = _settingsWindow is { } settings

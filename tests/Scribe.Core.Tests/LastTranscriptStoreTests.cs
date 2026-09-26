@@ -312,6 +312,34 @@ public sealed class LastTranscriptStoreTests
     }
 
     [Fact]
+    public void Seed_history_rejects_stale_read_after_delete_revision_moves()
+    {
+        var store = new LastTranscriptStore();
+        var revision = 0L;
+        var readRevision = revision;
+        revision++;
+
+        Assert.False(store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow, "deleted", 1, 1),
+        ], readRevision, () => revision));
+        Assert.Empty(store.GetRecent());
+    }
+
+    [Fact]
+    public void Seed_history_rejects_stale_read_after_clear_revision_moves()
+    {
+        var store = new LastTranscriptStore();
+        var revision = 4L;
+        var readRevision = revision;
+        revision++;
+
+        Assert.False(store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow, "cleared", 1, 1),
+        ], readRevision, () => revision));
+        Assert.Empty(store.GetRecent());
+    }
+
+    [Fact]
     public void Notice_ids_stop_copying_after_their_entry_is_forgotten()
     {
         var store = new LastTranscriptStore();
@@ -337,7 +365,7 @@ public sealed class LastTranscriptStoreTests
             new HistoryEntry(2, cutoff.AddMinutes(1), "new", 1, 1),
         ]);
 
-        Assert.True(store.ForgetOlderThan(cutoff));
+        Assert.NotEmpty(store.ForgetOlderThan(cutoff));
 
         Assert.Equal(["live", "new"], store.GetRecent());
     }
@@ -374,7 +402,7 @@ public sealed class LastTranscriptStoreTests
         store.Set("other");
         store.Set("repeat");
 
-        Assert.True(store.Forget("repeat"));
+        Assert.NotEmpty(store.Forget("repeat"));
 
         Assert.Equal(["other"], store.GetRecent());
     }
@@ -385,8 +413,8 @@ public sealed class LastTranscriptStoreTests
         var store = new LastTranscriptStore();
         store.Set("one");
 
-        Assert.False(store.Forget("missing"));
-        Assert.False(store.Forget(null));
+        Assert.Empty(store.Forget("missing"));
+        Assert.Empty(store.Forget(null));
         Assert.Equal(["one"], store.GetRecent());
     }
 
@@ -398,7 +426,7 @@ public sealed class LastTranscriptStoreTests
         store.Set("cloud pilot");
         Assert.True(store.Update("cloud pilot", "Copilot"));
 
-        Assert.True(store.Forget("cloud pilot"));
+        Assert.NotEmpty(store.Forget("cloud pilot"));
 
         Assert.Empty(store.GetRecent());
     }
@@ -411,7 +439,7 @@ public sealed class LastTranscriptStoreTests
         Assert.True(store.Update("cloud pilot", "Copilot"));
         Assert.True(store.Update("Copilot", "GitHub Copilot"));
 
-        Assert.True(store.Forget("cloud pilot"));
+        Assert.NotEmpty(store.Forget("cloud pilot"));
 
         Assert.Empty(store.GetRecent());
     }

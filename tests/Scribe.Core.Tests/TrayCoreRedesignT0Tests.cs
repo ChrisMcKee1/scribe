@@ -165,7 +165,7 @@ public sealed class TrayCoreRedesignT0Tests
         store.Set("two");
         store.Set("one");
 
-        Assert.True(store.Forget("one"));
+        Assert.NotEmpty(store.Forget("one"));
         Assert.Equal(["two"], store.GetRecent());
         store.Clear();
         Assert.Empty(store.GetRecent());

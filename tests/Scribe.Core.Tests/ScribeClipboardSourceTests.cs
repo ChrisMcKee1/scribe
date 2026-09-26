@@ -38,6 +38,9 @@ public sealed class ScribeClipboardSourceTests
     [InlineData("Clipboard.SetDataObject (data);")]
     [InlineData("using Clip = System.Windows.Clipboard; class C { void M() { Clip.SetImage(image); } }")]
     [InlineData("var url = \"https://example.test/Clipboard.SetText(\"; System.Windows.Clipboard.SetFileDropList(files);")]
+    [InlineData("using static System.Windows.Clipboard; class C { void M() { SetText(\"x\"); } }")]
+    [InlineData("var c = '\"'; Clipboard.SetAudio(stream);")]
+    [InlineData("var s = $$$\"\"\"Clipboard.SetText(\"x\")\"\"\"; Clipboard.SetData(\"f\", data);")]
     public void Detector_flags_clipboard_bypasses(string source)
     {
         Assert.NotEmpty(FindClipboardWrites(StripCommentsAndStrings(source)));
@@ -78,10 +81,20 @@ public sealed class ScribeClipboardSourceTests
                 System.Text.RegularExpressions.RegexOptions.Multiline)
             .Select(match => match.Groups["name"].Value)
             .ToList();
+        var usingStatic = System.Text.RegularExpressions.Regex.IsMatch(
+            source,
+            @"using\s+static\s+[^;]*\bClipboard\s*;",
+            System.Text.RegularExpressions.RegexOptions.Multiline);
         var targets = new[] { "Clipboard", "System\\s*\\.\\s*Windows\\s*\\.\\s*Clipboard" }
             .Concat(aliases.Select(System.Text.RegularExpressions.Regex.Escape));
         var pattern = $@"(?<![A-Za-z0-9_])(?:{string.Join("|", targets)})\s*\.\s*Set\w+\s*\(";
-        return System.Text.RegularExpressions.Regex.Matches(source, pattern).Select(match => match.Value).ToList();
+        var matches = System.Text.RegularExpressions.Regex.Matches(source, pattern).Select(match => match.Value).ToList();
+        if (usingStatic)
+        {
+            matches.AddRange(System.Text.RegularExpressions.Regex.Matches(source, @"(?<![A-Za-z0-9_\.])Set\w+\s*\(").Select(match => match.Value));
+        }
+
+        return matches;
     }
 
     private static string StripCommentsAndStrings(string source)
@@ -137,8 +150,23 @@ public sealed class ScribeClipboardSourceTests
 
             if (source[i] == '$' && i + 1 < source.Length && source[i + 1] == '"')
             {
+                var start = i;
+                while (i < source.Length && source[i] == '$')
+                {
+                    i++;
+                }
+
+                var quoteCount = CountQuotes(source, i);
+                if (quoteCount >= 3)
+                {
+                    result.Append("\"\"");
+                    i += quoteCount;
+                    SkipRawString(source, ref i, quoteCount);
+                    continue;
+                }
+
+                i = start + 1;
                 result.Append("\"\"");
-                i++;
                 SkipRegularString(source, ref i);
                 continue;
             }
@@ -178,6 +206,13 @@ public sealed class ScribeClipboardSourceTests
                 continue;
             }
 
+            if (source[i] == '\'')
+            {
+                result.Append("''");
+                SkipCharLiteral(source, ref i);
+                continue;
+            }
+
             result.Append(source[i]);
         }
 
@@ -195,6 +230,38 @@ public sealed class ScribeClipboardSourceTests
             }
 
             if (source[i] == '"')
+            {
+                return;
+            }
+        }
+    }
+
+    private static void SkipRawString(string source, ref int i, int quoteCount)
+    {
+        while (i < source.Length)
+        {
+            var closing = CountQuotes(source, i);
+            if (closing >= quoteCount)
+            {
+                i += closing - 1;
+                return;
+            }
+
+            i++;
+        }
+    }
+
+    private static void SkipCharLiteral(string source, ref int i)
+    {
+        for (i++; i < source.Length; i++)
+        {
+            if (source[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (source[i] == '\'')
             {
                 return;
             }
