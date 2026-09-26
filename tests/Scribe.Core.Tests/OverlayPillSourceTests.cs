@@ -66,11 +66,13 @@ public sealed class OverlayPillSourceTests
     // A colour inside a markup extension, and the scRGB form.
     [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=Red}'/>")]
     [InlineData("<Border Background='sc#1,1,0,0'/>")]
-    // A markup extension's argument quoted either way (Grok's G3), and a colour named as a static member.
+    // A markup extension's argument quoted either way (Grok's G3), a colour named as a static member, and one passed to a
+    // function.
     [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=\"Red\"}'/>")]
     [InlineData("<TextBlock Foreground='{Binding Tint, FallbackValue=\"#FF0000\"}'/>")]
     [InlineData("<TextBlock Foreground=\"{Binding Tint, FallbackValue='Red'}\"/>")]
     [InlineData("<Border><Border.Background><SolidColorBrush Color='{x:Bind ui:Colors.Red}'/></Border.Background></Border>")]
+    [InlineData("<Border><Border.Background><SolidColorBrush Color='{x:Bind local:Tints.Of(ui:Colors.Red)}'/></Border.Background></Border>")]
     public void The_colour_scan_finds_a_stray_colour_however_XAML_writes_it(string fragment)
     {
         Assert.Contains(Colours(InGrid(fragment)), c => !c.Approved);
