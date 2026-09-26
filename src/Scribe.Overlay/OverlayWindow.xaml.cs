@@ -5,6 +5,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Scribe.Core.Overlay;
 using Scribe.Overlay.Interop;
 using Scribe.Overlay.Logging;
 using Windows.Graphics;
@@ -20,10 +21,6 @@ namespace Scribe.Overlay;
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
-    // Logical (DIP) design size, matching the WPF overlay. Converted to physical pixels per-monitor.
-    private const double LogicalWidth = 264;
-    private const double LogicalHeight = 110;
-
     // The level bars' heights at full level, as fractions of 16 DIP: the icon's proportions. Each bar is laid out 16 DIP
     // tall and scaled to the larger of the 4 DIP floor and its proportion of the level, so a level update is five
     // render-transform writes and never a layout pass (the old meter's width change laid out 40 times a second).
@@ -58,6 +55,13 @@ public sealed partial class OverlayWindow : Window
     private bool _contrast;
     private bool _displaySettingsFailed;
 
+    // Windows text size, as the scale the whole pill is drawn at: read at each show and again when Windows changes it.
+    // PillTextScale holds the scale the window is sized for and decides when a new one applies, never mid-fade.
+    private readonly PillTextScale _textScale = new();
+    private double _textScaleRead = PillGeometry.MinTextScale;
+    private bool _textScaleFailed;
+
+    private bool _fadingIn;
     private bool _fadingOut;
     private DispatcherQueueTimer? _outcomeTimer;
     private DispatcherQueueTimer? _recordingWarningTimer;
@@ -94,6 +98,12 @@ public sealed partial class OverlayWindow : Window
         if (FindStoryboard(FadeOutStoryboardKey) is { } fadeOut)
         {
             fadeOut.Completed += OnFadeOutCompleted;
+        }
+
+        // A text size change that arrived during the fade in is applied once it has finished.
+        if (FindStoryboard(FadeInStoryboardKey) is { } fadeIn)
+        {
+            fadeIn.Completed += OnFadeInCompleted;
         }
 
         // Lifecycle tracing: the whole point of the rebuild is to see every transition.
@@ -187,38 +197,22 @@ public sealed partial class OverlayWindow : Window
         }
     }
 
+    // The window is the 100% window times the text scale the pill is drawn at (the Viewbox in OverlayWindow.xaml scales the
+    // content to fill it), placed at its anchor with the 8 DIP margin and kept inside the work area (PillGeometry).
     private void SizeAndPosition()
     {
         var scale = DpiScale;
-        var w = (int)Math.Round(LogicalWidth * scale);
-        var h = (int)Math.Round(LogicalHeight * scale);
-        _appWindow.Resize(new SizeInt32(w, h));
+        var textScale = _textScale.Current;
+        var work = DisplayArea.GetFromWindowId(_windowId, DisplayAreaFallback.Nearest).WorkArea;
 
-        var display = DisplayArea.GetFromWindowId(_windowId, DisplayAreaFallback.Nearest);
-        var work = display.WorkArea;
-        var margin = (int)Math.Round(8 * scale);
-
-        var x = _anchor switch
-        {
-            OverlayAnchor.TopLeft or OverlayAnchor.MiddleLeft or OverlayAnchor.BottomLeft
-                => work.X + margin,
-            OverlayAnchor.TopRight or OverlayAnchor.MiddleRight or OverlayAnchor.BottomRight
-                => work.X + work.Width - w - margin,
-            _ => work.X + (work.Width - w) / 2,
-        };
-        var y = _anchor switch
-        {
-            OverlayAnchor.TopLeft or OverlayAnchor.TopCenter or OverlayAnchor.TopRight
-                => work.Y + margin,
-            OverlayAnchor.MiddleLeft or OverlayAnchor.Center or OverlayAnchor.MiddleRight
-                => work.Y + (work.Height - h) / 2,
-            _ => work.Y + work.Height - h - margin,
-        };
-        _appWindow.Move(new PointInt32(x, y));
+        // OverlayAnchor has PillAnchor's names in PillAnchor's order (both are the engine's OverlayPosition's).
+        var place = PillGeometry.Place(
+            (PillAnchor)(int)_anchor, new PillRect(work.X, work.Y, work.Width, work.Height), textScale, scale);
+        _appWindow.MoveAndResize(new RectInt32(place.X, place.Y, place.Width, place.Height));
 
         OverlayLog.Write(
-            $"OverlayWindow.SizeAndPosition scale={scale:0.##} size={w}x{h} pos={x},{y} " +
-            $"anchor={_anchor} work=({work.X},{work.Y},{work.Width},{work.Height})");
+            $"OverlayWindow.SizeAndPosition scale={scale:0.##} textScale={textScale:0.##} size={place.Width}x{place.Height} " +
+            $"pos={place.X},{place.Y} anchor={_anchor} work=({work.X},{work.Y},{work.Width},{work.Height}) clamped={place.Clamped}");
     }
 
     /// <summary>
@@ -280,9 +274,14 @@ public sealed partial class OverlayWindow : Window
         // A fade that was taking the pill away gives it back at full opacity; it never left the screen.
         var appearing = !_appWindow.IsVisible;
         CancelFadeOut();
+
+        // The text size read above applies before an appearing pill's first frame and at once to one on screen, except
+        // during its fade in, which the change waits out; EnsureShown sizes and anchors the window for it.
+        _textScale.OnShow(_textScaleRead, appearing, _fadingIn);
         if (appearing && _animate)
         {
             StartStoryboard(FadeInStoryboardKey); // begun before the show, so the first frame is already transparent
+            _fadingIn = true;
         }
 
         EnsureShown();
@@ -427,12 +426,13 @@ public sealed partial class OverlayWindow : Window
     }
 
     // Read at each show, in this process. Motion is decoration, so without an answer the pill stays still; the contrast
-    // theme is WinUI's to apply (the HighContrast brushes in App.xaml) and is read here for the state line.
+    // theme is WinUI's to apply (the HighContrast brushes in App.xaml) and is read here for the state line. The text size
+    // is read with them.
     private void ReadDisplaySettings()
     {
         try
         {
-            _uiSettings ??= new UISettings();
+            _uiSettings ??= CreateUiSettings();
             _accessibility ??= new AccessibilitySettings();
             _animate = _uiSettings.AnimationsEnabled;
             _contrast = _accessibility.HighContrast;
@@ -446,7 +446,52 @@ public sealed partial class OverlayWindow : Window
                 OverlayLog.Warn($"OverlayWindow.ReadDisplaySettings failed ({ex.GetType().Name} 0x{ex.HResult:X8}); no motion");
             }
         }
+
+        _textScaleRead = ReadTextScale();
     }
+
+    // Windows text size, as the scale the whole pill is drawn at (PillGeometry.TextScale clamps it to 1 to 2.25). Without an
+    // answer the pill keeps its 100% size.
+    private double ReadTextScale()
+    {
+        try
+        {
+            _uiSettings ??= CreateUiSettings();
+            return PillGeometry.TextScale(_uiSettings.TextScaleFactor);
+        }
+        catch (Exception ex)
+        {
+            if (!_textScaleFailed)
+            {
+                _textScaleFailed = true;
+                OverlayLog.Warn($"OverlayWindow.ReadTextScale failed ({ex.GetType().Name} 0x{ex.HResult:X8}); 100% text size");
+            }
+
+            return PillGeometry.MinTextScale;
+        }
+    }
+
+    // The one UISettings this window keeps, so its text size event keeps firing for as long as the window lives.
+    private UISettings CreateUiSettings()
+    {
+        var settings = new UISettings();
+        settings.TextScaleFactorChanged += OnTextScaleFactorChanged;
+        return settings;
+    }
+
+    // Windows raises this off the UI thread. The scale is read again there; it resizes and re-anchors a pill on screen at
+    // once, one fading in once the fade has finished, and one hidden or fading out at its next show (PillTextScale).
+    private void OnTextScaleFactorChanged(UISettings sender, object args) => RunOnUi(() =>
+    {
+        var textScale = ReadTextScale();
+        var resize = _textScale.OnChanged(textScale, _appWindow.IsVisible, _fadingIn, _fadingOut);
+        OverlayLog.Write($"OverlayWindow.TextScaleChanged textScale={textScale:0.##} resize={resize}");
+        if (resize)
+        {
+            SizeAndPosition();
+            LogState("TextScaleChanged");
+        }
+    });
 
     // Nothing runs while the pill is hidden: the dots and both timers stop here, and a fade out ends in the hide.
     private void HidePill(OverlayState previous)
@@ -463,6 +508,8 @@ public sealed partial class OverlayWindow : Window
         }
 
         StopStoryboard(FadeInStoryboardKey);
+        _fadingIn = false;
+        _textScale.OnHidden();
         if (_animate && _appWindow.IsVisible && FindStoryboard(FadeOutStoryboardKey) is not null)
         {
             _fadingOut = true;
@@ -489,6 +536,17 @@ public sealed partial class OverlayWindow : Window
         StopStoryboard(FadeOutStoryboardKey); // full opacity again for the next show, while hidden
         LogState("FadeOut.completed");
         OverlayLog.Write("OverlayWindow.FadeOut completed; window hidden");
+    }
+
+    // A text size change that arrived during the fade in resizes the pill now, if it is still on screen.
+    private void OnFadeInCompleted(object? sender, object e)
+    {
+        _fadingIn = false;
+        if (_textScale.OnFadeInCompleted(_appWindow.IsVisible, _fadingOut))
+        {
+            SizeAndPosition();
+            LogState("FadeIn.completed");
+        }
     }
 
     private void CancelFadeOut()
@@ -642,6 +700,11 @@ public sealed partial class OverlayWindow : Window
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
+        if (_uiSettings is not null)
+        {
+            _uiSettings.TextScaleFactorChanged -= OnTextScaleFactorChanged;
+        }
+
         OverlayLog.Write("OverlayWindow.Closed");
     }
 
@@ -661,7 +724,7 @@ public sealed partial class OverlayWindow : Window
                 $"rect=({pos.X},{pos.Y},{size.Width},{size.Height}) dpi={DpiScale:0.##} " +
                 $"ex=0x{ex:X} layered={layered} transparent={transparent} noactivate={noactivate} " +
                 $"backdrop={(SystemBackdrop is null ? "null" : SystemBackdrop.GetType().Name)} " +
-                $"animations={_animate} contrast={_contrast}");
+                $"animations={_animate} contrast={_contrast} textScale={_textScale.Current:0.##}");
         }
         catch (Exception e)
         {
