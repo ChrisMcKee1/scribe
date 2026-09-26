@@ -357,10 +357,13 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
                                     (which library wins a spoken form: frozen built-in ids, then file names),
                                     LibraryTermKey (one key per spoken form), LibraryMetadata (names 0.4.3 reads
-                                    back), and the library model's shared types:
-                                    the committed LibraryCatalog, the editor's LibraryDraft, LibraryChangeSet, the
-                                    save payload, LibraryVocabulary, and the interfaces of the library CSV codec,
-                                    the built-in overlay, composition and the committed store
+                                    back), the library model's shared types (the committed LibraryCatalog, the
+                                    editor's LibraryDraft, LibraryChangeSet, the save payload, LibraryVocabulary),
+                                    and the parts behind them: the CSV codec and lint (LibraryCsvCodec), the
+                                    built-in overlay and its edits documents (BuiltInLibraryOverlay), composition
+                                    and policy (LibraryComposition, AiVocabularyPolicy, LibraryComposer,
+                                    LibraryDecisions), and storage (LibraryJournal, LibraryInstaller, the custom
+                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry); see Word packs
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -372,7 +375,10 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     of accent text, links and switch tracks (see Accent contrast)
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
-                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
+                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync;
+                                    the word pack editor's deciders (LibraryWorkspace, LibraryEditor,
+                                    LibraryImportPlanner, LibraryNaming, LibraryLayoutPlanner, SettingsCloseGuard,
+                                    LibrarySearch, LibraryTermSort)
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
     TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower; DictationInsertion adds the
@@ -390,11 +396,13 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
-  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
+  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
+                                    Libraries/Integration/ the word pack parts together, over real files)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
                                     will read in stream M1), term-keys.json (the library term key's answers, for
-                                    the same port) and composition-golden.txt (what the libraries decide,
+                                    the same port), slugs.json (the id rule), csv/ and edits/ (the CSV and edits
+                                    document formats) and composition-golden.txt (what the libraries decide,
                                     captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
@@ -1053,6 +1061,76 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   quote hides every row from it. `LibraryMetadata` holds the rule (refuse a typed double quote; a header 0.4.3 reads back
   has an even number of them), checked against `Legacy043LibraryCsv`, a verbatim copy of 0.4.3's reader in the tests.
 
+## Word packs: the library model (read before touching library storage, composition or the editor's deciders)
+
+- **The product calls libraries word packs** ("Word packs" as a title, "word pack" in a sentence, the maintainer's
+  decision). Every text the deciders show says so; types, ids, file names, settings keys, log text and the misuse
+  exceptions keep "library", and so do release 0.4.4's `Import` and `Remove` wrappers, which the old window shows beside
+  its own "library" wording until W2 replaces them. An unnamed import is "Imported word pack"
+  (`LibraryNaming.ImportedLibraryBaseName`). Ids follow the unchanged rules and are never derived again: a word pack
+  created or imported on the page takes `custom-<slug>` of the name it is made with (`custom-new-word-pack`), and the
+  `Import` wrapper keeps release 0.4.4's unprefixed slug (`imported-word-pack`).
+- **One service over four pure parts.** `DictionaryLibraryService` is `IDictionaryLibraryService`,
+  `ILibraryCatalogStore` and `ILibraryVocabularySource`, one singleton, built by `LibraryServiceParts.Default` from the
+  library CSV codec (`LibraryCsvCodec`), the built-in overlay (`BuiltInLibraryOverlay`) and composition and policy
+  (`LibraryComposer`), which are singletons in the container too, over `PhysicalLibraryFileSystem`. The editor's deciders
+  (`LibraryWorkspace`, `LibraryEditor`, `LibraryImportPlanner`, `LibraryNaming`, `LibraryLayoutPlanner`,
+  `SettingsCloseGuard`, `LibrarySearch`, `LibraryTermSort`) are pure and are what the Word packs page drives; their public
+  shapes are the Settings redesign's to build on, so a change to one goes through whoever owns that stream. Tests build
+  catalogs, drafts and change sets through `InternalsVisibleTo`; the App cannot.
+- **Tiers and legacy markers (decision 1, behind `LibraryDecisions`).** Authored rows (custom rows, and edited, pinned,
+  added and no-longer-shipped rows of a built-in; an off row supplies no rule) beat shipped rows. A custom row that
+  contradicted a built-in at the upgrade carries a legacy marker and competes after the shipped rows until the user
+  chooses "Use my spelling", so no replacement winner moves on upgrade. The AI glossary can change: authored terms enter
+  the on-device model's 80 slots ahead of shipped ones. `tests/fixtures/libraries/composition-golden.txt` pins both.
+- **Built-in edits documents.** `edits\<id>.json`, version 1, hold the user's intent per row (edited, added, pinned, off),
+  merged field by field with later shipped versions (a question only where both sides changed a field differently); the
+  previous document stays as `<id>.previous.json`. An unreadable or newer document pauses only its built-in, with no rows
+  at all: the service never calls `Apply(shipped, null)` for a document that exists, so a term the user turned off never
+  comes back. A document another app holds open keeps the content last read, or nothing at a fresh start.
+- **A library Save is a journal, and only a whole Settings Save makes one.** `PrepareSave` writes redo images and a
+  manifest `journal\g<G>-<id>.manifest.json`; `SaveBundle` with the payload commits generation G
+  (`libraries.generation`) with the local state (`libraries.state`) and the file ids (`libraries.file_ids`) in the
+  settings transaction; `CompleteSave` installs every file from whatever state it finds, never overwriting what another
+  app wrote (that is kept as a new word pack, off, or set aside), and recovery resumes an interrupted one. The witness
+  `journal\state.witness` is written before the first commit and never deleted. Journal names are parsed whole, never
+  globbed (`LibraryJournalNames`). Only `LibraryJournal` and `LibraryInstaller` touch these files.
+- **The local state is the truth; the document's list is a projection.** Enabled word packs and AI permission live in
+  `libraries.state` by logical id. `EnabledDictionaryLibraryIds` is only the downgrade-safe list older builds read (a
+  library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
+  only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it. So the old
+  Settings window's own library switches do not persist until W2's page replaces its list write.
+- **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
+  packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
+  the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything
+  it writes in the same commit, and drops the hash of an edits document it removes, so its own writes never read as a
+  replacement. A word pack a Save created that another app's file pushed to a new id takes the draft's choices with it at
+  the next adoption in the same process; after a restart before that, it is simply a word pack that is off.
+- **The vocabulary and its admission point.** `ILibraryVocabularySource.Current` is published after every commit, load
+  and recovery that changes it, possibly at the same generation, so a consumer never skips a publication because the
+  generation matches. Every outbound cleanup request is handed over only through `TryHandOff` with the scope it was
+  admitted under. Committed content that cannot be read right now is held back (no rows, no hash), and dictation runs on
+  the personal dictionary alone until a recovery can read it again: `LibraryRecoveryRetry` asks storage maintenance for a
+  pass at once, then again 30 s later doubling to 5 minutes while the hold-back lasts, and stops when content is back or
+  shutdown begins.
+- **Formats.** A managed file this version writes carries `# scribe-format: 2` and 0.4.3's raw metadata lines; one without
+  the marker is read exactly as 0.4.3 read it. An export is UTF-8 with a byte order mark, quoted metadata and the
+  reversible formula guard (`# formula-guard: 1`); an import decodes strictly with an ANSI fallback. Every write is encoded
+  before any destination is opened, so a refusal never truncates a file. The personal dictionary's export keeps its
+  replacing encoder until the editor refuses ill-formed text there too.
+- **Logging.** The library service logs counts, generations, enum names and `FailureShape` text only, never a name, id,
+  term, file name or path; `LogPrivacyGuardTests` scans `Core\Libraries`, `Core\Settings` and
+  `PostProcessing\DictionaryLibrary*.cs`, and `LogCallScanner` holds the one file-failure template.
+- **Release gate: no release contains this library model without W-V's vocabulary publication.** Until W-V lands,
+  dictation still selects word packs through release 0.4.4's seam (`GetEnabledLibraryEntries(ids)` with the document's
+  list, which is now the projection), so an enabled word pack kept from AI cleanup, or a remapped twin, is not applied on
+  this PC. Before any release from a line carrying the integration, check that W-V's merge is an ancestor of the release
+  head too. The Store build's journal (the redirected `LocalCache` folder, native and checked replace) is unverified until
+  the desktop gate exercises it.
+- **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
+  import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
+  `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
+
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
 - **The shipped hotkeys are a first-run default.** `AppSettings.CreateDefault` sets hold Page Down
@@ -1350,6 +1428,11 @@ packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
+- **The word pack library model ships only with W-V's vocabulary publication.** Before cutting a release, check whether
+  the W1b integration commit ("Integrate the library model's parts", first on `win/libraries-integration`) is an
+  ancestor of the release head (`git merge-base --is-ancestor <integration commit> <release head>`); if it is, W-V's
+  merge commit must be an ancestor too, checked the same way, or the release is refused. Until the Store rows of the
+  desktop gate are observed, the release notes say the Store build's library journal is unverified (see Word packs).
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from

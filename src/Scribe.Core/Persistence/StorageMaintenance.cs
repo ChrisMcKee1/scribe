@@ -134,6 +134,9 @@ public sealed class StorageMaintenance : IDisposable
         _origin = time.GetTimestamp();
         _quietCount = database.ActivityCount;
         _database.StorageChanged += OnStorageChanged;
+
+        // A library hold-back asks for passes through the same coalesced trigger stored audio does (contract 9.5).
+        libraryJanitor?.Retry.Connect(() => RequestRun());
     }
 
     /// <summary>
@@ -287,6 +290,9 @@ public sealed class StorageMaintenance : IDisposable
             _closed = true;
             _stopRequested = true;
         }
+
+        // Shutdown ends the library hold-back retry too: nothing asks for a pass after this.
+        _libraryJanitor?.Retry.Stop();
 
         // Counted as foreground activity so the stop is sticky: a preemptible statement registered
         // before this call aborts at its next progress check even if it had not started yet, when a

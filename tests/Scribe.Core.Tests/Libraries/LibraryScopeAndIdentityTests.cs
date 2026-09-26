@@ -166,8 +166,9 @@ public sealed class LibraryScopeAndIdentityTests : IDisposable
     [Fact]
     public void The_0_4_3_oracle_agrees_with_the_service_for_folders_without_a_remap()
     {
-        // The service still selects libraries exactly as 0.4.3 did (W1a's golden); on a folder this version has not
-        // remapped, the oracle must say the same, or it is not an oracle.
+        // The service's release 0.4.4 seam still selects libraries exactly as 0.4.3 did (W1a's golden); on a folder this
+        // version has not remapped, the oracle must say the same, or it is not an oracle. (The committed vocabulary composes
+        // the same winners in tiers, authored rows first, which LibraryWrapperTests' upgrade case checks by winner.)
         var paths = new AppPaths(_root);
         Directory.CreateDirectory(paths.LibrariesDir);
         File.WriteAllText(Path.Combine(paths.LibrariesDir, "team-terms.csv"), "# name: Team\npattern,replacement\nkube,K8s\nget hub,GitHub Enterprise\n");
@@ -180,7 +181,7 @@ public sealed class LibraryScopeAndIdentityTests : IDisposable
             var settings = new EnabledListSettings(enabled);
             var service = new DictionaryLibraryService(paths, settings, NullLogger<DictionaryLibraryService>.Instance);
 
-            Assert.Equal(Legacy043LibrarySelection.EnabledEntries(enabled, paths.LibrariesDir), service.GetEnabledLibraryEntries());
+            Assert.Equal(Legacy043LibrarySelection.EnabledEntries(enabled, paths.LibrariesDir), service.GetEnabledLibraryEntries(enabled));
         }
     }
 

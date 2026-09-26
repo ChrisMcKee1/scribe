@@ -25,11 +25,14 @@ internal sealed record LibraryServiceParts(
     Func<LibraryStateContext> Context,
     Func<Guid> NewManifestId)
 {
-    /// <summary>The interim adapters in this branch (<c>InterimLibraryParts.cs</c>); the integration commit swaps in X, O and C.</summary>
+    /// <summary>
+    /// The real parts: the library CSV codec, the built-in overlay and composition and policy, over the physical file
+    /// system and the system clock.
+    /// </summary>
     internal static LibraryServiceParts Default { get; } = new(
-        InterimCsvCodec.Instance,
-        InterimOverlay.Instance,
-        InterimComposer.Instance,
+        LibraryCsvCodec.Instance,
+        BuiltInLibraryOverlay.Instance,
+        LibraryComposer.Instance,
         PhysicalLibraryFileSystem.Instance,
         TimeProvider.System,
         static () => default,

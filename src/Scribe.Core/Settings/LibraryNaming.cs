@@ -156,6 +156,38 @@ public static class LibraryNaming
         return Unique(CustomIdPrefix + fileStem, takenIds);
     }
 
+    /// <summary>
+    /// <see cref="NewCustomId(string?, IEnumerable{string?})"/> with the taken ids as a predicate, for the storage
+    /// stream's journal, which also refuses a candidate whose whole series of kept-version names meets an id the
+    /// settings document's enabled list keeps (contract 6.6.2).
+    /// </summary>
+    internal static string NewCustomId(string? name, Func<string, bool> taken) => Unique(CustomIdPrefix + Slug(name), taken);
+
+    /// <summary>
+    /// The suffix rule every id here follows: <paramref name="candidate"/>, then <c>-2</c>, <c>-3</c> and so on appended
+    /// while <paramref name="taken"/> says the candidate is taken. The storage stream calls it for the ids it gives
+    /// without the <c>custom-</c> prefix: an id the Import wrapper derives from a name, as release 0.4.4 did, and a
+    /// hand-placed file whose stem another file's recorded id holds.
+    /// </summary>
+    internal static string Unique(string candidate, Func<string, bool> taken)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(taken);
+        if (!taken(candidate))
+        {
+            return candidate;
+        }
+
+        for (var n = 2; ; n++)
+        {
+            var suffixed = $"{candidate}-{n}";
+            if (!taken(suffixed))
+            {
+                return suffixed;
+            }
+        }
+    }
+
     private static string Unique(string candidate, IEnumerable<string?> takenIds)
     {
         ArgumentNullException.ThrowIfNull(takenIds);
@@ -168,19 +200,7 @@ public static class LibraryNaming
             }
         }
 
-        if (!taken.Contains(candidate))
-        {
-            return candidate;
-        }
-
-        for (var n = 2; ; n++)
-        {
-            var suffixed = $"{candidate}-{n}";
-            if (!taken.Contains(suffixed))
-            {
-                return suffixed;
-            }
-        }
+        return Unique(candidate, taken.Contains);
     }
 
     private static HashSet<string> NameSet(IEnumerable<string?> names)

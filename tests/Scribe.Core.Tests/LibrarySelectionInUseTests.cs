@@ -139,7 +139,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         }
 
         Assert.Empty(_libraries.GetEnabledLibraryEntries());
-        Assert.True(_settings.LastLoadFailed);
+        Assert.True(SettingsRepository.StartsWithoutSavedSettings(_settings, _database));
 
         // A post-processor no owner has given a selection falls back to that stored selection: nothing, not the defaults.
         Assert.Equal(DefaultAiDictated, _processor.Process(DefaultAiDictated));
@@ -178,7 +178,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
             .ToList();
         Assert.Equal(
             [
-                "DictionaryLibraryService.cs: public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries()",
+                "DictionaryLibraryService.cs: public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries() => Current.Entries;",
                 "IDictionaryLibraryService.cs: IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries();",
                 "TextPostProcessor.cs: : _libraries.GetEnabledLibraryEntries();",
             ],

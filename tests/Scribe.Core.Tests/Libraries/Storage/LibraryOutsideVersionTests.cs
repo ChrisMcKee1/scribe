@@ -299,11 +299,16 @@ public sealed class LibraryOutsideVersionTests : IDisposable
         Assert.Equal(new LibraryKeptVersion("custom-release-notes", LibraryKeptVersionKind.SavedUnderNewId, "custom-release-notes-2"),
             Assert.Single(saved.Outcome.KeptVersions));
 
-        // The other app's file does not match what the Save accepted: it is adopted as replaced (off, not sent).
+        // The other app's file does not match what the Save accepted: it is off and not sent, read as newly discovered, and
+        // Scribe's content under the new id carries the choices the Save made for it (contract 9.3): on here, and, with no
+        // AI choice made, kept from AI cleanup by the custom default.
         var reloaded = service.LoadCatalog();
         Assert.DoesNotContain("custom-release-notes", reloaded.LocalState.EnabledIds);
         Assert.False(reloaded.LocalState.AiPermissions["custom-release-notes"]);
-        Assert.False(reloaded.LocalState.AiPermissions["custom-release-notes-2"]);
+        Assert.Contains("custom-release-notes-2", reloaded.LocalState.EnabledIds);
+        Assert.Equal(reloaded.Find("custom-release-notes-2")!.ContentHash, reloaded.LocalState.AcceptedContent["custom-release-notes-2"]);
+        Assert.False(ContractComposer.IsPermitted(
+            reloaded.LocalState, "custom-release-notes-2", false, reloaded.Find("custom-release-notes-2")!.ContentHash));
 
         var files = _fixture.AllFiles();
         _fixture.Restart();
