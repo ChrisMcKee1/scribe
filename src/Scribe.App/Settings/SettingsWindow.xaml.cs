@@ -1378,35 +1378,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         AiCleanupCheck.IsChecked = _settings.EnableAiCleanup;
 
-        AiProviderCombo.DisplayMemberPath = nameof(ProviderChoice.Label);
-        AiProviderCombo.ItemsSource = new[]
-        {
-            new ProviderChoice(CleanupProvider.FoundryLocal, "On this PC (Foundry Local)"),
-            new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry"),
-            new ProviderChoice(CleanupProvider.OpenAiCompatible, "Another AI service"),
-            new ProviderChoice(CleanupProvider.GitHubCopilot, "GitHub Copilot"),
-        };
-
-        // Foundry model picker: searchable list of curated aliases. The live Foundry Local catalog
-        // merges in on demand (panel show / "Check & list models") without blocking the window open.
-        _foundryCuratedByAlias.Clear();
-        foreach (var curated in CleanupModelCatalog.Curated)
-        {
-            _foundryCuratedByAlias[curated.Alias] = curated;
-        }
-        SetComboItems(AiModelBox, CleanupModelCatalog.Curated.Select(m => m.Alias).ToList());
-
-        var providers = (ProviderChoice[])AiProviderCombo.ItemsSource;
-        AiProviderCombo.SelectedItem =
-            providers.FirstOrDefault(p => p.Provider == _settings.AiCleanupProvider) ?? providers[0];
         SetSelectedProviderRadio(_settings.AiCleanupProvider);
 
         var savedModel = CleanupModelCatalog.Curated
             .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
-        AiModelBox.Text = savedModel?.Alias
+        AiModelBox.SelectedValue = savedModel?.Alias
             ?? (string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
                 ? CleanupModelCatalog.Curated[0].Alias
                 : _settings.AiCleanupModel.Trim());
+        AiModelBox.Text = SelectedFoundryModelAlias;
 
         // Manual endpoint/deployment/key are the source of truth Save reads; discovery just autofills
         // them. Populate from saved settings (key is decrypted in memory by AppSettings).
@@ -1414,10 +1394,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
         AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
-        AzureAuthModeBox.SelectedIndex = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey)
+        SetSelectedAzureAuthRadio(!string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey)
             ? 2
-            : _settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
-        SetSelectedAzureAuthRadio(AzureAuthModeBox.SelectedIndex);
+            : _settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0);
         SpTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
         SpClientIdBox.Text = _settings.AiCleanupAzureClientId ?? string.Empty;
         SpClientSecretBox.Password = _settings.AiCleanupAzureClientSecret ?? string.Empty;
@@ -1694,7 +1673,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         // Also reached from the AI page's handlers, which can run while InitializeComponent is still
         // creating the controls this reads.
-        if (DictionaryGlossaryHint is null || AiProviderCombo is null || AiPromptStyleCombo is null ||
+        if (DictionaryGlossaryHint is null || AiPromptStyleCombo is null ||
             AiCleanupCheck is null || PostCheck is null)
         {
             return;
@@ -2751,17 +2730,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAiEnabledState();
     }
 
-    private void AiProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        UpdateDictionaryGlossaryHint();
-        if (AiProviderCombo.SelectedItem is ProviderChoice choice)
-        {
-            SetSelectedProviderRadio(choice.Provider);
-        }
-
-        AiProviderChanged(RemoteActivityTrigger.ProviderChange);
-    }
-
     private void AiProviderRadio_Checked(object sender, RoutedEventArgs e) =>
         AiProviderChanged(RemoteActivityTrigger.ProviderChange);
 
@@ -2773,7 +2741,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        SyncProviderComboToRadio();
         UpdateAiProviderPanels();
         UpdateAiEnabledState();
         RefreshAiStatus();
@@ -2807,23 +2774,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCopilotRadio.IsChecked = provider == CleanupProvider.GitHubCopilot;
     }
 
-    private void SyncProviderComboToRadio()
-    {
-        if (AiProviderCombo?.ItemsSource is not IEnumerable<ProviderChoice> providers)
-        {
-            return;
-        }
-
-        var provider = SelectedProvider;
-        AiProviderCombo.SelectedItem = providers.FirstOrDefault(choice => choice.Provider == provider);
-    }
-
     private AppSettings CurrentAiDraftSettings()
     {
         var draft = _settings.Clone();
         draft.EnableAiCleanup = AiCleanupCheck?.IsChecked == true;
         draft.AiCleanupProvider = SelectedProvider;
-        draft.AiCleanupModel = AiModelBox?.Text?.Trim() ?? draft.AiCleanupModel;
+        draft.AiCleanupModel = SelectedFoundryModelAlias;
         draft.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
         draft.AiCleanupAzureEndpoint = AzureEndpointBox?.Text;
         draft.AiCleanupAzureDeployment = AzureDeploymentBox?.Text;
@@ -2889,6 +2845,30 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (sender is ComboBox box)
         {
             box.Items.Filter = null;
+        }
+    }
+
+    private string SelectedFoundryModelAlias =>
+        (AiModelBox.SelectedItem as FoundryModelChoice)?.Alias ??
+        AiModelBox.SelectedValue as string ??
+        AiModelBox.Text?.Trim() ?? CleanupModelCatalog.DefaultAlias;
+
+    private void SetFoundryModelItems(IReadOnlyList<FoundryModelOption> liveCatalog)
+    {
+        _suppressComboFilter = true;
+        try
+        {
+            var selected = SelectedFoundryModelAlias;
+            AiModelBox.DisplayMemberPath = nameof(FoundryModelChoice.Label);
+            AiModelBox.SelectedValuePath = nameof(FoundryModelChoice.Alias);
+            AiModelBox.ItemsSource = FoundryModelChoices.Build(selected, CleanupModelCatalog.Curated, liveCatalog);
+            AiModelBox.Items.Filter = null;
+            AiModelBox.SelectedValue = selected;
+            AiModelBox.Text = selected;
+        }
+        finally
+        {
+            _suppressComboFilter = false;
         }
     }
 
@@ -2962,15 +2942,43 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // The Foundry Local panel's resting status line, the same text the XAML starts with.
     private const string FoundryIdleStatus =
-        "Nothing downloads while you browse. Load, or saving with AI cleanup on, downloads the selected model. " +
-        "Switching to another provider, or restarting with another one saved, removes what Foundry Local downloaded.";
+        "Nothing downloads until you choose Set up or Load, or save with AI cleanup on. " +
+        "Choosing somewhere else for AI cleanup removes what Scribe downloaded for it.";
 
-    // "Set up Foundry Local" is the one explicit way to start the runtime from this page, and the first
-    // time it downloads the hardware runtime (several GB). The warning about that lives in its own
-    // text block, which nothing writes to, so a status update can never replace it.
-    private async void AiSetupButton_Click(object sender, RoutedEventArgs e)
+    // The local status row has one next action chosen by FoundryLocalSetup. The action is the only page path
+    // that may start the Foundry Local runtime or download a model.
+    private async void AiLocalActionButton_Click(object sender, RoutedEventArgs e)
     {
-        AiSetupButton.IsEnabled = false;
+        var action = AiLocalActionButton.Content as string;
+        if (action is "Set up" or "Try again")
+        {
+            await SetupFoundryLocalAsync();
+        }
+        else if (action is "Download and load" or "Load")
+        {
+            await LoadFoundryModelAsync();
+        }
+        else if (action == "Unload")
+        {
+            await UnloadFoundryModelAsync();
+        }
+    }
+
+    private void SetAiLocalAction(string? text, bool enabled)
+    {
+        if (AiLocalActionButton is null)
+        {
+            return;
+        }
+
+        AiLocalActionButton.Content = text ?? string.Empty;
+        AiLocalActionButton.Visibility = string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
+        AiLocalActionButton.IsEnabled = enabled && !_foundryModelOp;
+    }
+
+    private async Task SetupFoundryLocalAsync()
+    {
+        AiLocalActionButton.IsEnabled = false;
         AiStatusText.Text = "Setting up. The first time can take a while.";
         try
         {
@@ -2978,18 +2986,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (!available)
             {
                 AiStatusText.Text = "Couldn't set up AI on this PC. Try again, or choose another AI service.";
+                SetAiLocalAction("Try again", enabled: true);
                 return;
             }
 
-            // The old message said the check had passed and stopped there, while the real work
-            // (repopulating the picker) happened invisibly. Reporting the counts is what makes the
-            // button's effect observable, since the list it refreshes is behind a closed dropdown.
-            // An explicit press is the one place browsing may start the runtime.
             var count = await RefreshFoundryModelsAsync(initializeRuntime: true);
             var loaded = _foundryExecutionBuilds.Values.FirstOrDefault(m => m.Loaded);
             var running = loaded is null
-                ? $"Ready to download {DisplayNameForFoundryAlias(AiModelBox.Text)}."
-                : $"{loaded.Alias} is loaded and running on the {loaded.DeviceLabel ?? "default device"}.";
+                ? $"Ready to download {DisplayNameForFoundryAlias(SelectedFoundryModelAlias)}."
+                : $"{loaded.Alias} is ready.";
 
             AiStatusText.Text = count switch
             {
@@ -3001,10 +3006,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch
         {
             AiStatusText.Text = "Couldn't set up AI on this PC. Try again, or choose another AI service.";
-        }
-        finally
-        {
-            AiSetupButton.IsEnabled = true;
+            SetAiLocalAction("Try again", enabled: true);
         }
     }
 
@@ -3022,23 +3024,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var models = initializeRuntime
                 ? await _cleanup.ListFoundryModelsAsync()
                 : await _cleanup.ListFoundryModelsIfInitializedAsync();
-            if (models.Count > 0)
-            {
-                // Keep the currently typed alias selectable even if it isn't in the live catalog.
-                var current = AiModelBox.Text?.Trim();
-                var aliases = models.Select(m => m.Alias).ToList();
-                if (!string.IsNullOrWhiteSpace(current) &&
-                    !aliases.Contains(current, StringComparer.OrdinalIgnoreCase))
-                {
-                    aliases.Add(current);
-                }
+            SetFoundryModelItems(models);
 
-                SetComboItems(AiModelBox, aliases);
-            }
-
-            // Remember each alias's build so the hint can say whether a model runs on the CPU or the
-            // GPU. The picker items stay plain strings, because the box is editable and its filter
-            // and saved value both work on text.
             _foundryExecutionBuilds.Clear();
             foreach (var model in models)
             {
@@ -3064,37 +3051,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // The device belongs on the loaded line rather than only in the picker hint: this is the
-        // one line that states what is running right now, which is exactly what the user is asking
-        // when they want to know whether cleanup is on the NPU, the GPU or the CPU.
         AiLoadedModelText.Text = string.IsNullOrWhiteSpace(loadedAlias)
-            ? "No on-device model is loaded yet."
-            : string.IsNullOrWhiteSpace(deviceLabel)
-                ? $"Loaded: {loadedAlias}"
-                : $"Loaded: {loadedAlias}, running on the {deviceLabel}";
+            ? "No model is loaded."
+            : $"{DisplayNameForFoundryAlias(loadedAlias)} is ready.";
 
-        if (AiUnloadButton is not null)
-        {
-            AiUnloadButton.IsEnabled = !_foundryModelOp && !string.IsNullOrWhiteSpace(loadedAlias);
-        }
+        var modelName = DisplayNameForFoundryAlias(string.IsNullOrWhiteSpace(loadedAlias) ? SelectedFoundryModelAlias : loadedAlias);
+        var stage = string.IsNullOrWhiteSpace(loadedAlias)
+            ? FoundryLocalSetupStage.CachedUnloaded
+            : FoundryLocalSetupStage.Loaded;
+        var setup = FoundryLocalSetup.Describe(stage, modelName, ModelSizeForAlias(SelectedFoundryModelAlias));
+        AiStatusText.Text = setup.Text;
+        SetAiLocalAction(setup.ActionText, setup.ActionText != "Unload" || setup.CanUnload);
     }
 
-    private async void AiLoadButton_Click(object sender, RoutedEventArgs e)
+    private async Task LoadFoundryModelAsync()
     {
-        var alias = AiModelBox.Text?.Trim();
+        var alias = SelectedFoundryModelAlias;
         if (_foundryModelOp || string.IsNullOrWhiteSpace(alias))
         {
             return;
         }
 
         _foundryModelOp = true;
-        AiLoadButton.IsEnabled = false;
-        AiUnloadButton.IsEnabled = false;
+        AiLocalActionButton.IsEnabled = false;
         try
         {
-            // The service reports the real reason through progress (a missing execution provider,
-            // a model absent from the catalog). Replacing that with a generic line would throw away
-            // the only actionable detail the user gets, so the last reported message wins.
             string? lastMessage = null;
             var progress = new Progress<string>(message =>
             {
@@ -3106,24 +3087,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (!ok)
             {
                 AiStatusText.Text = string.IsNullOrWhiteSpace(lastMessage)
-                    ? $"Couldn't load {alias}. Make sure Foundry Local is installed."
+                    ? $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model."
                     : lastMessage;
+                SetAiLocalAction("Try again", enabled: true);
             }
         }
         catch
         {
-            AiStatusText.Text = $"Couldn't load {alias}.";
+            AiStatusText.Text = $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model.";
+            SetAiLocalAction("Try again", enabled: true);
         }
         finally
         {
             _foundryModelOp = false;
-            AiLoadButton.IsEnabled = true;
-            // The explicit load already started the runtime; this only reads it.
             await RefreshFoundryModelsAsync(initializeRuntime: false);
         }
     }
 
-    private async void AiUnloadButton_Click(object sender, RoutedEventArgs e)
+    private async Task UnloadFoundryModelAsync()
     {
         if (_foundryModelOp)
         {
@@ -3131,17 +3112,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _foundryModelOp = true;
-        AiLoadButton.IsEnabled = false;
-        AiUnloadButton.IsEnabled = false;
+        AiLocalActionButton.IsEnabled = false;
         AiStatusText.Text = "Freeing model memory...";
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             var loaded = await _cleanup.GetLoadedFoundryModelAsync(cts.Token);
-            var ok = await _cleanup.UnloadFoundryModelAsync(loaded, cts.Token);
-            AiStatusText.Text = ok
-                ? "Model memory freed."
-                : "Model memory freed.";
+            _ = await _cleanup.UnloadFoundryModelAsync(loaded, cts.Token);
+            AiStatusText.Text = "Model memory freed.";
         }
         catch
         {
@@ -3150,7 +3128,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         finally
         {
             _foundryModelOp = false;
-            AiLoadButton.IsEnabled = true;
             await RefreshFoundryModelsAsync(initializeRuntime: false);
         }
     }
@@ -3178,7 +3155,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void AzureManualButton_Click(object sender, RoutedEventArgs e)
     {
         _azureManualConfiguration = true;
-        AzureAuthModeBox.SelectedIndex = 2;
+        AzureApiKeyRadio.IsChecked = true;
         ApplyAzureSettingsAccess();
         UpdateAzureProjectApiKeyHint();
         AzureStatusText.Text =
@@ -3511,7 +3488,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private bool IsAzureApiKeySelected => AzureApiKeyRadio?.IsChecked == true || AzureAuthModeBox?.SelectedIndex == 2;
+    private bool IsAzureApiKeySelected => AzureApiKeyRadio?.IsChecked == true;
 
     private string SelectedAzureApiKey => IsAzureApiKeySelected ? AzureApiKeyBox?.Password ?? string.Empty : string.Empty;
 
@@ -3522,7 +3499,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         !string.IsNullOrWhiteSpace(SelectedAzureApiKey);
 
     private AzureAuthMode SelectedAzureAuthMode =>
-        AzureServicePrincipalRadio?.IsChecked == true || AzureAuthModeBox?.SelectedIndex == 1
+        AzureServicePrincipalRadio?.IsChecked == true
             ? AzureAuthMode.ServicePrincipal
             : AzureAuthMode.AzureCli;
 
@@ -3545,15 +3522,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureApiKeyRadio.IsChecked = selectedIndex == 2;
     }
 
-    private void AzureAuthRadio_Checked(object sender, RoutedEventArgs e)
-    {
-        if (AzureAuthModeBox is not null)
-        {
-            AzureAuthModeBox.SelectedIndex = IsAzureApiKeySelected ? 2 : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
-        }
-
-        AzureAuthModeBox_SelectionChanged(sender, new SelectionChangedEventArgs(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent, new List<object>(), new List<object>()));
-    }
+    private void AzureAuthRadio_Checked(object sender, RoutedEventArgs e) =>
+        AzureAuthModeChanged();
 
     private void AzureUseApiKeyButton_Click(object sender, RoutedEventArgs e)
     {
@@ -3589,6 +3559,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             !apiKeyMode && _azureConnectionKnown && access.ShowCliSetup ? Visibility.Visible : Visibility.Collapsed;
         AzureDiscoveryPanel.Visibility = !apiKeyMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
         AzureConfigurationPanel.Visibility = apiKeyMode || access.ShowConfiguration ? Visibility.Visible : Visibility.Collapsed;
+        if (AzureConfigurationPanel is Wpf.Ui.Controls.CardExpander manualDetails)
+        {
+            manualDetails.IsExpanded = access.ManualDetailsExpanded;
+        }
         AzureManualButton.Visibility =
             !apiKeyMode && access.ShowManualConfigurationAction ? Visibility.Visible : Visibility.Collapsed;
 
@@ -3665,7 +3639,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         SpValidationText.Visibility = Visibility.Visible;
     }
 
-    private void AzureAuthModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void AzureAuthModeChanged()
     {
         if (_loadingUi)
         {
@@ -3708,17 +3682,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? "Fill in the details above, then choose Verify."
                 : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
                     ? "Fill in the details above, then choose Verify."
-                    : "Checking your Azure CLI sign-in before showing cloud resources.";
+                    : "Not checked yet.";
         }
 
         ApplyAzureSettingsAccess();
-
-        // Returning to the CLI needs a fresh probe; nothing else re-runs it on this path.
-        if (!IsAzureApiKeySelected && SelectedAzureAuthMode == AzureAuthMode.AzureCli)
-        {
-            _ = RefreshAzureConnectionAsync(
-                allowInteractiveLogin: false, listModels: true, forceListModels: false);
-        }
     }
 
     private void ServicePrincipalField_Changed(object sender, RoutedEventArgs e)
@@ -4836,6 +4803,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             : string.IsNullOrWhiteSpace(key) ? "the selected model" : key;
     }
 
+    private string? ModelSizeForAlias(string? alias)
+    {
+        var key = alias?.Trim() ?? string.Empty;
+        var choice = FoundryModelChoices.Build(key, CleanupModelCatalog.Curated, [])
+            .FirstOrDefault(item => string.Equals(item.Alias, key, StringComparison.OrdinalIgnoreCase));
+        if (choice is null)
+        {
+            return null;
+        }
+
+        var parts = choice.Label.Split(", ", StringSplitOptions.RemoveEmptyEntries);
+        return parts.FirstOrDefault(part => part.StartsWith("about ", StringComparison.Ordinal));
+    }
+
     private void UpdateAiModelHint()
     {
         if (AiModelHint is null)
@@ -4843,7 +4824,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var alias = AiModelBox.Text?.Trim() ?? string.Empty;
+        var alias = SelectedFoundryModelAlias;
         var buildNote = _foundryExecutionBuilds.TryGetValue(alias, out var option)
             ? option.ExecutionBuildLabel
             : null;
@@ -5431,7 +5412,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.EnableAiCleanup = aiCleanupEnabled;
             _settings.AiCleanupProvider = SelectedProvider;
             _settings.AiCleanupModel =
-                NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
+                NullIfBlank(SelectedFoundryModelAlias) ?? CleanupModelCatalog.DefaultAlias;
             _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(SelectedAzureApiKey);

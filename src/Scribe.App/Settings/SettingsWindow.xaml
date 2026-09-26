@@ -1049,23 +1049,22 @@
 
                                 <TextBlock x:Name="AiOffHelperText" Style="{StaticResource CardDescription}" Margin="2,4,2,12" Text="Turn on AI cleanup to choose where it runs and set your writing style."/>
 
-                                <ui:Card x:Name="AiDisclosureCard" Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock Text="What AI cleanup sends" Style="{StaticResource CardTitle}"
-                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <ui:CardExpander x:Name="AiDisclosureCard" Margin="0,0,0,4" IsExpanded="False"
+                                                 AutomationProperties.Name="What AI cleanup sends">
+                                    <ui:CardExpander.Header>
+                                        <StackPanel>
+                                            <TextBlock Text="What AI cleanup sends" Style="{StaticResource CardTitle}"/>
+                                        </StackPanel>
+                                    </ui:CardExpander.Header>
+                                    <StackPanel Margin="0,4,0,0">
                                         <!-- The wording lives in Core (CleanupDisclosure), next to the limits it quotes, so a test holds it to the code. -->
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                   Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}"/>
                                         <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0">
-                                            <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md"
-                                                       RequestNavigate="Hyperlink_RequestNavigate">
-                                                Read the privacy policy
-                                            </Hyperlink>
+                                            <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md" RequestNavigate="Hyperlink_RequestNavigate">Read the privacy policy</Hyperlink>
                                         </TextBlock>
                                     </StackPanel>
-                                </ui:Card>
+                                </ui:CardExpander>
 
                                 <ui:Card x:Name="AiProviderCard" Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -1099,9 +1098,6 @@
                                             </RadioButton>
                                         </StackPanel>
                                         <TextBlock x:Name="AiProviderSummaryText" Style="{StaticResource CardDescription}" Margin="0,10,0,0"/>
-                                        <ComboBox x:Name="AiProviderCombo" Visibility="Collapsed"
-                                                  SelectionChanged="AiProviderCombo_SelectionChanged"/>
-
                                         <!-- Foundry Local (on-device) -->
                                         <StackPanel x:Name="FoundryPanel">
                                             <TextBlock x:Name="AiModelTitle" Text="Model" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
@@ -1115,43 +1111,24 @@
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" TextWrapping="Wrap"
                                                        Text="" Visibility="Collapsed"/>
 
-                                            <!-- Load / unload: only one on-device model stays resident at a time -->
-                                            <Grid Margin="0,12,0,0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock x:Name="AiLoadedModelText" Grid.Column="0" VerticalAlignment="Center"
-                                                           Style="{StaticResource CardDescription}" Margin="0,0,12,0"
-                                                           Text="No on-device model is loaded yet."/>
-                                                <ui:Button x:Name="AiLoadButton" Grid.Column="1" Content="Load" MinWidth="80"
-                                                           ToolTip="Downloads the selected model if needed (the first time, also the hardware runtime for this PC), then loads it. Only one model stays loaded."
-                                                           Margin="0,0,8,0" Appearance="Primary" Click="AiLoadButton_Click"/>
-                                                <ui:Button x:Name="AiUnloadButton" Grid.Column="2" Content="Unload" MinWidth="80"
-                                                           Appearance="Secondary" Click="AiUnloadButton_Click"/>
-                                            </Grid>
-
+                                            <TextBlock x:Name="AiLoadedModelText" Visibility="Collapsed"/>
                                             <Border Style="{StaticResource CalloutBorder}">
-                                                <Grid>
+                                                <Grid MinHeight="32">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                        <TextBlock Text="Requires Foundry Local" Style="{StaticResource CardTitle}" />
-                                                        <TextBlock x:Name="AiStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                                   Text="Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it."/>
-                                                        <!-- Never written by code: live status goes to AiStatusText above, so no provider's status can replace this warning. -->
-                                                        <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource CardDescription}" Margin="0,4,0,0"
+                                                        <TextBlock x:Name="AiStatusText" Style="{StaticResource CardDescription}"
                                                                    Text="Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB."/>
                                                     </StackPanel>
-                                                    <ui:Button x:Name="AiSetupButton" Grid.Column="1" Content="Set up"
-                                                               MinWidth="76" VerticalAlignment="Center"
-                                                               ToolTip="Starts Foundry Local and fills the model dropdown above. The first setup downloads the hardware runtime for this PC, which can be several GB."
-                                                               Click="AiSetupButton_Click"/>
+                                                    <ui:Button x:Name="AiLocalActionButton" Grid.Column="1" Content="Set up"
+                                                               MinWidth="96" VerticalAlignment="Center"
+                                                               Click="AiLocalActionButton_Click"/>
                                                 </Grid>
                                             </Border>
+                                            <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource CardDescription}" Margin="0,8,0,0"
+                                                       Text="Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it."/>
                                         </StackPanel>
 
                                         <!-- Microsoft Foundry: verify sign-in before revealing cloud resources. -->
@@ -1177,11 +1154,6 @@
                                                     </StackPanel>
                                                 </RadioButton>
                                             </StackPanel>
-                                            <ComboBox x:Name="AzureAuthModeBox" Visibility="Collapsed" SelectionChanged="AzureAuthModeBox_SelectionChanged">
-                                                <ComboBoxItem Content="Azure CLI (your az login account)"/>
-                                                <ComboBoxItem Content="Service principal (app registration)"/>
-                                                <ComboBoxItem Content="API key (personal or resource key)"/>
-                                            </ComboBox>
                                             <TextBlock x:Name="AzureAuthModeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Choose how Scribe signs in to the Azure resource that runs your model."/>
 
@@ -1267,9 +1239,10 @@
                                                         <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
                                                                    Text="Scribe uses Azure CLI to sign you in and find your models. You can use an API key instead."/>
                                                     </StackPanel>
-                                                    <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install Azure CLI"
-                                                               MinWidth="76" VerticalAlignment="Center"
-                                                               Click="AzureCliButton_Click"/>
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <ui:Button x:Name="AzureCliButton" Content="Install Azure CLI" MinWidth="112" Click="AzureCliButton_Click"/>
+                                                        <ui:Button Content="Use an API key instead" Margin="8,0,0,0" MinWidth="150" Click="AzureUseApiKeyButton_Click"/>
+                                                    </StackPanel>
                                                 </Grid>
                                             </Border>
 
@@ -1291,10 +1264,14 @@
                                                 <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
                                             </StackPanel>
 
-                                            <StackPanel x:Name="AzureConfigurationPanel" Visibility="Collapsed">
-                                                <TextBlock Text="Enter details manually" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                                <TextBlock x:Name="AzureCleanupStatusText" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                           Text="" Visibility="Collapsed"/>
+                                            <ui:CardExpander x:Name="AzureConfigurationPanel" Margin="0,14,0,0" IsExpanded="False" Visibility="Collapsed" AutomationProperties.Name="Enter details manually">
+                                                <ui:CardExpander.Header>
+                                                    <StackPanel>
+                                                        <TextBlock Text="Enter details manually" Style="{StaticResource CardTitle}"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander.Header>
+                                                <StackPanel Margin="0,4,0,0">
+                                                    <TextBlock x:Name="AzureCleanupStatusText" Style="{StaticResource CardDescription}" Text="" Visibility="Collapsed"/>
 
                                                 <TextBlock x:Name="AzureEndpointTitle" Text="Endpoint" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                                 <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
@@ -1324,11 +1301,11 @@
                                                     <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                                Text="Saved encrypted on this PC with your Windows account."/>
                                                     <TextBlock x:Name="AzureProjectApiKeyHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                               Foreground="{DynamicResource SystemFillColorCautionBrush}"
                                                                Visibility="Collapsed"
                                                                Text="With an API key, Scribe uses your resource's main address instead of the project address. That's expected."/>
                                                 </StackPanel>
-                                            </StackPanel>
+                                                </StackPanel>
+                                            </ui:CardExpander>
                                         </StackPanel>
 
                                         <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->
@@ -1406,59 +1383,64 @@
                                         <TextBlock x:Name="AiWritingStyleTitle" Text="Writing style" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="AiWritingStyleSummary" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
                                                    Text="Scribe's style: clear sentences, correct punctuation, numbers as digits, and your spoken corrections applied."/>
-                                        <ui:TextBox x:Name="AiWritingStyleBox" Margin="0,10,0,0" HorizontalAlignment="Stretch"
-                                                    AcceptsReturn="True" TextWrapping="Wrap" MinHeight="140" MaxHeight="260"
-                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                    TextAlignment="Left" SpellCheck.IsEnabled="False"
-                                                    AutomationProperties.LabeledBy="{Binding ElementName=AiWritingStyleTitle}"/>
-                                        <ui:Button x:Name="ResetWritingStyleButton" Content="Restore Scribe's style" Margin="0,10,0,0"
-                                                   HorizontalAlignment="Left" Appearance="Secondary"
-                                                   Click="ResetWritingStyleButton_Click"/>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <ui:Card x:Name="AiAdvancedCard" Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock x:Name="AiPromptStyleTitle" Text="Advanced AI settings" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                   Text="Automatic uses short instructions for models on this PC and detailed instructions for cloud models."/>
-                                        <ComboBox x:Name="AiPromptStyleCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=AiPromptStyleTitle}"
-                                                  SelectionChanged="AiPromptStyleCombo_SelectionChanged"/>
-
-                                        <ui:CardExpander x:Name="PromptEditExpander" Margin="0,14,0,0" IsExpanded="False"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=PromptEditTitle}">
+                                        <ui:CardExpander x:Name="AiWritingStyleExpander" Margin="0,10,0,0" IsExpanded="False" AutomationProperties.Name="Customize">
                                             <ui:CardExpander.Header>
                                                 <StackPanel>
-                                                    <TextBlock x:Name="PromptEditTitle" Text="Instructions for the AI model" Style="{StaticResource CardTitle}" />
-                                                    <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                               Text="Changes what Scribe tells the AI model. Leave a box on Scribe's text to keep getting its improvements."/>
+                                                    <TextBlock Text="Customize" Style="{StaticResource CardTitle}"/>
                                                 </StackPanel>
                                             </ui:CardExpander.Header>
                                             <StackPanel Margin="0,4,0,0">
-                                                <TextBlock x:Name="AiFrontierPromptTitle" Text="Detailed instructions" Style="{StaticResource CardTitle}"/>
-                                                <ui:TextBox x:Name="AiFrontierPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                            AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                <ui:TextBox x:Name="AiWritingStyleBox" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                                            AcceptsReturn="True" TextWrapping="Wrap" MinHeight="160" MaxHeight="320"
                                                             VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
                                                             TextAlignment="Left" SpellCheck.IsEnabled="False"
-                                                            AutomationProperties.LabeledBy="{Binding ElementName=AiFrontierPromptTitle}"/>
-                                                <ui:Button x:Name="ResetFrontierPromptButton" Content="Restore Scribe's detailed instructions" Margin="0,8,0,0"
+                                                            AutomationProperties.LabeledBy="{Binding ElementName=AiWritingStyleTitle}"/>
+                                                <ui:Button x:Name="ResetWritingStyleButton" Content="Restore Scribe's style" Margin="0,10,0,0"
                                                            HorizontalAlignment="Left" Appearance="Secondary"
-                                                           Click="ResetFrontierPromptButton_Click"/>
-
-                                                <TextBlock x:Name="AiLocalPromptTitle" Text="Short instructions" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                                <ui:TextBox x:Name="AiLocalPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                            AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
-                                                            VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                            TextAlignment="Left" SpellCheck.IsEnabled="False"
-                                                            AutomationProperties.LabeledBy="{Binding ElementName=AiLocalPromptTitle}"/>
-                                                <ui:Button x:Name="ResetLocalPromptButton" Content="Restore Scribe's short instructions" Margin="0,8,0,0"
-                                                           HorizontalAlignment="Left" Appearance="Secondary"
-                                                           Click="ResetLocalPromptButton_Click"/>
+                                                           Click="ResetWritingStyleButton_Click"/>
                                             </StackPanel>
                                         </ui:CardExpander>
                                     </StackPanel>
                                 </ui:Card>
+
+                                <ui:CardExpander x:Name="AiAdvancedCard" Margin="0,10,0,0" IsExpanded="False"
+                                                 AutomationProperties.LabeledBy="{Binding ElementName=AiPromptStyleTitle}">
+                                    <ui:CardExpander.Header>
+                                        <StackPanel>
+                                            <TextBlock Text="Advanced AI settings" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                       Text="Automatic uses short instructions for models on this PC and detailed instructions for cloud models."/>
+                                        </StackPanel>
+                                    </ui:CardExpander.Header>
+                                    <StackPanel Margin="0,4,0,0">
+                                        <TextBlock x:Name="AiPromptStyleTitle" Text="Instructions for the AI model" Style="{StaticResource CardTitle}"/>
+                                        <ComboBox x:Name="AiPromptStyleCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AiPromptStyleTitle}"
+                                                  SelectionChanged="AiPromptStyleCombo_SelectionChanged"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                   Text="Automatic uses short instructions for models on this PC and detailed instructions for cloud models."/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,12,0,0"
+                                                   Text="Changes what Scribe tells the AI model. Leave a box on Scribe's text to keep getting its improvements."/>
+                                        <TextBlock x:Name="AiFrontierPromptTitle" Text="Detailed instructions" Style="{StaticResource CardTitle}" Margin="0,12,0,0"/>
+                                        <ui:TextBox x:Name="AiFrontierPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                    TextAlignment="Left" SpellCheck.IsEnabled="False"
+                                                    AutomationProperties.LabeledBy="{Binding ElementName=AiFrontierPromptTitle}"/>
+                                        <ui:Button x:Name="ResetFrontierPromptButton" Content="Restore Scribe's detailed instructions" Margin="0,8,0,0"
+                                                   HorizontalAlignment="Left" Appearance="Secondary"
+                                                   Click="ResetFrontierPromptButton_Click"/>
+                                        <TextBlock x:Name="AiLocalPromptTitle" Text="Short instructions" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                        <ui:TextBox x:Name="AiLocalPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                    TextAlignment="Left" SpellCheck.IsEnabled="False"
+                                                    AutomationProperties.LabeledBy="{Binding ElementName=AiLocalPromptTitle}"/>
+                                        <ui:Button x:Name="ResetLocalPromptButton" Content="Restore Scribe's short instructions" Margin="0,8,0,0"
+                                                   HorizontalAlignment="Left" Appearance="Secondary"
+                                                   Click="ResetLocalPromptButton_Click"/>
+                                    </StackPanel>
+                                </ui:CardExpander>
                                 </StackPanel>
                             </Grid>
                         </ScrollViewer>

@@ -254,7 +254,7 @@ public sealed class VocabularyApplicationSourceTests
         var read = Regex.Matches(Body(window, "private async Task<bool> TrySaveAsync()"), @"\b[A-Z]\w*\b")
             .Select(match => match.Value)
             .Where(named.Contains)
-            .Concat(["DeviceCombo", "ModeCombo", "DictationOnlyModeCombo", "AiProviderCombo", "AiPromptStyleCombo", "AzureAuthModeBox", "AzureApiKeyBox", "AzureSubscriptionBox", "OverlayPositionGrid"])
+            .Concat(["DeviceCombo", "ModeCombo", "DictationOnlyModeCombo", "AiProviderLocalRadio", "AiProviderCopilotRadio", "AiProviderFoundryRadio", "AiProviderCustomRadio", "AiPromptStyleCombo", "AzureCliRadio", "AzureServicePrincipalRadio", "AzureApiKeyRadio", "AzureApiKeyBox", "AzureSubscriptionBox", "OverlayPositionGrid"])
             .Distinct()
             .ToList();
         Assert.Contains("AiCleanupCheck", read);
