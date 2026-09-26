@@ -66,16 +66,16 @@ public sealed class VocabularyApplicationSourceTests
         // for it, off the dispatcher, before saying the change is in effect.
         var quickAdd = Body(app, "private async void OnQuickAddSaved(");
         var quickReload = quickAdd.IndexOf("var refresh = await Task.Run(() => controller.ReloadVocabulary());", StringComparison.Ordinal);
-        var willNow = quickAdd.IndexOf("will now be written as", StringComparison.Ordinal);
-        Assert.True(quickReload > 0 && quickReload < willNow, "Quick add says a rule will be written before dictation can use it.");
+        var saved = quickAdd.IndexOf("TrayNotices.QuickAddSavedAndClosed()", StringComparison.Ordinal);
+        Assert.True(quickReload > 0 && quickReload < saved, "Quick add says a rule was saved before dictation can use it.");
         Assert.Contains("if (!refresh.Applied)", quickAdd, StringComparison.Ordinal);
-        Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Saved the rule\")", quickAdd, StringComparison.Ordinal);
+        Assert.Contains("TrayNotices.QuickAddSavedButNotReloaded()", quickAdd, StringComparison.Ordinal);
 
         var learn = Body(app, "private async void LearnFromHistory()");
         var learnReload = learn.IndexOf("applied = (await Task.Run(() => controller.ReloadVocabulary())).Applied;", StringComparison.Ordinal);
-        var learnedNotice = learnReload > 0 ? learn.IndexOf("_tray.ShowNotification(", learnReload, StringComparison.Ordinal) : -1;
+        var learnedNotice = learnReload > 0 ? learn.IndexOf("ShowTrayNotice(new TrayNotice(", learnReload, StringComparison.Ordinal) : -1;
         Assert.True(learnReload > 0 && learnedNotice > learnReload, "Learning says terms were learned before dictation can use them.");
-        Assert.Contains("VocabularyNotice.SavedButNotApplied(learnedNotice)", learn[learnedNotice..], StringComparison.Ordinal);
+        Assert.Contains("\"Saved, but not in use yet\"", learn[learnedNotice..], StringComparison.Ordinal);
         Assert.DoesNotContain("ITextPostProcessor>().Reload()", app, StringComparison.Ordinal);
 
         AssertNothingWaitsSynchronously(controller, app, window);
@@ -351,7 +351,7 @@ public sealed class VocabularyApplicationSourceTests
         Assert.Contains("ShowStartupFailureNotice();", abandon, StringComparison.Ordinal);
         Assert.Contains("Shutdown();", abandon, StringComparison.Ordinal);
         Assert.Contains(
-            "Scribe.Core.Lifecycle.StartupFailureNotice.Compose(log is { } status && status.Healthy ? status.Path : null)",
+            "StartupNotices.StartupFailure(log is { } status && status.Healthy ? status.Path : null)",
             Body(app, "private static void ShowStartupFailureNotice()"),
             StringComparison.Ordinal);
 

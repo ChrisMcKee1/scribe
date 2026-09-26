@@ -5,9 +5,6 @@ namespace Scribe.Core.Tests;
 // replace Scribe blue with the Windows accent behind the resolver's back.
 public sealed class AccentSourceScanTests
 {
-    // The one known exception until T2 sets updateAccent: false in App.xaml.cs (PD03).
-    private const string AppThemeApplyException = "ApplicationThemeManager.Apply(theme,updateAccent:true)";
-
     [Fact]
     public void Watched_windows_never_let_WPF_UI_update_accents()
     {
@@ -46,7 +43,7 @@ public sealed class AccentSourceScanTests
     }
 
     [Fact]
-    public void Theme_applications_never_update_accents_except_the_one_T2_removes()
+    public void Theme_applications_never_update_accents()
     {
         var root = RepositoryRoot();
         var offenders = RepositoryViolations(root)
@@ -80,14 +77,6 @@ public sealed class AccentSourceScanTests
     public void Detector_allows_compliant_calls(string source)
     {
         Assert.Empty(FindAccentPolicyViolations(source));
-    }
-
-    [Fact]
-    public void Detector_allows_the_one_App_xaml_cs_exception_until_T2()
-    {
-        Assert.Empty(FindAccentPolicyViolations(
-            "ApplicationThemeManager.Apply(theme, updateAccent: true);",
-            Path.Combine("src", "Scribe.App", "App.xaml.cs")));
     }
 
     private static IReadOnlyList<(string RelativePath, string Call)> RepositoryViolations(string root)
@@ -125,7 +114,7 @@ public sealed class AccentSourceScanTests
         });
         Scan("ApplicationThemeManager.Apply(", call =>
         {
-            if (IsKnownAppThemeException(relativePath, call.Full) || IsElementApplyOverload(call.Args))
+            if (IsElementApplyOverload(call.Args))
             {
                 return;
             }
@@ -159,10 +148,6 @@ public sealed class AccentSourceScanTests
             }
         }
     }
-
-    private static bool IsKnownAppThemeException(string relativePath, string call) =>
-        relativePath.Equals(Path.Combine("src", "Scribe.App", "App.xaml.cs"), StringComparison.OrdinalIgnoreCase) &&
-        call == AppThemeApplyException;
 
     private static bool IsElementApplyOverload(string args) =>
         !ContainsTopLevelComma(args) &&
