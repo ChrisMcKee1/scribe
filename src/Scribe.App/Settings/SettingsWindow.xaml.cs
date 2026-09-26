@@ -350,15 +350,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             UpdateStatusText.Text =
-                $"Scribe {UpdateService.RunningVersion} is installed from Microsoft Store.";
+                $"Scribe {UpdateService.RunningVersion} is installed from Microsoft Store. Scribe does not look for updates until you ask.";
             UpdateCheckButton.Visibility = Visibility.Visible;
+            UpdateApplyButton.Content = "Install update";
             UpdateApplyButton.Visibility = Visibility.Collapsed;
             return;
         }
 
         UpdateStatusText.Text = _updates?.PendingVersion is { } pending
             ? $"Scribe {UpdateService.RunningVersion}. {pending} is downloaded and ready to install."
-            : $"Scribe {UpdateService.RunningVersion}. Use Check for updates when you want to connect.";
+            : $"Scribe {UpdateService.RunningVersion}. Scribe does not look for updates until you ask.";
         UpdateApplyButton.Visibility = _updates?.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
         if (_updates is not null)
         {
@@ -584,7 +585,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateCheckButton.IsEnabled = false;
-        UpdateStatusText.Text = "Checking for updates…";
+        UpdateStatusText.Text = "Checking for updates...";
         try
         {
             UpdateStatusText.Text = await _updates.CheckAndDownloadAsync();
@@ -602,7 +603,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StoreUpdateService>.Instance);
 
         UpdateCheckButton.IsEnabled = false;
-        UpdateStatusText.Text = "Checking Microsoft Store for updates…";
+        UpdateStatusText.Text = "Checking Microsoft Store for updates...";
         try
         {
             var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -633,7 +634,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // relaunches on the new version.
         if (_updates is null || !_updates.ApplyNowAndRestart())
         {
-            UpdateStatusText.Text = "Couldn't restart into the update. It will install when you quit Scribe.";
+            UpdateStatusText.Text = "Couldn't restart to update. The update will install when you quit Scribe.";
         }
     }
 
@@ -645,7 +646,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateApplyButton.IsEnabled = false;
-        UpdateStatusText.Text = "Installing the update from Microsoft Store…";
+        UpdateStatusText.Text = "Installing the update from Microsoft Store...";
         try
         {
             // Windows shows its own consent and progress dialogs here, and may close Scribe to
@@ -654,10 +655,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var outcome = await _storeUpdates.ApplyAsync(hwnd);
             UpdateStatusText.Text = outcome switch
             {
-                StoreUpdateOutcome.Completed => "The update is installed. Restart Scribe to run the new version.",
-                StoreUpdateOutcome.Canceled => "The update was cancelled.",
+                StoreUpdateOutcome.Completed => "The update is installed. Restart Scribe to use the new version.",
+                StoreUpdateOutcome.Canceled => "The update was canceled.",
                 StoreUpdateOutcome.NothingToDo => $"Scribe {UpdateService.RunningVersion} is up to date.",
-                _ => "The update could not be installed. Try again from the Microsoft Store app.",
+                _ => "Couldn't install the update. Try again from the Microsoft Store app.",
             };
             UpdateApplyButton.Visibility = outcome == StoreUpdateOutcome.Completed
                 ? Visibility.Collapsed
@@ -1956,7 +1957,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (report is null)
             {
-                SystemCapabilityText.Text = "Hardware details unavailable.";
+                SystemCapabilityText.Text = "This PC details aren't available.";
                 return;
             }
 
@@ -1976,7 +1977,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // Hardware detection is descriptive only; never let it break the diagnostics page.
             TryLog(ex, "Compute capability detection failed.");
-            SystemCapabilityText.Text = "Hardware details unavailable.";
+            SystemCapabilityText.Text = "This PC details aren't available.";
         }
     }
 
@@ -2097,7 +2098,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CleanupSummaryHint.Text = "No AI cleanup runs in this period yet.";
                 CleanupMetricsGrid.Visibility = Visibility.Collapsed;
                 CleanupNoDataText.Visibility = Visibility.Visible;
-                CleanupSpeedExpander.IsExpanded = false;
+                SpeedDetailsExpander.IsExpanded = false;
             }
 
             if (stats.CombinedMs is { } combined)
@@ -2118,7 +2119,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CombinedSummaryHint.Text = "No cleanup-enabled runs in this period yet.";
                 CombinedMetricsGrid.Visibility = Visibility.Collapsed;
                 CombinedNoDataText.Visibility = Visibility.Visible;
-                CombinedSpeedExpander.IsExpanded = false;
+                SpeedDetailsExpander.IsExpanded = false;
             }
 
             StatsGrid.Visibility = Visibility.Visible;
@@ -2159,7 +2160,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ClearFailuresButton.IsEnabled = false;
 
         _statsSummaryEmptyText = StatsSummaryText.Text;
-        StatsSummaryText.Text = "Calculating from local history...";
+        StatsSummaryText.Text = "Reading your statistics...";
     }
 
     private async void LoadFailures()
@@ -2172,14 +2173,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IReadOnlyList<CleanupFailure> failures;
         try
         {
-            failures = await Task.Run(() => _failureLog.GetRecent(50));
+            failures = await Task.Run(() => _failureLog.GetRecent(10_000));
         }
         catch (Exception ex)
         {
             if (_failureLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load the AI cleanup failure log for Settings.");
-                NoFailuresText.Text = "Couldn't load the failure list. Close Settings and open it again to retry.";
+                NoFailuresText.Text = "Couldn't load the list.";
                 NoFailuresText.Visibility = Visibility.Visible;
                 ClearFailuresButton.IsEnabled = true;
             }
@@ -2193,7 +2194,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _failures.Clear();
-        foreach (var failure in failures)
+        foreach (var failure in failures.Take(20))
         {
             _failures.Add(new FailureRow
             {
@@ -2206,11 +2207,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         NoFailuresText.Text = _noFailuresText;
         NoFailuresText.Visibility = _failures.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        FailuresCountText.Text = failures.Count > _failures.Count
+            ? $"Showing the 20 most recent of {failures.Count:N0} failures."
+            : string.Empty;
         ClearFailuresButton.IsEnabled = true;
     }
 
     private async void ClearFailuresButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!await ConfirmRiskyAsync(
+                "Clear the list of AI cleanup problems?",
+                "This doesn't change your settings.",
+                "Clear list"))
+        {
+            return;
+        }
+
         ClearFailuresButton.IsEnabled = false;
         try
         {
@@ -2221,6 +2233,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _failures.Clear();
+            FailuresCountText.Text = string.Empty;
             NoFailuresText.Text = _noFailuresText;
             NoFailuresText.Visibility = Visibility.Visible;
 
@@ -2231,7 +2244,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not clear the failure log:\n{ex.Message}");
+                TryLog(ex, "Could not clear the AI cleanup failure log.");
+                ShowInfo("Couldn't clear the list. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
                 ClearFailuresButton.IsEnabled = true;
             }
         }
@@ -3640,7 +3654,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not write the diagnostics bundle.");
-            ShowInfo($"Couldn't save the diagnostics: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't save diagnostics. Choose another location or try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -3655,13 +3669,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             Clipboard.SetText(path);
-            ShowInfo($"Copied the {label}.");
+            ShowInfo($"Copied {label}.");
         }
         catch (Exception ex)
         {
             // Another process can hold the clipboard open; that is not worth a crash.
             TryLog(ex, "Could not copy a path to the clipboard.");
-            ShowInfo($"Couldn't copy the {label}: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo($"Couldn't copy {label}. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -3675,7 +3689,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (!Directory.Exists(folder))
         {
-            ShowInfo($"That folder doesn't exist yet: {folder}", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            ShowInfo("That folder doesn't exist yet.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
             return;
         }
 
@@ -3690,7 +3704,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not open the folder.");
-            ShowInfo($"Couldn't open the folder: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't open the folder. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 

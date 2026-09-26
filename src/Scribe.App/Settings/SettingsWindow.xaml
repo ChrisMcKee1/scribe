@@ -802,26 +802,6 @@
                                         </Grid>
                                     </StackPanel>
                                 </ui:Card>
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
-                                            <TextBlock Text="Updates" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="UpdateStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                       Text="Scribe does not look for updates until you ask."/>
-                                        </StackPanel>
-                                        <ui:Button x:Name="UpdateCheckButton" Grid.Column="1" Content="Check for updates"
-                                                   MinWidth="76" VerticalAlignment="Center" Margin="0,0,8,0"
-                                                   Click="UpdateCheckButton_Click"/>
-                                        <ui:Button x:Name="UpdateApplyButton" Grid.Column="2" Content="Restart to update"
-                                                   MinWidth="76" VerticalAlignment="Center" Appearance="Primary"
-                                                   Visibility="Collapsed" Click="UpdateApplyButton_Click"/>
-                                    </Grid>
-                                </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
@@ -2314,436 +2294,186 @@
 
                     <!-- ============================ Diagnostics ============================ -->
                     <Grid x:Name="SectionDiagnostics" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock Text="Diagnostics" Style="{StaticResource PageTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Get help, see what went wrong, and check how fast dictation runs."/>
+                            <TextBlock Style="{StaticResource PageSubtitle}" Text="Get help, see what went wrong, and check how fast dictation runs."/>
                         </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                                <TextBlock Text="Get help" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                                <TextBlock Text="Save diagnostics..." Style="{StaticResource CardTitle}"/>
+                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Saves your logs and a summary of this PC to a zip file you can attach to a report. Logs never contain your dictations, but they do name the app you dictated into, your microphone, and error details."/>
+                                            </StackPanel>
+                                            <ui:Button Grid.Column="1" Content="Save diagnostics..." MinWidth="150" VerticalAlignment="Center" Click="AboutSaveDiagnostics_Click"/>
+                                        </Grid>
+                                        <Border Height="1" Margin="0,12,0,12" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/>
+                                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                                <TextBlock Text="Report a problem" Style="{StaticResource CardTitle}"/>
+                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Opens GitHub to report a problem or suggest a feature. Don't include dictations, recordings or keys in a public report."/>
+                                            </StackPanel>
+                                            <ui:Button Grid.Column="1" Content="Report a problem" MinWidth="150" VerticalAlignment="Center" Click="GitHubIssueButton_Click"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
 
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel>
-                        <!-- Local latency stats from stored history, expanded by pipeline stage. -->
-                        <StackPanel Margin="0,0,0,12">
-                            <TextBlock Text="This PC" Style="{StaticResource CardTitle}"/>
-                            <TextBlock x:Name="SystemCapabilityText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                       Text="Checking hardware…"/>
-                            <TextBlock x:Name="SystemCapabilityAdviceText" Style="{StaticResource CardDescription}"
-                                       Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed"
-                                       Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
-                            <TextBlock Text="Performance, last 7 days" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                            <TextBlock x:Name="StatsSummaryText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                       Text="No dictations recorded in the last week."/>
-                            <StackPanel x:Name="StatsGrid" Margin="0,12,0,0" Visibility="Collapsed">
-                                    <Border Style="{StaticResource CalloutBorder}" Margin="0,0,0,10">
-                                        <UniformGrid Columns="4">
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatWeekDictations" Style="{StaticResource MetricValue}"/>
-                                                <TextBlock Text="dictations this week" Style="{StaticResource MetricLabel}"/>
+                                <TextBlock Text="Logs folder" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <TextBlock x:Name="AboutLogsTitle" Text="Logs folder" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" TextWrapping="Wrap" Text="One file per day, kept for 7 days, recording app events, timings and errors. Logs never contain your dictations, but they do name the app you dictated into, your microphone, and error details. Read one before sharing it."/>
+                                        <Grid Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="AboutLogsPathBox" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0" VerticalContentAlignment="Center" FontFamily="Consolas" AutomationProperties.LabeledBy="{Binding ElementName=AboutLogsTitle}"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <ui:Button x:Name="AboutCopyLogsButton" Content="Copy" MinWidth="76" Margin="0,0,8,0" Click="AboutCopyLogsPath_Click" ToolTip="Copy this path to the clipboard."/>
+                                                <ui:Button Content="Open" MinWidth="76" Click="AboutOpenLogsFolder_Click" ToolTip="Open this folder in File Explorer."/>
                                             </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatWeekSpeech" Style="{StaticResource MetricValue}"/>
-                                                <TextBlock Text="speech captured" Style="{StaticResource MetricLabel}"/>
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatLongestDictation" Style="{StaticResource MetricValue}"/>
-                                                <TextBlock Text="longest dictation" Style="{StaticResource MetricLabel}"/>
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatBestPace" Style="{StaticResource MetricValue}"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                <TextBlock Text="best pace this week" Style="{StaticResource MetricLabel}"/>
-                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <TextBlock x:Name="FailuresTitle" Text="AI cleanup problems" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                            <TextBlock Text="AI cleanup problems" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Times AI cleanup couldn't finish in the last 7 days, so Scribe typed what it heard instead."/>
+                                            <TextBlock x:Name="FailuresCountText" Style="{StaticResource CardDescription}" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                        <ui:Button x:Name="ClearFailuresButton" Grid.Column="1" Content="Clear this list..." MinWidth="130" VerticalAlignment="Center" Click="ClearFailuresButton_Click"/>
+                                    </Grid>
+                                </ui:Card>
+                                <ui:Card Padding="0" Style="{StaticResource PanelCard}">
+                                    <Grid>
+                                        <DataGrid x:Name="FailuresGrid" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Disabled" settings:NestedScrollWheel.ForwardToPage="True" AutomationProperties.LabeledBy="{Binding ElementName=FailuresTitle}">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="When" Binding="{Binding When}" Width="Auto"/>
+                                                <DataGridTextColumn Header="Model" Binding="{Binding Model}" Width="Auto"/>
+                                                <DataGridTextColumn Header="What happened" Binding="{Binding Reason}" Width="*"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <TextBlock x:Name="NoFailuresText" Text="No AI cleanup failures recorded in the last 7 days." HorizontalAlignment="Center" VerticalAlignment="Center" Style="{StaticResource CardDescription}" Margin="16" Visibility="Collapsed"/>
+                                    </Grid>
+                                </ui:Card>
+
+                                <TextBlock Text="Speed" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="How long each step takes" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="StatsSummaryText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="No dictations in the last 7 days."/>
+                                        <Grid x:Name="StatsGrid" Margin="0,12,0,0" Visibility="Collapsed">
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="1.4*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="Speech recognition" Style="{StaticResource MetricLabel}" FontWeight="SemiBold"/>
+                                            <TextBlock Grid.Row="0" Grid.Column="2" Text="AI cleanup" Style="{StaticResource MetricLabel}" FontWeight="SemiBold"/>
+                                            <TextBlock Grid.Row="0" Grid.Column="3" Text="Both" Style="{StaticResource MetricLabel}" FontWeight="SemiBold"/>
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Typical" Style="{StaticResource MetricLabel}" Margin="0,8,12,0"/>
+                                            <TextBlock x:Name="StatDecodeP50" Grid.Row="1" Grid.Column="1" Style="{StaticResource MetricValue}" Margin="0,8,12,0"/>
+                                            <TextBlock x:Name="StatCleanupP50" Grid.Row="1" Grid.Column="2" Style="{StaticResource MetricValue}" Margin="0,8,12,0"/>
+                                            <TextBlock x:Name="StatCombinedP50" Grid.Row="1" Grid.Column="3" Style="{StaticResource MetricValue}" Margin="0,8,0,0"/>
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="19 in 20 finish within" Style="{StaticResource MetricLabel}" Margin="0,8,12,0"/>
+                                            <TextBlock x:Name="StatDecodeP95" Grid.Row="2" Grid.Column="1" Style="{StaticResource MetricValue}" Margin="0,8,12,0"/>
+                                            <TextBlock x:Name="StatCleanupP95" Grid.Row="2" Grid.Column="2" Style="{StaticResource MetricValue}" Margin="0,8,12,0"/>
+                                            <TextBlock x:Name="StatCombinedP95" Grid.Row="2" Grid.Column="3" Style="{StaticResource MetricValue}" Margin="0,8,0,0"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
+                                <ui:CardExpander x:Name="SpeedDetailsExpander" IsExpanded="False" AutomationProperties.Name="Speed details">
+                                    <ui:CardExpander.Header><StackPanel><TextBlock Text="Speed details" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Average, fastest and slowest runs by step."/></StackPanel></ui:CardExpander.Header>
+                                    <StackPanel Margin="0,8,0,0">
+                                        <UniformGrid Columns="4" Margin="0,0,0,12">
+                                            <StackPanel><TextBlock x:Name="StatWeekDictations" Style="{StaticResource MetricValue}"/><TextBlock Text="dictations" Style="{StaticResource MetricLabel}"/></StackPanel>
+                                            <StackPanel><TextBlock x:Name="StatWeekSpeech" Style="{StaticResource MetricValue}"/><TextBlock Text="speech captured" Style="{StaticResource MetricLabel}"/></StackPanel>
+                                            <StackPanel><TextBlock x:Name="StatLongestDictation" Style="{StaticResource MetricValue}"/><TextBlock Text="longest dictation" Style="{StaticResource MetricLabel}"/></StackPanel>
+                                            <StackPanel><TextBlock x:Name="StatBestPace" Style="{StaticResource MetricValue}"/><TextBlock Text="best pace" Style="{StaticResource MetricLabel}"/></StackPanel>
                                         </UniformGrid>
-                                    </Border>
+                                        <TextBlock x:Name="DecodeSpeedTitle" Text="Speech recognition" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="DecodeSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Speech recognition time only. AI cleanup isn't counted here."/>
+                                        <UniformGrid x:Name="DecodeMetricsGrid" Columns="3" Margin="0,8,0,12" Visibility="Collapsed"><StackPanel><TextBlock x:Name="StatDecodeAverage" Style="{StaticResource MetricValue}"/><TextBlock Text="average" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatDecodeMin" Style="{StaticResource MetricValue}"/><TextBlock Text="fastest" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatDecodeMax" Style="{StaticResource MetricValue}"/><TextBlock Text="slowest" Style="{StaticResource MetricLabel}"/></StackPanel></UniformGrid>
+                                        <TextBlock x:Name="DecodeNoDataText" Style="{StaticResource CardDescription}" Text="No speech recognition runs in this period yet."/>
+                                        <TextBlock x:Name="CleanupSpeedTitle" Text="AI cleanup" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="CleanupSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="AI cleanup time after speech recognition finishes."/>
+                                        <UniformGrid x:Name="CleanupMetricsGrid" Columns="3" Margin="0,8,0,12" Visibility="Collapsed"><StackPanel><TextBlock x:Name="StatCleanupAverage" Style="{StaticResource MetricValue}"/><TextBlock Text="average" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatCleanupMin" Style="{StaticResource MetricValue}"/><TextBlock Text="fastest" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatCleanupMax" Style="{StaticResource MetricValue}"/><TextBlock Text="slowest" Style="{StaticResource MetricLabel}"/></StackPanel></UniformGrid>
+                                        <TextBlock x:Name="CleanupNoDataText" Style="{StaticResource CardDescription}" Text="No AI cleanup runs in this period yet."/>
+                                        <TextBlock x:Name="CombinedSpeedTitle" Text="Recognition plus AI cleanup" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="CombinedSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Recognition plus AI cleanup."/>
+                                        <UniformGrid x:Name="CombinedMetricsGrid" Columns="3" Margin="0,8,0,0" Visibility="Collapsed"><StackPanel><TextBlock x:Name="StatCombinedAverage" Style="{StaticResource MetricValue}"/><TextBlock Text="average" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatCombinedMin" Style="{StaticResource MetricValue}"/><TextBlock Text="fastest" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatCombinedMax" Style="{StaticResource MetricValue}"/><TextBlock Text="slowest" Style="{StaticResource MetricLabel}"/></StackPanel></UniformGrid>
+                                        <TextBlock x:Name="CombinedNoDataText" Style="{StaticResource CardDescription}" Text="No cleanup-enabled runs in this period yet."/>
+                                    </StackPanel>
+                                </ui:CardExpander>
 
-                                    <ui:CardExpander x:Name="DecodeSpeedExpander" IsExpanded="False" Margin="0,0,0,8"
-                                                     AutomationProperties.LabeledBy="{Binding ElementName=DecodeSpeedTitle}">
-                                        <ui:CardExpander.Header>
-                                            <StackPanel>
-                                                <TextBlock x:Name="DecodeSpeedTitle" Text="Speech recognition" Style="{StaticResource CardTitle}" FontWeight="SemiBold"/>
-                                                <TextBlock x:Name="DecodeSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                           Text="Time inside the Parakeet recognizer only. AI cleanup is never counted here."/>
+                                <TextBlock Text="This PC" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><TextBlock Text="This PC" Style="{StaticResource CardTitle}"/><TextBlock x:Name="SystemCapabilityText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Checking hardware..."/><TextBlock x:Name="SystemCapabilityAdviceText" Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed" Foreground="{DynamicResource SystemFillColorCautionBrush}"/></StackPanel></ui:Card>
+
+                                <TextBlock Text="Where Scribe keeps your data" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Where Scribe keeps your data" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}" TextWrapping="Wrap" Text="Never send or share this file. It holds everything you've dictated and your saved keys. To delete dictations, use History."/>
+                                        <TextBlock x:Name="AboutDataPathWarning" Style="{StaticResource CardDescription}" Margin="0,8,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}" TextWrapping="Wrap" Visibility="Collapsed"/>
+                                        <TextBlock x:Name="AboutDataFileTitle" Text="Scribe data file" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                        <TextBlock x:Name="AboutDataFileHintText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
+                                        <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="AboutDatabasePathBox" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0" VerticalContentAlignment="Center" FontFamily="Consolas" AutomationProperties.LabeledBy="{Binding ElementName=AboutDataFileTitle}"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <ui:Button x:Name="AboutCopyDatabaseButton" Content="Copy" MinWidth="76" Margin="0,0,8,0" Click="AboutCopyDatabasePath_Click" ToolTip="Copy this path to the clipboard."/>
+                                                <ui:Button Content="Open folder" MinWidth="104" Click="AboutOpenDataFolder_Click" ToolTip="Open the containing folder in File Explorer."/>
                                             </StackPanel>
-                                        </ui:CardExpander.Header>
-                                        <StackPanel Margin="0,8,0,0">
-                                            <UniformGrid x:Name="DecodeMetricsGrid" Columns="5" Visibility="Collapsed">
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatDecodeAverage" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="average" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatDecodeMin" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="fastest" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatDecodeMax" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="slowest" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatDecodeP50" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="typical (P50)" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatDecodeP95" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="slow runs (P95)" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                            </UniformGrid>
-                                            <TextBlock x:Name="DecodeNoDataText" Style="{StaticResource CardDescription}"
-                                                       Text="No model-verified Parakeet runs have been captured yet."/>
-                                        </StackPanel>
-                                    </ui:CardExpander>
-
-                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="False" Margin="0,0,0,8"
-                                                     AutomationProperties.LabeledBy="{Binding ElementName=CleanupSpeedTitle}">
-                                        <ui:CardExpander.Header>
-                                            <StackPanel>
-                                                <TextBlock x:Name="CleanupSpeedTitle" Text="AI cleanup model" Style="{StaticResource CardTitle}" FontWeight="SemiBold"/>
-                                                <TextBlock x:Name="CleanupSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                           Text="The cleanup model round trip on its own, measured after recognition finishes."/>
-                                            </StackPanel>
-                                        </ui:CardExpander.Header>
-                                        <StackPanel Margin="0,8,0,0">
-                                            <UniformGrid x:Name="CleanupMetricsGrid" Columns="5" Visibility="Collapsed">
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCleanupAverage" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="average" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCleanupMin" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="fastest" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCleanupMax" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="slowest" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCleanupP50" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="typical (P50)" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCleanupP95" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="slow runs (P95)" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                            </UniformGrid>
-                                            <TextBlock x:Name="CleanupNoDataText" Style="{StaticResource CardDescription}"
-                                                       Text="No AI cleanup runs were captured in this period yet."/>
-                                        </StackPanel>
-                                    </ui:CardExpander>
-
-                                    <ui:CardExpander x:Name="CombinedSpeedExpander" IsExpanded="False"
-                                                     AutomationProperties.LabeledBy="{Binding ElementName=CombinedSpeedTitle}">
-                                        <ui:CardExpander.Header>
-                                            <StackPanel>
-                                                <TextBlock x:Name="CombinedSpeedTitle" Text="End to end, recognition plus AI cleanup" Style="{StaticResource CardTitle}" FontWeight="SemiBold"/>
-                                                <TextBlock x:Name="CombinedSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                           Text="Recognition plus the cleanup model round trip. This is the wait you actually feel when AI cleanup is on."/>
-                                            </StackPanel>
-                                        </ui:CardExpander.Header>
-                                        <StackPanel Margin="0,8,0,0">
-                                            <UniformGrid x:Name="CombinedMetricsGrid" Columns="5" Visibility="Collapsed">
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCombinedAverage" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="average" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCombinedMin" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="fastest" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCombinedMax" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="slowest" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCombinedP50" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="typical (P50)" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                                <StackPanel>
-                                                    <TextBlock x:Name="StatCombinedP95" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="slow runs (P95)" Style="{StaticResource CardDescription}"/>
-                                                </StackPanel>
-                                            </UniformGrid>
-                                            <TextBlock x:Name="CombinedNoDataText" Style="{StaticResource CardDescription}"
-                                                       Text="No cleanup-enabled runs were captured in this period yet."/>
-                                        </StackPanel>
-                                    </ui:CardExpander>
-                            </StackPanel>
-                        </StackPanel>
-
-                        <TextBlock x:Name="FailuresTitle" Style="{StaticResource SectionHeader}" Margin="2,0,0,10"
-                                   Text="AI cleanup failures, last 7 days"/>
-                        <ui:Card Padding="0" Style="{StaticResource PanelCard}">
-                            <Grid>
-                                <DataGrid x:Name="FailuresGrid"
-                                          AutoGenerateColumns="False" IsReadOnly="True"
-                                          CanUserAddRows="False" CanUserDeleteRows="False"
-                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                          Background="Transparent" BorderThickness="0"
-                                          settings:NestedScrollWheel.ForwardToPage="True"
-                                          AutomationProperties.LabeledBy="{Binding ElementName=FailuresTitle}">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="When" Binding="{Binding When}" Width="Auto"/>
-                                        <DataGridTextColumn Header="Model" Binding="{Binding Model}" Width="Auto"/>
-                                        <DataGridTextColumn Header="Reason" Binding="{Binding Reason}" Width="*"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                                <TextBlock x:Name="NoFailuresText" Text="No failures recorded. Cleanup has been healthy."
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                                           Style="{StaticResource CardDescription}" Margin="0"
-                                           Visibility="Collapsed"/>
-                            </Grid>
-                        </ui:Card>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-                            <ui:Button x:Name="ClearFailuresButton" Content="Clear failures"
-                                       MinWidth="120" Click="ClearFailuresButton_Click"/>
-                        </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
 
                     <!-- ============================ About ============================ -->
                     <Grid x:Name="SectionAbout" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock Text="About" Style="{StaticResource PageTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Version, updates, help, privacy and feedback."/>
+                            <TextBlock Style="{StaticResource PageSubtitle}" Text="Version, updates, help, privacy and feedback."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Image Grid.Column="0" Source="pack://application:,,,/Assets/scribe-mark.png" Width="72" Height="72"
-                                               Margin="0,0,18,0"
-                                               RenderOptions.BitmapScalingMode="HighQuality"
-                                               AutomationProperties.Name="Scribe"/>
+                                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <Image Grid.Column="0" Source="pack://application:,,,/Assets/scribe-mark.png" Width="72" Height="72" Margin="0,0,18,0" RenderOptions.BitmapScalingMode="HighQuality" AutomationProperties.Name="Scribe"/>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="Scribe AI" Style="{StaticResource PageTitle}"/>
-                                            <TextBlock x:Name="AboutVersionText" Text="Version"
-                                                       Style="{StaticResource CardDescription}" Margin="0,3,0,0"/>
-                                            <TextBlock Text="Private push-to-talk voice dictation for Windows"
-                                                       Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock Text="Private by design" Style="{StaticResource CardTitle}"
-                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                   Text="Speech recognition runs on this PC, and audio never leaves it. Cloud AI is optional: it sends text, never audio, and only while you have a remote provider turned on or use a feature that needs one."/>
-                                        <ui:Button Content="Read privacy policy" HorizontalAlignment="Left"
-                                                   Margin="0,12,0,0" MinWidth="150"
-                                                   Click="PrivacyPolicyButton_Click"/>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <!-- Store policy 11.16 requires a reporting route for AI content that is
-                                     reachable regardless of what is in History, so this card is the
-                                     unconditional one; the per-result buttons in History are the
-                                     contextual path. -->
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="Report an AI result" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                       Text="If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it first. Scribe sends nothing by itself. You can also report a result from History."/>
-                                        </StackPanel>
-                                        <ui:Button Grid.Column="1" Content="Report an AI result..."
-                                                   VerticalAlignment="Center" MinWidth="150"
-                                                   Click="AboutReportAiContent_Click"/>
-                                    </Grid>
-                                </ui:Card>
-
-                                <!-- Deliberately unconditional and unconnected to the History thumbs.
-                                     Store policy requires an in-app rating of the APP to route to the
-                                     Store's own mechanism regardless of sentiment; offering this only
-                                     to people who liked a result is the pattern filed under fraudulent
-                                     activity. Anyone can reach this at any time. -->
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="Rate Scribe in the Store" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                       Text="Ratings and reviews are handled by the Microsoft Store, whatever you want to say."/>
-                                        </StackPanel>
-                                        <ui:Button Grid.Column="1" Content="Open Store rating"
-                                                   VerticalAlignment="Center" MinWidth="150"
-                                                   Click="AboutRateInStore_Click"/>
-                                    </Grid>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="Love Scribe?" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                       Text="A GitHub star helps other people discover private, offline dictation."/>
-                                        </StackPanel>
-                                        <ui:Button Grid.Column="1" Content="Open GitHub to star"
-                                                   Appearance="Primary" MinWidth="150"
-                                                   VerticalAlignment="Center"
-                                                   Click="GitHubStarButton_Click"/>
-                                    </Grid>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock Text="Share Scribe" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                   Text="Send this link to anyone who wants private, offline dictation. It opens the Scribe AI listing in the Microsoft Store."/>
-                                        <Grid Margin="0,12,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="AboutStoreLinkBox" Grid.Column="0" IsReadOnly="True"
-                                                        VerticalAlignment="Center"
-                                                        AutomationProperties.Name="Microsoft Store link"/>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                                        VerticalAlignment="Center" Margin="8,0,0,0">
-                                                <ui:Button Content="Copy" MinWidth="76" Margin="0,0,8,0"
-                                                           Click="AboutCopyStoreLink_Click"
-                                                           ToolTip="Copy the Store link to the clipboard"/>
-                                                <ui:Button Content="Open in Store" MinWidth="120"
-                                                           Click="AboutOpenStore_Click"
-                                                           ToolTip="Open the Scribe AI listing in the Microsoft Store"/>
+                                            <TextBlock Text="Scribe" Style="{StaticResource PageTitle}"/>
+                                            <TextBlock x:Name="AboutVersionText" Text="Version" Style="{StaticResource CardDescription}" Margin="0,3,0,0"/>
+                                            <TextBlock Text="Private push-to-talk dictation for Windows" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
+                                            <TextBlock Text="Updates" Style="{StaticResource CardTitle}" Margin="0,18,0,0"/>
+                                            <TextBlock x:Name="UpdateStatusText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Scribe does not look for updates until you ask."/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                                <ui:Button x:Name="UpdateCheckButton" Content="Check for updates" MinWidth="130" Margin="0,0,8,0" Click="UpdateCheckButton_Click"/>
+                                                <ui:Button x:Name="UpdateApplyButton" Content="Restart to update" MinWidth="130" Visibility="Collapsed" Click="UpdateApplyButton_Click"/>
                                             </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="Support and source" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                       Text="Report a problem, request a feature, or inspect the code that runs on your device. Never put transcripts, audio, credentials, or other sensitive information in a public issue."/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ui:Button Content="Report an issue" MinWidth="120" Margin="0,0,8,0"
-                                                       Click="GitHubIssueButton_Click"/>
-                                            <ui:Button Content="View source" MinWidth="110"
-                                                       Click="GitHubSourceButton_Click"/>
                                         </StackPanel>
                                     </Grid>
                                 </ui:Card>
 
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock Text="Where your data is stored" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
-                                                   Text="Scribe keeps its local data files in these locations. Copy a path to paste it elsewhere, or open the folder."/>
-                                        <TextBlock x:Name="AboutDataPathWarning" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"
-                                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
-                                                   TextWrapping="Wrap"
-                                                   Visibility="Collapsed"/>
+                                <TextBlock Text="Get help" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><TextBlock Text="Having a problem? Save diagnostics and attach the file when you report it." Style="{StaticResource CardDescription}"/><WrapPanel Margin="0,12,0,0"><ui:Button Content="Report a problem" MinWidth="130" Margin="0,0,8,8" Click="GitHubIssueButton_Click"/><ui:Button Content="Save diagnostics..." MinWidth="150" Margin="0,0,8,8" Click="AboutSaveDiagnostics_Click"/><ui:Button Content="Open Diagnostics" MinWidth="140" Margin="0,0,8,8" Click="AboutOpenDiagnostics_Click"/><ui:Button Content="Show the welcome again" MinWidth="180" Margin="0,0,8,8" Click="AboutShowWelcomeButton_Click"/></WrapPanel></StackPanel></ui:Card>
 
-                                        <TextBlock x:Name="AboutLogsTitle" Text="Diagnostic logs" Style="{StaticResource CardTitle}"
-                                                    Margin="0,16,0,0"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                   Text="One file per day, kept for 7 days, recording app events, timings and errors. Logs never contain your dictations, but they do record the name of the focused app, your audio device, and error details. Read one before sharing it."/>
+                                <TextBlock Text="Privacy" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Privacy" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Speech recognition runs on this PC, and your audio never leaves it. AI cleanup is optional, and online services receive text only while you use them."/></StackPanel><ui:Button Grid.Column="1" Content="Read the privacy policy" MinWidth="170" VerticalAlignment="Center" Click="PrivacyPolicyButton_Click"/></Grid></ui:Card>
 
-                                        <!-- Reporting a bug is the whole point of this card, so the
-                                             action that produces an attachable file leads, and the
-                                             raw folder path stays available underneath for anyone
-                                             who wants to read a log in place. -->
-                                        <Grid Margin="0,10,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Style="{StaticResource CardDescription}"
-                                                       VerticalAlignment="Center" TextWrapping="Wrap"
-                                                       Margin="0,0,12,0"
-                                                       Text="Reporting a problem? Save every kept log plus a summary of this PC into one zip you can attach to a GitHub issue."/>
-                                            <ui:Button Grid.Column="1" Content="Save diagnostics…"
-                                                       Appearance="Primary" MinWidth="150"
-                                                       Click="AboutSaveDiagnostics_Click"
-                                                       ToolTip="Write the logs and a system summary to a zip file."/>
-                                        </Grid>
+                                <TextBlock Text="Feedback" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Report an AI result..." Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it first. Scribe sends nothing by itself. You can also report a result from History."/></StackPanel><ui:Button Grid.Column="1" Content="Report an AI result..." VerticalAlignment="Center" MinWidth="150" Click="AboutReportAiContent_Click"/></Grid><Border Height="1" Margin="0,12,0,12" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Rate Scribe in the Microsoft Store" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" Text="Ratings and reviews are handled by the Microsoft Store."/></StackPanel><ui:Button Grid.Column="1" Content="Rate" VerticalAlignment="Center" MinWidth="100" Click="AboutRateInStore_Click"/></Grid></StackPanel></ui:Card>
 
-                                        <Grid Margin="0,8,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="AboutLogsPathBox" Grid.Column="0" IsReadOnly="True"
-                                                        Margin="0,0,8,0" VerticalContentAlignment="Center"
-                                                        FontFamily="Consolas"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=AboutLogsTitle}"/>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                                <ui:Button x:Name="AboutCopyLogsButton" Content="Copy" MinWidth="76"
-                                                           Margin="0,0,8,0" Click="AboutCopyLogsPath_Click"
-                                                           ToolTip="Copy this path to the clipboard."/>
-                                                <ui:Button Content="Open" MinWidth="76"
-                                                           Click="AboutOpenLogsFolder_Click"
-                                                           ToolTip="Open this folder in File Explorer."/>
-                                            </StackPanel>
-                                        </Grid>
+                                <TextBlock Text="Support Scribe" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Star Scribe on GitHub" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="A GitHub star helps other people discover private, offline dictation."/></StackPanel><ui:Button Grid.Column="1" Content="Open GitHub" MinWidth="130" VerticalAlignment="Center" Click="GitHubStarButton_Click"/></Grid><Border Height="1" Margin="0,12,0,12" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/><TextBlock Text="Share Scribe" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Send this link to anyone who wants private, offline dictation. It opens the Scribe listing in the Microsoft Store."/><Grid Margin="0,12,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ui:TextBox x:Name="AboutStoreLinkBox" Grid.Column="0" IsReadOnly="True" VerticalAlignment="Center" AutomationProperties.Name="Microsoft Store link"/><ui:Button Grid.Column="1" Content="Copy link" MinWidth="100" Margin="8,0,0,0" Click="AboutCopyStoreLink_Click" ToolTip="Copy the Store link to the clipboard."/></Grid></StackPanel></ui:Card>
 
-                                        <TextBlock x:Name="AboutDataFileTitle" Text="Scribe data file" Style="{StaticResource CardTitle}"
-                                                    Margin="0,18,0,0"/>
-                                        <!-- Text comes from StorageRetentionPolicy.DataFileHint so it names the audio limits maintenance enforces. -->
-                                        <TextBlock x:Name="AboutDataFileHintText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
-                                                   Text="Never send or post this file. It contains everything you have dictated, and your saved API keys. To clear dictations use the History page instead, because deleting this file also erases your dictionary, snippets, profiles and settings."/>
-                                        <Grid Margin="0,8,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="AboutDatabasePathBox" Grid.Column="0" IsReadOnly="True"
-                                                        Margin="0,0,8,0" VerticalContentAlignment="Center"
-                                                        FontFamily="Consolas"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=AboutDataFileTitle}"/>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                                <ui:Button x:Name="AboutCopyDatabaseButton" Content="Copy" MinWidth="76"
-                                                           Margin="0,0,8,0" Click="AboutCopyDatabasePath_Click"
-                                                           ToolTip="Copy this path to the clipboard."/>
-                                                <ui:Button Content="Open" MinWidth="76"
-                                                           Click="AboutOpenDataFolder_Click"
-                                                           ToolTip="Open the containing folder in File Explorer."/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <TextBlock Text="Scribe is open source under the MIT License."
-                                           Style="{StaticResource CardDescription}" Margin="2,2,0,0"/>
+                                <TextBlock Text="Source" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Source" Style="{StaticResource CardTitle}"/><TextBlock Text="Scribe is open source under the MIT License." Style="{StaticResource CardDescription}" Margin="0,4,0,0"/></StackPanel><ui:Button Grid.Column="1" Content="View source" MinWidth="110" VerticalAlignment="Center" Click="GitHubSourceButton_Click"/></Grid></ui:Card>
                             </StackPanel>
                         </ScrollViewer>
-                    </Grid>
-                </Grid>
+                    </Grid>                </Grid>
 
                 <!-- Footer: explicit save model, always visible -->
                 <Grid Grid.Row="1" Margin="0,16,0,0">
