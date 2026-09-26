@@ -79,6 +79,7 @@ public partial class App : Application
     private bool _foundryDownloadedModel;
     private readonly FoundryModelCacheRefresh _foundryRefresh = new();
     private Guid? _noticeCopyEntryId;
+    private Task? _appExitOperation;
 
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
@@ -349,7 +350,7 @@ public partial class App : Application
                 // Tray updates are best effort, and so is saying one failed.
             }
         });
-        _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
+        _tray.QuitRequested += TrayQuit;
         _tray.SettingsRequested += OpenSettings;
         _tray.CopyLastDictationRequested += CopyLastDictation;
         _tray.CopyRecentDictationRequested += CopyRecentDictation;
@@ -1418,10 +1419,11 @@ public partial class App : Application
         {
             new DictionaryLibrary("current-word-packs", "Word packs", string.Empty, null, BuiltIn: true, vocabulary.Entries),
         };
-        var personal = _settingsWindow is { } window
-            ? window.CurrentDictionaryEntries()
+        var draft = _settingsWindow is { IsDraftDiscardedForAppExit: false } window ? window : null;
+        var personal = draft is not null
+            ? draft.CurrentDictionaryEntries()
             : services.GetRequiredService<IDictionaryRepository>().GetAll();
-        var pending = _settingsWindow?.PendingQuickAddSpokenForms() ?? [];
+        var pending = draft?.PendingQuickAddSpokenForms() ?? [];
         return QuickAddVocabulary.Compose(personal, pending, libraries, ["current-word-packs"]);
     }
 
@@ -1447,12 +1449,157 @@ public partial class App : Application
         _quickAddWindow.UseHeardText(spoken);
     }
 
-    private void RestartToUpdate()
+    private async void TrayQuit()
     {
-        if (_updates?.ApplyNowAndRestart() != true)
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.TrayQuit, () =>
         {
-            ShowTrayNotice(TrayNotices.RestartFailed());
+            Shutdown();
+            return Task.CompletedTask;
+        }));
+    }
+
+    private async void RestartToUpdate()
+    {
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, () =>
+        {
+            if (_updates?.ApplyNowAndRestart() != true)
+            {
+                ShowTrayNotice(TrayNotices.RestartFailed());
+            }
+
+            return Task.CompletedTask;
+        }));
+    }
+
+    private Task RunAppExitOperationAsync(Func<Task> operation)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(() => RunAppExitOperationAsync(operation)).Task.Unwrap();
         }
+
+        if (_appExitOperation is { IsCompleted: false } existing)
+        {
+            return existing;
+        }
+
+        // Reserved before the operation starts: its prompts are modal and pump messages, and a Quit or Restart clicked
+        // meanwhile must join this exit, not start a second one that runs the restart again.
+        var reservation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _appExitOperation = reservation.Task;
+
+        async Task RunReservedAsync()
+        {
+            try
+            {
+                await operation();
+                reservation.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                reservation.TrySetException(ex);
+            }
+            finally
+            {
+                if (ReferenceEquals(_appExitOperation, reservation.Task))
+                {
+                    _appExitOperation = null;
+                }
+            }
+        }
+
+        _ = RunReservedAsync();
+        return reservation.Task;
+    }
+
+    private async Task RunCloseGuardsThenAsync(CloseTrigger trigger, Func<Task> action)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(() => RunCloseGuardsThenAsync(trigger, action)).Task.Unwrap();
+            return;
+        }
+
+        var state = CurrentAppExitCloseState(trigger, includeSettingsSave: true);
+        var step = AppExitCloseGuard.First(state);
+        while (step is AppExitCloseStep.Settings or AppExitCloseStep.QuickAdd)
+        {
+            var accepted = step switch
+            {
+                AppExitCloseStep.Settings => _settingsWindow is null || await _settingsWindow.RequestAppCloseAsync(trigger),
+                AppExitCloseStep.QuickAdd => _quickAddWindow is null || await _quickAddWindow.RequestAppCloseAsync(),
+                _ => true,
+            };
+            var result = accepted ? AppExitCloseStepResult.Saved : AppExitCloseStepResult.KeepEditing;
+            state = step == AppExitCloseStep.Settings
+                ? CurrentAppExitCloseState(trigger, includeSettingsSave: false, refreshQuickAdd: true)
+                : CurrentAppExitCloseState(trigger, includeSettingsSave: false);
+            step = AppExitCloseGuard.Next(step, result, state);
+        }
+
+        if (step == AppExitCloseStep.Proceed)
+        {
+            await action();
+        }
+    }
+
+    private async Task RunAboutUpdateGuardThenAsync(Func<Task> action)
+    {
+        await RunAppExitOperationAsync(async () =>
+        {
+            var closeSettingsAfterAction = false;
+            if (_settingsWindow is { } settings)
+            {
+                var result = await settings.RequestUpdateRestartWithoutClosingAsync();
+                if (result == SettingsUpdateRestartGuardResult.Canceled)
+                {
+                    return;
+                }
+
+                closeSettingsAfterAction = result == SettingsUpdateRestartGuardResult.ProceedCloseAfterAction;
+            }
+
+            // With Discard chosen, Settings stays open to own the update's UI, but its draft no longer counts, so Add to
+            // dictionary is judged against what is stored (IsDraftDiscardedForAppExit) and asks about a correction the
+            // discarded draft was blocking.
+            var proceeded = false;
+            try
+            {
+                if (_quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true &&
+                    !await _quickAddWindow.RequestAppCloseAsync())
+                {
+                    return;
+                }
+
+                proceeded = true;
+                await action();
+            }
+            finally
+            {
+                if (_settingsWindow is { } liveSettings)
+                {
+                    if (proceeded && closeSettingsAfterAction)
+                    {
+                        liveSettings.CloseAfterAppUpdateDiscard();
+                    }
+                    else
+                    {
+                        // The update didn't go ahead, so nothing was discarded: the draft counts again.
+                        liveSettings.IsDraftDiscardedForAppExit = false;
+                    }
+                }
+            }
+        });
+    }
+
+    private AppExitCloseState CurrentAppExitCloseState(CloseTrigger trigger, bool includeSettingsSave, bool refreshQuickAdd = false)
+    {
+        var settingsUnsaved = _settingsWindow?.HasAppCloseChanges(trigger) == true
+            || includeSettingsSave && _settingsWindow?.HasAppCloseSaveInProgress == true;
+        var quickAddUnsaved = refreshQuickAdd
+            ? _quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true
+            : _quickAddWindow?.HasAppCloseCorrection() == true;
+        return new AppExitCloseState(settingsUnsaved, quickAddUnsaved);
     }
 
     private void OnTrayNoticeAction(TrayNoticeAction action)
@@ -1647,6 +1794,8 @@ public partial class App : Application
                 services.GetRequiredService<ILibraryVocabularySource>(),
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
+                RunAboutUpdateGuardThenAsync,
+                () => ShowTrayNotice(TrayNotices.RestartFailed()),
                 services.GetRequiredService<SessionDiagnostics>(),
                 services.GetRequiredService<HistoryDeletionNotifier>());
             _settingsWindow.Closed += (_, _) =>
@@ -1988,7 +2137,7 @@ public partial class App : Application
                 recent.Select(source => new QuickAdd.QuickAddWindow.QuickAddSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision)).ToList(),
                 loadExisting: () =>
                 {
-                    var baseEntries = _settingsWindow is { } settings
+                    var baseEntries = _settingsWindow is { IsDraftDiscardedForAppExit: false } settings
                         ? settings.CurrentDictionaryEntries()
                         : services.GetRequiredService<IDictionaryRepository>().GetAll();
 
@@ -2008,7 +2157,9 @@ public partial class App : Application
                 },
                 persist: entry =>
                 {
-                    if (_settingsWindow is { } settings)
+                    // A draft discarded for an update never receives the correction: it would update a row the user
+                    // threw away. Storage takes it, and that Settings window closes once the update runs.
+                    if (_settingsWindow is { IsDraftDiscardedForAppExit: false } settings)
                     {
                         return settings.ApplyQuickDictionaryEntry(entry);
                     }

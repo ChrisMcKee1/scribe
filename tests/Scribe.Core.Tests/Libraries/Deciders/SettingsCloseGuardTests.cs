@@ -3,8 +3,8 @@ using Scribe.Core.Settings;
 namespace Scribe.Core.Tests.Libraries.Deciders;
 
 /// <summary>
-/// D-8: the close guard for every trigger, naming only the tracked sections, Keep editing the default, restart,
-/// sign-out and shutdown never waiting; the Escape order; and Ctrl+S captured as a hotkey not saving.
+/// D-8: the close guard for every trigger, naming only the tracked sections, Keep editing the default, only sign-out
+/// and shutdown never waiting; the Escape order; and Ctrl+S captured as a hotkey not saving.
 /// </summary>
 public sealed class SettingsCloseGuardTests
 {
@@ -14,6 +14,7 @@ public sealed class SettingsCloseGuardTests
     [InlineData(CloseTrigger.AltF4)]
     [InlineData(CloseTrigger.CloseButton)]
     [InlineData(CloseTrigger.TrayQuit)]
+    [InlineData(CloseTrigger.UpdateRestart)]
     public void D8_a_close_the_user_starts_asks_when_a_tracked_section_is_unsaved_with_keep_editing_focused(CloseTrigger trigger)
     {
         var decision = SettingsCloseGuard.Decide(UnsavedSections.Libraries | UnsavedSections.Dictionary, trigger);
@@ -30,10 +31,9 @@ public sealed class SettingsCloseGuardTests
     }
 
     [Theory]
-    [InlineData(CloseTrigger.UpdateRestart)]
     [InlineData(CloseTrigger.SignOut)]
     [InlineData(CloseTrigger.Shutdown)]
-    public void D8_an_update_restart_sign_out_or_shutdown_never_waits(CloseTrigger trigger)
+    public void D8_sign_out_or_shutdown_never_waits(CloseTrigger trigger)
     {
         var decision = SettingsCloseGuard.Decide(UnsavedSections.Libraries | UnsavedSections.Dictionary | UnsavedSections.Snippets, trigger);
 

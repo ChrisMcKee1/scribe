@@ -255,7 +255,7 @@ public partial class SettingsWindow
     private CloseDecision ShouldAskBeforeClose(CloseTrigger trigger)
     {
         var guard = SettingsCloseGuard.Decide(CurrentUnsavedSections(), trigger);
-        if (trigger is CloseTrigger.UpdateRestart or CloseTrigger.SignOut or CloseTrigger.Shutdown)
+        if (trigger is CloseTrigger.SignOut or CloseTrigger.Shutdown)
         {
             return guard;
         }
