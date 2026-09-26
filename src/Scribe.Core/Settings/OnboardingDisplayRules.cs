@@ -28,15 +28,27 @@ public static class FirstRunHint
     }
 }
 
+public sealed record AppProgramGroup(string Key, string DisplayName, IReadOnlyList<string> Programs)
+{
+    public bool Contains(string? processName)
+    {
+        var normalized = AppDisplayName.NormalizeProcessName(processName);
+        return Programs.Any(program => string.Equals(program, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+}
+
 public static partial class AppDisplayName
 {
+    private static readonly IReadOnlyList<AppProgramGroup> Groups =
+    [
+        new("outlook", "Outlook", ["OUTLOOK"]),
+        new("new-outlook", "New Outlook", ["olk"]),
+        new("teams", "Teams", ["ms-teams", "Teams", "msteams"]),
+        new("terminal", "Terminal", ["WindowsTerminal", "wt"]),
+    ];
+
     private static readonly IReadOnlyDictionary<string, string> Known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["outlook"] = "Outlook",
-        ["olk"] = "Outlook",
-        ["ms-teams"] = "Teams",
-        ["teams"] = "Teams",
-        ["msteams"] = "Teams",
         ["winword"] = "Word",
         ["word"] = "Word",
         ["excel"] = "Excel",
@@ -50,8 +62,6 @@ public static partial class AppDisplayName
         ["code"] = "VS Code",
         ["devenv"] = "Visual Studio",
         ["notepad"] = "Notepad",
-        ["windowsterminal"] = "Terminal",
-        ["wt"] = "Terminal",
         ["slack"] = "Slack",
         ["discord"] = "Discord",
         ["zoom"] = "Zoom",
@@ -60,12 +70,40 @@ public static partial class AppDisplayName
     public static string For(string? processName)
     {
         var normalized = NormalizeProcessName(processName);
-        return normalized.Length == 0
-            ? string.Empty
-            : Known.TryGetValue(normalized, out var display) ? display : normalized;
+        if (normalized.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var group = GroupFor(normalized);
+        if (group is not null)
+        {
+            return group.DisplayName;
+        }
+
+        return Known.TryGetValue(normalized, out var display) ? display : normalized;
     }
 
-    private static string NormalizeProcessName(string? processName)
+    public static AppProgramGroup? GroupFor(string? processName)
+    {
+        var normalized = NormalizeProcessName(processName);
+        return normalized.Length == 0 ? null : Groups.FirstOrDefault(group => group.Contains(normalized));
+    }
+
+    public static string GroupKeyFor(string? processName)
+    {
+        var normalized = NormalizeProcessName(processName);
+        return GroupFor(normalized)?.Key ?? normalized;
+    }
+
+    public static IReadOnlyList<string> GroupMembersFor(string? processName)
+    {
+        var normalized = NormalizeProcessName(processName);
+        var group = GroupFor(normalized);
+        return group is null ? [normalized] : group.Programs;
+    }
+
+    public static string NormalizeProcessName(string? processName)
     {
         var value = (processName ?? string.Empty).Trim();
         if (value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))

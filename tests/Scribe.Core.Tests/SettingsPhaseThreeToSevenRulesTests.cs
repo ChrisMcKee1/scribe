@@ -51,10 +51,23 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData("OUTLOOK.EXE", "Outlook")]
     [InlineData("ms-teams", "Teams")]
     [InlineData("WINWORD", "Word")]
-    [InlineData("olk", "Outlook")]
+    [InlineData("olk", "New Outlook")]
     [InlineData("unknown-app.exe", "unknown-app")]
     public void App_display_names_are_friendly_when_known(string process, string expected) =>
         Assert.Equal(expected, AppDisplayName.For(process));
+
+    [Theory]
+    [InlineData("OUTLOOK", "outlook", "Outlook")]
+    [InlineData("olk", "new-outlook", "New Outlook")]
+    [InlineData("ms-teams", "teams", "Teams")]
+    [InlineData("Teams", "teams", "Teams")]
+    [InlineData("WindowsTerminal", "terminal", "Terminal")]
+    [InlineData("wt", "terminal", "Terminal")]
+    public void App_display_groups_keep_distinct_program_groups(string process, string key, string display)
+    {
+        Assert.Equal(key, AppDisplayName.GroupKeyFor(process));
+        Assert.Equal(display, AppDisplayName.For(process));
+    }
 
     [Fact]
     public void Ai_cleanup_off_rows_cover_complete_incomplete_and_empty_setup()
@@ -217,6 +230,79 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
                 Assert.Equal("WINWORD", app.ProcessName);
                 Assert.Equal("Word", app.DisplayName);
                 Assert.Equal(1, app.DictationCount);
+            });
+    }
+
+    [Fact]
+    public void Snippet_list_text_shows_off_state_and_new_placeholder()
+    {
+        Assert.Equal(new SnippetListItemText("New snippet", null), SnippetListText.Describe(" ", enabled: true));
+        Assert.Equal(new SnippetListItemText("insert signature", "Off"), SnippetListText.Describe(" insert signature ", enabled: false));
+    }
+
+    [Fact]
+    public void Profile_list_text_and_chips_hide_process_jargon_until_needed()
+    {
+        var description = ProfileListText.Describe(" Email ", "OUTLOOK.exe, ms-teams, Teams, olk");
+
+        Assert.Equal("Email", description.Primary);
+        Assert.Equal("Outlook, Teams, New Outlook", description.Secondary);
+
+        var chips = ProfileAppChips.FromProgramNames("OUTLOOK.exe, ms-teams, Teams, olk");
+        Assert.Collection(
+            chips,
+            chip =>
+            {
+                Assert.Equal("outlook", chip.GroupKey);
+                Assert.Equal("Outlook", chip.DisplayName);
+                Assert.Equal(["OUTLOOK"], chip.ProgramNames);
+                Assert.Equal("Remove Outlook", chip.RemoveName);
+            },
+            chip =>
+            {
+                Assert.Equal("teams", chip.GroupKey);
+                Assert.Equal("Teams", chip.DisplayName);
+                Assert.Equal(["ms-teams", "Teams"], chip.ProgramNames);
+            },
+            chip =>
+            {
+                Assert.Equal("new-outlook", chip.GroupKey);
+                Assert.Equal("New Outlook", chip.DisplayName);
+                Assert.Equal(["olk"], chip.ProgramNames);
+            });
+        Assert.Equal("OUTLOOK, ms-teams, Teams, olk", ProfileAppChips.ToProgramNames(chips));
+        Assert.Equal("OUTLOOK, olk", ProfileAppChips.RemoveGroup("OUTLOOK, ms-teams, Teams, olk", "teams"));
+    }
+
+    [Fact]
+    public void App_picker_options_put_running_apps_first_and_deduplicate_selected_apps()
+    {
+        var options = AppPickerOptions.Build(
+            [
+                new AppPickerCandidate("WINWORD.exe", "Word", IsRunning: true),
+                new AppPickerCandidate("OUTLOOK", "Outlook", IsRunning: true),
+            ],
+            [
+                new RecentApp("OUTLOOK", "Outlook", 5),
+                new RecentApp("slack", "Slack", 3),
+            ],
+            selectedApps: ["WINWORD"]);
+
+        Assert.Collection(
+            options,
+            option =>
+            {
+                Assert.Equal("OUTLOOK", option.ProcessName);
+                Assert.Equal("Outlook (OUTLOOK)", option.Label);
+                Assert.True(option.IsRunning);
+                Assert.Equal(5, option.RecentDictations);
+            },
+            option =>
+            {
+                Assert.Equal("slack", option.ProcessName);
+                Assert.Equal("Slack (slack)", option.Label);
+                Assert.False(option.IsRunning);
+                Assert.Equal(3, option.RecentDictations);
             });
     }
 

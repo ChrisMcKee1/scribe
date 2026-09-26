@@ -23,9 +23,9 @@ public static class ProfileBuilder
         var profiles = new List<AppProfile>();
         foreach (var row in rows)
         {
-            var processes = (row.Processes ?? string.Empty)
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(p => p.Length > 0)
+            var processes = ProgramNames.Normalize(
+                (row.Processes ?? string.Empty)
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 .ToList();
 
             if (string.IsNullOrWhiteSpace(row.Name) && processes.Count == 0)
