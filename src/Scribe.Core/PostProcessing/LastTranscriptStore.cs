@@ -17,7 +17,7 @@ public sealed class LastTranscriptStore
 
     private readonly object _gate = new();
 
-    private sealed record Slot(string Original, string Current);
+    private sealed record Slot(Guid Id, string Original, string Current, DateTimeOffset? TimestampUtc);
 
     // Most recent first. A plain list is fine at this size: inserts shift at most Capacity items.
     private readonly List<Slot> _entries = new(Capacity);
@@ -39,7 +39,7 @@ public sealed class LastTranscriptStore
                 return;
             }
 
-            _entries.Insert(0, new Slot(text, text));
+            _entries.Insert(0, new Slot(Guid.NewGuid(), text, text, null));
             if (_entries.Count > Capacity)
             {
                 _entries.RemoveAt(_entries.Count - 1);
@@ -97,7 +97,7 @@ public sealed class LastTranscriptStore
     /// while <see cref="Update"/> searches an empty ring, so a correction would appear to save and
     /// then quietly fail to fix the dictation it came from.
     ///
-    /// Only ever fills a ring that is empty, so it can never displace live dictations.
+    /// Live dictations already in the ring stay newest, and seeded entries fill the older slots without duplicates.
     /// </summary>
     public void Seed(IEnumerable<string>? transcripts)
     {
@@ -108,11 +108,7 @@ public sealed class LastTranscriptStore
 
         lock (_gate)
         {
-            if (_entries.Count > 0)
-            {
-                return;
-            }
-
+            var liveCount = _entries.Count;
             foreach (var text in transcripts)
             {
                 if (string.IsNullOrWhiteSpace(text) || _entries.Count >= Capacity)
@@ -120,7 +116,39 @@ public sealed class LastTranscriptStore
                     continue;
                 }
 
-                _entries.Add(new Slot(text, text));
+                if (_entries.Take(liveCount).Any(entry => string.Equals(entry.Current, text, StringComparison.Ordinal) || string.Equals(entry.Original, text, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                _entries.Add(new Slot(Guid.NewGuid(), text, text, null));
+            }
+        }
+    }
+
+    public void SeedHistory(IEnumerable<HistoryEntry>? entries)
+    {
+        if (entries is null)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            var liveCount = _entries.Count;
+            foreach (var history in entries)
+            {
+                if (string.IsNullOrWhiteSpace(history.Text) || _entries.Count >= Capacity)
+                {
+                    continue;
+                }
+
+                if (_entries.Take(liveCount).Any(entry => string.Equals(entry.Current, history.Text, StringComparison.Ordinal) || string.Equals(entry.Original, history.Text, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                _entries.Add(new Slot(Guid.NewGuid(), history.Text, history.Text, history.TimestampUtc));
             }
         }
     }
@@ -138,6 +166,22 @@ public sealed class LastTranscriptStore
         return fallbackHistory?
             .Select(entry => entry.Text)
             .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
+    }
+
+    public Guid? CurrentId()
+    {
+        lock (_gate)
+        {
+            return _entries.Count == 0 ? null : _entries[0].Id;
+        }
+    }
+
+    public string? Get(Guid id)
+    {
+        lock (_gate)
+        {
+            return _entries.FirstOrDefault(entry => entry.Id == id)?.Current;
+        }
     }
 
 
@@ -161,6 +205,14 @@ public sealed class LastTranscriptStore
         lock (_gate)
         {
             return _entries.RemoveAll(entry => string.Equals(entry.Current, text, StringComparison.Ordinal) || string.Equals(entry.Original, text, StringComparison.Ordinal)) > 0;
+        }
+    }
+
+    public bool ForgetOlderThan(DateTimeOffset cutoffUtc)
+    {
+        lock (_gate)
+        {
+            return _entries.RemoveAll(entry => entry.TimestampUtc is { } timestamp && timestamp < cutoffUtc) > 0;
         }
     }
 

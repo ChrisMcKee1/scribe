@@ -74,6 +74,8 @@ public partial class App : Application
     private int _learningFromHistory;
     private readonly TrayFeedbackPolicy _trayFeedback = new();
     private TrayCondition _trayCondition;
+    private bool _foundryDownloadedModel;
+    private Guid? _noticeCopyEntryId;
 
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
@@ -306,6 +308,7 @@ public partial class App : Application
         _settingsWrites = new Scribe.Core.Settings.SettingsWriteLane(
             settingsRepository,
             callback => Dispatcher.BeginInvoke(callback));
+        services.GetRequiredService<HistoryDeletionNotifier>().Deleted += OnHistoryDeleted;
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
@@ -395,15 +398,23 @@ public partial class App : Application
             });
         _controller.StateChanged += OnStateChanged;
         _controller.PipelineReported += report =>
-            Dispatcher.BeginInvoke(() => _settingsWindow?.ShowPlaygroundPipeline(report));
+            Dispatcher.BeginInvoke(() =>
+            {
+                _settingsWindow?.ShowPlaygroundPipeline(report);
+                if (report.CleanupEnabled &&
+                    report.Cleanup?.Outcome is CleanupOutcome.Cleaned or CleanupOutcome.Unchanged)
+                {
+                    _trayFeedback.Decide(TrayFeedbackEvent.AiCleanupSuccess);
+                }
+            });
         _controller.Error += message =>
         {
-            ShowDictationProblem(message, recordingRevision: 0, pillText: null);
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(message, recordingRevision: 0, pillText: null, controllerError: true));
         };
         _controller.Warning += warning =>
         {
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
-            ShowDictationProblem(warning.Message, warning.RecordingRevision, warning.PillText);
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(warning.Message, warning.RecordingRevision, warning.PillText, controllerError: false));
         };
         _controller.CleanupFailed += OnCleanupFailed;
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
@@ -426,14 +437,7 @@ public partial class App : Application
             // The failed dictation survives in LastTranscriptStore; a balloon closes the loop so
             // the user knows the tray menu can recover it. Best-effort: a notification failure
             // must never throw back into the dictation processing path.
-            try
-            {
-                ShowTrayNotice(TrayNotices.TypingFailed(incomplete: false));
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning("Failed to show the injection recovery notification ({Failure}).", FailureShape.Describe(ex));
-            }
+            log.LogDebug("Injection failure event received; controller error owns user feedback.");
         };
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
@@ -466,10 +470,13 @@ public partial class App : Application
 
         // Before Start(): the startup reclaim of an earlier session's Foundry Local leftovers runs in the
         // background right after the first Configure, which Start() makes.
-        services.GetRequiredService<ITextCleanupService>().FoundryStorageReclaimed += OnFoundryStorageReclaimed;
+        var cleanupService = services.GetRequiredService<ITextCleanupService>();
+        cleanupService.FoundryStorageReclaimed += OnFoundryStorageReclaimed;
+        cleanupService.StatusChanged += RefreshFoundryDownloadedModel;
 
         _controller.Start();
         AccentContrastResources.UseSource(_controller.CurrentSettings.AccentSource);
+        RefreshFoundryDownloadedModel();
 
         // Settings-dependent wiring goes AFTER Start(): CurrentSettings returns compiled defaults
         // until Start() loads the persisted settings, so reading it earlier silently ignored the
@@ -479,7 +486,7 @@ public partial class App : Application
         // pushed here before the warmup can arm it, and again with every state change.
         _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes);
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
-        SeedRecentDictations(services);
+        SeedRecentDictationsAsync(services);
         UpdateTrayShortcut(_controller.CurrentSettings);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
         // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
@@ -948,22 +955,20 @@ public partial class App : Application
     /// </summary>
     private void OnCleanupFailed(string reason)
     {
-        if (_trayFeedback.Decide(TrayFeedbackEvent.AiCleanupFailure).Channel == TrayFeedbackChannel.Notice)
-        {
-            ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
-        }
-
-        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
-        if (!overlayEnabled)
-        {
-            return;
-        }
-
         Dispatcher.BeginInvoke(() =>
         {
+            if (_trayFeedback.Decide(TrayFeedbackEvent.AiCleanupFailure).Channel == TrayFeedbackChannel.Notice)
+            {
+                ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
+            }
+
             if (_controller?.IsClosing == false)
             {
-                _overlay?.ShowFailed(reason);
+                var overlayEnabled = _controller.CurrentSettings.ShowOverlay;
+                if (overlayEnabled)
+                {
+                    _overlay?.ShowFailed(reason);
+                }
             }
         });
     }
@@ -997,6 +1002,7 @@ public partial class App : Application
     /// </summary>
     private void OnFoundryStorageReclaimed(FoundryStorageReclaim reclaim)
     {
+        RefreshFoundryDownloadedModel();
         try
         {
             var notice = FoundryStorageReclaimNotice.Format(reclaim);
@@ -1085,6 +1091,7 @@ public partial class App : Application
     {
         // The switch changes no vocabulary, so nothing here waits for the generation ApplySettings asks for.
         _ = _controller?.ApplySettings(stored);
+        RefreshFoundryDownloadedModel();
         if (!superseded)
         {
             _settingsWindow?.AdoptExternalAiCleanup(stored.EnableAiCleanup, revision);
@@ -1248,47 +1255,81 @@ public partial class App : Application
         var settings = _controller?.CurrentSettings ?? AppSettings.CreateDefault();
         var status = _host?.Services.GetRequiredService<ITextCleanupService>().Status ?? CleanupStatus.Disabled;
         var recovered = _host?.Services.GetRequiredService<ISettingsRepository>().LastLoadFailed ?? false;
-        return TrayAiCleanup.Describe(settings, IsAiCleanupConfigured(settings), status, recovered);
+        var setupComplete = settings.AiCleanupProvider != CleanupProvider.FoundryLocal || _foundryDownloadedModel;
+        return TrayAiCleanup.Describe(settings, setupComplete, status, recovered);
     }
 
-    private static bool IsAiCleanupConfigured(AppSettings settings) => settings.AiCleanupProvider switch
+    private void RefreshFoundryDownloadedModel()
     {
-        CleanupProvider.FoundryLocal => !string.IsNullOrWhiteSpace(settings.AiCleanupModel),
-        CleanupProvider.AzureFoundry => !string.IsNullOrWhiteSpace(settings.AiCleanupAzureEndpoint) && !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment),
-        CleanupProvider.OpenAiCompatible => !string.IsNullOrWhiteSpace(settings.AiCleanupCustomEndpoint) && !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel),
-        CleanupProvider.GitHubCopilot => true,
-        _ => false,
-    };
+        if (_host is null)
+        {
+            return;
+        }
+
+        var services = _host.Services;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var hasModel = FoundryLocalStorage.HoldsDownloadedModel(services.GetRequiredService<AppPaths>());
+                if (Dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                Dispatcher.BeginInvoke(() =>
+                {
+                    _foundryDownloadedModel = hasModel;
+                    if (_tray is not null)
+                    {
+                        _tray.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _appLog?.LogDebug("Could not inspect the Foundry Local model cache ({Failure}).", FailureShape.Describe(ex));
+            }
+        });
+    }
 
     private void UpdateTrayShortcut(AppSettings settings)
     {
         _tray?.SetShortcutSentence(HotkeyText.SentenceName(settings.Hotkey), settings.Hotkey.Mode);
     }
 
-    private void SeedRecentDictations(IServiceProvider services)
+    private void SeedRecentDictationsAsync(IServiceProvider services)
     {
-        try
+        _ = Task.Run(() =>
         {
-            var store = services.GetRequiredService<LastTranscriptStore>();
-            if (store.GetRecent().Count > 0)
+            try
             {
-                return;
-            }
+                var recent = services.GetRequiredService<IHistoryRepository>()
+                    .GetRecent(LastTranscriptStore.Capacity)
+                    .Where(h => !string.IsNullOrWhiteSpace(h.Text))
+                    .ToList();
 
-            var recent = services.GetRequiredService<IHistoryRepository>()
-                .GetRecent(LastTranscriptStore.Capacity)
-                .Select(h => h.Text)
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .ToList();
-            store.Seed(recent);
-        }
-        catch (Exception ex)
-        {
-            _appLog?.LogDebug("Could not seed recent dictations from history ({Failure}).", FailureShape.Describe(ex));
-        }
+                if (Dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (_controller?.IsClosing == false)
+                    {
+                        services.GetRequiredService<LastTranscriptStore>().SeedHistory(recent);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _appLog?.LogDebug("Could not seed recent dictations from history ({Failure}).", FailureShape.Describe(ex));
+            }
+        });
     }
 
-    private void ShowDictationProblem(string legacyMessage, long recordingRevision, string? pillText)
+    private void ShowDictationProblem(string legacyMessage, long recordingRevision, string? pillText, bool controllerError)
     {
         var problem = DictationProblemText.FromLegacy(legacyMessage) ?? DictationProblem.RecognitionFailed;
         var settings = _controller?.CurrentSettings;
@@ -1296,6 +1337,12 @@ public partial class App : Application
             problem,
             settings?.Hotkey.Mode ?? HotkeyMode.Hold,
             settings?.Hotkey is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
+        if (controllerError && settings?.ShowOverlay == true)
+        {
+            _overlay?.ShowFailed(pillText ?? notice.PillText ?? notice.Title);
+            return;
+        }
+
         var decision = _trayFeedback.Decide(
             problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete
                 ? TrayFeedbackEvent.TypingFailure
@@ -1309,6 +1356,11 @@ public partial class App : Application
 
         if (decision.Channel == TrayFeedbackChannel.Notice)
         {
+            if (notice.Action == TrayNoticeAction.CopyLastDictation)
+            {
+                _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            }
+
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
         }
     }
@@ -1378,7 +1430,7 @@ public partial class App : Application
                 break;
             case TrayNoticeAction.CopyLastDictation:
             case TrayNoticeAction.RetryCopy:
-                CopyLastDictation();
+                CopyNoticeDictation();
                 break;
             case TrayNoticeAction.OpenSoundSettings:
                 OpenSoundSettings();
@@ -1386,28 +1438,57 @@ public partial class App : Application
         }
     }
 
-    private void SettingsWindow_ShowWelcomeRequested(object? sender, EventArgs e) => ShowWelcome();
-
-    private void SettingsWindow_HistoryEntryDeleted(string text)
+    private void CopyNoticeDictation()
     {
         if (_host is null)
         {
             return;
         }
 
-        _host.Services.GetRequiredService<LastTranscriptStore>().Forget(text);
-        _quickAddWindow?.ForgetTranscript(text);
+        var id = _noticeCopyEntryId;
+        if (id is null)
+        {
+            CopyLastDictation();
+            return;
+        }
+
+        var text = _host.Services.GetRequiredService<LastTranscriptStore>().Get(id.Value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            ShowTrayNotice(TrayNotices.NothingToCopy());
+            return;
+        }
+
+        ShowTrayNotice(ScribeClipboard.SetText(text) ? TrayNotices.CopiedLastDictation() : TrayNotices.ClipboardBusy());
     }
 
-    private void SettingsWindow_HistoryCleared()
+    private void SettingsWindow_ShowWelcomeRequested(object? sender, EventArgs e) => ShowWelcome();
+
+    private void OnHistoryDeleted(HistoryDeletion deletion)
     {
         if (_host is null)
         {
             return;
         }
 
-        _host.Services.GetRequiredService<LastTranscriptStore>().Clear();
-        _quickAddWindow?.ClearTranscripts();
+        var store = _host.Services.GetRequiredService<LastTranscriptStore>();
+        QuickAdd.QuickAddWindow? quickAdd = null;
+        switch (deletion.Kind)
+        {
+            case HistoryDeletionKind.Entry when deletion.Entry is { } entry:
+                store.Forget(entry.Text);
+                quickAdd = _quickAddWindow;
+                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ForgetTranscript(entry.Text));
+                break;
+            case HistoryDeletionKind.Clear:
+                store.Clear();
+                quickAdd = _quickAddWindow;
+                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ClearTranscripts());
+                break;
+            case HistoryDeletionKind.OlderThan when deletion.CutoffUtc is { } cutoff:
+                store.ForgetOlderThan(cutoff);
+                break;
+        }
     }
 
     /// <summary>
@@ -1526,6 +1607,7 @@ public partial class App : Application
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
                     AccentContrastResources.UseSource(settings.AccentSource);
                     UpdateTrayShortcut(settings);
+                    RefreshFoundryDownloadedModel();
                     return applying;
                 },
                 () => _controller!.ReloadVocabulary(),
@@ -1537,14 +1619,10 @@ public partial class App : Application
             {
                 audio.InputDevicesChanged -= OnInputDevicesChanged;
                 _settingsWindow.ShowWelcomeRequested -= SettingsWindow_ShowWelcomeRequested;
-                _settingsWindow.HistoryEntryDeleted -= SettingsWindow_HistoryEntryDeleted;
-                _settingsWindow.HistoryCleared -= SettingsWindow_HistoryCleared;
                 _settingsWindow = null;
                 foreground.Dispose();
             };
             _settingsWindow.ShowWelcomeRequested += SettingsWindow_ShowWelcomeRequested;
-            _settingsWindow.HistoryEntryDeleted += SettingsWindow_HistoryEntryDeleted;
-            _settingsWindow.HistoryCleared += SettingsWindow_HistoryCleared;
             _settingsWindow.Show();
             _settingsWindow.ShowPage(page, focusName);
             _settingsWindow.Activate();
@@ -1567,10 +1645,12 @@ public partial class App : Application
             return;
         }
 
+        LastTranscriptStore? store = null;
         try
         {
             var services = _host.Services;
-            var store = services.GetRequiredService<LastTranscriptStore>();
+            store = services.GetRequiredService<LastTranscriptStore>();
+            var copyId = store.CurrentId();
             var text = store.Get();
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -1583,12 +1663,19 @@ public partial class App : Application
                 return;
             }
 
-            ShowTrayNotice(ScribeClipboard.SetText(text) ? TrayNotices.CopiedLastDictation() : TrayNotices.ClipboardBusy());
+            var copied = ScribeClipboard.SetText(text);
+            if (!copied)
+            {
+                _noticeCopyEntryId = copyId;
+            }
+
+            ShowTrayNotice(copied ? TrayNotices.CopiedLastDictation() : TrayNotices.ClipboardBusy());
         }
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning("Copying the last dictation failed ({Failure}).", FailureShape.Describe(ex));
+            _noticeCopyEntryId = store?.CurrentId();
             ShowTrayNotice(TrayNotices.ClipboardBusy());
         }
     });

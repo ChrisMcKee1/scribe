@@ -211,20 +211,40 @@ public partial class QuickAddWindow : FluentWindow
             return;
         }
 
-        var removedCurrent = string.Equals(_transcript, text, StringComparison.Ordinal);
-        _sources.RemoveAll(source => string.Equals(source.Text, text, StringComparison.Ordinal));
+        var current = RecentPicker.SelectedItem as TranscriptSource;
+        var state = QuickAddSources.Forget(_sources.Select(source => source.Original), current?.Original, text, HasUnsavedSavableCorrection());
+        _sources.RemoveAll(source => string.Equals(source.Original, text, StringComparison.Ordinal));
         RecentPicker.Items.Refresh();
-        if (!removedCurrent)
+        if (!state.CurrentRemoved)
         {
             return;
         }
 
-        if (HasUnsavedSavableCorrection())
+        ClearDeletedTranscript(keepCorrection: state.KeepCorrection, state.Message);
+    }
+
+    public void ClearTranscripts()
+    {
+        var state = QuickAddSources.Clear(HasUnsavedSavableCorrection());
+        _sources.Clear();
+        RecentPicker.Items.Refresh();
+        ClearDeletedTranscript(state.KeepCorrection, state.Message);
+    }
+
+    private void ClearDeletedTranscript(bool keepCorrection, string? message)
+    {
+        _transcript = string.Empty;
+        _tokens = [];
+        _chips.Clear();
+        _fixedTranscript = null;
+        SavedDetailText.Visibility = Visibility.Collapsed;
+        CopyFixedButton.Visibility = Visibility.Collapsed;
+        if (keepCorrection)
         {
             ShowResult(new QuickDictionaryAdd.Plan(
                 QuickDictionaryAdd.PlanKind.NoChange,
                 null,
-                "That dictation is no longer in the tray's recent list. You can still save the word.",
+                message ?? QuickAddSources.RemovedMessage,
                 QuickDictionaryAdd.PlanSeverity.Info));
             return;
         }
@@ -237,23 +257,6 @@ public partial class QuickAddWindow : FluentWindow
         {
             LoadTranscript(string.Empty);
         }
-    }
-
-    public void ClearTranscripts()
-    {
-        _sources.Clear();
-        RecentPicker.Items.Refresh();
-        if (HasUnsavedSavableCorrection())
-        {
-            ShowResult(new QuickDictionaryAdd.Plan(
-                QuickDictionaryAdd.PlanKind.NoChange,
-                null,
-                "That dictation is no longer in the tray's recent list. You can still save the word.",
-                QuickDictionaryAdd.PlanSeverity.Info));
-            return;
-        }
-
-        LoadTranscript(string.Empty);
     }
 
     public void UseHeardText(string text)
@@ -1085,6 +1088,7 @@ public partial class QuickAddWindow : FluentWindow
 
     private sealed class TranscriptSource(string text) : INotifyPropertyChanged
     {
+        public string Original { get; } = text;
         public string Text { get; private set; } = text;
         public string Preview => LastTranscriptStore.FormatPreview(Text, maxLength: 64);
 
@@ -1135,7 +1139,6 @@ public partial class QuickAddWindow : FluentWindow
         public override string ToString() => Text;
     }
 }
-
 
 
 

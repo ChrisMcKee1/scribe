@@ -36,6 +36,7 @@ public static class DictationProblemText
         if (value.StartsWith("no sound from", StringComparison.OrdinalIgnoreCase)) return DictationProblem.OnlySilenceFromDevice;
         if (value.StartsWith("no sound was captured", StringComparison.OrdinalIgnoreCase)) return DictationProblem.OnlySilence;
         if (value.StartsWith("microphone is muted", StringComparison.OrdinalIgnoreCase)) return DictationProblem.MicrophoneMuted;
+        if (value.Contains("isn't available, so Scribe is using the Windows default microphone", StringComparison.OrdinalIgnoreCase)) return DictationProblem.FallbackMicrophone;
         if (value.Equals("microphone unavailable", StringComparison.OrdinalIgnoreCase)) return DictationProblem.MicrophoneUnavailable;
         if (value.Equals("microphone disconnected", StringComparison.OrdinalIgnoreCase)) return DictationProblem.MicrophoneDisconnected;
         if (value.StartsWith("dictation hit", StringComparison.OrdinalIgnoreCase)) return DictationProblem.DurationLimit;

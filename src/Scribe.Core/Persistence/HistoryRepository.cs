@@ -17,8 +17,13 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     private const string TimestampFormat = "O";
 
     private readonly ScribeDatabase _database;
+    private readonly HistoryDeletionNotifier _deletions;
 
-    public HistoryRepository(ScribeDatabase database) => _database = database;
+    public HistoryRepository(ScribeDatabase database, HistoryDeletionNotifier? deletions = null)
+    {
+        _database = database;
+        _deletions = deletions ?? new HistoryDeletionNotifier();
+    }
 
     /// <summary>
     /// Largest encoded capture this repository stores. A capture that could never fit under the
@@ -200,6 +205,30 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         return results;
     }
 
+    private static HistoryEntry? GetById(SqliteConnection connection, SqliteTransaction transaction, long id)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT id, timestamp_utc, text, audio_ms, decode_ms, target_app, audio_blob_id
+            FROM history
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new HistoryEntry(
+                reader.GetInt64(0),
+                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                reader.GetString(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4),
+                TargetApp: reader.IsDBNull(5) ? null : reader.GetString(5),
+                AudioBlobId: reader.IsDBNull(6) ? null : reader.GetInt64(6))
+            : null;
+    }
+
     public CapturedAudio? GetAudio(long blobId)
     {
         using var connection = _database.Open();
@@ -253,10 +282,12 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     public void Delete(long id)
     {
         int changes;
+        HistoryEntry? deleted;
         using (_database.EnterWriteScope())
         {
             using var connection = _database.Open();
             using var transaction = connection.BeginTransaction();
+            deleted = GetById(connection, transaction, id);
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText =
@@ -278,6 +309,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         if (changes > 0)
         {
             _database.NotifyStorageChanged(StorageChange.HistoryEntryDeleted);
+            if (deleted is not null)
+            {
+                _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.Entry, deleted));
+            }
         }
     }
 
@@ -328,6 +363,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             if (entries > 0 || recordingsDeleted > 0)
             {
                 _database.NotifyStorageChanged(StorageChange.HistoryCleared);
+                if (entries > 0)
+                {
+                    _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.Clear));
+                }
             }
         }
     }
@@ -340,18 +379,27 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         // (however old) must stay playable, mirroring the ownership rule in Delete().
         try
         {
-            using var writeScope = _database.EnterWriteScope();
-            using var connection = _database.Open();
-            using var transaction = connection.BeginTransaction();
+            int removed;
+            using (_database.EnterWriteScope())
+            {
+                using var connection = _database.Open();
+                using var transaction = connection.BeginTransaction();
 
-            var removed = DeleteEntriesOlderThan(connection, cutoffUtc);
-            var unreferenced = ListStoredAudio(connection)
-                .Where(blob => !blob.Referenced)
-                .Select(blob => blob.Id)
-                .ToList();
-            DeleteUnreferencedAudio(connection, unreferenced, cutoffUtc);
+                removed = DeleteEntriesOlderThan(connection, cutoffUtc);
+                var unreferenced = ListStoredAudio(connection)
+                    .Where(blob => !blob.Referenced)
+                    .Select(blob => blob.Id)
+                    .ToList();
+                DeleteUnreferencedAudio(connection, unreferenced, cutoffUtc);
 
-            transaction.Commit();
+                transaction.Commit();
+            }
+
+            if (removed > 0)
+            {
+                _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+            }
+
             return removed;
         }
         catch
@@ -365,9 +413,19 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     public int DeleteEntriesOlderThan(DateTimeOffset cutoffUtc)
     {
-        using var writeScope = _database.EnterWriteScope();
-        using var connection = _database.Open();
-        return DeleteEntriesOlderThan(connection, cutoffUtc);
+        int removed;
+        using (_database.EnterWriteScope())
+        {
+            using var connection = _database.Open();
+            removed = DeleteEntriesOlderThan(connection, cutoffUtc);
+        }
+
+        if (removed > 0)
+        {
+            _deletions.Notify(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+        }
+
+        return removed;
     }
 
     public int ClearAudioOlderThan(DateTimeOffset cutoffUtc)

@@ -427,6 +427,23 @@ public sealed class FoundryStorageJanitorTests
     }
 
     [Fact]
+    public void Holds_downloaded_model_is_true_only_for_a_definite_cached_model()
+    {
+        using var temp = new TempDirectory();
+        var paths = new AppPaths(rootOverride: null, dataDirOverride: temp.Combine("data"));
+        var foundryRoot = FoundryLocalStorage.ResolveAppDataDir(paths)!;
+
+        Assert.False(FoundryLocalStorage.HoldsDownloadedModel(paths));
+
+        temp.WriteFile(@"data\foundry\cache\models\foundry.modelinfo.json", 2048);
+        Assert.False(FoundryLocalStorage.HoldsDownloadedModel(paths));
+
+        temp.WriteFile(@"data\foundry\cache\models\Microsoft\qwen3-1.7b-generic-cpu-1\v1\model.onnx", 64);
+        Assert.True(FoundryLocalStorage.HoldsDownloadedModel(paths));
+        Assert.StartsWith(temp.Combine("data"), foundryRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void A_cache_that_cannot_be_reasoned_about_is_unknown_never_empty()
     {
         using var temp = new TempDirectory();

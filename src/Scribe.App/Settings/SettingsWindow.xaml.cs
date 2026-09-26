@@ -50,9 +50,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private const string PrivacyPolicyUrl = ScribeLinks.PrivacyPolicy;
     private const string NewIssueUrl = ScribeLinks.NewIssue;
 
-    internal event Action<string>? HistoryEntryDeleted;
-    internal event Action? HistoryCleared;
-
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
@@ -591,27 +588,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return [];
         }
 
-        var saved = _dictionary.GetAll()
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.Pattern))
-            .ToDictionary(entry => entry.Pattern.Trim(), StringComparer.OrdinalIgnoreCase);
-        return _rows
-            .Where(row => IsQuickAddPending(row, saved))
-            .Select(row => row.Pattern.Trim())
-            .ToList();
-    }
-
-    private static bool IsQuickAddPending(DictionaryRow row, IReadOnlyDictionary<string, DictionaryEntry> saved)
-    {
-        var pattern = row.Pattern.Trim();
-        if (pattern.Length == 0)
-        {
-            return false;
-        }
-
-        return !saved.TryGetValue(pattern, out var entry) ||
-            !string.Equals(entry.Replacement.Trim(), row.Replacement.Trim(), StringComparison.Ordinal) ||
-            entry.WholeWord != row.WholeWord ||
-            entry.Enabled != row.Enabled;
+        return DictionaryDraftDiff.ChangedSpokenForms(_dictionary.GetAll(), CurrentDictionaryEntries()).ToList();
     }
 
     internal void ShowDictionaryEntry(string spoken)
@@ -6961,7 +6938,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             LoadHistory();
-            HistoryEntryDeleted?.Invoke(row.Text);
             ShowInfo("Deleted the selected history entry.");
         }
         catch
@@ -6997,7 +6973,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             LoadHistory();
-            HistoryCleared?.Invoke();
             ShowInfo("Cleared dictation history.");
         }
         catch

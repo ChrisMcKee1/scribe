@@ -23,15 +23,32 @@ public sealed class ScribeClipboardSourceTests
                 continue;
             }
 
-            var source = RemoveComments(File.ReadAllText(file));
-            if (HasDirectClipboardWrite(source, "Clipboard.SetText(") ||
-                HasDirectClipboardWrite(source, "Clipboard.SetDataObject("))
+            var source = StripCommentsAndStrings(File.ReadAllText(file));
+            if (FindClipboardWrites(source).Count > 0)
             {
                 offenders.Add(relative);
             }
         }
 
         Assert.True(offenders.Count == 0, string.Join(Environment.NewLine, offenders));
+    }
+
+    [Theory]
+    [InlineData("Clipboard.SetText\r\n(\"x\");")]
+    [InlineData("Clipboard.SetDataObject (data);")]
+    [InlineData("using Clip = System.Windows.Clipboard; class C { void M() { Clip.SetImage(image); } }")]
+    [InlineData("var url = \"https://example.test/Clipboard.SetText(\"; System.Windows.Clipboard.SetFileDropList(files);")]
+    public void Detector_flags_clipboard_bypasses(string source)
+    {
+        Assert.NotEmpty(FindClipboardWrites(StripCommentsAndStrings(source)));
+    }
+
+    [Fact]
+    public void Detector_allows_helper_itself()
+    {
+        var root = RepositoryRoot();
+        var helper = Path.Combine(root, "src", "Scribe.App", "Infrastructure", "ScribeClipboard.cs");
+        Assert.NotEmpty(FindClipboardWrites(StripCommentsAndStrings(File.ReadAllText(helper))));
     }
 
     private static string RepositoryRoot()
@@ -53,7 +70,21 @@ public sealed class ScribeClipboardSourceTests
             file.Contains($"{separator}bin{separator}", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string RemoveComments(string source)
+    private static IReadOnlyList<string> FindClipboardWrites(string source)
+    {
+        var aliases = System.Text.RegularExpressions.Regex.Matches(
+                source,
+                @"using\s+(?<name>[A-Za-z_]\w*)\s*=\s*[^;]*\bClipboard\s*;",
+                System.Text.RegularExpressions.RegexOptions.Multiline)
+            .Select(match => match.Groups["name"].Value)
+            .ToList();
+        var targets = new[] { "Clipboard", "System\\s*\\.\\s*Windows\\s*\\.\\s*Clipboard" }
+            .Concat(aliases.Select(System.Text.RegularExpressions.Regex.Escape));
+        var pattern = $@"(?<![A-Za-z0-9_])(?:{string.Join("|", targets)})\s*\.\s*Set\w+\s*\(";
+        return System.Text.RegularExpressions.Regex.Matches(source, pattern).Select(match => match.Value).ToList();
+    }
+
+    private static string StripCommentsAndStrings(string source)
     {
         var result = new System.Text.StringBuilder(source.Length);
         for (var i = 0; i < source.Length; i++)
@@ -81,25 +112,103 @@ public sealed class ScribeClipboardSourceTests
                 continue;
             }
 
+            if (source[i] == '@' && i + 1 < source.Length && source[i + 1] == '"')
+            {
+                result.Append("\"\"");
+                i += 2;
+                while (i < source.Length)
+                {
+                    if (source[i] == '"' && i + 1 < source.Length && source[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+
+                    if (source[i] == '"')
+                    {
+                        break;
+                    }
+
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (source[i] == '$' && i + 1 < source.Length && source[i + 1] == '"')
+            {
+                result.Append("\"\"");
+                i++;
+                SkipRegularString(source, ref i);
+                continue;
+            }
+
+            if ((source[i] == '$' || source[i] == '@') && i + 1 < source.Length && source[i + 1] == '$')
+            {
+                while (i < source.Length && (source[i] == '$' || source[i] == '@'))
+                {
+                    i++;
+                }
+            }
+
+            if (source[i] == '"')
+            {
+                var quoteCount = CountQuotes(source, i);
+                if (quoteCount >= 3)
+                {
+                    result.Append("\"\"");
+                    i += quoteCount;
+                    while (i < source.Length)
+                    {
+                        var closing = CountQuotes(source, i);
+                        if (closing >= quoteCount)
+                        {
+                            i += closing - 1;
+                            break;
+                        }
+
+                        i++;
+                    }
+
+                    continue;
+                }
+
+                result.Append("\"\"");
+                SkipRegularString(source, ref i);
+                continue;
+            }
+
             result.Append(source[i]);
         }
 
         return result.ToString();
     }
 
-    private static bool HasDirectClipboardWrite(string source, string call)
+    private static void SkipRegularString(string source, ref int i)
     {
-        var index = source.IndexOf(call, StringComparison.Ordinal);
-        while (index >= 0)
+        for (i++; i < source.Length; i++)
         {
-            if (index == 0 || source[index - 1] != 'e')
+            if (source[i] == '\\')
             {
-                return true;
+                i++;
+                continue;
             }
 
-            index = source.IndexOf(call, index + call.Length, StringComparison.Ordinal);
+            if (source[i] == '"')
+            {
+                return;
+            }
+        }
+    }
+
+    private static int CountQuotes(string source, int index)
+    {
+        var count = 0;
+        while (index + count < source.Length && source[index + count] == '"')
+        {
+            count++;
         }
 
-        return false;
+        return count;
     }
 }

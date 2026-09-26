@@ -289,13 +289,57 @@ public sealed class LastTranscriptStoreTests
         store.Set("live");
         store.Seed(["from history"]);
 
-        Assert.Equal(new[] { "live" }, store.GetRecent());
+        Assert.Equal(new[] { "live", "from history" }, store.GetRecent());
 
         var empty = new LastTranscriptStore();
         empty.Seed(Enumerable.Range(0, LastTranscriptStore.Capacity + 3).Select(i => $"h{i}"));
 
         Assert.Equal(LastTranscriptStore.Capacity, empty.GetRecent().Count);
         Assert.Null(Record.Exception(() => empty.Seed(null)));
+    }
+
+    [Fact]
+    public void Seed_history_merges_under_live_dictations_and_skips_duplicates()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("live");
+        store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow.AddMinutes(-1), "live", 1, 1),
+            new HistoryEntry(2, DateTimeOffset.UtcNow.AddMinutes(-2), "older", 1, 1),
+        ]);
+
+        Assert.Equal(["live", "older"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Notice_ids_stop_copying_after_their_entry_is_forgotten()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("copy me");
+        var id = store.CurrentId();
+
+        Assert.NotNull(id);
+        Assert.Equal("copy me", store.Get(id.Value));
+
+        store.Forget("copy me");
+
+        Assert.Null(store.Get(id.Value));
+    }
+
+    [Fact]
+    public void Forget_older_than_removes_only_seeded_history_before_cutoff()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddHours(-1);
+        var store = new LastTranscriptStore();
+        store.Set("live");
+        store.SeedHistory([
+            new HistoryEntry(1, cutoff.AddMinutes(-1), "old", 1, 1),
+            new HistoryEntry(2, cutoff.AddMinutes(1), "new", 1, 1),
+        ]);
+
+        Assert.True(store.ForgetOlderThan(cutoff));
+
+        Assert.Equal(["live", "new"], store.GetRecent());
     }
 
     [Fact]

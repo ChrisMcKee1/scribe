@@ -26,7 +26,7 @@ public static class TrayAiCleanup
         }
 
         var isSetUp = setupComplete && ProviderConfigured(settings);
-        if (!isSetUp)
+        if (!settings.EnableAiCleanup && !isSetUp)
         {
             return new TrayAiCleanupItem(TrayAiCleanupKind.SetUp, "Set up AI cleanup...", false, true);
         }
