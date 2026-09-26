@@ -1339,7 +1339,7 @@ public partial class App : Application
     private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
     {
         var settings = _controller?.CurrentSettings;
-        var mode = settings?.Hotkey.Mode ?? HotkeyMode.Hold;
+        var mode = report.ShortcutMode;
         var notice = DictationProblemText.Describe(
             report,
             mode,

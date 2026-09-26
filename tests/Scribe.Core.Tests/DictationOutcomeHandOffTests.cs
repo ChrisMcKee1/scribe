@@ -20,13 +20,38 @@ public sealed class DictationOutcomeHandOffTests
 
         Assert.Single(Regex.Matches(Controller, Regex.Escape("PillOutcome.Of(pillInsertion,")));
         Assert.Contains(
-            "ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, settings.Hotkey.Mode));",
+            "ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, session.ShortcutMode));",
             process[process.LastIndexOf("finally", StringComparison.Ordinal)..],
             StringComparison.Ordinal);
 
         // The insertion as the insertion step reported it (the whole of it, the space included), and cleanup as it returned.
         Assert.Matches(new Regex(@"var injection = insertion\.Injection;\s*pillInsertion = injection;"), process);
         Assert.Matches(new Regex(@"report\.Cleanup = cleanup;\s*pillCleanup = cleanup;"), process);
+    }
+
+    [Fact]
+    public void Outcome_and_problem_words_use_the_shortcut_mode_that_started_the_session()
+    {
+        var activation = Body(Controller, "private void OnActivated(");
+        var stop = Body(Controller, "private void StopAndProcess(");
+        var process = Body(Controller, "private async Task ProcessAsync(");
+
+        Assert.Contains("var binding = CaptureTriggerBinding.For(current, e.Trigger);", activation, StringComparison.Ordinal);
+        Assert.Contains("binding?.Mode ?? HotkeyMode.Hold", activation, StringComparison.Ordinal);
+        Assert.Contains("capture.ShortcutMode", stop, StringComparison.Ordinal);
+        Assert.Contains("ShortcutMode: session.ShortcutMode", process, StringComparison.Ordinal);
+        Assert.Contains("PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, session.ShortcutMode)", process, StringComparison.Ordinal);
+        Assert.DoesNotContain("PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, settings.Hotkey.Mode)", process, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Speech_recognition_exceptions_only_report_model_load_when_the_recognizer_was_not_resident()
+    {
+        var process = Body(Controller, "private async Task ProcessAsync(");
+
+        Assert.Contains("var recognizerResident = false;", process, StringComparison.Ordinal);
+        Assert.Contains("recognizerResident = _transcription.IsReady;", process, StringComparison.Ordinal);
+        Assert.Contains("currentStage == TryDictationReportClassifier.StageSpeechRecognition && !recognizerResident", process, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -620,6 +620,7 @@ internal sealed class DictationController : IDisposable
             () =>
             {
                 var targetWindow = GetForegroundWindow();
+                var binding = CaptureTriggerBinding.For(current, e.Trigger);
 
                 // The vocabulary generation is taken here, at the recording's admission, with its settings: a lock-free
                 // read of the newest complete generation, so a Save while this dictation runs changes nothing it uses.
@@ -629,6 +630,7 @@ internal sealed class DictationController : IDisposable
                     ProcessNameForWindow(targetWindow),
                     Stopwatch.GetTimestamp(),
                     e.Activation,
+                    binding?.Mode ?? HotkeyMode.Hold,
                     _vocabulary.Current);
             },
             () => _hotkeys.CancelToggle(e.Activation));
@@ -951,6 +953,7 @@ internal sealed class DictationController : IDisposable
             capture.TargetApp,
             capture.StartedTimestamp,
             reason,
+            capture.ShortcutMode,
             capture.Vocabulary);
 
         // Everything from here to the hand-off is guarded: the admission is ended only by the processing task, so a
@@ -1027,6 +1030,7 @@ internal sealed class DictationController : IDisposable
             settings.ApplyPostProcessing,
             session.StartedTimestamp);
         var currentStage = TryDictationReportClassifier.StageAudioCapture;
+        var recognizerResident = false;
         long insertedTimestamp = 0;
 
         // What the pill says about this dictation when it returns to idle (PillOutcome.Of decides): how the insertion went,
@@ -1101,7 +1105,7 @@ internal sealed class DictationController : IDisposable
                 // support log showed this exact misdirection: the device took five seconds to open,
                 // the user let go, and Scribe blamed their hardware.
                 pillProblem = heldSeconds < 1.0
-                    ? new DictationProblemReport(DictationProblem.TooQuick)
+                    ? new DictationProblemReport(DictationProblem.TooQuick, ShortcutMode: session.ShortcutMode)
                     : device is null
                         ? new DictationProblemReport(DictationProblem.NoAudio)
                         : new DictationProblemReport(DictationProblem.NoAudioFromDevice, Device: device);
@@ -1144,7 +1148,7 @@ internal sealed class DictationController : IDisposable
             // The recognizer warm-loads at startup, but a very fast first dictation can arrive
             // before that finishes. Rather than throwing the capture away, let Transcribe load the
             // model on demand (it is idempotent) so the user's first utterance is never lost.
-            var recognizerResident = _transcription.IsReady;
+            recognizerResident = _transcription.IsReady;
             activity?.SetTag(ScribeTelemetry.TagRecognizerReady, recognizerResident);
             if (!recognizerResident)
             {
@@ -1432,7 +1436,7 @@ internal sealed class DictationController : IDisposable
             _log.LogError("Dictation processing failed: {Failure}", FailureShape.DescribeWithStack(ex));
             report.Fail(currentStage, TryDictationReportClassifier.FailureReasonForStage(currentStage));
             RaisePipelineReport(report);
-            pillProblem = currentStage == TryDictationReportClassifier.StageSpeechRecognition
+            pillProblem = currentStage == TryDictationReportClassifier.StageSpeechRecognition && !recognizerResident
                 ? new DictationProblemReport(DictationProblem.ModelLoadFailed)
                 : new DictationProblemReport(DictationProblem.RecognitionFailed);
             RaiseError(pillProblem);
@@ -1441,7 +1445,7 @@ internal sealed class DictationController : IDisposable
         {
             // After the pipeline, never in it: the outcome is decided here from what it set, and shown with the return to
             // idle, which already accepts the next press.
-            ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, settings.Hotkey.Mode));
+            ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, session.ShortcutMode));
         }
     }
 
@@ -1835,6 +1839,7 @@ internal sealed class DictationController : IDisposable
         string? TargetApp,
         long StartedTimestamp,
         DictationStopReason StopReason,
+        HotkeyMode ShortcutMode,
         VocabularyGeneration Vocabulary);
 
     // Everything a recording needs to remember from the moment it started, captured under the lifecycle's gate
@@ -1847,6 +1852,7 @@ internal sealed class DictationController : IDisposable
         string? TargetApp,
         long StartedTimestamp,
         long HotkeyActivation,
+        HotkeyMode ShortcutMode,
         VocabularyGeneration Vocabulary);
 
     [DllImport("user32.dll")]
