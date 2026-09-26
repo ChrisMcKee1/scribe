@@ -721,6 +721,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     internal void AddDictionaryDraft(string spoken)
     {
         ShowPage(SettingsPage.Dictionary, nameof(DictionaryGrid));
+        if (!string.IsNullOrWhiteSpace(DictionarySearchBox.Text))
+        {
+            DictionarySearchBox.Text = string.Empty;
+            _dictionaryView?.Refresh();
+        }
+
         if (string.IsNullOrWhiteSpace(spoken))
         {
             return;
@@ -5577,24 +5583,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ShowWordPackSaveResult(result);
     }
 
-    private void RefreshWordPackCatalogSnapshot()
-
-    {
-        try
-
-        {
-            _wordPackCatalog = _libraryStore.LoadCatalog();
-        }
-
-        catch (Exception ex)
-
-        {
-            _wordPackCatalog = null;
-
-            _log.LogWarning("Could not refresh the word pack catalog snapshot after save: {Failure}", FailureShape.DescribeWithStack(ex));
-        }
-    }
-
     private void RefreshWordPackRowsFromWorkspace()
     {
         if (_wordPackWorkspace is null)
@@ -5705,9 +5693,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             UpdateAiEnabledState();
         }
 
-        void OnWordPacksChanged()
+        void OnWordPacksChanged(LibraryCatalog catalog)
         {
-            RefreshWordPackCatalogSnapshot();
+            _wordPackCatalog = catalog;
             RefreshWordPackList();
             RefreshWordPackRowsFromWorkspace();
             RefreshDictionaryStatus();

@@ -622,7 +622,7 @@ public sealed class WordPackSaveProtocolTests
             },
             () => ValidationErrors,
             () => Trace.Add("settings-committed"),
-            () => Trace.Add("wordpacks-changed"));
+            catalog => Trace.Add($"wordpacks-changed:{catalog.Generation}"));
 
         public void EditDraft(string edit)
         {

@@ -74,7 +74,9 @@ public sealed class WordPackSaveProtocol
                 {
                     if (prepared.Status == LibraryPrepareStatus.Stale)
                     {
-                        session.Rebase(await _store.LoadCatalogAsync().ConfigureAwait(true));
+                        var catalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
+                        session.Rebase(catalog);
+                        request.OnWordPacksChanged?.Invoke(catalog);
                     }
 
                     return WordPackSaveProtocolResult.Error(PrepareMessage(prepared));
@@ -189,8 +191,8 @@ public sealed class WordPackSaveProtocol
         {
             pending.MarkSaved(catalog);
             ClearPending();
-            request.OnWordPacksChanged?.Invoke();
-            var repairs = await SavePendingReferenceRepairsAsync(pending).ConfigureAwait(true);
+            request.OnWordPacksChanged?.Invoke(catalog);
+            var repairs = await SavePendingReferenceRepairsAsync(pending, request).ConfigureAwait(true);
             if (!repairs.Success)
             {
                 return repairs;
@@ -200,7 +202,7 @@ public sealed class WordPackSaveProtocol
         }
 
         ClearPending();
-        request.OnWordPacksChanged?.Invoke();
+        request.OnWordPacksChanged?.Invoke(catalog);
         return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
     }
 
@@ -214,9 +216,10 @@ public sealed class WordPackSaveProtocol
         {
             case LibrarySaveStatus.Applied:
             case LibrarySaveStatus.AppliedAwaitingRelease:
-                session.MarkSaved(await _store.LoadCatalogAsync().ConfigureAwait(true));
-                request.OnWordPacksChanged?.Invoke();
-                var repairs = await SavePendingReferenceRepairsAsync(session).ConfigureAwait(true);
+                var catalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
+                session.MarkSaved(catalog);
+                request.OnWordPacksChanged?.Invoke(catalog);
+                var repairs = await SavePendingReferenceRepairsAsync(session, request).ConfigureAwait(true);
                 if (!repairs.Success)
                 {
                     return repairs;
@@ -243,16 +246,19 @@ public sealed class WordPackSaveProtocol
                     "Scribe couldn't confirm that your word pack changes were saved. It will finish saving them, and your edits stay here until it has.");
 
             case LibrarySaveStatus.Superseded:
-                session.Rebase(await _store.LoadCatalogAsync().ConfigureAwait(true));
-                request.OnWordPacksChanged?.Invoke();
+            {
+                var supersededCatalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
+                session.Rebase(supersededCatalog);
+                request.OnWordPacksChanged?.Invoke(supersededCatalog);
                 return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+            }
 
             default:
                 return WordPackSaveProtocolResult.Error("Couldn't save your changes. Your edits are still here.");
         }
     }
 
-    private async Task<WordPackSaveProtocolResult> SavePendingReferenceRepairsAsync(WordPackSaveSession completed)
+    private async Task<WordPackSaveProtocolResult> SavePendingReferenceRepairsAsync(WordPackSaveSession completed, WordPackSaveProtocolRequest request)
     {
         while (completed.Workspace.HasPendingReferenceRepairs)
         {
@@ -290,7 +296,9 @@ public sealed class WordPackSaveProtocol
 
             if (repairOutcome.Status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
             {
-                repair.MarkSaved(await _store.LoadCatalogAsync().ConfigureAwait(true));
+                var catalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
+                repair.MarkSaved(catalog);
+                request.OnWordPacksChanged?.Invoke(catalog);
                 if (transactionError is not null)
                 {
                     return WordPackSaveProtocolResult.Warning(
@@ -382,7 +390,7 @@ public sealed record WordPackSaveProtocolRequest(
     Func<string> CurrentDraft,
     Func<IReadOnlyList<string>>? Validate = null,
     Action? OnSettingsCommitted = null,
-    Action? OnWordPacksChanged = null);
+    Action<LibraryCatalog>? OnWordPacksChanged = null);
 
 public sealed record WordPackSaveProtocolResult(bool Success, string? Message, WordPackSaveProtocolSeverity Severity)
 {

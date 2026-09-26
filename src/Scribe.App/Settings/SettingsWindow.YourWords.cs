@@ -24,6 +24,7 @@ namespace Scribe.App.Settings;
 public partial class SettingsWindow
 {
     private bool _dictionarySuggestionRunning;
+    private DictionaryRow? _dictionarySelectionPendingRestore;
 
     private void InitializeDictionaryGrid()
     {
@@ -242,13 +243,38 @@ public partial class SettingsWindow
         }
     }
 
-    private void DictionaryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+    private void DictionaryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DictionaryGrid.SelectedItem is DictionaryRow row)
+        {
+            _dictionarySelectionPendingRestore = row;
+        }
+
         UpdateSelectedDictionaryCoverageStatus();
+    }
 
     private void DictionarySearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (DictionaryGrid.SelectedItem is DictionaryRow selected)
+        {
+            _dictionarySelectionPendingRestore = selected;
+        }
+
         _dictionaryView?.Refresh();
+        RestoreDictionarySelectionIfVisible();
         UpdateDictionaryViewState();
+    }
+
+    private void RestoreDictionarySelectionIfVisible()
+    {
+        if (_dictionarySelectionPendingRestore is not { } row || !_rows.Contains(row) ||
+            _dictionaryView?.Cast<object>().Contains(row) != true)
+        {
+            return;
+        }
+
+        DictionaryGrid.SelectedItem = row;
+        DictionaryGrid.ScrollIntoView(row);
     }
 
     private void DictionaryClearSearchButton_Click(object sender, RoutedEventArgs e)
@@ -286,6 +312,7 @@ public partial class SettingsWindow
     /// </summary>
     private void DictionaryAddButton_Click(object sender, RoutedEventArgs e)
     {
+        ClearDictionarySearchForNewRow();
         var row = new DictionaryRow();
         _rows.Add(row);
 
@@ -299,6 +326,17 @@ public partial class SettingsWindow
         DictionaryGrid.SelectedItem = row;
         DictionaryGrid.CurrentCell = new DataGridCellInfo(row, DictionaryGrid.Columns.Count > 1 ? DictionaryGrid.Columns[1] : DictionaryGrid.Columns[0]);
         DictionaryGrid.BeginEdit();
+    }
+
+    private void ClearDictionarySearchForNewRow()
+    {
+        if (string.IsNullOrWhiteSpace(DictionarySearchBox.Text))
+        {
+            return;
+        }
+
+        DictionarySearchBox.Text = string.Empty;
+        _dictionaryView?.Refresh();
     }
 
     /// <summary>Removes the row whose delete button was pressed.</summary>
@@ -417,84 +455,45 @@ public partial class SettingsWindow
     }
 
     private async void ReviewDictionaryOverlaps_Click(object? sender, RoutedEventArgs e)
-
     {
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
         var dictionaryBefore = DictionarySignature();
-
         var wordPacksBefore = LibrarySignature();
-
-        var entries = BuildDictionaryEntries(out _);
-
-        var report = CurrentLibraryComposition()?.OverlapReport(entries)
-
-            ?? DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(entries, CurrentWordPackLibraries(), CollectEnabledLibraryIds());
-
-        var redundant = report.Redundant.ToList();
-
-        if (redundant.Count == 0)
-
+        var covering = CurrentLibraryComposition()?.Coverage()
+            ?? DictionaryLibraryOverlapAnalyzer.Coverage(CurrentWordPackLibraries(), CollectEnabledLibraryIds());
+        var listed = _rows
+            .Where(row => IsRedundantWithWordPack(row, covering))
+            .Select(row => new ReviewedOverlap(row, row.Pattern, row.Replacement, row.WholeWord, row.Enabled))
+            .ToList();
+        if (listed.Count == 0)
         {
             ShowInfo("No words overlap with word packs.");
-
-            return;
-        }
-
-        var listed = redundant
-
-            .Select(overlap => _rows.FirstOrDefault(row => RedundantMatches(row, overlap)) is { } row
-
-                ? new ReviewedOverlap(row, row.Pattern, row.Replacement, row.WholeWord, row.Enabled)
-
-                : null)
-
-            .OfType<ReviewedOverlap>()
-
-            .ToList();
-
-        if (listed.Count == 0)
-
-        {
-            ShowInfo("The word list changed. Review overlaps again.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
-
             return;
         }
 
         var list = string.Join("\n", listed.Take(8).Select(item => $"• {item.Pattern}"));
-
         if (listed.Count > 8)
-
         {
             list += $"\n• and {listed.Count - 8:N0} more";
         }
 
         if (!await ShowConfirmationAsync(ThemedConfirmation.Create(
-
                 "Remove words a word pack already has?",
-
                 list,
-
                 $"Remove {listed.Count:N0}",
-
                 cancelIsDefault: true,
-
                 cancelText: "Keep them")))
-
         {
             return;
         }
 
         if (DictionarySignature() != dictionaryBefore || LibrarySignature() != wordPacksBefore)
-
         {
             ShowInfo("The word list changed. Review overlaps again.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
-
             return;
         }
 
         foreach (var item in listed.Where(item => _rows.Contains(item.Row) && item.StillMatches()))
-
         {
             _rows.Remove(item.Row);
         }
@@ -502,25 +501,24 @@ public partial class SettingsWindow
         RefreshDictionaryStatus();
     }
 
-    private static bool RedundantMatches(DictionaryRow row, DictionaryOverlap overlap) =>
+    private static bool IsRedundantWithWordPack(DictionaryRow row, IReadOnlyDictionary<string, LibraryCoverage> covering)
+    {
+        var pattern = (row.Pattern ?? string.Empty).Trim();
+        if (!row.Enabled || pattern.Length == 0 || !covering.TryGetValue(pattern, out var hit))
+        {
+            return false;
+        }
 
-        string.Equals(row.Pattern.Trim(), overlap.Pattern, StringComparison.OrdinalIgnoreCase) &&
-
-        string.Equals((row.Replacement ?? string.Empty).Trim(), overlap.Replacement, StringComparison.Ordinal) &&
-
-        row.Enabled;
+        return string.Equals((row.Replacement ?? string.Empty).Trim(), (hit.Entry.Replacement ?? string.Empty).Trim(), StringComparison.Ordinal) &&
+            row.WholeWord == hit.Entry.WholeWord;
+    }
 
     private sealed record ReviewedOverlap(DictionaryRow Row, string Pattern, string Replacement, bool WholeWord, bool Enabled)
-
     {
         public bool StillMatches() =>
-
             string.Equals(Row.Pattern, Pattern, StringComparison.Ordinal) &&
-
             string.Equals(Row.Replacement, Replacement, StringComparison.Ordinal) &&
-
             Row.WholeWord == WholeWord &&
-
             Row.Enabled == Enabled;
     }
 
@@ -719,6 +717,7 @@ public partial class SettingsWindow
 
     private void AddSuggestionRows(IEnumerable<(string Pattern, string Replacement)> entries)
     {
+        ClearDictionarySearchForNewRow();
         DictionaryRow? first = null;
         foreach (var (pattern, replacement) in entries)
         {

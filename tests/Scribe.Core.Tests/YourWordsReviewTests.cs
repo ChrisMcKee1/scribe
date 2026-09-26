@@ -6,14 +6,18 @@ public sealed class YourWordsReviewTests
     public void Word_pack_settlement_refreshes_the_catalog_snapshot_before_the_hint()
     {
         var code = ReadSettingsWindowCode();
-        var callback = Body(code, "void OnWordPacksChanged()");
+        var callback = Body(code, "void OnWordPacksChanged(LibraryCatalog catalog)");
 
-        Assert.Contains("RefreshWordPackCatalogSnapshot();", callback, StringComparison.Ordinal);
+        Assert.Contains("_wordPackCatalog = catalog;", callback, StringComparison.Ordinal);
         Assert.True(
-            callback.IndexOf("RefreshWordPackCatalogSnapshot();", StringComparison.Ordinal) <
+            callback.IndexOf("_wordPackCatalog = catalog;", StringComparison.Ordinal) <
             callback.IndexOf("RefreshDictionaryStatus();", StringComparison.Ordinal));
-        Assert.Contains("_wordPackCatalog = _libraryStore.LoadCatalog();", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("_libraryStore.LoadCatalog();", callback, StringComparison.Ordinal);
         Assert.Contains("Word pack vocabulary is unavailable right now.", code, StringComparison.Ordinal);
+        var protocol = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.Core", "Settings", "WordPackSaveProtocol.cs"));
+        var stale = protocol[protocol.IndexOf("prepared.Status == LibraryPrepareStatus.Stale", StringComparison.Ordinal)..];
+        Assert.Contains("session.Rebase(catalog);", stale, StringComparison.Ordinal);
+        Assert.Contains("request.OnWordPacksChanged?.Invoke(catalog);", stale, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -59,6 +63,34 @@ public sealed class YourWordsReviewTests
         Assert.Contains("DictionaryEmptyLearnButton.IsEnabled = false;", body, StringComparison.Ordinal);
         Assert.Contains("_dictionarySuggestionRunning = false;", body, StringComparison.Ordinal);
         Assert.Contains("DictionaryEmptyLearnButton.IsEnabled = true;", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Search_preserves_selection_and_add_paths_clear_the_filter()
+    {
+        var code = ReadSettingsWindowCode();
+        var search = Body(code, "private void DictionarySearchBox_TextChanged");
+        var add = Body(code, "private void DictionaryAddButton_Click");
+        var addDraft = Body(code, "internal void AddDictionaryDraft");
+        var suggestions = Body(code, "private void AddSuggestionRows");
+
+        Assert.Contains("_dictionarySelectionPendingRestore = selected;", search, StringComparison.Ordinal);
+        Assert.Contains("RestoreDictionarySelectionIfVisible();", search, StringComparison.Ordinal);
+        Assert.Contains("ClearDictionarySearchForNewRow();", add, StringComparison.Ordinal);
+        Assert.Contains("DictionarySearchBox.Text = string.Empty;", addDraft, StringComparison.Ordinal);
+        Assert.Contains("ClearDictionarySearchForNewRow();", suggestions, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Scribe_writes_edits_the_replacement_not_the_placeholder()
+    {
+        var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        var column = xaml[xaml.IndexOf("<DataGridTextColumn Header=\"Scribe writes\"", StringComparison.Ordinal)..];
+        column = column[..column.IndexOf("<DataGridCheckBoxColumn Header=\"Whole words only\"", StringComparison.Ordinal)];
+
+        Assert.Contains("Binding=\"{Binding Replacement, UpdateSourceTrigger=PropertyChanged}\"", column, StringComparison.Ordinal);
+        Assert.Contains("ReplacementIsPlaceholder", column, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplacementDisplay", column, StringComparison.Ordinal);
     }
 
     private static string ReadSettingsWindowCode()

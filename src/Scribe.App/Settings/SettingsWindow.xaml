@@ -1502,40 +1502,24 @@
                                                             </Style>
                                                         </DataGridTextColumn.EditingElementStyle>
                                                     </DataGridTextColumn>
-                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding ReplacementDisplay, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement">
-
+                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement">
                                                         <DataGridTextColumn.ElementStyle>
-
                                                             <Style TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
-
                                                                 <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
-
                                                                 <Style.Triggers>
-
                                                                     <DataTrigger Binding="{Binding ReplacementIsPlaceholder}" Value="True">
-
+                                                                        <Setter Property="Text" Value="(removes these words)"/>
                                                                         <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
-
                                                                     </DataTrigger>
-
                                                                 </Style.Triggers>
-
                                                             </Style>
-
                                                         </DataGridTextColumn.ElementStyle>
-
                                                         <DataGridTextColumn.EditingElementStyle>
-
                                                             <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
-
                                                                 <Setter Property="AutomationProperties.Name" Value="Scribe writes"/>
-
                                                             </Style>
-
                                                         </DataGridTextColumn.EditingElementStyle>
-
                                                     </DataGridTextColumn>
-
                                                     <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
 
                                                                             ElementStyle="{StaticResource WholeWordCheckBox}"
