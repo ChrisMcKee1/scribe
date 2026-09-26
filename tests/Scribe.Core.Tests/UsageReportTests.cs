@@ -48,6 +48,21 @@ public sealed class UsageReportTests
     }
 
     [Fact]
+    public void Everyday_abbreviations_are_not_offered_as_words_to_add()
+    {
+        // Found in the P5-HU renders: "Thursday at 2 PM" in ten dictations put "PM" under Words you could add, because
+        // Usage asked only whether a token was jargon-shaped and skipped the miner's stoplist.
+        var history = Enumerable.Range(1, 10)
+            .Select(i => Entry(i, Now.AddHours(-i), "Let's meet Thursday at 2 PM about the AKS cluster."))
+            .ToArray();
+
+        var result = Build(history, periodDays: 7);
+
+        Assert.DoesNotContain(result.Snapshot.Terms, term => term.Text == "PM");
+        Assert.Contains(result.Snapshot.Terms, term => term is { Text: "AKS", Covered: false });
+    }
+
+    [Fact]
     public void Snapshot_uses_friendly_app_names_and_longest_dictation()
     {
         var history = new[]

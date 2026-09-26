@@ -236,7 +236,7 @@ public static partial class UsageAnalyzer
                 var token = match.Value.TrimEnd('.', ',', ':', ';', '!', '?');
                 if (token.Length < 2 ||
                     coveredForms.Contains(token) ||
-                    !DictionarySuggestionMiner.IsJargonShaped(token))
+                    !DictionarySuggestionMiner.IsCandidate(token))
                 {
                     continue;
                 }
