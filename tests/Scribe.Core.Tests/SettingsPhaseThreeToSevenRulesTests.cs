@@ -207,6 +207,30 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     [Fact]
+    public void Foundry_model_choices_keep_a_saved_alias_outside_the_catalog()
+    {
+        var choices = FoundryModelChoices.Build("team-custom-model", CleanupModelCatalog.Curated, []);
+
+        var selected = Assert.Single(choices, choice => choice.IsSelected);
+        Assert.Equal("team-custom-model", selected.Alias);
+        Assert.Equal("team-custom-model", selected.Label);
+        Assert.Equal("Custom Foundry Local model.", selected.Hint);
+    }
+
+    [Theory]
+    [InlineData(FoundryLocalSetupStage.NotSetUp, AiCleanupStatusKind.Warning, "Set up")]
+    [InlineData(FoundryLocalSetupStage.RuntimeReady, AiCleanupStatusKind.Info, "Download and load")]
+    [InlineData(FoundryLocalSetupStage.CachedUnloaded, AiCleanupStatusKind.Info, "Load")]
+    [InlineData(FoundryLocalSetupStage.ModelFailed, AiCleanupStatusKind.Error, "Try again")]
+    public void Foundry_setup_rows_distinguish_setup_download_cache_and_failure(FoundryLocalSetupStage stage, AiCleanupStatusKind kind, string action)
+    {
+        var setup = FoundryLocalSetup.Describe(stage, "Qwen3 1.7B", "about 1.3 GB");
+
+        Assert.Equal(kind, setup.Kind);
+        Assert.Equal(action, setup.ActionText);
+    }
+
+    [Fact]
     public void Text_filter_is_case_and_accent_insensitive()
     {
         Assert.True(TextFilter.Matches("resume", "Résumé for Contoso"));
@@ -418,6 +442,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { AzureSetupResult.SignedIn, AiCleanupStatusKind.Success, "Signed in.", "Refresh models", true, null },
         { AzureSetupResult.ListingModels, AiCleanupStatusKind.Busy, "Finding your models...", null, false, null },
         { AzureSetupResult.ListingFailed, AiCleanupStatusKind.Error, "Couldn't list your models. no access", "Try again", true, null },
+        { AzureSetupResult.Verifying, AiCleanupStatusKind.Busy, "Verifying...", null, false, null },
         { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
         { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },

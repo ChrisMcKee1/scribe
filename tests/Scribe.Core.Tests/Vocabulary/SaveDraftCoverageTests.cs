@@ -21,6 +21,34 @@ public sealed class SaveDraftCoverageTests
     // The kinds of editor the draft's walk reads (by XAML element name), or containers of them.
     private static readonly string[] WalkedKinds = ["TextBox", "PasswordBox", "NumberBox", "ToggleSwitch", "CheckBox", "RadioButton", "ComboBox", "Slider"];
 
+
+
+    [Fact]
+    public void Ai_cleanup_radio_buttons_have_accessible_names_and_help_text()
+    {
+        var xaml = Document().Descendants()
+            .Where(element => element.Attribute(X + "Name") is not null)
+            .ToDictionary(element => element.Attribute(X + "Name")!.Value, element => element);
+        var radios = new Dictionary<string, (string Title, string Description)>
+        {
+            ["AiProviderLocalRadio"] = ("AiProviderLocalTitle", "AiProviderLocalDescription"),
+            ["AiProviderCopilotRadio"] = ("AiProviderCopilotTitle", "AiProviderCopilotDescription"),
+            ["AiProviderFoundryRadio"] = ("AiProviderFoundryTitle", "AiProviderFoundryDescription"),
+            ["AiProviderCustomRadio"] = ("AiProviderCustomTitle", "AiProviderCustomDescription"),
+            ["AzureCliRadio"] = ("AzureCliRadioTitle", "AzureCliRadioDescription"),
+            ["AzureServicePrincipalRadio"] = ("AzureServicePrincipalRadioTitle", "AzureServicePrincipalRadioDescription"),
+            ["AzureApiKeyRadio"] = ("AzureApiKeyRadioTitle", "AzureApiKeyRadioDescription"),
+        };
+
+        foreach (var (radioName, (title, description)) in radios)
+        {
+            var radio = xaml[radioName];
+            Assert.Equal($"{{Binding ElementName={title}}}", Attribute(radio, "AutomationProperties.LabeledBy"));
+            Assert.Equal($"{{Binding Text, ElementName={description}}}", Attribute(radio, "AutomationProperties.HelpText"));
+            Assert.True(xaml.ContainsKey(title), title);
+            Assert.True(xaml.ContainsKey(description), description);
+        }
+    }
     // Values the save computes beyond a plain editor, each read by the draft through the same expression the save uses.
     private static readonly Dictionary<string, string> Computed = new()
     {
@@ -371,6 +399,9 @@ public sealed class SaveDraftCoverageTests
     }
 
     private static string Squash(string code) => Regex.Replace(code, @"\s+", string.Empty);
+
+    private static string? Attribute(XElement element, string localName) =>
+        element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == localName)?.Value;
 
     private static (string Window, string Save, string Draft, IReadOnlyCollection<string> Skipped, IReadOnlyDictionary<string, XElement> Xaml) Sources()
     {

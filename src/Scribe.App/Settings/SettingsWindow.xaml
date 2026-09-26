@@ -1053,28 +1053,36 @@
                                     <StackPanel>
                                         <TextBlock x:Name="AiProviderTitle" Text="Where AI cleanup runs" Style="{StaticResource CardTitle}"/>
                                         <StackPanel Margin="0,10,0,0">
-                                            <RadioButton x:Name="AiProviderLocalRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked">
+                                            <RadioButton x:Name="AiProviderLocalRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked"
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=AiProviderLocalTitle}"
+                                                         AutomationProperties.HelpText="{Binding Text, ElementName=AiProviderLocalDescription}">
                                                 <StackPanel>
-                                                    <TextBlock Text="On this PC (Foundry Local)" Style="{StaticResource CardTitle}"/>
-                                                    <TextBlock Text="Private: your text stays on this PC. The first setup downloads an AI runtime and a model, which can take several GB." Style="{StaticResource CardDescription}"/>
+                                                    <TextBlock x:Name="AiProviderLocalTitle" Text="On this PC (Foundry Local)" Style="{StaticResource CardTitle}"/>
+                                                    <TextBlock x:Name="AiProviderLocalDescription" Text="Private: your text stays on this PC. The first setup downloads an AI runtime and a model, which can take several GB." Style="{StaticResource CardDescription}"/>
                                                 </StackPanel>
                                             </RadioButton>
-                                            <RadioButton x:Name="AiProviderCopilotRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked">
+                                            <RadioButton x:Name="AiProviderCopilotRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked"
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=AiProviderCopilotTitle}"
+                                                         AutomationProperties.HelpText="{Binding Text, ElementName=AiProviderCopilotDescription}">
                                                 <StackPanel>
-                                                    <TextBlock Text="GitHub Copilot" Style="{StaticResource CardTitle}"/>
-                                                    <TextBlock Text="Uses your GitHub Copilot subscription. Your text goes to GitHub." Style="{StaticResource CardDescription}"/>
+                                                    <TextBlock x:Name="AiProviderCopilotTitle" Text="GitHub Copilot" Style="{StaticResource CardTitle}"/>
+                                                    <TextBlock x:Name="AiProviderCopilotDescription" Text="Uses your GitHub Copilot subscription. Your text goes to GitHub." Style="{StaticResource CardDescription}"/>
                                                 </StackPanel>
                                             </RadioButton>
-                                            <RadioButton x:Name="AiProviderFoundryRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked">
+                                            <RadioButton x:Name="AiProviderFoundryRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked"
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=AiProviderFoundryTitle}"
+                                                         AutomationProperties.HelpText="{Binding Text, ElementName=AiProviderFoundryDescription}">
                                                 <StackPanel>
-                                                    <TextBlock Text="Microsoft Foundry" Style="{StaticResource CardTitle}"/>
-                                                    <TextBlock Text="Uses a model in your Azure account. Your text goes to your Azure resource." Style="{StaticResource CardDescription}"/>
+                                                    <TextBlock x:Name="AiProviderFoundryTitle" Text="Microsoft Foundry" Style="{StaticResource CardTitle}"/>
+                                                    <TextBlock x:Name="AiProviderFoundryDescription" Text="Uses a model in your Azure account. Your text goes to your Azure resource." Style="{StaticResource CardDescription}"/>
                                                 </StackPanel>
                                             </RadioButton>
-                                            <RadioButton x:Name="AiProviderCustomRadio" GroupName="AiProvider" Checked="AiProviderRadio_Checked">
+                                            <RadioButton x:Name="AiProviderCustomRadio" GroupName="AiProvider" Checked="AiProviderRadio_Checked"
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=AiProviderCustomTitle}"
+                                                         AutomationProperties.HelpText="{Binding Text, ElementName=AiProviderCustomDescription}">
                                                 <StackPanel>
-                                                    <TextBlock Text="Another AI service" Style="{StaticResource CardTitle}"/>
-                                                    <TextBlock Text="Connects to a compatible app or server, such as Ollama, LM Studio, OpenRouter or OpenAI. Your text goes to the address you enter." Style="{StaticResource CardDescription}"/>
+                                                    <TextBlock x:Name="AiProviderCustomTitle" Text="Another AI service" Style="{StaticResource CardTitle}"/>
+                                                    <TextBlock x:Name="AiProviderCustomDescription" Text="Connects to a compatible app or server, such as Ollama, LM Studio, OpenRouter or OpenAI. Your text goes to the address you enter." Style="{StaticResource CardDescription}"/>
                                                 </StackPanel>
                                             </RadioButton>
                                         </StackPanel>
@@ -1115,19 +1123,25 @@
                                         <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
                                             <TextBlock Text="How to sign in" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                             <StackPanel Margin="0,8,0,0">
-                                                <RadioButton x:Name="AzureCliRadio" GroupName="AzureAuthMode" Margin="0,0,0,8" Checked="AzureAuthRadio_Checked">
+                                                <RadioButton x:Name="AzureCliRadio" GroupName="AzureAuthMode" Margin="0,0,0,8" Checked="AzureAuthRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=AzureCliRadioTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=AzureCliRadioDescription}">
                                                     <StackPanel>
                                                         <TextBlock x:Name="AzureCliRadioTitle" Text="Your Azure account (Azure CLI) (recommended)" Style="{StaticResource CardTitle}"/>
                                                         <TextBlock x:Name="AzureCliRadioDescription" Text="Signs in with your Azure account in the browser. Needs Azure CLI." Style="{StaticResource CardDescription}"/>
                                                     </StackPanel>
                                                 </RadioButton>
-                                                <RadioButton x:Name="AzureServicePrincipalRadio" GroupName="AzureAuthMode" Margin="0,0,0,8" Checked="AzureAuthRadio_Checked">
+                                                <RadioButton x:Name="AzureServicePrincipalRadio" GroupName="AzureAuthMode" Margin="0,0,0,8" Checked="AzureAuthRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=AzureServicePrincipalRadioTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=AzureServicePrincipalRadioDescription}">
                                                     <StackPanel>
                                                         <TextBlock x:Name="AzureServicePrincipalRadioTitle" Text="An app registration (service principal)" Style="{StaticResource CardTitle}"/>
                                                         <TextBlock x:Name="AzureServicePrincipalRadioDescription" Text="An app your organization set up in Azure for Scribe. Reliable when your account belongs to several organizations." Style="{StaticResource CardDescription}"/>
                                                     </StackPanel>
                                                 </RadioButton>
-                                                <RadioButton x:Name="AzureApiKeyRadio" GroupName="AzureAuthMode" Checked="AzureAuthRadio_Checked">
+                                                <RadioButton x:Name="AzureApiKeyRadio" GroupName="AzureAuthMode" Checked="AzureAuthRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=AzureApiKeyRadioTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=AzureApiKeyRadioDescription}">
                                                     <StackPanel>
                                                         <TextBlock x:Name="AzureApiKeyRadioTitle" Text="An API key" Style="{StaticResource CardTitle}"/>
                                                         <TextBlock x:Name="AzureApiKeyRadioDescription" Text="A key for the Azure resource that runs your model. Works without signing in to Azure, if your resource accepts keys." Style="{StaticResource CardDescription}"/>

@@ -146,6 +146,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Dictionary<string, AzureSubscription> _azureSubscriptionMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _updatingAzureSubscriptions;
     private bool _foundryModelOp;
+    private FoundryLocalSetupDescription? _foundryOperationStatus;
+    private string? _foundryOperationAlias;
     private bool _azureAutoListed;
     private readonly AzureSignInAttempts _azureSignInAttempts = new();
     private bool _azureCliInstalled;
@@ -1395,14 +1397,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _foundryCuratedByAlias[curated.Alias] = curated;
         }
-        SetFoundryModelItems([]);
-
-        var savedModel = CleanupModelCatalog.Curated
-            .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
-        AiModelBox.SelectedValue = savedModel?.Alias
-            ?? (string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
-                ? CleanupModelCatalog.Curated[0].Alias
-                : _settings.AiCleanupModel.Trim());
+        var savedModelAlias = string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
+            ? CleanupModelCatalog.DefaultAlias
+            : _settings.AiCleanupModel.Trim();
+        SetFoundryModelItems([], savedModelAlias);
 
         // Manual endpoint/deployment/key are the source of truth Save reads; discovery just autofills
         // them. Populate from saved settings (key is decrypted in memory by AppSettings).
@@ -2915,12 +2913,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiModelBox.SelectedValue as string ??
         NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
 
-    private void SetFoundryModelItems(IReadOnlyList<FoundryModelOption> liveCatalog)
+    private void SetFoundryModelItems(IReadOnlyList<FoundryModelOption> liveCatalog, string? selectedAlias = null)
     {
         _suppressComboFilter = true;
         try
         {
-            var selected = SelectedFoundryModelAlias;
+            var selected = string.IsNullOrWhiteSpace(selectedAlias) ? SelectedFoundryModelAlias : selectedAlias.Trim();
             AiModelBox.DisplayMemberPath = nameof(FoundryModelChoice.Label);
             AiModelBox.SelectedValuePath = nameof(FoundryModelChoice.Alias);
             var choices = FoundryModelChoices.Build(selected, CleanupModelCatalog.Curated, liveCatalog);
@@ -2962,6 +2960,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        _foundryOperationStatus = null;
+        _foundryOperationAlias = null;
         // The editable Text lags SelectionChanged; read it after the combo commits.
         Dispatcher.BeginInvoke(UpdateAiModelHint);
     }
@@ -3015,12 +3015,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // that may start the Foundry Local runtime or download a model.
     private async Task SetupFoundryLocalAsync()
     {
+        _foundryOperationAlias = SelectedFoundryModelAlias;
+        _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.SettingUp, DisplayNameForFoundryAlias(_foundryOperationAlias), ModelSizeForAlias(_foundryOperationAlias));
         FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, "Setting up. The first time can take a while."));
         try
         {
             var available = await Task.Run(() => _cleanup.ProbeAsync());
             if (!available)
             {
+                _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.Failed, DisplayNameForFoundryAlias(_foundryOperationAlias), ModelSizeForAlias(_foundryOperationAlias));
                 FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, "Couldn't set up AI on this PC. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again")));
                 return;
             }
@@ -3031,15 +3034,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? $"Ready to download {DisplayNameForFoundryAlias(SelectedFoundryModelAlias)}."
                 : $"{loaded.Alias} is ready.";
 
-            FoundryStatusRow.Show(new(AiCleanupStatusKind.Info, count switch
+            _foundryOperationStatus = new FoundryLocalSetupDescription(AiCleanupStatusKind.Info, count switch
             {
                 null => $"Foundry Local is running, but its model list could not be read. {running}",
                 0 => "Foundry Local is running but reported no models. Check that it finished starting, then try again.",
                 _ => $"Foundry Local is running. {count} models are in the dropdown above. {running}",
-            }, new(AiCleanupActionId.Load, "Load")));
+            }, "Load", false, FoundryLocalSetupStage.RuntimeReady);
+            FoundryStatusRow.Show(new(_foundryOperationStatus.Kind, _foundryOperationStatus.Text, new(AiCleanupActionId.Load, "Load")));
         }
         catch
         {
+            _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.Failed, DisplayNameForFoundryAlias(_foundryOperationAlias), ModelSizeForAlias(_foundryOperationAlias));
             FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, "Couldn't set up AI on this PC. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again")));
         }
     }
@@ -3067,8 +3072,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             UpdateAiModelHint();
-            var loaded = models.FirstOrDefault(m => m.Loaded);
-            UpdateFoundryLoadedText(loaded?.Alias, loaded?.DeviceLabel);
+            RefreshAiStatus();
             return models.Count;
         }
         catch
@@ -3097,6 +3101,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _foundryModelOp = true;
+        _foundryOperationAlias = alias;
+        _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.DownloadingOrLoading, DisplayNameForFoundryAlias(alias), ModelSizeForAlias(alias), "Loading the model...");
         FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, "Loading the model..."));
         try
         {
@@ -3110,18 +3116,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var ok = await _cleanup.LoadFoundryModelAsync(alias, progress, cts.Token);
             if (!ok)
             {
+                _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.ModelFailed, DisplayNameForFoundryAlias(alias), ModelSizeForAlias(alias));
                 FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, string.IsNullOrWhiteSpace(lastMessage)
-                    ? $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model."
+                    ? _foundryOperationStatus.Text
                     : lastMessage, new(AiCleanupActionId.TryAgain, "Try again")));
             }
         }
         catch
         {
-            FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, $"Couldn't download or load {DisplayNameForFoundryAlias(alias)}. Try again, or choose another model.", new(AiCleanupActionId.TryAgain, "Try again")));
+            _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.ModelFailed, DisplayNameForFoundryAlias(alias), ModelSizeForAlias(alias));
+            FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, _foundryOperationStatus.Text, new(AiCleanupActionId.TryAgain, "Try again")));
         }
         finally
         {
             _foundryModelOp = false;
+            if (_foundryOperationStatus?.Kind == AiCleanupStatusKind.Busy)
+            {
+                _foundryOperationStatus = null;
+                _foundryOperationAlias = null;
+            }
             await RefreshFoundryModelsAsync(initializeRuntime: false);
         }
     }
@@ -3133,28 +3146,42 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
         _foundryModelOp = true;
-        _foundryModelOp = true;
+        _foundryOperationAlias = SelectedFoundryModelAlias;
+        _foundryOperationStatus = FoundryLocalSetup.Describe(FoundryLocalSetupStage.DownloadingOrLoading, DisplayNameForFoundryAlias(_foundryOperationAlias), ModelSizeForAlias(_foundryOperationAlias), "Freeing model memory...");
         FoundryStatusRow.Show(new(AiCleanupStatusKind.Busy, "Freeing model memory..."));
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             var loaded = await _cleanup.GetLoadedFoundryModelAsync(cts.Token);
             _ = await _cleanup.UnloadFoundryModelAsync(loaded, cts.Token);
+            _foundryOperationStatus = null;
+            _foundryOperationAlias = null;
             FoundryStatusRow.Show(new(AiCleanupStatusKind.Success, "Model memory freed.", new(AiCleanupActionId.Load, "Load")));
         }
         catch
         {
+            _foundryOperationStatus = new FoundryLocalSetupDescription(AiCleanupStatusKind.Error, "Couldn't free model memory. Try again.", "Try again", false, FoundryLocalSetupStage.ModelFailed);
             FoundryStatusRow.Show(new(AiCleanupStatusKind.Error, "Couldn't free model memory. Try again.", new(AiCleanupActionId.TryAgain, "Try again")));
         }
         finally
         {
             _foundryModelOp = false;
+            if (_foundryOperationStatus?.Kind == AiCleanupStatusKind.Busy)
+            {
+                _foundryOperationStatus = null;
+                _foundryOperationAlias = null;
+            }
             await RefreshFoundryModelsAsync(initializeRuntime: false);
         }
     }
 
     private async Task RunAzurePrimaryActionAsync(AiCleanupActionId action)
     {
+        if (_azureSignInAttempts.IsBusy)
+        {
+            return;
+        }
+
         if (IsAzureApiKeySelected)
         {
             await VerifyAzureApiKeyAsync();
@@ -3883,6 +3910,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private async Task VerifyAzureApiKeyAsync()
     {
+        if (_azureSignInAttempts.IsBusy)
+        {
+            return;
+        }
+
         if (!CanVerifyAzureApiKey)
         {
             _azureStatusMessage = "Fill in the details above, then choose Verify.";
@@ -3898,8 +3930,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _azureStatusMessage = "Verifying the API key...";
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            var result = await ProbeAzureApiKeyAsync(endpoint, deployment, apiKey, cts.Token);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, _azureSignInAttempts.CancellationOf(operationVersion));
+            var result = await ProbeAzureApiKeyAsync(endpoint, deployment, apiKey, linked.Token);
             if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
@@ -4080,6 +4113,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async Task VerifyServicePrincipalAsync(bool automatic = false)
     {
+        if (_azureSignInAttempts.IsBusy)
+        {
+            return;
+        }
+
         var principal = CurrentServicePrincipal;
         if (principal is null)
         {
@@ -4103,9 +4141,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 AzureCredentialInvalidation.Invalidate();
             }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, _azureSignInAttempts.CancellationOf(operationVersion));
             var status = await _azureDiscovery.GetSignInStatusAsync(
-                principal.TenantId, null, cts.Token, principal);
+                principal.TenantId, null, linked.Token, principal);
             if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
@@ -4631,14 +4670,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private FoundryLocalSetupDescription CurrentFoundrySetup()
     {
         var alias = SelectedFoundryModelAlias;
+        if (_foundryOperationStatus is not null &&
+            string.Equals(_foundryOperationAlias, alias, StringComparison.OrdinalIgnoreCase))
+        {
+            return _foundryOperationStatus;
+        }
+
         _foundryExecutionBuilds.TryGetValue(alias, out var selected);
         var runtimeReady = _foundryExecutionBuilds.Count > 0;
-        var stage = FoundryLocalSetup.FromCleanupStatus(_cleanup.Status, runtimeReady, selected?.Cached == true, selected?.Loaded);
-        return FoundryLocalSetup.Describe(stage, DisplayNameForFoundryAlias(alias), ModelSizeForAlias(alias), _cleanup.StatusDetail);
+        var liveStatus = SavedActiveFoundryModelMatches(alias) ? _cleanup.Status : CleanupStatus.Disabled;
+        var progressText = liveStatus == _cleanup.Status ? _cleanup.StatusDetail : null;
+        var stage = FoundryLocalSetup.FromCleanupStatus(liveStatus, runtimeReady, selected?.Cached == true, selected?.Loaded);
+        return FoundryLocalSetup.Describe(stage, DisplayNameForFoundryAlias(alias), ModelSizeForAlias(alias), progressText);
     }
+
+    private bool SavedActiveFoundryModelMatches(string alias) =>
+        _settings.EnableAiCleanup &&
+        _settings.AiCleanupProvider == CleanupProvider.FoundryLocal &&
+        string.Equals(
+            string.IsNullOrWhiteSpace(_settings.AiCleanupModel) ? CleanupModelCatalog.DefaultAlias : _settings.AiCleanupModel.Trim(),
+            alias,
+            StringComparison.OrdinalIgnoreCase);
 
     private AzureAiSetupState CurrentAzureSetup()
     {
+        if (_azureSignInAttempts.IsBusy)
+        {
+            return new(AzureSetupResult.Verifying);
+        }
+
         if (IsAzureApiKeySelected)
         {
             if (!CanVerifyAzureApiKey)
@@ -4671,11 +4731,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return AzureMessageIsFailure(_azureStatusMessage)
                 ? new(AzureSetupResult.ServicePrincipalVerificationFailed, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _azureStatusMessage)
                 : new(AzureSetupResult.ServicePrincipalComplete, AuthMode: AzureAuthMode.ServicePrincipal);
-        }
-
-        if (_azureSignInAttempts.IsBusy)
-        {
-            return new(AzureSetupResult.CheckingSignIn);
         }
 
         if (!_azureConnectionKnown)
@@ -4736,6 +4791,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             providerSummary: offProviderSummary,
             modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias));
 
+        ApplyAiPageDescription(page);
+        AiProviderSummaryText.Text = providerSummary;
+        UpdateAiWritingStyleSummary();
+        RefreshAiStatus();
+    }
+
+    private void ApplyAiPageDescription(AiCleanupPageDescription page)
+    {
         AiCleanupDescription.Text = page.StatusLine;
         AiOffHelperText.Text = page.OffHelperText ?? string.Empty;
         AiOffHelperText.Visibility = page.OffHelperText is null ? Visibility.Collapsed : Visibility.Visible;
@@ -4744,9 +4807,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCard.Visibility = setupVisibility;
         AiWritingStyleCard.Visibility = setupVisibility;
         AiAdvancedCard.Visibility = setupVisibility;
-        AiProviderSummaryText.Text = providerSummary;
-        UpdateAiWritingStyleSummary();
-        RefreshAiStatus();
     }
 
     private void UpdateAiWritingStyleSummary()
@@ -4900,6 +4960,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias),
             safeReason: _cleanup.StatusDetail);
 
+        ApplyAiPageDescription(page);
         FoundryStatusRow.Show(SelectedProvider == CleanupProvider.FoundryLocal ? page.StatusRow : null);
         AzureSignInStatusRow.Show(SelectedProvider == CleanupProvider.AzureFoundry && SelectedAzureAuthMode == AzureAuthMode.AzureCli && !IsAzureApiKeySelected ? page.StatusRow : null);
         AzureVerifyStatusRow.Show(SelectedProvider == CleanupProvider.AzureFoundry && (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal || IsAzureApiKeySelected) ? page.StatusRow : null);
@@ -5672,6 +5733,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return false;
             }
 
+            UpdateAiEnabledState();
             return true;
         }
         catch (Exception ex) when (_closed)
