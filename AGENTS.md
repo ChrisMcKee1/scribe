@@ -217,10 +217,13 @@ anything was dictated.
   (`DictionaryLibraryComposer.ComposeLibraries`, precedence order), which it counts as given and never reorders, then
   the shared `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
   `CleanupPrompt.BuildGlossary`). Dictation takes the committed `LibraryVocabulary.AiEntries` in composition's tiers
-  instead, so the old page's count names the same word packs (its committed selection, see Word packs) and can order
-  their terms differently, which moves the count only where the character budget binds; the Word packs page hands the
-  hint the committed list (W2-1). Every control it reads (the AI switch, provider, prompt style, post-processing switch
-  and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
+  instead, and the old page's count is not an account of them: it composes the page's committed selection (the stored
+  projection, see Word packs), which lists only libraries both on and permitted for AI cleanup and withholds a shared
+  legacy id when not every library under it is (a built-in and a hand-placed twin with its id, one of them adopted off,
+  while `AiEntries` still carries the permitted one), so its word packs, its order and its count can differ from what
+  cleanup sends even below either budget; the Word packs page hands the hint the committed AI list (W2-1). Every control
+  it reads (the AI switch, provider, prompt style, post-processing switch and the libraries) refreshes it. Both quote
+  their limits from the constants that enforce them.
   `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if a
   retired claim (that cleanup sends only the transcript, or only the terms that matter to a dictation)
   comes back in `PRIVACY.md`, the README, this file, the privacy review lens, the Foundry,
