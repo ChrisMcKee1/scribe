@@ -62,9 +62,10 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   message instead of firing Enter mid-thought. Built by someone who dictates into CLIs all day.
 - **📖 Your vocabulary, your snippets.** A dictionary locks in your jargon (`azure` → `Azure`,
   `dot net` → `.NET`), imports/exports as CSV to share with your team, and even **suggests terms
-  from your own dictation history**. Eleven curated libraries cover AI models and terminology, Azure,
+  from your own dictation history**. Eleven curated word packs cover AI models and terminology, Azure,
   Microsoft 365, GitHub, modern developer tools, .NET and C#, data engineering, data science, machine
-  learning, and more. Say a trigger phrase and a whole saved template types itself.
+  learning, and more, and you can edit them or build your own. Say a trigger phrase and a whole saved
+  template types itself.
 - **🧹 AI polish on your terms.** Grammar and structure cleaned by an on-device model (fully
   offline), your Azure deployment, **your own GitHub Copilot licence**, or **any
   OpenAI-compatible server you already run** (Ollama,
@@ -82,10 +83,11 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 ## 📸 A quick look
 
 ### A settings app that respects you
-Everything lives in a clean, Windows 11-style settings window: pick your microphone, speech model,
-and push-to-talk keys (hold or toggle), then browse focused sections for dictation behaviour, the
-overlay, AI cleanup, your dictionary, snippets, per-app profiles, the playground, history, usage
-and diagnostics.
+Everything lives in a clean, Windows 11-style settings window with eleven pages in four groups:
+Dictation (microphone, shortcuts, typing, the recording indicator and startup), Try dictation and AI
+cleanup; Personalize (Dictionary, Voice snippets, App profiles); Review (History, Usage); and More
+(Advanced, Diagnostics, About). **Find a setting** searches every page by name, Settings follows your
+Windows text size, and closing it with unsaved changes asks before throwing them away.
 
 ![Scribe general settings: microphone, hotkey and startup, with the navigation rail](docs/screenshots/settings-general.png)
 
@@ -130,11 +132,12 @@ identity you name, every time ([setup guide](docs/service-principal-setup.md)). 
 OpenAI-compatible endpoint**: Ollama or LM Studio on localhost, vLLM on your homelab, OpenRouter,
 or api.openai.com with your own key. Scribe sends the recognized *text* (never audio) only to the
 service **you** configure, together with its cleanup instructions, your writing style and your
-enabled dictionary and library terms, and it asks Microsoft Foundry not to store the response
+dictionary plus the word packs you let AI cleanup use, and it asks Microsoft Foundry not to store the response
 (Microsoft's abuse monitoring can still keep a sample of flagged prompts and responses for review, as
 its [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)
 explains). The [privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly
-what each request carries. And when you want the raw transcript, **toggle AI cleanup straight from the
+what each request carries. **Test connection** checks a Microsoft Foundry or other remote setup with the
+settings on the page before you save them. And when you want the raw transcript, **toggle AI cleanup straight from the
 tray menu** with no settings trip required.
 
 > **No Foundry resource yet?** [`docs/foundry-setup.md`](docs/foundry-setup.md) walks you through it
@@ -144,12 +147,14 @@ tray menu** with no settings trip required.
 > you if the credit ever ran out. Every Microsoft employee has one.
 
 ### Teach it your words
-The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
-AI cleanup a glossary of your preferred vocabulary. With a provider other than Foundry Local, that
-glossary, your enabled dictionary and library terms up to 5,000 of them, goes with every cleanup
-request whether or not you said them (a replacement longer than one line or 100 characters, such as a
-signature, stays out), so turn off any entry or library you would rather keep to
-yourself. Build it in seconds: **import a CSV** your team
+Your words, the dictionary, replaces spoken words and phrases with the spelling you actually want, and
+feeds the AI cleanup a glossary of your preferred vocabulary. Word packs add curated vocabulary you can
+turn on and off, edit word by word, extend with packs of your own, import and export as CSV, and
+restore for 30 days after you delete one; your own words always win over a word pack. With a provider
+other than Foundry Local, that glossary, your dictionary plus the word packs you let AI cleanup use,
+up to 5,000 terms, goes with every cleanup request whether or not you said them (a replacement longer
+than one line or 100 characters, such as a signature, stays out), so turn off any entry, or keep a
+word pack from AI cleanup, if you would rather keep it to yourself. Build it in seconds: **import a CSV** your team
 shares, grab the self-documenting **template**, or let **Learn from history** spot the acronyms
 and product names you keep saying and add them for you.
 
@@ -214,8 +219,8 @@ Right-click the tray icon for settings, one-click vocabulary learning, copying a
 five dictations, and pausing or quitting. If a dictation ever fails to insert, Scribe notifies you
 and keeps the text ready to copy from the tray. Review history and local Usage from Settings.
 
-> **Upgrading?** Your hotkeys stay as they were (Right Ctrl, unless you changed it). To switch to
-> Page Down and Page Up, choose **Restore default hotkeys** in Settings, General, then Save. While
+> **Upgrading?** Your shortcuts stay as they were (Right Ctrl, unless you changed it). To switch to
+> Page Down and Page Up, choose **Restore default shortcuts** in Settings, Dictation, then Save. While
 > they are bound, Page Down and Page Up pressed on their own no longer page through documents in
 > other apps, and a presentation remote stops changing slides (except the few presses Scribe lets
 > through, described in [Remote Desktop and virtual machines](#remote-desktop-and-virtual-machines));
@@ -230,10 +235,11 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
    the app you're in), applies your dictionary and snippets, and types the result into the focused
    app. The pill then briefly says what happened: "Typed", or why not, and what to do next.
 
-Everything is configurable from the tray: microphone, hotkey (hold or toggle), silence auto-stop,
+Everything is configurable in Settings: microphone, shortcuts (hold or toggle), silence auto-stop,
 the pill and where it appears, voice-activity detection, line-break handling, per-app profiles,
 snippets, post-processing, start-with-Windows (applied the moment you flip it), how text is
-inserted, and the space Scribe adds after each dictation.
+inserted, and the space Scribe adds after each dictation; the tray menu covers the everyday
+toggles.
 
 ### Remote Desktop and virtual machines
 
@@ -246,7 +252,7 @@ before a move can still reach the remote session, and so can a press in the mome
 which Scribe cannot tell from the repeat of a key held across the move: Scribe lets that keystroke
 through whole, repeats and release included, so a push-to-talk Page Down pages the session for as
 long as you hold it (the dictation still starts and ends). A key you are already holding when
-Scribe moves is left alone, even if you change Scribe's hotkey settings meanwhile: its repeats and
+Scribe moves is left alone, even if you change Scribe's shortcut settings meanwhile: its repeats and
 its release go where its press went, as long as its next repeat reaches Scribe within the time your
 keyboard's repeat settings allow (under a second with the Windows defaults, a second and a half at
 most). A key whose repeat comes later than that, or a keystroke a program sends stamped with a time
@@ -265,43 +271,46 @@ carry the real key codes remote clients forward.
 
 | Feature | What it does |
 |---|---|
-| Push-to-talk | Separate AI-capable and dictation-only hotkeys (hold Page Down and hold Page Up on a new install), each hold or toggle on any key, two-key chord or shortcut, or a spare mouse button (middle, back or forward, alone or after a key; any other button through the key your mouse's software sends for it, such as F13), with a capture UI that pauses dictation while you rebind and a one-click restore of the defaults |
+| Push-to-talk | A dictation shortcut and a shortcut without AI cleanup (hold Page Down and hold Page Up on a new install), each hold or toggle on any key, two-key chord or shortcut, or a spare mouse button (middle, back or forward, alone or after a key; any other button through the key your mouse's software sends for it, such as F13), with a capture UI that pauses dictation while you rebind and a one-click restore of the defaults |
 | Microphone choice | Follows the Windows default input device (the one Windows Settings shows under Sound, Input) from your next dictation, with no restart; or pick any microphone in Settings or from the tray's Microphone menu. A chosen microphone that is unplugged falls back to the Windows default, and Scribe tells you once |
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
-| Recording pill | A WinUI 3 overlay with live level bars that says what each dictation did ("Typed", "Typed without AI cleanup" with the reason, or "Nothing typed" with the next step), follows your contrast theme and your Windows animation setting, and sits on any of 9 screen anchors with an on-screen preview |
+| Recording pill | A WinUI 3 overlay with live level bars that says what each dictation did ("Typed", "Typed without AI cleanup", or "Nothing typed" with the next step), follows your contrast theme, your Windows animation setting and your Windows text size, and sits on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, terminal-aware line-break flattening so newlines never fire Enter, and paced typing, never a paste, into Remote Desktop and virtual machine sessions |
 | Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
-| Hotkey self-healing | Detects and repairs stuck modifiers, restores the keyboard and mouse hooks Windows removes silently, and moves its keyboard hook ahead of a Remote Desktop client's while the client is in front, so push-to-talk keeps working across long sessions |
+| Shortcut self-healing | Detects and repairs stuck modifiers, restores the keyboard and mouse hooks Windows removes silently, and moves its keyboard hook ahead of a Remote Desktop client's while the client is in front, so push-to-talk keeps working across long sessions |
 
 **Text quality**
 
 | Feature | What it does |
 |---|---|
-| Personal dictionary | Spoken-form to replacement rules with whole-word matching, CSV import/export, and history-mined suggestions |
-| Dictionary libraries | Eleven curated libraries (the two AI packs are on by default), including dedicated .NET and C#, data engineering, and data science and machine learning packs, plus your own custom CSV libraries, all in one A to Z list |
+| Your words | Your dictionary: spoken-form to replacement rules with whole-word matching, search, CSV import/export, Learn from history, and Clean up unused words |
+| Word packs | Eleven curated packs (the two AI packs are on by default), including dedicated .NET and C#, data engineering, and data science and machine learning packs, plus your own and imported packs, all in one A to Z list, with an editor for single words, a per-pack switch for AI cleanup, and Recently deleted for 30 days |
 | Voice snippets | A spoken trigger phrase expands into a saved multi-line template |
 | Per-app profiles | Writing style and line-break behavior switch automatically based on the focused app |
-| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login or a service principal), your own GitHub Copilot licence via the Copilot CLI, or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
-| Playground | Captures normal push-to-talk dictation, then shows raw recognition, final highlighted dictionary, library, and snippet replacements, and per-step timing |
+| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login or a service principal), your own GitHub Copilot licence via the Copilot CLI, or any OpenAI-compatible endpoint; Test connection before you save, benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
+| Try dictation | Captures normal push-to-talk dictation, then shows what Scribe heard, what it changed (dictionary, word pack and snippet replacements highlighted), and how long each step took |
 
 **Insight and recovery**
 
 | Feature | What it does |
 |---|---|
-| History | Retained dictations with optional audio (kept 7 days and 250 MB at most), copyable and deletable, all local |
+| History | Retained dictations with optional audio (kept 7 days and 250 MB at most), copyable and deletable, with older dictations loaded on demand and search across all of them, all local |
 | Usage insights | Totals, speech time, active days, top apps, a trend chart, and recurring terminology with one-click add to dictionary |
 | Dictation recovery | Your last five dictations stay copyable from the tray, and a failed insertion notifies you instead of losing text |
-| Diagnostics | P50/P95 decode latency and real-time factor computed from your own history |
+| Diagnostics | P50/P95 decode and AI cleanup latency and real-time factor for the speech model you use, computed from your own history |
 | AI usage insight | Opt-in, explicit, and aggregate-only: sends totals and dictionary term labels, never transcripts, audio, app names, or timestamps |
 
 **App**
 
 | Feature | What it does |
 |---|---|
+| Find a setting | A search box above the Settings pages finds any setting by name, older names included ("hotkey", "overlay", "library") |
+| Safer saving | The footer says when something isn't saved; closing Settings, quitting or restarting to update asks first, and mistakes show next to the field that has them |
+| Text size | Settings and the recording pill follow Windows' Text size setting |
 | Tray quick actions | Pause (your push-to-talk key then works normally in other apps until you resume), choose the microphone, AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
 | Start with Windows | Applies the moment you flip it, with nothing to save, and shows what Windows reports, including a choice made in Task Manager or Windows Settings |
-| Keyboard and screen readers | Tab follows the visible layout in every window, controls carry screen reader names, and text stays readable on any Windows accent colour, with Windows contrast themes left as they are |
+| Keyboard and screen readers | Tab follows the visible layout in every window, controls carry screen reader names, and text stays readable on Scribe blue or your Windows accent colour (Settings, Advanced, "Use my Windows accent color"), with Windows contrast themes left as they are |
 | Auto-updates | Microsoft Store installs are signed and updated by Microsoft; standalone GitHub installs use Velopack delta updates |
 | Offline by architecture | The dictation path needs no network, sends no telemetry, and keeps every stat on your disk |
 
@@ -334,7 +343,8 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
   offline. If you choose Microsoft Foundry, GitHub Copilot or an OpenAI-compatible endpoint, each
   cleanup request sends the recognized *text* of that dictation (never audio), Scribe's cleanup
-  instructions with your writing style, and your enabled dictionary and library terms (up to 5,000),
+  instructions with your writing style, and your dictionary plus the word packs you let AI cleanup use
+  (up to 5,000 terms),
   whether or not the dictation mentions them. It goes only to the service **you** configure, under
   **your** credentials. Scribe asks Microsoft Foundry not to store the response, though Microsoft's
   abuse monitoring can still keep a sample of flagged prompts and responses for review.
