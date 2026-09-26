@@ -119,9 +119,11 @@ public sealed class LibraryWellFormedTextTests : IDisposable
 
         var imported = service.Import("pattern,replacement\nkube,Kubernetes\n", "team" + LoneHigh);
 
-        Assert.Equal("Imported library", imported.Name);
+        // The name an import falls back on is LibraryNaming's, which says word pack, as the product calls a library.
+        Assert.Equal(Scribe.Core.Settings.LibraryNaming.ImportedLibraryBaseName, imported.Name);
+        Assert.Equal("Imported word pack", imported.Name);
         Assert.All(_fixture.AllFiles(), relative => Assert.True(LibraryText.IsWellFormed(relative)));
-        Assert.Contains(service.LoadCatalog().Libraries, library => library.Content.Name == "Imported library");
+        Assert.Contains(service.LoadCatalog().Libraries, library => library.Content.Name == "Imported word pack");
     }
 
     [Fact]

@@ -1539,10 +1539,11 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 
     /// <summary>
     /// The cleanup switching one row of the Libraries list off, end to end: custom files the real loader reads beside the
-    /// shipped libraries, the list's rows saved as Save saves them (the ids of the ticked rows, which the real service
-    /// applies to every loaded library with that id), the real review over what dictation applies, the plan, and Save
-    /// storing the row unticked, unless the plan keeps its library on, and the copies in a real dictionary. Returns
-    /// finished text before and after.
+    /// shipped libraries, the list's rows as the old Settings window saved them (the ids of the ticked rows, which the real
+    /// service applies to every loaded library with that id) and the first start adopts, the real review over what
+    /// dictation applies, the plan, and the rows the plan leaves stored through the library state (every library on whose
+    /// id a ticked row names), unless the plan keeps its library on, and the copies in a real dictionary. Returns finished
+    /// text before and after.
     /// </summary>
     private static (string[] Before, string[] After, LibrarySwitchOffCopy.Result Plan) SwitchOffThroughTheService(
         IReadOnlyList<(string FileName, string Csv)> customFiles,
@@ -1565,12 +1566,42 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             var dictionary = new DictionaryRepository(database);
             var service = new DictionaryLibraryService(paths, settings, NullLogger<DictionaryLibraryService>.Instance);
 
+            // The list as 0.4.3 or the old Settings window stored it, which the first start adopts into the library state.
             void Save(IEnumerable<(string Id, bool BuiltIn, bool Ticked)> listRows)
             {
                 var saved = AppSettings.CreateDefault();
                 saved.EnabledDictionaryLibraryIds.Clear();
                 saved.EnabledDictionaryLibraryIds.AddRange(listRows.Where(r => r.Ticked).Select(r => r.Id).Distinct(StringComparer.OrdinalIgnoreCase));
                 settings.Save(saved);
+            }
+
+            // Once the first start stored the library state, a settings-only save of the list no longer persists (contract
+            // 3.1.2 and 9.1 step 6), so the rows the cleanup leaves are saved the way the Libraries page saves them: a
+            // workspace over the committed catalog, each library on exactly when a ticked row names the id it loads under
+            // (the old window's model: the saved ids of the ticked rows, applied to every library with that id), captured
+            // and saved through the journal.
+            void SaveThroughTheLibraryState(IEnumerable<(string Id, bool BuiltIn, bool Ticked)> listRows)
+            {
+                var ticked = listRows.Where(r => r.Ticked).Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var catalog = service.LoadCatalog();
+                var workspace = new LibraryWorkspace(catalog, BuiltInLibraryOverlay.Instance, LibraryDecisions.DefaultAiPermission);
+                foreach (var library in catalog.Libraries)
+                {
+                    var legacyId = new LibraryIdentity(library.Content.Id, library.Content.BuiltIn, library.FileName).LegacyId;
+                    workspace.SetEnabled(library.Content.Id, ticked.Contains(legacyId));
+                }
+
+                var capture = workspace.CaptureChangeSet();
+                Assert.Empty(capture.Issues);
+                if (capture.ChangeSet is not { IsEmpty: false } changes)
+                {
+                    return;
+                }
+
+                var prepared = service.PrepareSave(changes);
+                Assert.Equal(LibraryPrepareStatus.Prepared, prepared.Status);
+                settings.SaveBundle(settings.Load(), null, null, default, prepared.Save!.Payload);
+                Assert.Equal(LibrarySaveStatus.Applied, service.CompleteSave(prepared.Save).Status);
             }
 
             string[] Dictate() =>
@@ -1589,7 +1620,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             var plan = LibrarySwitchOffCopy.Plan(
                 [], loaded, [.. rows.Select(r => new LibrarySwitchOffCopy.LibraryRow(r.Id, r.BuiltIn, r.Ticked))], selected, report.Libraries);
 
-            Save(rows.Select(r => r.BuiltIn == switchOff.BuiltIn && r.Id == switchOff.Id && !plan.KeepsOn(r.Id, r.BuiltIn) ? r with { Ticked = false } : r));
+            SaveThroughTheLibraryState(rows.Select(r => r.BuiltIn == switchOff.BuiltIn && r.Id == switchOff.Id && !plan.KeepsOn(r.Id, r.BuiltIn) ? r with { Ticked = false } : r));
             if (plan.Copies.Count > 0)
             {
                 dictionary.AddRange(Saves(plan.Copies).Entries);

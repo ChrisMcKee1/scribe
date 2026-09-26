@@ -11,9 +11,12 @@ namespace Scribe.Core.Tests.Libraries.Storage;
 /// the native replace refused (every step of the checked replace), with it stopping in ReplaceFileW's 1177 state, and
 /// through recovery itself. After each, a new service over the same folder and database resumes and must load the
 /// complete old state or the complete new state, content and local state, never a mix; the native replace is never
-/// handed a backup name that exists; and no byte of an outside version seeded mid-Save is lost.
+/// handed a backup name that exists; and no byte of an outside version seeded mid-Save is lost. The suite runs twice:
+/// with J's doubles of the composer and the overlay (<see cref="LibraryFaultInjectionTests"/>), and with the real parts
+/// since the integration commit (contract 9.3, <c>Integration.LibraryFaultInjectionRealPartsTests</c>), in classes of
+/// their own so the two run side by side.
 /// </summary>
-public sealed class LibraryFaultInjectionTests
+public abstract class LibraryFaultInjectionSuite
 {
     private const string EditedCsvName = "team-terms.csv";
 
@@ -24,20 +27,24 @@ public sealed class LibraryFaultInjectionTests
         LeavesReplacement,
     }
 
+    /// <summary>Whether the services are built from C's composer, O's overlay and X's codec rather than J's doubles.</summary>
+    protected abstract bool RealParts { get; }
+
     [Theory]
     [InlineData(ReplaceMode.Native)]
     [InlineData(ReplaceMode.Refused)]
     [InlineData(ReplaceMode.LeavesReplacement)]
     public void Every_interruption_of_a_save_recovers_to_the_whole_old_or_the_whole_new_state(ReplaceMode mode)
     {
-        var (old, @new, calls) = Reference(mode);
+        var realParts = RealParts;
+        var (old, @new, calls) = Reference(mode, realParts);
         Assert.True(calls > 10, $"The Save made only {calls} mutating calls, so the scenario is not exercising the journal.");
 
         foreach (var timing in (FaultingFileSystem.Timing[])[FaultingFileSystem.Timing.Before, FaultingFileSystem.Timing.After])
         {
             for (var n = 1; n <= calls; n++)
             {
-                using var scenario = Scenario.Create();
+                using var scenario = Scenario.Create(realParts);
                 var files = Faulting(mode);
                 files.FailAt = n;
                 files.FailTiming = timing;
@@ -72,10 +79,11 @@ public sealed class LibraryFaultInjectionTests
     [Fact]
     public void Every_interruption_of_recovery_still_ends_in_the_new_state()
     {
-        var (_, @new, _) = Reference(ReplaceMode.Native);
+        var realParts = RealParts;
+        var (_, @new, _) = Reference(ReplaceMode.Native, realParts);
 
         // A crash right after the commit, before any file is installed: the next start has the whole completion to do.
-        using var counting = Scenario.Create();
+        using var counting = Scenario.Create(realParts);
         CrashAfterCommit(counting);
         var countingFiles = new FaultingFileSystem();
         counting.Fixture.Restart();
@@ -87,7 +95,7 @@ public sealed class LibraryFaultInjectionTests
         {
             for (var n = 1; n <= calls; n++)
             {
-                using var scenario = Scenario.Create();
+                using var scenario = Scenario.Create(realParts);
                 CrashAfterCommit(scenario);
                 var files = new FaultingFileSystem { FailAt = n, FailTiming = timing };
                 scenario.Fixture.Restart();
@@ -112,8 +120,9 @@ public sealed class LibraryFaultInjectionTests
     [InlineData("save committed", true)]
     public void A_settings_step_that_fails_leaves_the_old_state_before_the_commit_and_the_new_one_after(string step, bool committed)
     {
-        var (old, @new, _) = Reference(ReplaceMode.Native);
-        using var scenario = Scenario.Create();
+        var realParts = RealParts;
+        var (old, @new, _) = Reference(ReplaceMode.Native, realParts);
+        using var scenario = Scenario.Create(realParts);
         scenario.Fixture.Settings.WriteStep = (name, _, _) =>
         {
             if (name == step)
@@ -135,7 +144,7 @@ public sealed class LibraryFaultInjectionTests
     [InlineData("library state committed", true)]
     public void A_wrapper_whose_state_commit_step_fails_stands_exactly_when_it_committed(string step, bool committed)
     {
-        using var scenario = Scenario.Create();
+        using var scenario = Scenario.Create(RealParts);
         var before = Recovered(scenario);
         var service = scenario.Fixture.Service();
         var reached = false;
@@ -169,9 +178,10 @@ public sealed class LibraryFaultInjectionTests
     [Fact]
     public void No_byte_of_an_outside_version_seeded_between_prepare_and_completion_is_lost_at_any_interruption()
     {
+        var realParts = RealParts;
         var outside = Encoding.UTF8.GetBytes(LibraryStorageFixture.Csv("Team terms", ("kube", "Kube from another app")));
         var outsideHash = LibraryContentHashing.Of(outside);
-        using var counting = Scenario.Create();
+        using var counting = Scenario.Create(realParts);
         var countingFiles = new FaultingFileSystem();
         Changes.Save(counting.Fixture.Service(countingFiles), counting.Fixture.Settings, counting.Changes,
             beforeCommit: () => counting.Fixture.WriteBytes(EditedCsvName, outside));
@@ -181,7 +191,7 @@ public sealed class LibraryFaultInjectionTests
         {
             for (var n = 1; n <= calls; n++)
             {
-                using var scenario = Scenario.Create();
+                using var scenario = Scenario.Create(realParts);
                 var files = new FaultingFileSystem { FailAt = n, FailTiming = timing };
                 var seeded = false;
                 try
@@ -212,7 +222,7 @@ public sealed class LibraryFaultInjectionTests
     {
         // E1 lands before completion and E2 right after the first native replace moved E1 into the backup: that backup
         // is resolved (E1 kept) before the next replace, which would otherwise write E2 over the only copy of E1.
-        using var fixture = new LibraryStorageFixture();
+        using var fixture = new LibraryStorageFixture { RealParts = RealParts };
         fixture.Write(EditedCsvName, LibraryStorageFixture.Csv("Team terms", ("kube", "Kubernetes")));
         var first = Encoding.UTF8.GetBytes(LibraryStorageFixture.Csv("Team terms", ("kube", "First outside")));
         var second = Encoding.UTF8.GetBytes(LibraryStorageFixture.Csv("Team terms", ("kube", "Second outside")));
@@ -254,7 +264,8 @@ public sealed class LibraryFaultInjectionTests
         // The single-slot previous copy is the one overwrite rules R1 and R7 allow (contract 6.6.4): Grok's G2 of round 2
         // was ruled that exception, not a finding. Every other move never overwrites, whatever it meets, outside versions
         // at every kind of target included.
-        using var scenario = Scenario.Create();
+        var realParts = RealParts;
+        using var scenario = Scenario.Create(realParts);
         var files = Faulting(mode);
         var outside = Encoding.UTF8.GetBytes(LibraryStorageFixture.Csv("Team terms", ("kube", "Kube from another app")));
 
@@ -262,7 +273,7 @@ public sealed class LibraryFaultInjectionTests
         {
             scenario.Fixture.WriteBytes(EditedCsvName, outside);
             scenario.Fixture.WriteBytes("custom-release-notes.csv", outside);
-            scenario.Fixture.WriteBytes("edits/github.json", JsonEditsOverlay.Document("github", ("get hub", "GitHub from another app")));
+            scenario.Fixture.WriteBytes("edits/github.json", EditsDocument(realParts, "github", ("get hub", "GitHub from another app")));
             scenario.Fixture.WriteBytes("scratch.csv", outside);
         });
 
@@ -284,9 +295,9 @@ public sealed class LibraryFaultInjectionTests
         }
     }
 
-    private static (string Old, string New, int Calls) Reference(ReplaceMode mode)
+    private static (string Old, string New, int Calls) Reference(ReplaceMode mode, bool realParts)
     {
-        using var scenario = Scenario.Create();
+        using var scenario = Scenario.Create(realParts);
         var old = Recovered(scenario);
         var files = Faulting(mode);
         var saved = Changes.Save(scenario.Fixture.Service(files), scenario.Fixture.Settings, scenario.Changes);
@@ -357,7 +368,8 @@ public sealed class LibraryFaultInjectionTests
     /// <summary>
     /// A folder whose first start has been adopted (so a state row and the witness exist), and a Save that writes a
     /// custom library, creates one, creates a built-in's edits document, removes another's, deletes a library into
-    /// Recently deleted, restores an entry from it and purges another.
+    /// Recently deleted, restores an entry from it and purges another. With the real parts (contract 9.3), the composer,
+    /// the overlay and the codec are C's, O's and X's, and the edits documents O's.
     /// </summary>
     private sealed class Scenario : IDisposable
     {
@@ -374,12 +386,12 @@ public sealed class LibraryFaultInjectionTests
 
         public LibraryChangeSet Changes { get; }
 
-        public static Scenario Create()
+        public static Scenario Create(bool realParts = false)
         {
-            var fixture = new LibraryStorageFixture();
+            var fixture = new LibraryStorageFixture { RealParts = realParts };
             fixture.Write(EditedCsvName, LibraryStorageFixture.Csv("Team terms", ("kube", "Kubernetes")));
             fixture.Write("old-library.csv", LibraryStorageFixture.Csv("Old", ("old", "Old")));
-            fixture.WriteBytes("edits/data-and-ai.json", JsonEditsOverlay.Document("data-and-ai", ("data lake", "Data Lake Gen2")));
+            fixture.WriteBytes("edits/data-and-ai.json", EditsDocument(realParts, "data-and-ai", ("data lake", "Data Lake Gen2")));
             fixture.Write("deleted/20260901T101010Z.scratch.csv", LibraryStorageFixture.Csv("Scratch", ("scratch", "Scratch")));
             fixture.Write("deleted/20260801T090000Z.junk.csv", LibraryStorageFixture.Csv("Junk", ("junk", "Junk")));
             fixture.SaveEnabled("team-terms", "old-library", "github");
@@ -394,7 +406,7 @@ public sealed class LibraryFaultInjectionTests
                 [
                     Storage.Changes.Edit(start, "team-terms", LibraryStorageFixture.Content("team-terms", "Team terms", ("kube", "K8s"), ("north star", "North Star"))),
                     Storage.Changes.Create(LibraryStorageFixture.Content("custom-release-notes", "Release notes", ("sprint", "Sprint"))),
-                    new LibraryWrite("github", true, LibraryOrigin.Existing, null, Edits: JsonEditsOverlay.Edits("github", ("get hub", "GitHub Enterprise"))),
+                    new LibraryWrite("github", true, LibraryOrigin.Existing, null, Edits: Edits(realParts, "github", ("get hub", "GitHub Enterprise"))),
                     new LibraryWrite("data-and-ai", true, LibraryOrigin.Existing, start.Find("data-and-ai")!.ContentHash, Edits: null),
                 ],
                 deletions: [Storage.Changes.Delete(start, "old-library")],
@@ -409,4 +421,16 @@ public sealed class LibraryFaultInjectionTests
 
         public void Dispose() => Fixture.Dispose();
     }
+
+    private static BuiltInLibraryEdits Edits(bool realParts, string libraryId, params (string Key, string Written)[] edits) =>
+        realParts ? RealEdits.Written(libraryId, edits) : JsonEditsOverlay.Edits(libraryId, edits);
+
+    private static byte[] EditsDocument(bool realParts, string libraryId, params (string Key, string Written)[] edits) =>
+        realParts ? RealEdits.Document(libraryId, edits) : JsonEditsOverlay.Document(libraryId, edits);
+}
+
+/// <summary>J-1 with J's doubles of the composer and the overlay, as J's stream wrote it.</summary>
+public sealed class LibraryFaultInjectionTests : LibraryFaultInjectionSuite
+{
+    protected override bool RealParts => false;
 }

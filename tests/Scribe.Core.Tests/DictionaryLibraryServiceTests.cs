@@ -108,12 +108,18 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
         Assert.Contains(initial, e => e.Replacement == "GPT-5.6-Terra");
         Assert.DoesNotContain(initial, e => e.Replacement == "APIM");
 
-        var settings = AppSettings.CreateDefault();
-        settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
-        _settings.Save(settings);
+        // The first start recorded the library state, which is where a library is turned on from now on (contract 3.1.2;
+        // a settings-only save of another list no longer does, 9.1 step 6): a library Save turns one on.
+        var catalog = _service.LoadCatalog();
+        Assert.DoesNotContain(catalog.LocalState.EnabledIds, id => id == "microsoft-azure");
+        var enabled = Scribe.Core.Tests.Libraries.Storage.Changes.With(catalog.LocalState, enable: ["microsoft-azure"]);
+        var saved = Scribe.Core.Tests.Libraries.Storage.Changes.Save(
+            _service, _settings, Scribe.Core.Tests.Libraries.Storage.Changes.Of(catalog, state: enabled));
+        Assert.Equal(Scribe.Core.Libraries.LibrarySaveStatus.Applied, saved.Outcome!.Status);
 
         var entries = _service.GetEnabledLibraryEntries();
         Assert.Contains(entries, e => e.Replacement == "APIM");
+        Assert.Contains("microsoft-azure", _settings.Load().EnabledDictionaryLibraryIds);
     }
 
     [Fact]

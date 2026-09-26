@@ -193,11 +193,13 @@ them. Until this was fixed the AI cleanup page said remote providers get only th
 dictation, while every request carried the whole glossary and the readiness probe carried it too, before
 anything was dictated.
 
-- **Every cleanup request carries the glossary**: every enabled dictionary and library term, merged
-  personal first (`DictationController.BuildGlossary`), up to 5,000 terms and 24,000 characters (80
-  terms under the Local prompt style), whether or not the dictation mentions them. The libraries are those
-  the settings in use enable, the selection the post-processor was given, never a fresh read of the stored
-  document (see "The library selection is the one in use" below). A template (a written
+- **Every cleanup request carries the glossary**: every enabled dictionary term and every term of the word packs
+  AI cleanup may receive, merged personal first, up to 5,000 terms and 24,000 characters (80 terms under the
+  Local prompt style), whether or not the dictation mentions them. It comes from the vocabulary generation the
+  dictation was admitted with (`VocabularyGeneration.GlossaryEntries`, `CleanupPrompt.ComposeVocabulary` of the
+  personal dictionary and the committed `LibraryVocabulary.AiEntries`), never from a fresh read of the stored
+  document (see "The library vocabulary is the committed one" below, and "Library vocabulary admission"). A word
+  pack kept from AI cleanup still applies on this PC and never reaches it. A template (a written
   form spanning lines or past 100 characters, judged before trimming) is not vocabulary and stays out,
   by `CleanupPrompt.IsVocabularyReplacement`, the one rule the usage insight's labels follow too
   (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
@@ -212,10 +214,12 @@ anything was dictated.
   suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
   glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
   collation, `SqliteBinaryCollation`), the enabled libraries' entries as the page composes them
-  (`DictionaryLibraryComposer.ComposeLibraries`, precedence order, as the library service gives dictation),
-  which it counts as given and never reorders, then the shared
-  `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
-  `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
+  (`DictionaryLibraryComposer.ComposeLibraries`, precedence order), which it counts as given and never reorders, then
+  the shared `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
+  `CleanupPrompt.BuildGlossary`). Dictation takes the committed `LibraryVocabulary.AiEntries` in composition's tiers
+  instead, so the old page's count names the same word packs (its committed selection, see Word packs) and can order
+  their terms differently, which moves the count only where the character budget binds; the Word packs page hands the
+  hint the committed list (W2-1). Every control it reads (the AI switch, provider, prompt style, post-processing switch
   and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
   `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if a
   retired claim (that cleanup sends only the transcript, or only the terms that matter to a dictation)
@@ -238,21 +242,24 @@ anything was dictated.
 
 ### GitHub Copilot provider (the parent environment is never touched)
 
-- **The model travels in `SessionConfig.Model`**, through Agent Framework's typed
-  `AsAIAgent(client, SessionConfig, ownsClient: false)` overload (`GitHubCopilotAgentFactory`), with the
-  instructions as an appended system message, no tools and no permission handler, so nothing in the
-  Copilot runtime's coding-agent toolset is approved. A blank model stays null and leaves the choice to
-  the CLI. `ownsClient` stays false: the client is released with the service, and an owning agent would
-  dispose it every time a setting changed.
+- **The model travels in `SessionConfig.Model`**, and Scribe runs the session itself (`GitHubCopilotCleanupAgent`, built
+  by `GitHubCopilotAgentFactory`) rather than through Agent Framework's `GitHubCopilotAgent`, whose run creates the
+  session and sends to it with no step in between: Scribe hands the session's creation and its send over separately
+  through the library vocabulary's admission point. The configuration is what Agent Framework built (instructions as an
+  appended system message, no tools, no permission handler, streaming on), so nothing in the Copilot runtime's
+  coding-agent toolset is approved. A blank model stays null and leaves the choice to the CLI. The agent never owns the
+  client: the client is released with the service. `GitHubCopilotCleanupAgentTests` pins wire and answer parity with
+  Agent Framework's agent against a loopback fake runtime.
 - **The runtime's child process gets its own environment.** `GitHubCopilotCli.BuildRuntimeEnvironment`
   copies this process's environment, minus `GITHUB_COPILOT_MODEL`, plus the selected model when there
   is one, into `CopilotClientOptions.Environment`, which replaces the child's environment wholesale. The
   parent process is never mutated; the old approach set and restored a process-wide variable around
   startup, which a concurrent reader could observe and a cancelled startup skipped restoring.
-- On any bump of `GitHub.Copilot.SDK` or `Microsoft.Agents.AI.GitHub.Copilot`, re-check in their source
-  that a non-null `Environment` still replaces the child environment, that `SessionConfig.Model` is still
-  forwarded to the create-session request, and that the agent still disposes the client only when
-  `ownsClient` is true.
+- On any bump of `GitHub.Copilot.SDK` or `Microsoft.Agents.AI.GitHub.Copilot`, re-check in their source that a non-null
+  `Environment` still replaces the child environment, that `SessionConfig.Model` is still forwarded to the
+  create-session request, and that the session events `GitHubCopilotCleanupAgent` maps still carry the answer (the
+  parity test compares against Agent Framework's agent, so run it after the bump). Production no longer calls into
+  `Microsoft.Agents.AI.GitHub.Copilot`; it stays referenced because `GitHub.Copilot.SDK` arrives through it.
 
 ## Commands (run these, including the flags)
 
@@ -359,14 +366,22 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Audio/ Vad/ Transcription/      capture → 16 kHz mono (pooled capture buffer), Silero VAD, Parakeet ASR
                                     (TranscriptionChunker plans long-capture seams)
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
-                                    Local storage policy and janitor
+                                    Local storage policy and janitor; the admission point every outbound
+                                    request is handed over through (VocabularyHandOff, GitHubCopilotCleanupAgent)
+    Vocabulary/                     VocabularyPublisher (one builder, every generation off the dispatcher),
+                                    VocabularyGeneration, DictationPostProcessor, VocabularyRefresh, and the
+                                    Settings save's draft (StoredChangeAcknowledgement, DraftSnapshot)
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
                                     (which library wins a spoken form: frozen built-in ids, then file names),
                                     LibraryTermKey (one key per spoken form), LibraryMetadata (names 0.4.3 reads
-                                    back), and the library model's shared types:
-                                    the committed LibraryCatalog, the editor's LibraryDraft, LibraryChangeSet, the
-                                    save payload, LibraryVocabulary, and the interfaces of the library CSV codec,
-                                    the built-in overlay, composition and the committed store
+                                    back), the library model's shared types (the committed LibraryCatalog, the
+                                    editor's LibraryDraft, LibraryChangeSet, the save payload, LibraryVocabulary),
+                                    and the parts behind them: the CSV codec and lint (LibraryCsvCodec), the
+                                    built-in overlay and its edits documents (BuiltInLibraryOverlay), composition
+                                    and policy (LibraryComposition, AiVocabularyPolicy, LibraryComposer,
+                                    LibraryDecisions), and storage (LibraryJournal, LibraryInstaller, the custom
+                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry), and until
+                                    W2 LegacyLibraryPageContainment (the old Libraries page); see Word packs
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -378,7 +393,10 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     of accent text, links and switch tracks (see Accent contrast)
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
-                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
+                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync;
+                                    the word pack editor's deciders (LibraryWorkspace, LibraryEditor,
+                                    LibraryImportPlanner, LibraryNaming, LibraryLayoutPlanner, SettingsCloseGuard,
+                                    LibrarySearch, LibraryTermSort)
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
     TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower; DictationInsertion adds the
@@ -398,11 +416,13 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
-  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
+  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
+                                    Libraries/Integration/ the word pack parts together, over real files)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
                                     will read in stream M1), term-keys.json (the library term key's answers, for
-                                    the same port) and composition-golden.txt (what the libraries decide,
+                                    the same port), slugs.json (the id rule), csv/ and edits/ (the CSV and edits
+                                    document formats) and composition-golden.txt (what the libraries decide,
                                     captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
@@ -530,8 +550,9 @@ cause of one.**
   `FailureShape.DescribeWithStack` adds the stack frames, frame lines only, for failures that point at
   a defect, such as crashes, unhandled exceptions and handlers that threw.
   `LogPrivacyGuardTests` runs `LogCallScanner`, a source-level guard, over all of `src/Scribe.App`, the
-  Core folders `Cleanup`, `Diagnostics`, `Feedback` and `Settings`, and
-  `PostProcessing/AiDictionarySuggester.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
+  Core folders `Cleanup`, `Diagnostics`, `Feedback`, `Libraries`, `Settings` and `Vocabulary`, the library
+  service family (`PostProcessing/DictionaryLibrary*.cs`), and `PostProcessing/AiDictionarySuggester.cs`,
+  `PostProcessing/TextPostProcessor.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
   a log call that passes an exception object (cast or not), reads an exception's `.Message`,
   `.StackTrace`, inner exceptions or `.Data`, renders an object with `.ToString()`, interpolates an
   exception, or does not start with a literal message template, and on a logging helper handed an
@@ -1383,24 +1404,27 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   all there, a picked AI cleanup provider among them, while dictation keeps running on what is stored. So
   `_applySettings(_settings)` runs in one place, right after `SaveBundle` returns. Anything else in the
   window that needs settings applied goes through `StoredSettingsReapply`, which applies the settings as
-  stored, or, while `LastLoadFailed`, applies none and has the controller reload only the vocabulary
-  (`DictationController.ReloadVocabulary`), on the settings in use, library selection included, because the
-  defaults standing in are no more the user's choice. The Usage page's Add used to apply `_settings` to
-  reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to the
-  provider nobody saved.
+  stored, or, while `LastLoadFailed`, applies none and has the controller rebuild only the vocabulary
+  (`DictationController.ReloadVocabulary`, a new generation from the committed library vocabulary and the stored
+  dictionary), because the defaults standing in are no more the user's choice. The Usage page's Add used to apply
+  `_settings` to reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to
+  the provider nobody saved.
   `StoredSettingsReapplyTests` drives that failed Save and the Add through a real repository and cleanup
   service; `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it` pins the
   window.
-- **The library selection is the one in use.** The post-processor (`ITextPostProcessor.Reload(ids)`), the AI
-  glossary (`DictationController.BuildGlossary`), the usage report and quick add's conflict check each pass the
-  enabled library ids of the settings dictation runs on to `IDictionaryLibraryService.GetEnabledLibraryEntries(ids)`,
-  never a fresh read of the stored document: a document that turns unreadable mid-session reads as the defaults,
-  which switched the user's libraries off and the default AI libraries on and sent their terms to a remote provider.
-  A parameterless `Reload()` (quick add, learning from history) keeps the last selection; the parameterless
-  `GetEnabledLibraryEntries()` returns none while `LastLoadFailed`, and only a post-processor no owner has given a
-  selection falls back to it. `LibrarySelectionInUseTests` pins both consumers through the real library service and
-  post-processor, and the callers by source. This is the seam the dictionary library program replaces with a
-  vocabulary source.
+- **The library vocabulary is the committed one, never the stored document.** Every dictation's vocabulary generation
+  is built from one `ILibraryVocabularySource.Current` snapshot (the library service's committed vocabulary) and one
+  read of the personal dictionary, so no consumer re-reads the stored document per request, and a dictionary-only
+  reload keeps the library vocabulary. Release 0.4.4 passed the ids of the settings in use
+  (`IDictionaryLibraryService.GetEnabledLibraryEntries(ids)`, `ITextPostProcessor.Reload(ids)`) for the same reason:
+  a document that turns unreadable mid-session reads as the defaults, which switched the user's libraries off and
+  the default AI libraries on and sent their terms to a remote provider. That seam now serves only the
+  post-processor's legacy reload and the usage report's path for a library service that is not a vocabulary source;
+  quick add's conflict check reads the committed `Current.Entries`, and the usage report one `Current` snapshot with
+  its scope. A post-processor no owner has given a selection falls back to the parameterless
+  `GetEnabledLibraryEntries()`, which is `Current.Entries`: on defaults, what a surviving state row enables, or
+  nothing. `LibrarySelectionInUseTests` pins both guarantees through the real library service and post-processor,
+  and the callers by source.
 
 ## Dictionary libraries: order and precedence (read before touching library order)
 
@@ -1428,9 +1452,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)
   is the exception by design: it takes entries, not libraries, and a flattened list has no library of origin left to
   order by, so the window hands it `ComposeLibraries` over `LibraryPrecedence.Enabled` and the hint never reorders
-  them. The window also hands the cleanup scan its libraries through `LibraryPrecedence.Enabled`, and saves the
-  enabled ids in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display,
-  reversed and random orders.
+  them. The window saves the enabled ids in precedence order, never in display order (and, while the old window is
+  contained, see Word packs, hands the cleanup scan no library). `LibraryOrderInvariantTests` hands the Core calls
+  display, reversed and random orders.
 - **The cleanup switches a library off only when that cannot change what dictation writes.** `LibrarySwitchOffCopy`
   decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
   first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule
@@ -1466,7 +1490,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   every loaded library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so
   unticking one of the two while the other's row stays ticked switches nothing off, and unticking the last row with
   the id switches both off. The window passes every row and every loaded library, leaves the rows of libraries kept on
-  ticked, and Core decides.
+  ticked, and Core decides. While the old window is contained (see Word packs) its cleanup does not call it, and the rule
+  stands for the Word packs page.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
@@ -1493,6 +1518,115 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `# key: value` comment lines, and 0.4.3's CSV reader treats a double quote on them as a quoted field, so an unpaired
   quote hides every row from it. `LibraryMetadata` holds the rule (refuse a typed double quote; a header 0.4.3 reads back
   has an even number of them), checked against `Legacy043LibraryCsv`, a verbatim copy of 0.4.3's reader in the tests.
+
+## Word packs: the library model (read before touching library storage, composition or the editor's deciders)
+
+- **The product calls libraries word packs** ("Word packs" as a title, "word pack" in a sentence, the maintainer's
+  decision). Every text the deciders show says so; types, ids, file names, settings keys, log text and the misuse
+  exceptions keep "library", and so do release 0.4.4's `Import` and `Remove` wrappers, which the old window shows beside
+  its own "library" wording until W2 replaces them. An unnamed import is "Imported word pack"
+  (`LibraryNaming.ImportedLibraryBaseName`). Ids follow the unchanged rules and are never derived again: a word pack
+  created or imported on the page takes `custom-<slug>` of the name it is made with (`custom-new-word-pack`), and the
+  `Import` wrapper keeps release 0.4.4's unprefixed slug (`imported-word-pack`).
+- **One service over four pure parts.** `DictionaryLibraryService` is `IDictionaryLibraryService`,
+  `ILibraryCatalogStore` and `ILibraryVocabularySource`, one singleton, built by `LibraryServiceParts.Default` from the
+  library CSV codec (`LibraryCsvCodec`), the built-in overlay (`BuiltInLibraryOverlay`) and composition and policy
+  (`LibraryComposer`), which are singletons in the container too, over `PhysicalLibraryFileSystem`. The editor's deciders
+  (`LibraryWorkspace`, `LibraryEditor`, `LibraryImportPlanner`, `LibraryNaming`, `LibraryLayoutPlanner`,
+  `SettingsCloseGuard`, `LibrarySearch`, `LibraryTermSort`) are pure and are what the Word packs page drives; their public
+  shapes are the Settings redesign's to build on, so a change to one goes through whoever owns that stream. Tests build
+  catalogs, drafts and change sets through `InternalsVisibleTo`; the App cannot.
+- **Tiers and legacy markers (decision 1, behind `LibraryDecisions`).** Authored rows (custom rows, and edited, pinned,
+  added and no-longer-shipped rows of a built-in; an off row supplies no rule) beat shipped rows. A custom row that
+  contradicted a built-in at the upgrade carries a legacy marker and competes after the shipped rows until the user
+  chooses "Use my spelling", so no replacement winner moves on upgrade. The AI glossary can change: authored terms enter
+  the on-device model's 80 slots ahead of shipped ones. `tests/fixtures/libraries/composition-golden.txt` pins both.
+- **Built-in edits documents.** `edits\<id>.json`, version 1, hold the user's intent per row (edited, added, pinned, off),
+  merged field by field with later shipped versions (a question only where both sides changed a field differently); the
+  previous document stays as `<id>.previous.json`. An unreadable or newer document pauses only its built-in, with no rows
+  at all: the service never calls `Apply(shipped, null)` for a document that exists, so a term the user turned off never
+  comes back. A document another app holds open keeps the content last read, or nothing at a fresh start.
+- **A library Save is a journal, and only a whole Settings Save makes one.** `PrepareSave` writes redo images and a
+  manifest `journal\g<G>-<id>.manifest.json`; `SaveBundle` with the payload commits generation G
+  (`libraries.generation`) with the local state (`libraries.state`) and the file ids (`libraries.file_ids`) in the
+  settings transaction; `CompleteSave` installs every file from whatever state it finds, never overwriting what another
+  app wrote (that is kept as a new word pack, off, or set aside), and recovery resumes an interrupted one. The witness
+  `journal\state.witness` is written before the first commit and never deleted. Journal names are parsed whole, never
+  globbed (`LibraryJournalNames`). Only `LibraryJournal` and `LibraryInstaller` touch these files.
+- **The local state is the truth; the document's list is a projection.** Enabled word packs and AI permission live in
+  `libraries.state` by logical id. `EnabledDictionaryLibraryIds` is only the downgrade-safe list older builds read (a
+  library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
+  only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it.
+- **The old Settings window's Libraries page is contained until W2's Word packs page replaces it.** It cannot store a
+  switch, since its settings-only Save keeps the stored list, so it must not look as if it can, nor act on a selection a
+  Save may not keep (review findings A1 and G1: it said "Settings saved.", kept the ticks, and its Save prompt removed a
+  personal correction as covered by a pack ticked on but stored off, leaving neither writing it; and A2: the window's own
+  catalog load, whose adoption turns a pack changed outside Scribe off, left the prompt judging the list the window
+  opened with). `LegacyLibraryPageContainment` holds the decision and the window uses it
+  (`LegacyLibraryPageContainmentTests` runs both scenarios over the real parts and pins the window's source): the On
+  column is read-only, its box disabled so UI Automation cannot toggle it either, with the subtitle set from the type and
+  a notice under it; the Save prompt removes nothing a library covers, and asks nothing (the badges still show the
+  overlap); the Dictionary page's badges and the glossary count are judged against the committed selection, never the
+  rows: the stored list read when the page's catalog load finishes, then the one each Save hands back. That selection
+  only draws figures and is not what the next Save uses: an adoption later in the window's life (a file replaced,
+  removed or unreadable on disk) reaches it at that Save. It is also the document's list, the projection (word packs on
+  and sent to AI cleanup): since W-V, dictation applies on this PC a word pack that is on but kept from AI cleanup too
+  (for instance after a lost state, or a built-in whose edits changed outside Scribe), which the old page shows off and
+  badges nothing; that costs a figure, never a correction, since the page acts on none of it. The dictionary cleanup
+  reviews no library and never switches one off or copies its terms, and says so; an import says the pack is stored and
+  off; and after every Save the rows show the stored list again, with a notice in place of "Settings saved." (and the
+  window left open by Save and close) if a row showed otherwise. Import, export and remove work as before. Never make
+  the list write work here: that is W2's library payload.
+- **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
+  packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
+  the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything
+  it writes in the same commit, and drops the hash of an edits document it removes, so its own writes never read as a
+  replacement. A word pack a Save created that another app's file pushed to a new id takes the draft's choices with it at
+  the next adoption in the same process; after a restart before that, it is simply a word pack that is off.
+- **The vocabulary and its admission point.** `ILibraryVocabularySource.Current` is published after every commit, load
+  and recovery that changes it, possibly at the same generation, so a consumer never skips a publication because the
+  generation matches. Once a vocabulary is published, `Current` is a lock-free read; before that, its first read loads
+  the catalog synchronously (file I/O under the library lock), so it is not I/O-free. That first read is W-V's first
+  vocabulary build, on a worker, which the app awaits in `DictationController.PrepareAsync` (at most
+  `VocabularyPublisher.StartupDeadline`, 30 s) before the tray and the hotkey; nothing on the dispatcher reads the
+  source before it. The first load measured about 4.5 ms at 1,549 terms, 21 ms at 10,000 and 187 ms at 100,000, so the
+  deadline needs no change. Dictation takes every library through the publisher (see "Library vocabulary admission"),
+  never through release 0.4.4's seam, and every outbound cleanup request is handed over only through `TryHandOff` with
+  the scope it was admitted under. Committed content that cannot be read right now is held back (no rows, no hash), and
+  dictation runs on the personal dictionary alone until a recovery can read it again: `LibraryRecoveryRetry` asks
+  storage maintenance for a pass right away, then again 30 s later doubling to 5 minutes while the hold-back lasts, and
+  stops when content is back or shutdown begins. A request maintenance cannot take yet stays owed: the app's first
+  publication comes from that first build, before maintenance is resolved and started, so the request is made when
+  maintenance's `Start` runs, and the startup pass comes after the 10 s trigger delay rather than the first pass's 30 s.
+  `LibraryVocabularyRealSourceTests` runs W-V's publisher, dictation pass and admission point over the library service
+  itself: a hold-back and a restoration at the same generation, a dictation that keeps its own generation across a Save,
+  a one-off completion under a narrowed scope or a stale recipient, and store=false on the Responses surface.
+- **Formats.** A managed file this version writes carries `# scribe-format: 2` and 0.4.3's raw metadata lines; one without
+  the marker is read exactly as 0.4.3 read it. An export is UTF-8 with a byte order mark, quoted metadata and the
+  reversible formula guard (`# formula-guard: 1`); an import decodes strictly with an ANSI fallback. Every write is encoded
+  before any destination is opened, so a refusal never truncates a file. The personal dictionary's export keeps its
+  replacing encoder until the editor refuses ill-formed text there too.
+- **Logging.** The library service logs counts, generations, enum names and `FailureShape` text only, never a name, id,
+  term, file name or path; `LogPrivacyGuardTests` scans `Core\Libraries`, `Core\Settings`, `Core\Vocabulary`,
+  `PostProcessing\DictionaryLibrary*.cs` and `PostProcessing\TextPostProcessor.cs`, and `LogCallScanner` holds the one
+  file-failure template.
+- **Release gate: no release contains this library model without W-V's vocabulary publication.** Without W-V,
+  dictation selected word packs through release 0.4.4's seam (`GetEnabledLibraryEntries(ids)` with the document's
+  list, the projection), which left an enabled word pack kept from AI cleanup, or a remapped twin, unapplied on this
+  PC, and filtered by the ids its caller passed rather than by the current AI permission, so a word pack whose
+  permission was withdrawn since could still reach the glossary until the settings were applied again. W-V (approved at
+  a9e0b9e on `win/libraries-wv-r3`) is merged on this line, so dictation follows the committed vocabulary and its
+  permission gate. Before any release from a line carrying the integration, check that a9e0b9e is an ancestor of the
+  release head too. The Store build's journal (the redirected `LocalCache` folder, native and checked replace) is
+  unverified until the desktop gate exercises it.
+- **Release gate: no release until the Settings redesign's Word packs page lands.** The containment of the old window
+  keeps it from reporting a switch it cannot store, but a build carrying it cannot switch any word pack on or off, and
+  its dictionary cleanup reviews no word pack. The Word packs page (W2) removes `LegacyLibraryPageContainment` with the
+  old page, so before any release from a line carrying the integration, check that the type is gone from the release
+  head (`git grep -q LegacyLibraryPageContainment <release head> -- src` finds nothing).
+- **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
+  import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
+  `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
@@ -1847,6 +1981,13 @@ packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
+- **The word pack library model ships only with W-V's vocabulary publication and W2's Word packs page.** Before cutting
+  a release, check whether the W1b integration commit ("Integrate the library model's parts", first on
+  `win/libraries-integration`) is an ancestor of the release head (`git merge-base --is-ancestor <integration commit>
+  <release head>`); if it is, W-V's approved head (a9e0b9e, on `win/libraries-wv-r3`) must be an ancestor too, checked
+  the same way, and the old Settings window's containment must be gone (`git grep -q LegacyLibraryPageContainment
+  <release head> -- src` finds nothing, see Word packs), or the release is refused. Until the Store rows of the desktop
+  gate are observed, the release notes say the Store build's library journal is unverified (see Word packs).
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
@@ -2238,6 +2379,47 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
   [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true)). The serving agent is built by the
   initializer and published only after that probe passes; the Chat Completions fallback builds its
   serving agent only once its own probe has passed.
+
+## Library vocabulary admission (read before touching a cleanup client or the publisher)
+
+- Every dictation takes one `VocabularyGeneration` at admission and uses it for cleanup and the dictionary pass.
+  `VocabularyPublisher` builds generations with one builder, off the dispatcher, the first one included: the app awaits
+  `DictationController.PrepareAsync`, at most `StartupDeadline`, before the tray and the hotkey, so the library source's
+  first read (a cold catalog) never runs on the dispatcher. Nothing waits on a vocabulary task synchronously.
+- A change that stores vocabulary is reported as in effect only after awaiting the `VocabularyRefresh` its application
+  returns (`ApplySettings`, `ReloadVocabulary`, `StoredSettingsReapply`): `Applied` means the next dictation is admitted
+  with a generation built from inputs read after the change; `NotApplied` means saved but dictation keeps its previous
+  vocabulary (`VocabularyNotice`).
+- Every wait for a generation is bounded, on an injected `TimeProvider`: `StartAsync` faults with a `TimeoutException`
+  once `VocabularyPublisher.StartupDeadline` (30 s) passes without the first generation, which ends startup through
+  `AbandonStartup`, and every later request is answered `TimedOut` at `RefreshDeadline` (15 s), which callers report as
+  saved but not in use yet. Nothing waits for a read that does not return: the request is retired, the build is left to
+  finish, and if it returns it publishes in order for later dictations without changing the answer given. The events
+  nobody awaits (`Changed`, `Reloaded`) ask for a build with no deadline. Tests fire deadlines on a manual clock; never
+  add a sleep.
+- A Settings save stays editable while it awaits its generation, so it hands its draft to `StoredChangeAcknowledgement`
+  when the wait starts (no await since it read its controls) and the draft is read again on the dispatcher when the answer
+  is in. `ChangedWhileSaving` shows `VocabularyNotice.SettingsChangedWhileSaving` and keeps the window open with the edit
+  unsaved; `NotInUseYet` shows the saved-but-not-applied notice; only `InEffect` reports "Settings saved." or closes.
+  The draft is what a Save stores, read the way the Save reads it, and a row read that finishes during the wait is no
+  change (`VocabularyApplicationSourceTests` checks the draft against the Save and the pages against the XAML).
+- A build reads the library snapshot, then the dictionary. A commit of both between the reads gives one transient mixed
+  generation; it never persists, because every change of either source asks for a build after it commits, and it stays
+  content-bound, because its glossary and its scope come from the same library snapshot. Do not add a cross-store
+  transaction for it.
+- Every request is handed over only through `ILibraryVocabularySource.TryHandOff` with its admission's scope: HTTP from
+  `VocabularyHandOffHandler` just before the network handler (every OpenAI client is built with `ConfigureClient`; a
+  client that skips it sends vocabulary no admission stands behind), Copilot at `session.create` and at `session.send`. A
+  one-off completion is also bound to its recipient: every attempt goes only while the service still serves it and is
+  ready, checked under `_gate` inside the permission gate in one step with the send. Cleanup options carry no glossary;
+  one given in them is dropped where there is an admission point. A held-back request leaves its segment as dictated with
+  no failure, and its log line is a shape.
+- A vocabulary can be republished at the same library generation (a restoration after a hold-back, a lock clearing after
+  a fresh start, an adoption used in memory): the publisher rebuilds on every `Changed` from a fresh `Current`, and
+  nothing may cache vocabulary, rules, a glossary or an agent by generation. While libraries are held back, dictation runs
+  on the personal dictionary alone. The source is the library service itself (`DictionaryLibraryService`), which
+  `AddScribeCore` registers as the one `ILibraryVocabularySource`; its first read at startup publishes, which asks the
+  publisher for one more build right after the first.
 
 ## Git workflow
 

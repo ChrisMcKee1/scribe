@@ -170,11 +170,10 @@ public sealed class StoredSettingsReapplyTests : IDisposable
         var saved = AppSettings.CreateDefault();
         saved.EnabledDictionaryLibraryIds = [];
         _settings.Save(saved);
-        var inUse = _settings.Load();
         var queued = new List<Action>();
         var processor = new TextPostProcessor(_dictionary, NullLogger<TextPostProcessor>.Instance);
         using var publisher = new VocabularyPublisher(
-            new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds),
+            _libraries,
             _dictionary,
             processor,
             NullLogger<VocabularyPublisher>.Instance,
@@ -182,7 +181,13 @@ public sealed class StoredSettingsReapplyTests : IDisposable
         var starting = publisher.StartAsync();
         Assert.Single(queued)();
         queued.Clear();
-        var before = (await starting.WaitAsync(Bound)).Generation;
+        await starting.WaitAsync(Bound);
+
+        // The library service's first read publishes its vocabulary, which asks for one more build, and the builder runs it
+        // before it stops (the interim source this test was written against never published). The generation in use once
+        // the start has settled is the one a reapply's build must replace.
+        var before = publisher.Current;
+        Assert.Empty(queued);
         if (state == "unreadable")
         {
             _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");

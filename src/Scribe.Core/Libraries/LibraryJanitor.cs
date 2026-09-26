@@ -17,13 +17,22 @@ internal readonly record struct LibraryJanitorResult(int RecentlyDeletedRemoved,
 /// It never removes a library file (a target, a kept version, a set-aside edits document, a previous copy or a Recently
 /// deleted entry a manifest names), nothing a live or pending manifest names, no entry whose stamp cannot be parsed or
 /// lies in the future, a held manifest (which has no set-aside stamp), and nothing at all while the session runs on
-/// defaults. Loading never purges: only this step does. Never throws, as a maintenance step must not.
+/// defaults. Loading never purges: only this step does. Never throws, as a maintenance step must not. It also carries the
+/// bounded retry after a hold-back (<see cref="LibraryRecoveryRetry"/>): storage maintenance connects its trigger when it
+/// takes the janitor and stops the retry at shutdown, and the library service reports every publication.
 /// </remarks>
 internal sealed class LibraryJanitor
 {
     private readonly Func<DateTimeOffset, LibraryJanitorResult> _run;
 
-    internal LibraryJanitor(Func<DateTimeOffset, LibraryJanitorResult> run) => _run = run;
+    internal LibraryJanitor(Func<DateTimeOffset, LibraryJanitorResult> run, TimeProvider time)
+    {
+        _run = run;
+        Retry = new LibraryRecoveryRetry(time);
+    }
+
+    /// <summary>The retry after a hold-back, on the library service's clock.</summary>
+    internal LibraryRecoveryRetry Retry { get; }
 
     internal LibraryJanitorResult Run(DateTimeOffset nowUtc)
     {

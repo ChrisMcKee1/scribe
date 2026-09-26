@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Libraries;
 
@@ -695,7 +696,7 @@ internal static class LibrarySavePlanner
                 string? keepAs = null;
                 if (draft.KeepAsName is { } keepAsName && !draft.Target.StartsWith(LibraryManifest.EditsPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    var id = InterimLibraryNaming.NewCustomId(keepAsName, candidate => taken.Contains(candidate) || SeriesMeets(candidate, listed));
+                    var id = LibraryNaming.NewCustomId(keepAsName, candidate => taken.Contains(candidate) || SeriesMeets(candidate, listed));
                     taken.Add(id);
                     keepAs = id + ".csv";
                 }
@@ -769,7 +770,7 @@ internal static class LibrarySavePlanner
             // Where an outside version found at completion goes (a write), or Scribe's own content when another app takes
             // the planned name (a create): reserved now, named after the library.
             var keepAsName = kind == LibraryOperationKind.Write
-                ? InterimLibraryNaming.ChangedOutsideName(existing?.Content.Name ?? content.Name)
+                ? LibraryNaming.ChangedOutsideName(existing?.Content.Name ?? content.Name)
                 : content.Name;
             drafts.Add(new Draft(kind, target, write.LibraryId, write.ExpectedPreImage, bytes, keepAsName));
         }

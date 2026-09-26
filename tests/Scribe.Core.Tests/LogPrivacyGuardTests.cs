@@ -16,7 +16,8 @@ public sealed class LogPrivacyGuardTests
 {
     // The whole app shell (Settings verifies endpoints, keys and Azure sign-in; the tray, quick add and dictation
     // relay cleanup), every Core folder whose code talks to a provider or handles what one returned, the folder that
-    // holds library names and terms, and the provider-facing files of Core folders that are otherwise local.
+    // holds library names and terms, the folder that builds and publishes every dictation's vocabulary, and the
+    // provider-facing files of Core folders that are otherwise local.
     private static readonly string[] GuardedFolders =
     [
         Path.Combine("src", "Scribe.App"),
@@ -25,11 +26,14 @@ public sealed class LogPrivacyGuardTests
         Path.Combine("src", "Scribe.Core", "Feedback"),
         Path.Combine("src", "Scribe.Core", "Libraries"),
         Path.Combine("src", "Scribe.Core", "Settings"),
+        Path.Combine("src", "Scribe.Core", "Vocabulary"),
     ];
 
+    // TextPostProcessor logs a library read's failure, whose I/O text named the library's file (stream W-V's request).
     private static readonly string[] GuardedFiles =
     [
         Path.Combine("src", "Scribe.Core", "PostProcessing", "AiDictionarySuggester.cs"),
+        Path.Combine("src", "Scribe.Core", "PostProcessing", "TextPostProcessor.cs"),
         Path.Combine("src", "Scribe.Core", "Transcription", "TranscriptionModelInstaller.cs"),
     ];
 
@@ -45,6 +49,8 @@ public sealed class LogPrivacyGuardTests
         var root = RepositoryRoot();
         var offenders = new List<string>();
         var appCalls = 0;
+        var vocabularyCalls = 0;
+        var postProcessorCalls = 0;
         var files = GuardedFolders
             .SelectMany(folder => SourceFiles(Path.Combine(root, folder)))
             .Concat(GuardedFiles.Select(file => Path.Combine(root, file)))
@@ -53,9 +59,18 @@ public sealed class LogPrivacyGuardTests
         foreach (var file in files)
         {
             var source = File.ReadAllText(file);
+            var calls = LogCallScanner.Find(source).Count();
             if (file.Contains(Path.Combine("src", "Scribe.App") + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             {
-                appCalls += LogCallScanner.Find(source).Count();
+                appCalls += calls;
+            }
+            else if (file.Contains(Path.Combine("src", "Scribe.Core", "Vocabulary") + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                vocabularyCalls += calls;
+            }
+            else if (file.EndsWith(Path.Combine("PostProcessing", "TextPostProcessor.cs"), StringComparison.Ordinal))
+            {
+                postProcessorCalls += calls;
             }
 
             foreach (var offence in LogCallScanner.Check(source))
@@ -65,6 +80,8 @@ public sealed class LogPrivacyGuardTests
         }
 
         Assert.True(appCalls > 100, $"The scanner found only {appCalls} log calls in the app, so it is not reading the source.");
+        Assert.True(vocabularyCalls >= 6, $"The scanner found only {vocabularyCalls} log calls in the vocabulary folder, so it is not reading it.");
+        Assert.True(postProcessorCalls >= 4, $"The scanner found only {postProcessorCalls} log calls in TextPostProcessor.cs, so it is not reading it.");
         Assert.True(offenders.Count == 0, string.Join(Environment.NewLine, offenders));
     }
 

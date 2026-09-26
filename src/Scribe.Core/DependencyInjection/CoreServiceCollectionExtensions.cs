@@ -82,8 +82,13 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 
         // Dictionary libraries: the built-in embedded set plus any custom CSVs the user imports, and the journal that
-        // stores their changes. One service behind all three of its interfaces; the database says whether a repair ran
-        // at this start, which the library state reads a missing row by.
+        // stores their changes. The three pure parts (the library CSV codec, the built-in overlay, composition and
+        // policy) are singletons the Libraries page shares with the service; one service stands behind all three of its
+        // interfaces, and the database says whether a repair ran at this start, which the library state reads a missing
+        // row by. The service reads for itself whether the stored document can be used (a session on defaults).
+        services.AddSingleton<ILibraryCsvCodec>(LibraryCsvCodec.Instance);
+        services.AddSingleton<IBuiltInLibraryOverlay>(BuiltInLibraryOverlay.Instance);
+        services.AddSingleton<ILibraryComposer>(LibraryComposer.Instance);
         services.AddSingleton(sp =>
         {
             var database = sp.GetRequiredService<ScribeDatabase>();
@@ -93,6 +98,9 @@ public static class CoreServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<DictionaryLibraryService>>(),
                 LibraryServiceParts.Default with
                 {
+                    Codec = sp.GetRequiredService<ILibraryCsvCodec>(),
+                    Overlay = sp.GetRequiredService<IBuiltInLibraryOverlay>(),
+                    Composer = sp.GetRequiredService<ILibraryComposer>(),
                     Context = () => new LibraryStateContext(
                         RunningOnDefaults: false, DatabaseRepaired: database.RepairedAtStartup, GenerationStored: false),
                 });
