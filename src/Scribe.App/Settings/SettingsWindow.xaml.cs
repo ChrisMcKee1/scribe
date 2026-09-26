@@ -5206,49 +5206,56 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // What a Save stores, read the way the Save reads it, for the Save's check that nothing it stores changed while it
     // waited for its vocabulary generation. Values stored straight from an editor come from walking the four pages whose
-    // controls a Save reads; the rest are taken as the Save computes them: the hotkeys with their modes, the AI cleanup
-    // switch and the microphone with any tray change still waiting, the Azure subscription the deployment resolves to, the
-    // profiles and the set of enabled libraries it writes, and whether the dictionary or the snippets differ from what
-    // storage holds (a read that finishes during the wait publishes what storage holds, so it is no change) or a grid row
-    // edit is in progress. The walk leaves out the controls one of those already carries, and the Start with Windows
-    // switch, which Save never stores. Hashed, so the copy the check keeps holds no key or secret; never logged.
+    // controls a Save reads, each editor as typed (an editable combo box by its text, a number box by its text as well as
+    // its committed value), so an edit that would apply only when its editor loses focus, like a deployment typed into the
+    // Azure model picker, still counts. The rest are taken as the Save computes them: the hotkeys with their modes and any
+    // capture in progress, the AI cleanup switch and the microphone with any tray change still waiting, the Azure
+    // subscription the deployment resolves to, the profiles and the set of enabled libraries it writes, and whether the
+    // dictionary or the snippets differ from what storage holds (a read that finishes during the wait publishes what storage
+    // holds, so it is no change) or a grid row edit is in progress. The walk leaves out the controls one of those already
+    // carries, and the Start with Windows switch, which applies on its own when flipped: a Save stores the Windows
+    // observation it read before the wait, never the switch. Every value is framed by DraftSnapshot, so no text a user types
+    // can make two different drafts alike, and the draft is hashed, so the copy the check keeps holds no key or secret;
+    // never logged.
     private string SaveDraftSignature()
     {
         HashSet<DependencyObject> carriedElsewhere =
         [
             LaunchCheck, HotkeyBox, ModeCombo, DictationOnlyHotkeyBox, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck,
-            AzureModelBox, AzureSubscriptionBox,
+            AzureSubscriptionBox,
         ];
-        var draft = new StringBuilder();
+        var draft = new Scribe.Core.Vocabulary.DraftSnapshot();
         foreach (var page in new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi })
         {
+            draft.Part(page.Name);
             AppendEditorValues(page, carriedElsewhere, draft);
         }
 
-        var subscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
-            _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text);
-        draft.Append('\u001e').Append(_pendingBinding with { Mode = SelectedMode })
-            .Append('\u001f').Append(_pendingDictationOnlyBinding is null
+        draft.Part("hotkeys")
+            .Binding(_pendingBinding with { Mode = SelectedMode })
+            .Binding(_pendingDictationOnlyBinding is null
                 ? null
-                : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode });
-        draft.Append('\u001e').Append(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
-            .Append('\u001f').Append(_externalMicrophone.ForSave(ShownMicrophone));
-        draft.Append('\u001e').Append(subscription?.Id).Append('|').Append(subscription?.Name).Append('|').Append(subscription?.TenantId);
-        draft.Append('\u001e').AppendJoin('\u001f', BuildProfiles().Select(profile =>
-            $"{profile.Name}|{string.Join(',', profile.ProcessNames)}|{profile.WritingStyle}|{profile.NewlineHandling}"));
-        draft.Append('\u001e').AppendJoin('\u001f', (_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)
-            .Select(id => id.ToUpperInvariant())
-            .Order(StringComparer.Ordinal));
-        draft.Append('\u001e').Append(_dictionaryLoad.HasChanges(DictionarySignature()))
-            .Append(_snippetLoad.HasChanges(SnippetSignature()))
-            .Append(RowEditInProgress(DictionaryGrid))
-            .Append(RowEditInProgress(LibraryGrid));
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(draft.ToString())));
+                : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode })
+            .Flag(_capturing)
+            .List(_capturedKeys.Select(key => key.ToString()));
+        draft.Part("intents")
+            .Flag(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
+            .Microphone(_externalMicrophone.ForSave(ShownMicrophone));
+        draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
+            _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
+        draft.Part("profiles").Profiles(BuildProfiles());
+        draft.Part("libraries").LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds);
+        draft.Part("rows")
+            .Flag(_dictionaryLoad.HasChanges(DictionarySignature()))
+            .Flag(_snippetLoad.HasChanges(SnippetSignature()))
+            .Flag(RowEditInProgress(DictionaryGrid))
+            .Flag(RowEditInProgress(LibraryGrid));
+        return draft.Hash();
     }
 
-    // Every editor's value in the page's logical tree, whether shown or not, as the Save reads it: an editable combo box
-    // by its text, any other by its selection; a grid's rows are compared through their section instead.
-    private static void AppendEditorValues(DependencyObject node, HashSet<DependencyObject> skipped, StringBuilder draft)
+    // Every editor's value in the page's logical tree, whether shown or not, as the Save reads it, each after its kind: an
+    // editable combo box by its text, any other by its selection; a grid's rows are compared through their section instead.
+    private static void AppendEditorValues(DependencyObject node, HashSet<DependencyObject> skipped, Scribe.Core.Vocabulary.DraftSnapshot draft)
     {
         if (skipped.Contains(node))
         {
@@ -5260,28 +5267,28 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             case DataGrid:
                 return;
             case Wpf.Ui.Controls.PasswordBox secret:
-                draft.Append('\u001f').Append(secret.Password);
+                draft.Part("password").Text(secret.Password);
                 break;
             case Wpf.Ui.Controls.NumberBox number:
-                draft.Append('\u001f').Append(number.Text).Append('|').Append(number.Value);
+                draft.Part("number").Text(number.Text).Number(number.Value);
                 break;
             case TextBox text:
-                draft.Append('\u001f').Append(text.Text);
+                draft.Part("text").Text(text.Text);
                 break;
             case PasswordBox secret:
-                draft.Append('\u001f').Append(secret.Password);
+                draft.Part("password").Text(secret.Password);
                 break;
             case System.Windows.Controls.Primitives.ToggleButton toggle:
-                draft.Append('\u001f').Append(toggle.IsChecked);
+                draft.Part("toggle").Flag(toggle.IsChecked);
                 break;
             case ComboBox { IsEditable: true } editable:
-                draft.Append('\u001f').Append(editable.Text);
+                draft.Part("editable").Text(editable.Text);
                 break;
             case ComboBox combo:
-                draft.Append('\u001f').Append(combo.SelectedIndex).Append('|').Append(combo.Text);
+                draft.Part("choice").Number(combo.SelectedIndex).Text(combo.Text);
                 break;
             case Slider slider:
-                draft.Append('\u001f').Append(slider.Value);
+                draft.Part("slider").Number(slider.Value);
                 break;
         }
 

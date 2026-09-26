@@ -168,27 +168,27 @@ public sealed class VocabularyApplicationSourceTests
         Assert.Single(Regex.Matches(saveClose, Regex.Escape("Close();")));
 
         // The draft is what a Save stores, read the way the Save reads it: the editors of the pages whose controls it reads,
-        // and everything it computes beyond a plain editor as it computes it. Hashed, never logged.
+        // and everything it computes beyond a plain editor as it computes it, each value framed. Hashed, never logged.
         var draft = Body(window, "private string SaveDraftSignature()");
         foreach (var part in new[]
         {
             "new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi }",
+            "draft.Part(page.Name);",
             "AppendEditorValues(page, carriedElsewhere, draft);",
-            ".Append(_pendingBinding with { Mode = SelectedMode })",
+            ".Binding(_pendingBinding with { Mode = SelectedMode })",
             "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
-            ".Append(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))",
-            ".Append(_externalMicrophone.ForSave(ShownMicrophone))",
-            "AzureSubscriptionSelection.ResolveAuthenticationSubscription(",
-            "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text);",
-            ".Append(subscription?.Id).Append('|').Append(subscription?.Name).Append('|').Append(subscription?.TenantId)",
-            "BuildProfiles().Select(profile =>",
-            "$\"{profile.Name}|{string.Join(',', profile.ProcessNames)}|{profile.WritingStyle}|{profile.NewlineHandling}\"",
-            "(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)",
-            ".Append(_dictionaryLoad.HasChanges(DictionarySignature()))",
-            ".Append(_snippetLoad.HasChanges(SnippetSignature()))",
-            ".Append(RowEditInProgress(DictionaryGrid))",
-            ".Append(RowEditInProgress(LibraryGrid))",
-            "System.Security.Cryptography.SHA256.HashData(",
+            ".Flag(_capturing)",
+            ".Flag(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))",
+            ".Microphone(_externalMicrophone.ForSave(ShownMicrophone))",
+            ".Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(",
+            "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));",
+            ".Profiles(BuildProfiles())",
+            ".LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)",
+            ".Flag(_dictionaryLoad.HasChanges(DictionarySignature()))",
+            ".Flag(_snippetLoad.HasChanges(SnippetSignature()))",
+            ".Flag(RowEditInProgress(DictionaryGrid))",
+            ".Flag(RowEditInProgress(LibraryGrid))",
+            "return draft.Hash();",
         })
         {
             Assert.Contains(part, draft, StringComparison.Ordinal);
@@ -197,28 +197,31 @@ public sealed class VocabularyApplicationSourceTests
         // A row read that finishes during the wait publishes what storage holds, which is no change: the dictionary and the
         // snippets go by whether they differ from storage, never by their raw signatures, and the libraries by the set a
         // Save writes, never by the rows' signature (the library snapshot is not updated by a Save).
-        Assert.DoesNotContain(".Append(DictionarySignature())", draft, StringComparison.Ordinal);
-        Assert.DoesNotContain(".Append(SnippetSignature())", draft, StringComparison.Ordinal);
+        Assert.DoesNotContain("(DictionarySignature())", draft.Replace("HasChanges(DictionarySignature())", string.Empty), StringComparison.Ordinal);
+        Assert.DoesNotContain("(SnippetSignature())", draft.Replace("HasChanges(SnippetSignature())", string.Empty), StringComparison.Ordinal);
         Assert.DoesNotContain("LibrarySignature()", draft, StringComparison.Ordinal);
         Assert.DoesNotContain("_log.", draft, StringComparison.Ordinal);
 
-        var editors = Body(window, "private static void AppendEditorValues(DependencyObject node, HashSet<DependencyObject> skipped, StringBuilder draft)");
+        var editors = Body(window, "private static void AppendEditorValues(DependencyObject node, HashSet<DependencyObject> skipped, Scribe.Core.Vocabulary.DraftSnapshot draft)");
         foreach (var part in new[]
         {
             "if (skipped.Contains(node))",
             "case DataGrid:",
             "case Wpf.Ui.Controls.PasswordBox secret:",
             "case Wpf.Ui.Controls.NumberBox number:",
-            ".Append(number.Text).Append('|').Append(number.Value)",
+            "draft.Part(\"number\").Text(number.Text).Number(number.Value);",
             "case TextBox text:",
+            "draft.Part(\"text\").Text(text.Text);",
             "case PasswordBox secret:",
-            ".Append(secret.Password)",
+            "draft.Part(\"password\").Text(secret.Password);",
             "case System.Windows.Controls.Primitives.ToggleButton toggle:",
+            "draft.Part(\"toggle\").Flag(toggle.IsChecked);",
             "case ComboBox { IsEditable: true } editable:",
-            ".Append(editable.Text)",
+            "draft.Part(\"editable\").Text(editable.Text);",
             "case ComboBox combo:",
-            ".Append(combo.SelectedIndex).Append('|').Append(combo.Text)",
+            "draft.Part(\"choice\").Number(combo.SelectedIndex).Text(combo.Text);",
             "case Slider slider:",
+            "draft.Part(\"slider\").Number(slider.Value);",
             "LogicalTreeHelper.GetChildren(node)",
         })
         {
@@ -280,25 +283,29 @@ public sealed class VocabularyApplicationSourceTests
                 element.Contains("Popup", StringComparison.Ordinal));
         }
 
-        // The walk skips exactly the controls whose stored value the draft carries as the Save computes it, and the ones a
-        // Save never stores: skipping a control with nothing carrying it would drop what a Save stores from it.
+        // The walk skips exactly the controls whose stored value the draft carries as the Save computes it, and the one whose
+        // value a Save never takes: skipping a control with nothing carrying it would drop what a Save stores from it. The Azure
+        // model picker is walked, not skipped (round 4, A7): its typed text applies only when it loses focus, so the
+        // subscription it resolves to cannot stand in for it.
         var draft = Body(window, "private string SaveDraftSignature()");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
         Assert.True(skippedList.Success, "The draft's list of controls the walk skips was not found.");
         var skipped = skippedList.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var carriedBy = new Dictionary<string, string>
         {
-            ["LaunchCheck"] = string.Empty, // Start with Windows applies from its switch; Save stores what Windows reports
+            // Start with Windows applies from its own switch when flipped; a Save stores the Windows observation it read
+            // before the wait, never the switch.
+            ["LaunchCheck"] = string.Empty,
             ["HotkeyBox"] = "_pendingBinding with { Mode = SelectedMode }",
             ["ModeCombo"] = "_pendingBinding with { Mode = SelectedMode }",
             ["DictationOnlyHotkeyBox"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
             ["DictationOnlyModeCombo"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
             ["DeviceCombo"] = "_externalMicrophone.ForSave(ShownMicrophone)",
             ["AiCleanupCheck"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
-            ["AzureModelBox"] = "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text",
             ["AzureSubscriptionBox"] = "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text",
         };
         Assert.Equal(carriedBy.Keys.Order(StringComparer.Ordinal), skipped.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain("AzureModelBox", skipped);
         foreach (var (name, carrier) in carriedBy)
         {
             if (carrier.Length == 0)
