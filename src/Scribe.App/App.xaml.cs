@@ -1,10 +1,13 @@
 ﻿using System.Diagnostics;
 using System.IO;
+using System.IO.MemoryMappedFiles;
+using System.Text;
 using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
@@ -16,12 +19,15 @@ using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Lifecycle;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
+using Scribe.Core.Tray;
 using Scribe.Core.Vad;
 using Scribe.Core.Vocabulary;
 using Wpf.Ui.Appearance;
@@ -42,12 +48,15 @@ public partial class App : Application
     // dialog. Shortcuts and the installer both use that switch, so the old behaviour turned a
     // deliberate "open settings" into a dead end.
     private const string ShowSettingsEventName = "Scribe.ShowSettings.9E5C1A2F";
+    private const string ShowSettingsPayloadName = "Scribe.ShowSettings.Payload.9E5C1A2F";
+    private const int ShowSettingsPayloadBytes = 256;
 
     // How long quitting waits for a tray settings change already on its way to the database.
     private static readonly TimeSpan SettingsWriteDrainTimeout = TimeSpan.FromSeconds(2);
 
     private Mutex? _singleInstanceMutex;
     private EventWaitHandle? _showSettingsSignal;
+    private MemoryMappedFile? _showSettingsPayload;
     private RegisteredWaitHandle? _showSettingsRegistration;
     private IHost? _host;
     private TrayIconHost? _tray;
@@ -57,6 +66,7 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private QuickAdd.QuickAddWindow? _quickAddWindow;
+    private TextScaleService? _textScale;
 
     /// <summary>The file log sink, so its health can be reported in Settings.</summary>
     internal static FileLoggerProvider? LogSink { get; private set; }
@@ -64,6 +74,13 @@ public partial class App : Application
     private SessionDiagnostics? _diagnostics;
     private ILogger? _appLog;
     private int _learningFromHistory;
+    private readonly TrayFeedbackPolicy _trayFeedback = new();
+    private readonly QuickAddOpenGate _quickAddOpenGate = new();
+    private TrayCondition _trayCondition;
+    private bool _foundryDownloadedModel;
+    private readonly FoundryModelCacheRefresh _foundryRefresh = new();
+    private Guid? _noticeCopyEntryId;
+    private Task? _appExitOperation;
 
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
@@ -81,15 +98,16 @@ public partial class App : Application
         // Before any window exists, the already-running notice below included.
         TitleBarButtonNames.Apply(Resources);
         ButtonLabelContrast.Apply(Resources);
+        _textScale = new TextScaleService(Dispatcher);
+        _textScale.Start();
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
+        var requestedPage = RequestedSettingsPage(e.Args, out var hasSettingsSwitch);
         if (!isNew)
         {
-            var wantsSettings = HasSettingsSwitch(e.Args);
-
             // Hand the request to the running instance rather than telling the user to go find the
             // tray icon themselves. Only fall back to the notice when the signal cannot be raised.
-            if (wantsSettings && TrySignalShowSettings())
+            if (TrySignalShowSettings(requestedPage))
             {
                 Shutdown();
                 return;
@@ -117,9 +135,9 @@ public partial class App : Application
 
         // Allow `Scribe.exe --settings` to jump straight to the settings window on launch. After the guard on purpose:
         // Scribe is running by now, so a window that fails to open is a window fault, reported as any other is.
-        if (started && !Dispatcher.HasShutdownStarted && HasSettingsSwitch(e.Args))
+        if (started && !Dispatcher.HasShutdownStarted && hasSettingsSwitch)
         {
-            OpenSettings();
+            OpenSettings(requestedPage);
         }
     }
 
@@ -292,6 +310,7 @@ public partial class App : Application
         _settingsWrites = new Scribe.Core.Settings.SettingsWriteLane(
             settingsRepository,
             callback => Dispatcher.BeginInvoke(callback));
+        services.GetRequiredService<HistoryDeletionNotifier>().Deleted += OnHistoryDeleted;
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
@@ -334,23 +353,32 @@ public partial class App : Application
                 // Tray updates are best effort, and so is saying one failed.
             }
         });
-        _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
+        _tray.QuitRequested += TrayQuit;
         _tray.SettingsRequested += OpenSettings;
-        _tray.LearnFromHistoryRequested += LearnFromHistory;
         _tray.CopyLastDictationRequested += CopyLastDictation;
         _tray.CopyRecentDictationRequested += CopyRecentDictation;
+        _tray.CopyRecentDictationByIdRequested += CopyRecentDictation;
         _tray.RecentDictationsProvider = () => _host is null
             ? []
             : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecent();
-        _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
-        _tray.OpenStoreRequested += OpenMicrosoftStore;
-        _tray.ShareAppRequested += ShareApp;
+        _tray.RecentTranscriptProvider = () => _host is null
+            ? []
+            : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecentEntries();
+        _tray.CopyLastAvailableProvider = HasRecentDictationForTray;
         _tray.AddToDictionaryRequested += ShowQuickAdd;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
+        _tray.AiCleanupItemProvider = DescribeTrayAiCleanup;
+        _tray.UpdateReadyProvider = () => _updates?.PendingVersion is not null;
+        _tray.UpdateVersionProvider = () => _updates?.PendingVersion;
+        _tray.ConditionProvider = CurrentTrayCondition;
         _tray.MicrophoneMenuProvider = BuildTrayMicrophoneMenu;
         _tray.MicrophoneChosen += ChooseMicrophone;
         _tray.SoundSettingsRequested += OpenSoundSettings;
+        _tray.RestartToUpdateRequested += RestartToUpdate;
+        _tray.OpenHistoryRequested += () => OpenSettings(Scribe.Core.Settings.SettingsPage.History);
+        _tray.SetUpAiCleanupRequested += () => OpenSettings(Scribe.Core.Settings.SettingsPage.AiCleanup);
+        _tray.NoticeActionRequested += OnTrayNoticeAction;
 
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
@@ -376,21 +404,31 @@ public partial class App : Application
             });
         _controller.StateChanged += OnStateChanged;
         _controller.PipelineReported += report =>
-            Dispatcher.BeginInvoke(() => _settingsWindow?.ShowPlaygroundPipeline(report));
-        _controller.Error += message =>
+            Dispatcher.BeginInvoke(() =>
+            {
+                _settingsWindow?.ShowPlaygroundPipeline(report);
+                if (report.CleanupEnabled &&
+                    report.Cleanup?.Outcome is CleanupOutcome.Cleaned or CleanupOutcome.Unchanged)
+                {
+                    _trayFeedback.Decide(TrayFeedbackEvent.AiCleanupSuccess);
+                }
+
+                // Once per failing episode, as the controller's CleanupFailed event did (only for a failed attempt; a skip
+                // because cleanup wasn't ready never raised it). The pill's outcome says "Typed without AI cleanup" either way.
+                if (report.Cleanup?.Outcome is CleanupOutcome.Failed &&
+                    _trayFeedback.Decide(TrayFeedbackEvent.AiCleanupFailure).Channel == TrayFeedbackChannel.Notice)
+                {
+                    ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
+                }
+            });
+        _controller.Error += report =>
         {
-            // The pill says what the dictation did with the outcome on its return to idle (a microphone that would not
-            // open included), so the failure message goes to the tray only; the pill shows it there as the next step.
-            _tray!.ShowError(message);
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: true));
         };
-        _controller.Warning += warning =>
+        _controller.Warning += report =>
         {
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
-            _tray!.ShowNotification(warning.Message, isError: true);
-            if (warning.PillText is { } pillText)
-            {
-                OnRecordingWarning(warning.RecordingRevision, pillText);
-            }
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: false));
         };
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -398,7 +436,8 @@ public partial class App : Application
             // propagate back into a settings save.
             try
             {
-                _tray?.ShowNotification(message);
+                _trayFeedback.Decide(TrayFeedbackEvent.AiCleanupSetupChanged);
+                ShowTrayNotice(TrayNotices.AiCleanupActivation(message));
             }
             catch (Exception ex)
             {
@@ -411,15 +450,7 @@ public partial class App : Application
             // The failed dictation survives in LastTranscriptStore; a balloon closes the loop so
             // the user knows the tray menu can recover it. Best-effort: a notification failure
             // must never throw back into the dictation processing path.
-            try
-            {
-                _tray?.ShowNotification(
-                    "Dictation could not be inserted. Use the tray menu to copy it.", isError: true);
-            }
-            catch (Exception ex)
-            {
-                log.LogWarning("Failed to show the injection recovery notification ({Failure}).", FailureShape.Describe(ex));
-            }
+            log.LogDebug("Injection failure event received; controller error owns user feedback.");
         };
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
@@ -439,20 +470,26 @@ public partial class App : Application
                 log.LogInformation(
                     "No transcription model is installed; waiting for a Settings selection ({Failure}).",
                     FailureShape.Describe(ex));
-                _tray!.ShowInfo("No speech model is installed. Choose one in Settings.");
+                SetTrayCondition(TrayCondition.NoSpeechModel);
+                ShowTrayNotice(TrayNotices.NoSpeechModel());
             }
             catch (Exception ex)
             {
                 log.LogError("Failed to warm-load the transcription engine: {Failure}", FailureShape.DescribeWithStack(ex));
-                _tray!.ShowError("model failed to load, see logs");
+                SetTrayCondition(TrayCondition.SpeechModelFailed);
+                ShowTrayNotice(TrayNotices.SpeechModelFailed());
             }
         });
 
         // Before Start(): the startup reclaim of an earlier session's Foundry Local leftovers runs in the
         // background right after the first Configure, which Start() makes.
-        services.GetRequiredService<ITextCleanupService>().FoundryStorageReclaimed += OnFoundryStorageReclaimed;
+        var cleanupService = services.GetRequiredService<ITextCleanupService>();
+        cleanupService.FoundryStorageReclaimed += OnFoundryStorageReclaimed;
+        cleanupService.StatusChanged += RefreshFoundryDownloadedModel;
 
         _controller.Start();
+        AccentContrastResources.UseSource(_controller.CurrentSettings.AccentSource);
+        RefreshFoundryDownloadedModel();
 
         // Settings-dependent wiring goes AFTER Start(): CurrentSettings returns compiled defaults
         // until Start() loads the persisted settings, so reading it earlier silently ignored the
@@ -462,6 +499,8 @@ public partial class App : Application
         // pushed here before the warmup can arm it, and again with every state change.
         _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes);
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
+        _ = SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
+        UpdateTrayShortcut(_controller.CurrentSettings);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
         // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
         // later, ShowRecording launches it lazily. A warmed helper left unused is suspended after the
@@ -530,23 +569,17 @@ public partial class App : Application
         var database = services.GetRequiredService<ScribeDatabase>();
         if (database.RepairedAtStartup)
         {
-            var (notice, isError) = DatabaseRepairNotice.Compose(
+            var (notice, _) = DatabaseRepairNotice.Compose(
                 database.SettingsLostInRepair, database.DictionaryLostInRepair);
-            if (isError)
-            {
-                _tray.ShowNotification(notice, isError: true);
-            }
-            else
-            {
-                _tray.ShowInfo(notice);
-            }
+            ShowTrayNotice(TrayNotices.DatabaseRepaired(notice));
         }
 
         // --- Onboarding (first-run welcome) -------------------------------------------------
         // Tray-only app has no main window, so a brand-new user sees nothing and may never learn
         // the push-to-talk gesture. Show a one-time welcome once settings are loaded, then persist
         // the flag so it never reappears. Kept as a self-contained block for a clean merge.
-        if (!_controller.CurrentSettings.HasCompletedFirstRun)
+        var settingsLoadFailed = settingsRepository.LastLoadFailed;
+        if (FirstRunWelcome.ShouldShow(_controller.CurrentSettings.HasCompletedFirstRun, settingsLoadFailed))
         {
             ShowWelcome();
             var repo = services.GetRequiredService<ISettingsRepository>();
@@ -569,16 +602,27 @@ public partial class App : Application
             else
             {
                 // The stored settings were unreadable, or a repair lost them: the welcome flag is not written over
-                // them, and the tooltip says so in words true for both.
-                _tray.ShowError(SavedSettingsNotice.AtStartup);
+                // them, and the tray says so in words true for both.
+                SetTrayCondition(TrayCondition.DefaultSettings);
+                ShowTrayNotice(TrayNotices.SavedSettingsStartup());
             }
+        }
+        else if (settingsLoadFailed)
+        {
+            SetTrayCondition(TrayCondition.DefaultSettings);
+            ShowTrayNotice(TrayNotices.SavedSettingsStartup());
         }
         // --- End onboarding -----------------------------------------------------------------
 
         // Update checks are user-initiated from Settings so the offline-first startup path performs
         // no network access. Previously staged updates are detected by the same manual check.
         _updates = new UpdateService(services.GetRequiredService<ILogger<UpdateService>>());
-        _updates.UpdateReady += message => _tray?.ShowInfo(message);
+        _updates.UpdateReady += message =>
+        {
+            var version = _updates.PendingVersion;
+            _tray?.SetUpdateReady(true, version);
+            ShowTrayNotice(TrayNotices.UpdateReady(version ?? UpdateService.RunningVersion));
+        };
         _updates.ProbePendingLocal();
 
         // Finish synchronous initialization before yielding to WinRT. Store installs need a
@@ -647,9 +691,10 @@ public partial class App : Application
         try
         {
             var log = LogSink?.CurrentStatus();
+            var notice = StartupNotices.StartupFailure(log is { } status && status.Healthy ? status.Path : null);
             MessageBox.Show(
-                Scribe.Core.Lifecycle.StartupFailureNotice.Compose(log is { } status && status.Healthy ? status.Path : null),
-                Scribe.Core.Lifecycle.StartupFailureNotice.Title,
+                notice.Body,
+                notice.Title,
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -659,18 +704,26 @@ public partial class App : Application
         }
     }
 
-    private static bool HasSettingsSwitch(IEnumerable<string> args) =>
-        args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase));
+    private static Scribe.Core.Settings.SettingsPage RequestedSettingsPage(IEnumerable<string> args, out bool hasSettingsSwitch)
+    {
+        hasSettingsSwitch = Scribe.Core.Settings.SettingsNavigation.TryParseSettingsArgument(args, out var page);
+        return hasSettingsSwitch ? page : Scribe.Core.Settings.SettingsPage.Dictation;
+    }
 
     private static void ShowFatalDataPathNotice(Exception exception)
     {
         try
         {
+            var folder = exception switch
+            {
+                AppPathsCreationException creation => creation.PreferredRootDir,
+                IsolatedDataFolderException isolated => isolated.RootDir,
+                _ => null,
+            };
+            var notice = StartupNotices.DataFolderProblem(folder);
             MessageBox.Show(
-                "Scribe could not create a writable data folder and must close.\n\n" +
-                $"{exception.Message}\n\n" +
-                "Check disk space, folder permissions, antivirus rules, and whether a file is blocking the ScribeData folder.",
-                "Scribe data folder problem",
+                notice.Body,
+                notice.Title,
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -684,9 +737,10 @@ public partial class App : Application
     {
         try
         {
+            var notice = StartupNotices.NewerDatabase();
             MessageBox.Show(
-                NewerDatabaseSchemaException.UserMessage,
-                "Scribe",
+                notice.Body,
+                notice.Title,
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }
@@ -700,14 +754,10 @@ public partial class App : Application
     {
         try
         {
+            var notice = StartupNotices.TemporaryDataFolder(paths.PreferredRootDir, paths.RootDir);
             MessageBox.Show(
-                "Scribe could not use its usual data folder:\n" +
-                $"{paths.PreferredRootDir}\n\n" +
-                $"{paths.CreationFailureMessage}\n\n" +
-                "Scribe is running with temporary data and logs here:\n" +
-                $"{paths.RootDir}\n\n" +
-                "Open Settings, About to copy the active log and data paths. Check disk space, folder permissions, antivirus rules, and whether a file is blocking the ScribeData folder.",
-                "Scribe is using a fallback data folder",
+                notice.Body,
+                notice.Title,
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }
@@ -721,7 +771,7 @@ public partial class App : Application
     /// Raises the cross-process signal that asks the running instance to show Settings. Returns
     /// false when no instance is listening, so the caller can fall back to the notice.
     /// </summary>
-    private static bool TrySignalShowSettings()
+    private static bool TrySignalShowSettings(Scribe.Core.Settings.SettingsPage page)
     {
         try
         {
@@ -732,6 +782,7 @@ public partial class App : Application
 
             using (signal)
             {
+                TryWriteSettingsRequest(page);
                 return signal.Set();
             }
         }
@@ -750,6 +801,7 @@ public partial class App : Application
     {
         try
         {
+            _showSettingsPayload = MemoryMappedFile.CreateOrOpen(ShowSettingsPayloadName, ShowSettingsPayloadBytes);
             _showSettingsSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSettingsEventName);
             _showSettingsRegistration = ThreadPool.RegisterWaitForSingleObject(
                 _showSettingsSignal,
@@ -757,7 +809,8 @@ public partial class App : Application
                 {
                     if (!timedOut)
                     {
-                        Dispatcher.BeginInvoke(new Action(OpenSettings));
+                        var page = ReadSettingsRequestPage();
+                        Dispatcher.BeginInvoke(new Action(() => OpenSettings(page)));
                     }
                 },
                 state: null,
@@ -769,6 +822,53 @@ public partial class App : Application
             // Losing the listener only costs the shortcut; the tray menu still opens Settings.
             _showSettingsSignal = null;
             _showSettingsRegistration = null;
+            _showSettingsPayload?.Dispose();
+            _showSettingsPayload = null;
+        }
+    }
+
+    private static void TryWriteSettingsRequest(Scribe.Core.Settings.SettingsPage page)
+    {
+        try
+        {
+            using var map = MemoryMappedFile.OpenExisting(ShowSettingsPayloadName);
+            using var accessor = map.CreateViewAccessor(0, ShowSettingsPayloadBytes);
+            var bytes = Encoding.UTF8.GetBytes(page.ToString());
+            var length = Math.Min(bytes.Length, ShowSettingsPayloadBytes - sizeof(int));
+            accessor.Write(0, length);
+            accessor.WriteArray(sizeof(int), bytes, 0, length);
+        }
+        catch
+        {
+            // The event still opens Dictation in the running instance.
+        }
+    }
+
+    private Scribe.Core.Settings.SettingsPage ReadSettingsRequestPage()
+    {
+        try
+        {
+            if (_showSettingsPayload is null)
+            {
+                return Scribe.Core.Settings.SettingsPage.Dictation;
+            }
+
+            using var accessor = _showSettingsPayload.CreateViewAccessor(0, ShowSettingsPayloadBytes);
+            var length = accessor.ReadInt32(0);
+            if (length <= 0 || length > ShowSettingsPayloadBytes - sizeof(int))
+            {
+                return Scribe.Core.Settings.SettingsPage.Dictation;
+            }
+
+            var bytes = new byte[length];
+            accessor.ReadArray(sizeof(int), bytes, 0, length);
+            return Scribe.Core.Settings.SettingsNavigation.TryParsePage(Encoding.UTF8.GetString(bytes), out var page)
+                ? page
+                : Scribe.Core.Settings.SettingsPage.Dictation;
+        }
+        catch
+        {
+            return Scribe.Core.Settings.SettingsPage.Dictation;
         }
     }
 
@@ -780,7 +880,8 @@ public partial class App : Application
     private void ShowSingleInstanceNotice()
     {
         var dialog = ThemedNotice.Create(
-            "Scribe", "Scribe is already running. Look for the microphone icon in the system tray.");
+            StartupNotices.AlreadyRunning().Title,
+            StartupNotices.AlreadyRunning().Body);
 
         var frame = new System.Windows.Threading.DispatcherFrame();
         _ = dialog.ShowDialogAsync().ContinueWith(
@@ -877,20 +978,43 @@ public partial class App : Application
     /// it belongs to is still what the pill shows. Showing a warning puts the pill in its recording state, so one that ran
     /// after a pause or a stop had been shown would bring back a recording pill that nothing would ever hide.
     /// </summary>
-    private void OnRecordingWarning(long recordingRevision, string reason)
+    private void ShowRecordingWarningOrNotice(DictationProblemReport report, string reason, DictationProblemNotice notice)
     {
-        if (recordingRevision <= 0)
+        if (_dictationState is not { } relay)
         {
-            return; // the recording was already over when the warning was raised
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
         }
 
-        _dictationState?.PublishIfCurrent(recordingRevision, () =>
+        // The same revision twice on purpose: here only a warning for a recording that was already over (revision 0) is
+        // decided. Whether its recording is still the one shown is decided by PublishIfCurrent below, in queue order after
+        // that recording's own change has rendered; reading the relay's last revision here could run ahead of it.
+        if (DictationProblemRouting.DecideRecordingWarning(
+                report.Problem,
+                recordingIndicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
+                report.RecordingRevision,
+                report.RecordingRevision) == DictationProblemSurface.Notice)
         {
-            if (_controller?.CurrentSettings.ShowOverlay == true)
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
+        }
+
+        // The indicator is judged again when the warning's turn comes: a Save can turn it off between here and there, and
+        // then the notice is the one place the warning shows.
+        relay.PublishIfCurrent(
+            report.RecordingRevision,
+            () =>
             {
-                _overlay?.ShowRecordingWarning(reason);
-            }
-        });
+                if (_controller?.CurrentSettings.ShowOverlay == true)
+                {
+                    _overlay?.ShowRecordingWarning(reason);
+                }
+                else
+                {
+                    ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+                }
+            },
+            () => ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action)));
     }
 
     /// <summary>
@@ -901,6 +1025,7 @@ public partial class App : Application
     /// </summary>
     private void OnFoundryStorageReclaimed(FoundryStorageReclaim reclaim)
     {
+        RefreshFoundryDownloadedModel();
         try
         {
             var notice = FoundryStorageReclaimNotice.Format(reclaim);
@@ -921,7 +1046,7 @@ public partial class App : Application
             {
                 try
                 {
-                    _tray?.ShowNotification(notice);
+                    ShowTrayNotice(TrayNotices.FoundryStorageReclaimed(notice));
                 }
                 catch (Exception ex)
                 {
@@ -958,7 +1083,7 @@ public partial class App : Application
             if (repo.LastLoadFailed)
             {
                 _tray?.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
-                _tray?.ShowError(SavedSettingsNotice.FromTray("AI cleanup"));
+                ShowTrayNotice(TrayNotices.SavedSettingsTray("AI cleanup"));
                 return;
             }
 
@@ -989,13 +1114,16 @@ public partial class App : Application
     {
         // The switch changes no vocabulary, so nothing here waits for the generation ApplySettings asks for.
         _ = _controller?.ApplySettings(stored);
+        RefreshFoundryDownloadedModel();
         if (!superseded)
         {
             _settingsWindow?.AdoptExternalAiCleanup(stored.EnableAiCleanup, revision);
         }
 
+        _settingsWindow?.AdoptStoredSettings(stored);
         _tray?.SetAiCleanupChecked(stored.EnableAiCleanup);
-        _tray?.ShowInfo(stored.EnableAiCleanup ? "AI cleanup on" : "AI cleanup off");
+        ShowTrayNotice(TrayNotices.AiCleanupActivation(
+            stored.EnableAiCleanup ? "AI cleanup is on. Scribe uses the configured AI cleanup provider." : "AI cleanup is off. Scribe types what it hears, with your dictionary and snippets."));
     }
 
     private void OnAiCleanupToggleFailed(Exception ex, long revision)
@@ -1013,7 +1141,7 @@ public partial class App : Application
         var current = _controller?.CurrentSettings.EnableAiCleanup ?? false;
         _settingsWindow?.AdoptExternalAiCleanup(current, revision);
         _tray?.SetAiCleanupChecked(current);
-        _tray?.ShowError("couldn't toggle AI cleanup");
+        ShowTrayNotice(TrayNotices.AiCleanupChangeFailed());
     }
 
     /// <summary>
@@ -1049,7 +1177,7 @@ public partial class App : Application
             var repo = _host!.Services.GetRequiredService<ISettingsRepository>();
             if (repo.LastLoadFailed)
             {
-                _tray?.ShowError(SavedSettingsNotice.FromTray("the microphone"));
+                ShowTrayNotice(TrayNotices.SavedSettingsTray("the microphone"));
                 return;
             }
 
@@ -1093,7 +1221,9 @@ public partial class App : Application
             _settingsWindow?.AdoptExternalMicrophone(storedChoice, revision);
         }
 
-        _tray?.ShowInfo($"dictating with {Scribe.Core.Settings.MicrophoneChoices.Describe(storedChoice)}");
+        _settingsWindow?.AdoptStoredSettings(stored);
+
+        // The check mark is the feedback for a successful microphone change.
     }
 
     private void OnMicrophoneChoiceFailed(Exception ex, long revision)
@@ -1115,7 +1245,7 @@ public partial class App : Application
                 Scribe.Core.Settings.MicrophoneSelection.From(controller.CurrentSettings), revision);
         }
 
-        _tray?.ShowError("couldn't change the microphone");
+        ShowTrayNotice(TrayNotices.MicrophoneChangeFailed());
     }
 
     // Only the choice this word is about: a newer tray choice keeps showing until its own word arrives.
@@ -1125,6 +1255,422 @@ public partial class App : Application
         {
             _pendingTrayMicrophone = null;
         }
+    }
+
+    private void ShowTrayNotice(TrayNotice notice) => _tray?.ShowNotice(notice);
+
+    private void SetTrayCondition(TrayCondition condition)
+    {
+        _trayCondition = condition;
+        _tray?.SetCondition(condition, _updates?.PendingVersion);
+    }
+
+    private TrayCondition CurrentTrayCondition() => _trayCondition;
+
+    private bool HasRecentDictationForTray()
+    {
+        if (_host is null)
+        {
+            return false;
+        }
+
+        return _host.Services.GetRequiredService<LastTranscriptStore>().GetRecent().Count > 0;
+    }
+
+    private TrayAiCleanupItem DescribeTrayAiCleanup()
+    {
+        var settings = _controller?.CurrentSettings ?? AppSettings.CreateDefault();
+        var status = _host?.Services.GetRequiredService<ITextCleanupService>().Status ?? CleanupStatus.Disabled;
+        var recovered = _host?.Services.GetRequiredService<ISettingsRepository>().LastLoadFailed ?? false;
+        var setupComplete = settings.AiCleanupProvider != CleanupProvider.FoundryLocal || _foundryDownloadedModel;
+        return TrayAiCleanup.Describe(settings, setupComplete, status, recovered);
+    }
+
+    private void RefreshFoundryDownloadedModel()
+    {
+        if (_host is null)
+        {
+            return;
+        }
+
+        var services = _host.Services;
+        var revision = _foundryRefresh.Next();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var hasModel = FoundryLocalStorage.HoldsDownloadedModel(services.GetRequiredService<AppPaths>());
+                if (Dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (!_foundryRefresh.IsLatest(revision))
+                    {
+                        return;
+                    }
+
+                    _foundryDownloadedModel = hasModel;
+                    if (_tray is not null)
+                    {
+                        _tray.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _appLog?.LogDebug("Could not inspect the Foundry Local model cache ({Failure}).", FailureShape.Describe(ex));
+            }
+        });
+    }
+
+    private void UpdateTrayShortcut(AppSettings settings)
+    {
+        _tray?.SetShortcutSentence(HotkeyText.SentenceName(settings.Hotkey), settings.Hotkey.Mode);
+    }
+
+    private async Task SeedRecentDictationsAsync(IServiceProvider services, HistoryDeletionNotifier deletions)
+    {
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var revision = deletions.Revision;
+            try
+            {
+                var recent = await Task.Run(() => services.GetRequiredService<IHistoryRepository>()
+                    .GetRecent(LastTranscriptStore.Capacity)
+                    .Where(h => !string.IsNullOrWhiteSpace(h.Text))
+                    .ToList());
+
+                if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
+                {
+                    return;
+                }
+
+                var seeded = await Dispatcher.InvokeAsync(() =>
+                    services.GetRequiredService<LastTranscriptStore>().SeedHistory(recent, revision, () => deletions.Revision));
+                if (seeded)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _appLog?.LogDebug("Could not seed recent dictations from history ({Failure}).", FailureShape.Describe(ex));
+                return;
+            }
+        }
+    }
+
+    private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
+    {
+        // Posted from the dictation path, so it can run after shutdown began; nobody is left to read a notice then.
+        if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
+        {
+            return;
+        }
+
+        var settings = _controller?.CurrentSettings;
+        var mode = report.ShortcutMode;
+
+        // The shortcut that started the dictation names the key: the one without AI cleanup has its own key and mode.
+        var notice = DictationProblemText.Describe(
+            report,
+            mode,
+            (report.Shortcut ?? settings?.Hotkey) is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
+        var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
+        if (routing == DictationProblemSurface.PillAndNotice)
+        {
+            // Only a notice that offers Copy last dictation binds the entry it copies: a no-model notice (Open Settings)
+            // must not rebind a Copy notice still on screen to whatever is newest now.
+            if (notice.Action == TrayNoticeAction.CopyLastDictation)
+            {
+                _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            }
+
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
+        }
+
+        if (controllerError && routing == DictationProblemSurface.PillOutcome)
+        {
+            return;
+        }
+
+        if (!controllerError && routing == DictationProblemSurface.RecordingPill)
+        {
+            ShowRecordingWarningOrNotice(report, DictationProblemText.PillLine(report, mode) ?? notice.Title, notice);
+            return;
+        }
+
+        if (routing == DictationProblemSurface.Notice || routing == DictationProblemSurface.PillOutcome)
+        {
+            if (notice.Action == TrayNoticeAction.CopyLastDictation)
+            {
+                _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            }
+
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+        }
+    }
+
+    private QuickAddVocabulary BuildQuickAddVocabulary(IServiceProvider services)
+    {
+        var vocabulary = services.GetRequiredService<ILibraryVocabularySource>().Current;
+        var libraries = new[]
+        {
+            new DictionaryLibrary("current-word-packs", "Word packs", string.Empty, null, BuiltIn: true, vocabulary.Entries),
+        };
+        var draft = _settingsWindow is { IsDraftDiscardedForAppExit: false } window ? window : null;
+        var personal = draft is not null
+            ? draft.CurrentDictionaryEntries()
+            : services.GetRequiredService<IDictionaryRepository>().GetAll();
+        var pending = draft?.PendingQuickAddSpokenForms() ?? [];
+        return QuickAddVocabulary.Compose(personal, pending, libraries, ["current-word-packs"]);
+    }
+
+    private void OpenSettingsForDictionary(string spoken)
+    {
+        OpenSettings(Scribe.Core.Settings.SettingsPage.Dictionary, "DictionaryGrid");
+        _settingsWindow?.ShowDictionaryEntry(spoken);
+    }
+
+    private void AddQuickAddTermInSettings(string spoken)
+    {
+        OpenSettings(Scribe.Core.Settings.SettingsPage.Dictionary, "DictionaryGrid");
+        _settingsWindow?.AddDictionaryDraft(spoken);
+    }
+
+    private void FixQuickAddTermInstead(string spoken)
+    {
+        if (_quickAddWindow is null || string.IsNullOrWhiteSpace(spoken))
+        {
+            return;
+        }
+
+        _quickAddWindow.UseHeardText(spoken);
+    }
+
+    private async void TrayQuit()
+    {
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.TrayQuit, () =>
+        {
+            Shutdown();
+            return Task.CompletedTask;
+        }));
+    }
+
+    private async void RestartToUpdate()
+    {
+        await RunAppExitOperationAsync(() => RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, () =>
+        {
+            if (_updates?.ApplyNowAndRestart() != true)
+            {
+                ShowTrayNotice(TrayNotices.RestartFailed());
+            }
+
+            return Task.CompletedTask;
+        }));
+    }
+
+    private Task RunAppExitOperationAsync(Func<Task> operation)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(() => RunAppExitOperationAsync(operation)).Task.Unwrap();
+        }
+
+        if (_appExitOperation is { IsCompleted: false } existing)
+        {
+            return existing;
+        }
+
+        // Reserved before the operation starts: its prompts are modal and pump messages, and a Quit or Restart clicked
+        // meanwhile must join this exit, not start a second one that runs the restart again.
+        var reservation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _appExitOperation = reservation.Task;
+
+        async Task RunReservedAsync()
+        {
+            try
+            {
+                await operation();
+                reservation.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                reservation.TrySetException(ex);
+            }
+            finally
+            {
+                if (ReferenceEquals(_appExitOperation, reservation.Task))
+                {
+                    _appExitOperation = null;
+                }
+            }
+        }
+
+        _ = RunReservedAsync();
+        return reservation.Task;
+    }
+
+    private async Task RunCloseGuardsThenAsync(CloseTrigger trigger, Func<Task> action)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(() => RunCloseGuardsThenAsync(trigger, action)).Task.Unwrap();
+            return;
+        }
+
+        var state = CurrentAppExitCloseState(trigger, includeSettingsSave: true);
+        var step = AppExitCloseGuard.First(state);
+        while (step is AppExitCloseStep.Settings or AppExitCloseStep.QuickAdd)
+        {
+            var accepted = step switch
+            {
+                AppExitCloseStep.Settings => _settingsWindow is null || await _settingsWindow.RequestAppCloseAsync(trigger),
+                AppExitCloseStep.QuickAdd => _quickAddWindow is null || await _quickAddWindow.RequestAppCloseAsync(),
+                _ => true,
+            };
+            var result = accepted ? AppExitCloseStepResult.Saved : AppExitCloseStepResult.KeepEditing;
+            state = step == AppExitCloseStep.Settings
+                ? CurrentAppExitCloseState(trigger, includeSettingsSave: false, refreshQuickAdd: true)
+                : CurrentAppExitCloseState(trigger, includeSettingsSave: false);
+            step = AppExitCloseGuard.Next(step, result, state);
+        }
+
+        if (step == AppExitCloseStep.Proceed)
+        {
+            await action();
+        }
+    }
+
+    private async Task RunAboutUpdateGuardThenAsync(Func<Task> action)
+    {
+        await RunAppExitOperationAsync(async () =>
+        {
+            var closeSettingsAfterAction = false;
+            if (_settingsWindow is { } settings)
+            {
+                var result = await settings.RequestUpdateRestartWithoutClosingAsync();
+                if (result == SettingsUpdateRestartGuardResult.Canceled)
+                {
+                    return;
+                }
+
+                closeSettingsAfterAction = result == SettingsUpdateRestartGuardResult.ProceedCloseAfterAction;
+            }
+
+            // With Discard chosen, Settings stays open to own the update's UI, but its draft no longer counts, so Add to
+            // dictionary is judged against what is stored (IsDraftDiscardedForAppExit) and asks about a correction the
+            // discarded draft was blocking.
+            var proceeded = false;
+            try
+            {
+                if (_quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true &&
+                    !await _quickAddWindow.RequestAppCloseAsync())
+                {
+                    return;
+                }
+
+                proceeded = true;
+                await action();
+            }
+            finally
+            {
+                if (_settingsWindow is { } liveSettings)
+                {
+                    if (proceeded && closeSettingsAfterAction)
+                    {
+                        liveSettings.CloseAfterAppUpdateDiscard();
+                    }
+                    else
+                    {
+                        // The update didn't go ahead, so nothing was discarded: the draft counts again.
+                        liveSettings.IsDraftDiscardedForAppExit = false;
+                    }
+                }
+            }
+        });
+    }
+
+    private AppExitCloseState CurrentAppExitCloseState(CloseTrigger trigger, bool includeSettingsSave, bool refreshQuickAdd = false)
+    {
+        var settingsUnsaved = _settingsWindow?.HasAppCloseChanges(trigger) == true
+            || includeSettingsSave && _settingsWindow?.HasAppCloseSaveInProgress == true;
+        var quickAddUnsaved = refreshQuickAdd
+            ? _quickAddWindow?.RefreshAppCloseVocabularyAndHasCorrection() == true
+            : _quickAddWindow?.HasAppCloseCorrection() == true;
+        return new AppExitCloseState(settingsUnsaved, quickAddUnsaved);
+    }
+
+    private void OnTrayNoticeAction(TrayNoticeAction action)
+    {
+        switch (action)
+        {
+            case TrayNoticeAction.OpenSettings:
+                OpenSettings(Scribe.Core.Settings.SettingsPage.Dictation);
+                break;
+            case TrayNoticeAction.OpenSettingsAiCleanup:
+                OpenSettings(Scribe.Core.Settings.SettingsPage.AiCleanup);
+                break;
+            case TrayNoticeAction.OpenSettingsDictionary:
+                OpenSettings(Scribe.Core.Settings.SettingsPage.Dictionary);
+                break;
+            case TrayNoticeAction.OpenSettingsDiagnostics:
+                OpenSettings(Scribe.Core.Settings.SettingsPage.Diagnostics);
+                break;
+            case TrayNoticeAction.OpenSettingsHistory:
+                OpenSettings(Scribe.Core.Settings.SettingsPage.History);
+                break;
+            case TrayNoticeAction.CopyLastDictation:
+            case TrayNoticeAction.RetryCopy:
+                CopyNoticeDictation();
+                break;
+            case TrayNoticeAction.OpenSoundSettings:
+                OpenSoundSettings();
+                break;
+        }
+    }
+
+    private void CopyNoticeDictation()
+    {
+        if (_host is null)
+        {
+            return;
+        }
+
+        var id = _noticeCopyEntryId;
+        if (id is null)
+        {
+            CopyLastDictation();
+            return;
+        }
+
+        var text = _host.Services.GetRequiredService<LastTranscriptStore>().Get(id.Value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            ShowTrayNotice(TrayNotices.NothingToCopy());
+            return;
+        }
+
+        ShowTrayNotice(ScribeClipboard.SetText(text) ? TrayNotices.CopiedLastDictation() : TrayNotices.ClipboardBusy());
+    }
+
+    private void SettingsWindow_ShowWelcomeRequested(object? sender, EventArgs e) => ShowWelcome();
+
+    private void OnHistoryDeleted(HistoryDeletion deletion)
+    {
+        if (_host is null)
+        {
+            return;
+        }
+
+        var store = _host.Services.GetRequiredService<LastTranscriptStore>();
+        store.ApplyDeletion(deletion);
+        var quickAdd = _quickAddWindow;
+        quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ApplyHistoryDeletion(deletion));
     }
 
     /// <summary>
@@ -1148,7 +1694,7 @@ public partial class App : Application
                 // Best effort, like the notice below.
             }
 
-            _tray?.ShowNotification("Couldn't open the Windows sound settings. Open Settings, System, Sound.", isError: true);
+            ShowTrayNotice(TrayNotices.SoundSettingsFailed());
         }
     }
 
@@ -1185,10 +1731,18 @@ public partial class App : Application
     /// it always reflects the latest persisted state; on save it calls back into the controller to
     /// apply the new binding and dictionary live.
     /// </summary>
-    private void OpenSettings() => Dispatcher.Invoke(() =>
+    private void OpenSettings() => OpenSettings(Scribe.Core.Settings.SettingsPage.Dictation);
+
+    private void OpenSettings(Scribe.Core.Settings.SettingsPage page, string? focusName = null) => Dispatcher.Invoke(() =>
     {
         if (_settingsWindow is not null)
         {
+            _settingsWindow.ShowPage(page, focusName);
+            if (_settingsWindow.WindowState == WindowState.Minimized)
+            {
+                _settingsWindow.WindowState = WindowState.Normal;
+            }
+
             _settingsWindow.Activate();
             return;
         }
@@ -1221,6 +1775,7 @@ public partial class App : Application
                 services.GetRequiredService<ITranscriptionModelInstaller>(),
                 services.GetRequiredService<AppPaths>(),
                 services.GetRequiredService<StartupRegistration>(),
+                services.GetRequiredService<IOptions<TranscriptionOptions>>(),
                 position => _overlay?.Preview(position),
                 settings =>
                 {
@@ -1233,20 +1788,30 @@ public partial class App : Application
                     _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
                     _overlay?.SetPosition(settings.OverlayPosition);
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
+                    AccentContrastResources.UseSource(settings.AccentSource);
+                    UpdateTrayShortcut(settings);
+                    RefreshFoundryDownloadedModel();
                     return applying;
                 },
                 () => _controller!.ReloadVocabulary(),
                 services.GetRequiredService<ILibraryVocabularySource>(),
+                _textScale,
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
-                services.GetRequiredService<SessionDiagnostics>());
+                RunAboutUpdateGuardThenAsync,
+                () => ShowTrayNotice(TrayNotices.RestartFailed()),
+                services.GetRequiredService<SessionDiagnostics>(),
+                services.GetRequiredService<HistoryDeletionNotifier>());
             _settingsWindow.Closed += (_, _) =>
             {
                 audio.InputDevicesChanged -= OnInputDevicesChanged;
+                _settingsWindow.ShowWelcomeRequested -= SettingsWindow_ShowWelcomeRequested;
                 _settingsWindow = null;
                 foreground.Dispose();
             };
+            _settingsWindow.ShowWelcomeRequested += SettingsWindow_ShowWelcomeRequested;
             _settingsWindow.Show();
+            _settingsWindow.ShowPage(page, focusName);
             _settingsWindow.Activate();
         }
         catch
@@ -1267,10 +1832,12 @@ public partial class App : Application
             return;
         }
 
+        LastTranscriptStore? store = null;
         try
         {
             var services = _host.Services;
-            var store = services.GetRequiredService<LastTranscriptStore>();
+            store = services.GetRequiredService<LastTranscriptStore>();
+            var copyId = store.CurrentId();
             var text = store.Get();
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -1279,18 +1846,24 @@ public partial class App : Application
 
             if (string.IsNullOrWhiteSpace(text))
             {
-                _tray.ShowNotification("No dictation is available to copy.");
+                ShowTrayNotice(TrayNotices.NothingToCopy());
                 return;
             }
 
-            Clipboard.SetText(text);
-            _tray.ShowNotification("Copied the last dictation.");
+            var copied = ScribeClipboard.SetText(text);
+            if (!copied)
+            {
+                _noticeCopyEntryId = copyId;
+            }
+
+            ShowTrayNotice(copied ? TrayNotices.CopiedLastDictation() : TrayNotices.ClipboardBusy());
         }
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning("Copying the last dictation failed ({Failure}).", FailureShape.Describe(ex));
-            _tray.ShowNotification("Couldn't copy the last dictation.", isError: true);
+            _noticeCopyEntryId = store?.CurrentId();
+            ShowTrayNotice(TrayNotices.ClipboardBusy());
         }
     });
 
@@ -1308,16 +1881,39 @@ public partial class App : Application
 
         try
         {
-            // Clipboard.SetText can throw under clipboard contention (another app holding the
-            // clipboard open), so mirror CopyLastDictation: log and notify, never crash the tray.
-            Clipboard.SetText(text);
-            _tray.ShowNotification("Copied the dictation.");
+            ShowTrayNotice(ScribeClipboard.SetText(text) ? TrayNotices.CopiedRecentDictation() : TrayNotices.ClipboardBusy());
         }
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning("Copying a recent dictation failed ({Failure}).", FailureShape.Describe(ex));
-            _tray.ShowNotification("Couldn't copy the dictation.", isError: true);
+            ShowTrayNotice(TrayNotices.ClipboardBusy());
+        }
+    });
+
+    private void CopyRecentDictation(Guid id, string text) => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var copied = ScribeClipboard.SetText(text);
+            if (!copied)
+            {
+                _noticeCopyEntryId = id;
+            }
+
+            ShowTrayNotice(copied ? TrayNotices.CopiedRecentDictation() : TrayNotices.ClipboardBusy());
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning("Copying a recent dictation failed ({Failure}).", FailureShape.Describe(ex));
+            _noticeCopyEntryId = id;
+            ShowTrayNotice(TrayNotices.ClipboardBusy());
         }
     });
 
@@ -1352,7 +1948,7 @@ public partial class App : Application
             {
                 _host.Services.GetRequiredService<ILogger<App>>()
                     .LogWarning("Opening the Store web listing failed ({Failure}).", FailureShape.Describe(fallbackError));
-                _tray.ShowNotification("Couldn't open the Microsoft Store.", isError: true);
+                ShowTrayNotice(new TrayNotice("Couldn't open Microsoft Store", "Open Scribe from the Microsoft Store app, then search for Scribe AI.", TrayNoticeKind.Error));
             }
         }
     });
@@ -1370,14 +1966,15 @@ public partial class App : Application
 
         try
         {
-            Clipboard.SetText(ScribeLinks.StoreWeb);
-            _tray.ShowNotification("Copied the Scribe Store link.");
+            ShowTrayNotice(ScribeClipboard.SetText(ScribeLinks.StoreWeb)
+                ? new TrayNotice("Copied", "The Scribe link is on the clipboard.", TrayNoticeKind.Info)
+                : TrayNotices.ClipboardBusy());
         }
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning("Copying the Store link failed ({Failure}).", FailureShape.Describe(ex));
-            _tray.ShowNotification("Couldn't copy the Store link.", isError: true);
+            ShowTrayNotice(TrayNotices.ClipboardBusy());
         }
     });
 
@@ -1390,7 +1987,7 @@ public partial class App : Application
 
         if (Interlocked.Exchange(ref _learningFromHistory, 1) != 0)
         {
-            _tray.ShowNotification("Already learning from recent dictations.");
+            ShowTrayNotice(new TrayNotice("Learning already started", "Scribe is already checking your recent dictations.", TrayNoticeKind.Info));
             return;
         }
 
@@ -1426,19 +2023,20 @@ public partial class App : Application
             }
 
             var learnedNotice = $"Learned {learned.Count} new {(learned.Count == 1 ? "term" : "terms")} from your dictation history";
-            _tray.ShowNotification(
+            ShowTrayNotice(new TrayNotice(
+                learned.Count == 0 ? "No words found" : applied ? "Words learned" : "Saved, but not in use yet",
                 learned.Count == 0
-                    ? "No new recurring terms were found."
+                    ? "No new recurring words were found."
                     : applied
-                        ? learnedNotice + "."
-                        : VocabularyNotice.SavedButNotApplied(learnedNotice),
-                isError: !applied);
+                        ? "Scribe added words from your dictation history."
+                        : "Scribe saved the words but couldn't start using them yet. Quit and reopen Scribe to use them.",
+                applied ? TrayNoticeKind.Info : TrayNoticeKind.Warning));
         }
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogError("Failed to learn dictionary terms from history: {Failure}", FailureShape.DescribeWithStack(ex));
-            _tray.ShowNotification("Couldn't learn from history. See the Scribe log for details.", isError: true);
+            ShowTrayNotice(new TrayNotice("Couldn't learn from history", "Try again, or add words in Settings, Dictionary.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsDictionary));
         }
         finally
         {
@@ -1460,7 +2058,11 @@ public partial class App : Application
         }
 
         var gesture = HotkeyCapture.Gesture(_controller?.CurrentSettings);
-        _welcomeWindow = new Onboarding.WelcomeWindow(gesture, OpenSettings);
+        _welcomeWindow = new Onboarding.WelcomeWindow(
+            gesture,
+            _textScale,
+            () => OpenSettings(Scribe.Core.Settings.SettingsPage.Dictation),
+            () => OpenSettings(Scribe.Core.Settings.SettingsPage.TryDictation));
         _welcomeWindow.Closed += (_, _) => _welcomeWindow = null;
         _welcomeWindow.Show();
         _welcomeWindow.Activate();
@@ -1475,8 +2077,29 @@ public partial class App : Application
     /// deletes stored rows the open grid does not know about, so a write that ignored the grid
     /// would be silently undone by the user's next Save in that window.
     /// </summary>
-    private void ShowQuickAdd() => Dispatcher.Invoke(() =>
+    private void ShowQuickAdd()
     {
+        _ = _quickAddOpenGate.RunAsync(ShowQuickAddAsync, FocusQuickAddWhenOpenAsync);
+    }
+
+    private Task FocusQuickAddWhenOpenAsync()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(FocusQuickAddWhenOpenAsync).Task.Unwrap();
+        }
+
+        _quickAddWindow?.Activate();
+        return Task.CompletedTask;
+    }
+
+    private async Task ShowQuickAddAsync()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(ShowQuickAdd);
+            return;
+        }
         if (_host is null || _tray is null)
         {
             return;
@@ -1498,28 +2121,28 @@ public partial class App : Application
             var scope = services.GetRequiredService<StorageMaintenance>().EnterForegroundWork();
             foreground = scope;
             var store = services.GetRequiredService<LastTranscriptStore>();
-            var recent = store.GetRecent();
+            var recent = store.GetRecentEntries();
             if (recent.Count == 0)
             {
                 // Same idea as CopyLastDictation: the in-memory ring is empty on a fresh start, but
                 // history still holds what was dictated before the last restart.
-                recent = services.GetRequiredService<IHistoryRepository>()
-                    .GetRecent(LastTranscriptStore.Capacity)
-                    .Select(h => h.Text)
-                    .Where(t => !string.IsNullOrWhiteSpace(t))
-                    .ToList();
-
                 // Seed rather than just display. A correction saved against a transcript that only
                 // exists in history would otherwise find nothing to repair in the ring, so the fix
                 // would look like it worked while "copy last dictation" still returned the mistake.
-                store.Seed(recent);
+                await SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
+                recent = store.GetRecentEntries();
+                if (_quickAddWindow is not null)
+                {
+                    _quickAddWindow.Activate();
+                    return;
+                }
             }
 
             var window = new QuickAdd.QuickAddWindow(
-                recent,
+                recent.Select(source => new QuickAdd.QuickAddWindow.QuickAddSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision)).ToList(),
                 loadExisting: () =>
                 {
-                    var baseEntries = _settingsWindow is { } settings
+                    var baseEntries = _settingsWindow is { IsDraftDiscardedForAppExit: false } settings
                         ? settings.CurrentDictionaryEntries()
                         : services.GetRequiredService<IDictionaryRepository>().GetAll();
 
@@ -1539,7 +2162,9 @@ public partial class App : Application
                 },
                 persist: entry =>
                 {
-                    if (_settingsWindow is { } settings)
+                    // A draft discarded for an update never receives the correction: it would update a row the user
+                    // threw away. Storage takes it, and that Settings window closes once the update runs.
+                    if (_settingsWindow is { IsDraftDiscardedForAppExit: false } settings)
                     {
                         return settings.ApplyQuickDictionaryEntry(entry);
                     }
@@ -1553,13 +2178,28 @@ public partial class App : Application
                     dictionary.Update(entry);
                     return entry;
                 },
-                logger: services.GetService<ILoggerFactory>()?.CreateLogger<QuickAdd.QuickAddWindow>());
+                _textScale,
+                logger: services.GetService<ILoggerFactory>()?.CreateLogger<QuickAdd.QuickAddWindow>(),
+                options: new QuickAdd.QuickAddWindow.QuickAddWindowOptions(
+                    AiCleanupEnabled: _controller?.CurrentSettings.EnableAiCleanup ?? false,
+                    DictionaryEnabled: _controller?.CurrentSettings.ApplyPostProcessing ?? true,
+                    SettingsOpen: _settingsWindow is not null,
+                    LoadVocabulary: () => BuildQuickAddVocabulary(services),
+                    PendingSettingsSpokenForms: () => _settingsWindow?.PendingQuickAddSpokenForms() ?? [],
+                    OpenAdvancedSettings: () => OpenSettings(Scribe.Core.Settings.SettingsPage.Advanced, "PostCheck"),
+                    ShowInSettings: spoken => OpenSettingsForDictionary(spoken),
+                    AddItInSettings: spoken => AddQuickAddTermInSettings(spoken),
+                    FixInstead: spoken => FixQuickAddTermInstead(spoken)));
 
             window.Saved += OnQuickAddSaved;
             window.Closed += (_, _) =>
             {
                 window.Saved -= OnQuickAddSaved;
-                _quickAddWindow = null;
+                if (ReferenceEquals(_quickAddWindow, window))
+                {
+                    _quickAddWindow = null;
+                }
+
                 scope.Dispose();
             };
 
@@ -1573,9 +2213,9 @@ public partial class App : Application
             foreground?.Dispose();
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogError("Failed to open the quick dictionary add window: {Failure}", FailureShape.DescribeWithStack(ex));
-            _tray.ShowNotification("Couldn't open the quick add window.", isError: true);
+            ShowTrayNotice(TrayNotices.QuickAddOpenFailed());
         }
-    });
+    }
 
     /// <summary>
     /// Activates a freshly quick-added rule. Without the reload the entry sits in the database and
@@ -1624,13 +2264,14 @@ public partial class App : Application
             var corrected = repaired ? " Your last dictation was corrected to match." : string.Empty;
             if (!refresh.Applied)
             {
-                _tray.ShowNotification(VocabularyNotice.SavedButNotApplied("Saved the rule") + corrected, isError: true);
+                ShowTrayNotice(TrayNotices.QuickAddSavedButNotReloaded());
                 return;
             }
 
-            _tray.ShowNotification(entry.Replacement.Length == 0
-                ? $"\"{entry.Pattern}\" will now be left out of what you dictate." + corrected
-                : $"\"{entry.Pattern}\" will now be written as \"{entry.Replacement}\"." + corrected);
+            if (result.CloseAfterSaving)
+            {
+                ShowTrayNotice(TrayNotices.QuickAddSavedAndClosed());
+            }
         }
         catch (Exception ex)
         {
@@ -1638,8 +2279,7 @@ public partial class App : Application
                 .LogError(
                     "Failed to reload the vocabulary after a quick dictionary add: {Failure}",
                     FailureShape.DescribeWithStack(ex));
-            _tray.ShowNotification(
-                "Saved the rule, but it won't apply until Scribe restarts.", isError: true);
+            ShowTrayNotice(TrayNotices.QuickAddSavedButNotReloaded());
         }
     }
 
@@ -1681,7 +2321,7 @@ public partial class App : Application
 
         try
         {
-            ApplicationThemeManager.Apply(theme, updateAccent: true);
+            ApplicationThemeManager.Apply(theme, updateAccent: false);
             var applied = ApplicationThemeManager.GetAppTheme();
             log?.LogInformation(
                 "Applied Windows theme: {Theme} (AppsUseLightTheme={RegistryValue}, source={Source}, registryRead={RegistryRead}).",
@@ -1783,6 +2423,7 @@ public partial class App : Application
             new("overlay", () => _overlay?.CloseOverlay()),
             new("dictation controller", () => _controller?.Dispose()),
             new("tray icon", () => _tray?.Dispose()),
+            new("text scale", () => _textScale?.Dispose()),
             new("theme watcher", DisposeThemeWatcher),
             new("drain settings writes", () =>
             {
@@ -1797,6 +2438,7 @@ public partial class App : Application
             new("host dispose", () => _host?.Dispose()),
             new("settings signal registration", () => _showSettingsRegistration?.Unregister(null)),
             new("settings signal", () => _showSettingsSignal?.Dispose()),
+            new("settings request payload", () => _showSettingsPayload?.Dispose()),
             new("single-instance mutex", () => _singleInstanceMutex?.Dispose()),
         ],
         (step, ex) => _appLog?.LogWarning(

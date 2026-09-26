@@ -40,20 +40,17 @@ public static class StorageRetentionPolicy
 
     /// <summary>Settings hint under "Keep audio with history".</summary>
     public static string StoredAudioHint { get; } =
-        "Store a compact copy of the captured audio with each history entry. Audio is kept for " +
-        $"{AudioRetentionDays} days and at most {MaxStoredAudioMegabytes} MB in total; the oldest audio " +
-        "is removed first, and its text stays in your history.";
+        "Keeps the audio of each dictation on this PC for up to " +
+        $"{AudioRetentionDays} days ({MaxStoredAudioMegabytes} MB in total), then deletes it. " +
+        "Scribe doesn't play recordings back.";
 
     /// <summary>Settings hint under "Keep dictation history for".</summary>
     public static string TextRetentionHint { get; } =
-        "Days dictation text is kept. Older entries are removed automatically while Scribe runs. " +
-        "Set to 0 to keep text forever. Stored audio has its own limit of " +
-        $"{AudioRetentionDays} days and {MaxStoredAudioMegabytes} MB.";
+        "Older dictations are deleted automatically.";
 
     /// <summary>About page hint under "Scribe data file".</summary>
     public static string DataFileHint { get; } =
-        "One database holding your dictation history, dictionary, snippets, profiles and settings, plus " +
-        "stored audio. Turning off \"Keep audio with history\" stops new audio being saved. Audio already " +
-        $"saved is removed after {AudioRetentionDays} days, sooner once stored audio passes " +
-        $"{MaxStoredAudioMegabytes} MB, or when you delete its history entry.";
+        "One file holds your history, dictionary, snippets, profiles, settings and any saved recordings. " +
+        $"Recordings are removed after {AudioRetentionDays} days, sooner once they pass " +
+        $"{MaxStoredAudioMegabytes} MB, or when you delete their entry.";
 }

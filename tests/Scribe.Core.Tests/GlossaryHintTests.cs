@@ -73,10 +73,44 @@ public sealed class GlossaryHintTests
             [Library("team", DictionaryEntry.New("azure", "AZURE-from-library"), DictionaryEntry.New("cosmos db", "Cosmos DB"), DictionaryEntry.New("k eight s", "K8s"))]);
 
         Assert.Equal(
-            "2 of 2 entries enabled plus 2 from enabled libraries. All of them are applied on this PC. Your AI " +
+            "2 of 2 entries enabled plus 2 from enabled word packs. All of them are applied on this PC. Your AI " +
             "provider receives all 4 terms as vocabulary with every cleanup request, whether or not the dictation " +
             "mentions them.",
             text);
+    }
+
+    [Fact]
+    public void A_word_pack_kept_from_ai_cleanup_counts_locally_but_not_in_the_ai_sentence()
+    {
+        var local = new[] { DictionaryEntry.New("cosmos db", "Cosmos DB") };
+
+        var text = GlossaryHint.Describe(new GlossaryHint.Input(
+            [Row("azure", "Azure")],
+            local,
+            AiCleanupOn: true,
+            PostProcessingOn: true,
+            CleanupProvider.AzureFoundry,
+            CleanupPromptStyle.Auto,
+            AiLibraryEntries: []));
+
+        Assert.Equal(
+            "1 of 1 entries enabled plus 1 from enabled word packs. All of them are applied on this PC. " +
+            "Your AI provider receives that term as vocabulary with every cleanup request, whether or not the dictation mentions it.",
+            text);
+    }
+
+    [Fact]
+    public void When_every_word_pack_is_permitted_the_local_and_ai_counts_match_the_old_contract()
+    {
+        var local = new[] { DictionaryEntry.New("cosmos db", "Cosmos DB") };
+
+        var oldText = GlossaryHint.Describe(new GlossaryHint.Input(
+            [Row("azure", "Azure")], local, true, true, CleanupProvider.AzureFoundry, CleanupPromptStyle.Auto));
+        var newText = GlossaryHint.Describe(new GlossaryHint.Input(
+            [Row("azure", "Azure")], local, true, true, CleanupProvider.AzureFoundry, CleanupPromptStyle.Auto, local));
+
+        Assert.Equal(oldText, newText);
+        Assert.Contains("receives all 2 terms", newText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -168,14 +202,11 @@ public sealed class GlossaryHintTests
     [Fact]
     public void The_settings_window_hands_the_hint_the_entries_its_libraries_compose_to()
     {
-        // The window is the one caller: it composes the libraries of the committed selection (LegacyLibraryPageContainment,
-        // never the Libraries page's rows) the way the library service does for dictation, in precedence order whatever
-        // order its A to Z list holds them in.
-        var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        // The window composes the word pack draft in precedence order, whatever order its A to Z list holds rows in.
+        var code = ReadSettingsWindowCode();
 
-        Assert.Contains(
-            "var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, _libraryContainment.CommittedIds));",
-            code, StringComparison.Ordinal);
+        Assert.Contains("var composition = CurrentLibraryComposition();", code, StringComparison.Ordinal);
+        Assert.Contains("var aiEntries = composition?.AiLibraryEntries ?? localEntries;", code, StringComparison.Ordinal);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(code, @"new GlossaryHint\.Input\("));
     }
 
@@ -186,7 +217,7 @@ public sealed class GlossaryHintTests
         // library term with the same spoken form.
         var text = Describe([Row("azure", "AZURE-mine", enabled: false)], [Library("team", DictionaryEntry.New("azure", "Azure"))]);
 
-        Assert.StartsWith("0 of 1 entries enabled plus 1 from enabled libraries.", text, StringComparison.Ordinal);
+        Assert.StartsWith("0 of 1 entries enabled plus 1 from enabled word packs.", text, StringComparison.Ordinal);
         Assert.Contains("Your AI provider receives that term as vocabulary", text, StringComparison.Ordinal);
     }
 
@@ -259,10 +290,10 @@ public sealed class GlossaryHintTests
     [Fact]
     public void The_settings_window_refreshes_the_line_from_every_control_it_reads()
     {
-        var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var code = ReadSettingsWindowCode();
         var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
 
-        foreach (var handler in new[] { "AiCleanupCheck_Toggled", "AiProviderCombo_SelectionChanged", "AiPromptStyleCombo_SelectionChanged", "PostCheck_Toggled" })
+        foreach (var handler in new[] { "AiCleanupCheck_Toggled", "AiProviderRadio_Checked", "AiPromptStyleCombo_SelectionChanged", "PostCheck_Toggled" })
         {
             var start = code.IndexOf($"private void {handler}(", StringComparison.Ordinal);
             Assert.True(start >= 0, $"{handler} is missing.");
@@ -301,6 +332,17 @@ public sealed class GlossaryHintTests
 
     private static int CountLines(string glossary) =>
         glossary.Split('\n').Count(line => line.StartsWith("- ", StringComparison.Ordinal));
+
+    private static string ReadSettingsWindowCode()
+    {
+        var folder = Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings");
+        return string.Join(
+            '\n',
+            Directory.GetFiles(folder, "SettingsWindow*.cs")
+                .OrderBy(path => Path.GetFileName(path).Equals("SettingsWindow.xaml.cs", StringComparison.Ordinal) ? 0 : 1)
+                .ThenBy(path => path, StringComparer.Ordinal)
+                .Select(File.ReadAllText));
+    }
 
     private static string RepositoryRoot()
     {

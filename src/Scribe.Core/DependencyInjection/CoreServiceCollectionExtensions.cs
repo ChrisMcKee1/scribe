@@ -55,6 +55,7 @@ public static class CoreServiceCollectionExtensions
 
         // History commits in the background, in order, through the one concrete repository. IHistoryRepository is
         // that same repository behind a barrier that makes reads and maintenance wait for writes accepted before them.
+        services.AddSingleton<HistoryDeletionNotifier>();
         services.AddSingleton<HistoryRepository>();
         services.AddSingleton(sp => new HistoryWriter(
             sp.GetRequiredService<HistoryRepository>(), sp.GetRequiredService<ILogger<HistoryWriter>>()));

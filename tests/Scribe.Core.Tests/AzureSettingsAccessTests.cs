@@ -18,6 +18,8 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowDiscovery);
         Assert.False(state.ShowConfiguration);
         Assert.True(state.ShowManualConfigurationAction);
+        Assert.False(state.ShowManualDetails);
+        Assert.False(state.ManualDetailsExpanded);
         Assert.True(state.CanStartSignIn);
         Assert.False(state.HasUsableAuthentication);
     }
@@ -35,6 +37,8 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowDiscovery);
         Assert.True(state.ShowConfiguration);
         Assert.False(state.ShowManualConfigurationAction);
+        Assert.False(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
         Assert.False(state.CanStartSignIn);
     }
 
@@ -50,6 +54,8 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.ShowDiscovery);
         Assert.True(state.ShowConfiguration);
         Assert.False(state.ShowManualConfigurationAction);
+        Assert.True(state.ShowManualDetails);
+        Assert.False(state.ManualDetailsExpanded);
         Assert.True(state.HasUsableAuthentication);
     }
 
@@ -64,7 +70,41 @@ public sealed class AzureSettingsAccessTests
 
         Assert.False(state.ShowDiscovery);
         Assert.True(state.ShowConfiguration);
+        Assert.False(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
         Assert.True(state.HasUsableAuthentication);
+    }
+
+    [Fact]
+    public void Fresh_api_key_setup_shows_manual_details_without_sign_in()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false,
+            apiKeySelected: true);
+
+        Assert.False(state.ShowDiscovery);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
+        Assert.True(state.ShowConfiguration);
+    }
+
+    [Fact]
+    public void Saved_api_key_setup_shows_manual_details_without_sign_in()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: true,
+            apiKeySelected: true);
+
+        Assert.False(state.ShowDiscovery);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
+        Assert.True(state.ShowConfiguration);
     }
 
     [Theory]
@@ -200,6 +240,8 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowCliSetup);
         Assert.False(state.CanStartSignIn);
         Assert.True(state.ShowServicePrincipalFields);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
         Assert.False(state.ShowDiscovery);
         Assert.False(state.HasUsableAuthentication);
     }
@@ -243,6 +285,8 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.ShowConfiguration);
         Assert.True(state.HasUsableAuthentication);
         Assert.True(state.ShowServicePrincipalFields);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
     }
 
     [Fact]
@@ -261,6 +305,8 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.ShowConfiguration);
         Assert.True(state.HasUsableAuthentication);
         Assert.True(state.CanStartSignIn);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
     }
 
     [Fact]
@@ -279,7 +325,7 @@ public sealed class AzureSettingsAccessTests
     }
 
     [Fact]
-    public void A_complete_service_principal_can_save_without_a_live_verification()
+    public void Legacy_cleanup_validation_keeps_requiring_live_authentication_for_the_window()
     {
         // A dropped connection must not block editing unrelated settings.
         var issue = AzureSettingsAccess.ValidateCleanup(
@@ -298,10 +344,8 @@ public sealed class AzureSettingsAccessTests
     }
 
     [Fact]
-    public void The_cli_path_still_requires_a_verified_sign_in_to_save()
+    public void Legacy_cleanup_validation_still_blocks_cli_when_not_signed_in()
     {
-        // Unlike a service principal, an az login session cannot be judged offline, so this keeps
-        // its original behaviour.
         var issue = AzureSettingsAccess.ValidateCleanup(
             enabled: true,
             usesAzureProvider: true,
@@ -312,6 +356,38 @@ public sealed class AzureSettingsAccessTests
             authMode: AzureAuthMode.AzureCli);
 
         Assert.Equal(AzureSettingsAccess.ValidationIssue.AuthenticationRequired, issue);
+    }
+
+    [Fact]
+    public void Save_validation_allows_cli_setup_without_live_sign_in()
+    {
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
+            enabled: true,
+            usesAzureProvider: true,
+            signedIn: false,
+            apiKey: null,
+            endpoint: "https://example.test",
+            deployment: "cleanup",
+            apiKeySelected: false,
+            authMode: AzureAuthMode.AzureCli);
+
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.None, issue);
+    }
+
+    [Fact]
+    public void Save_validation_rejects_empty_api_key_mode()
+    {
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
+            enabled: true,
+            usesAzureProvider: true,
+            signedIn: false,
+            apiKey: "",
+            endpoint: "https://example.test",
+            deployment: "cleanup",
+            apiKeySelected: true,
+            authMode: AzureAuthMode.AzureCli);
+
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.ApiKeyRequired, issue);
     }
 
     [Fact]
@@ -390,13 +466,14 @@ public sealed class AzureSettingsAccessTests
     [Fact]
     public void An_incomplete_service_principal_blocks_saving()
     {
-        var issue = AzureSettingsAccess.ValidateCleanup(
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
             enabled: true,
             usesAzureProvider: true,
             signedIn: false,
             apiKey: null,
             endpoint: "https://example.test",
             deployment: "cleanup",
+            apiKeySelected: false,
             authMode: AzureAuthMode.ServicePrincipal,
             tenantId: Tenant,
             clientId: Client,
@@ -410,13 +487,14 @@ public sealed class AzureSettingsAccessTests
     {
         Assert.Equal(
             AzureSettingsAccess.ValidationIssue.EndpointRequired,
-            AzureSettingsAccess.ValidateCleanup(
+            AzureSettingsAccess.ValidateCleanupForSave(
                 enabled: true,
                 usesAzureProvider: true,
                 signedIn: true,
                 apiKey: null,
                 endpoint: null,
                 deployment: "cleanup",
+                apiKeySelected: false,
                 authMode: AzureAuthMode.ServicePrincipal,
                 tenantId: Tenant,
                 clientId: Client,
@@ -424,13 +502,14 @@ public sealed class AzureSettingsAccessTests
 
         Assert.Equal(
             AzureSettingsAccess.ValidationIssue.None,
-            AzureSettingsAccess.ValidateCleanup(
+            AzureSettingsAccess.ValidateCleanupForSave(
                 enabled: true,
                 usesAzureProvider: true,
                 signedIn: true,
                 apiKey: null,
                 endpoint: "https://example.test",
                 deployment: "cleanup",
+                apiKeySelected: false,
                 authMode: AzureAuthMode.ServicePrincipal,
                 tenantId: Tenant,
                 clientId: Client,
@@ -442,19 +521,43 @@ public sealed class AzureSettingsAccessTests
     {
         // The key path never touches Entra, so half-entered app registration details are not a
         // blocker; failing here would strand a user who deliberately chose key auth.
-        var issue = AzureSettingsAccess.ValidateCleanup(
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
             enabled: true,
             usesAzureProvider: true,
             signedIn: false,
             apiKey: "a-key",
             endpoint: "https://example.test",
             deployment: "cleanup",
+            apiKeySelected: true,
             authMode: AzureAuthMode.ServicePrincipal,
             tenantId: null,
             clientId: null,
             clientSecret: null);
 
         Assert.Equal(AzureSettingsAccess.ValidationIssue.None, issue);
+    }
+
+    [Theory]
+    [InlineData(AzureAuthMode.AzureCli, null, null, null, true)]
+    [InlineData(AzureAuthMode.ServicePrincipal, Tenant, Client, Secret, true)]
+    [InlineData(AzureAuthMode.ServicePrincipal, Tenant, Client, null, false)]
+    public void Local_setup_completeness_is_separate_from_live_sign_in(
+        AzureAuthMode authMode,
+        string? tenantId,
+        string? clientId,
+        string? clientSecret,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            AzureSettingsAccess.HasCompleteLocalSetup(
+                "https://example.test",
+                "cleanup",
+                apiKey: null,
+                authMode,
+                tenantId,
+                clientId,
+                clientSecret));
     }
 
     [Fact]
@@ -482,5 +585,42 @@ public sealed class AzureSettingsAccessTests
         Assert.Equal(Tenant, principal.TenantId);
         Assert.Equal(Client, principal.ClientId);
         Assert.Equal("  spaced-secret  ", principal.ClientSecret);
+    }
+    [Fact]
+    public void Service_principal_shows_endpoint_without_discovery_or_api_key_fields()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false,
+            authMode: AzureAuthMode.ServicePrincipal,
+            servicePrincipalComplete: false,
+            apiKeySelected: false);
+
+        Assert.True(state.ShowEndpointPanel);
+        Assert.False(state.ShowDiscovery);
+        Assert.False(state.ShowApiKeyPanel);
+        Assert.False(state.ShowManualToggleButton);
+    }
+
+    [Fact]
+    public void Azure_cli_manual_details_follow_the_core_toggle_state()
+    {
+        var closed = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: true,
+            manualConfigurationRequested: false,
+            hasApiKey: false);
+        var open = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: true,
+            manualConfigurationRequested: true,
+            hasApiKey: false);
+
+        Assert.True(closed.ShowManualToggleButton);
+        Assert.False(closed.ShowEndpointPanel);
+        Assert.True(open.ShowManualToggleButton);
+        Assert.True(open.ShowEndpointPanel);
     }
 }

@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Scribe.Core.Models;
 using Scribe.Core.Overlay;
+using Scribe.Core.Tray;
 
 namespace Scribe.Core.Tests;
 
@@ -63,7 +64,7 @@ public sealed class OverlayPipeProtocolTests
     {
         Assert.Equal("TYPED", OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.Typed)));
         Assert.Equal(
-            "TYPEDWITHOUTCLEANUP AI cleanup timed out.",
+            "TYPEDWITHOUTCLEANUP See Settings, AI cleanup",
             OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.TypedWithoutCleanup)));
         Assert.Equal(
             "NOTHINGTYPED Copy it from the tray menu",
@@ -72,8 +73,8 @@ public sealed class OverlayPipeProtocolTests
             "PARTLYTYPED Copy it from the tray menu",
             OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.PartlyTyped)));
         Assert.Equal(
-            "NOTHINGTYPED Nothing was recognised, try again",
-            OverlayPipeProtocol.OutcomeLine(PillOutcome.Of(null, false, null, "nothing was recognised, try again")!));
+            "NOTHINGTYPED No words heard, try again",
+            OverlayPipeProtocol.OutcomeLine(PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.NothingRecognized))!));
     }
 
     [Fact]

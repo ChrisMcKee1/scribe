@@ -293,6 +293,18 @@ public sealed class AppSettings
     public bool AddSpaceAfterDictation { get; set; } = true;
 
     /// <summary>
+    /// Settings, Add to dictionary and the tray menu use Scribe blue unless the user chooses the Windows accent.
+    /// </summary>
+    /// <remarks>
+    /// Scribe blue is the default for every install, new or upgraded, so the default is the property initializer and not
+    /// <see cref="CreateDefault"/>: a stored document written before the setting existed reads as Scribe. The tolerant
+    /// converter makes a future or malformed cosmetic value fall back to Scribe instead of making the whole settings
+    /// document unreadable.
+    /// </remarks>
+    [JsonConverter(typeof(AccentSourceJsonConverter))]
+    public AccentSource AccentSource { get; set; } = AccentSource.Scribe;
+
+    /// <summary>
     /// Persist a compact (16-bit) copy of each capture's audio alongside its history entry, kept
     /// within <see cref="Persistence.StorageRetentionPolicy"/>'s age and size limits.
     /// </summary>

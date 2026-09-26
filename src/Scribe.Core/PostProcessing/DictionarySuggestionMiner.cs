@@ -55,12 +55,7 @@ public static partial class DictionarySuggestionMiner
             foreach (var raw in history.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
             {
                 var token = TrimPunctuation(raw);
-                if (token.Length < 2 || known.Contains(token) || Stoplist.Contains(token))
-                {
-                    continue;
-                }
-
-                if (!IsJargonShaped(token))
+                if (token.Length < 2 || known.Contains(token) || !IsCandidate(token))
                 {
                     continue;
                 }
@@ -91,6 +86,12 @@ public static partial class DictionarySuggestionMiner
             .Take(maxSuggestions)
             .ToList();
     }
+
+    /// <summary>
+    /// Whether a token is worth suggesting: jargon-shaped and not one of the stoplist's everyday abbreviations. Usage's
+    /// "Words you could add" and Learn from history both ask this, so "PM" from "2 PM" is offered by neither.
+    /// </summary>
+    internal static bool IsCandidate(string token) => !Stoplist.Contains(token) && IsJargonShaped(token);
 
     // High-precision "this is jargon" shapes; ordinary prose words match none of them.
     internal static bool IsJargonShaped(string token) =>

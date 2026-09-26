@@ -25,12 +25,15 @@ namespace Scribe.Core.Settings;
 /// </summary>
 public static class GlossaryHint
 {
-    /// <summary>What the page shows: its rows as typed, its enabled libraries' entries, and the settings on screen.</summary>
+    /// <summary>What the page shows: its rows as typed, its word pack entries, and the settings on screen.</summary>
     /// <param name="LibraryEntries">
-    /// The enabled libraries' entries as <see cref="DictionaryLibraryComposer.ComposeLibraries"/> returns them: one row per
-    /// spoken form, in precedence order (<see cref="Libraries.LibraryPrecedence"/>), which is what the library service
-    /// gives dictation's glossary. They are counted as given: a flattened list no longer says which library a row came
-    /// from, so any reordering here could only lose which library's row wins.
+    /// The enabled word pack entries that local dictation applies, as the draft composition returns them: one row per
+    /// spoken form, in precedence order. They are counted as given: a flattened list no longer says which word pack a row
+    /// came from, so any reordering here could only lose which word pack's row wins.
+    /// </param>
+    /// <param name="AiLibraryEntries">
+    /// The subset of <paramref name="LibraryEntries"/> that AI cleanup may receive, in the same composition order. Null
+    /// keeps the old contract for callers that have no separate AI permission.
     /// </param>
     public sealed record Input(
         IReadOnlyList<DictionaryEntryBuilder.Row> Rows,
@@ -38,7 +41,8 @@ public static class GlossaryHint
         bool AiCleanupOn,
         bool PostProcessingOn,
         CleanupProvider Provider,
-        CleanupPromptStyle PromptStyle);
+        CleanupPromptStyle PromptStyle,
+        IReadOnlyList<DictionaryEntry>? AiLibraryEntries = null);
 
     public static string Describe(Input input)
     {
@@ -54,28 +58,30 @@ public static class GlossaryHint
         // spoken form out of the vocabulary. The page's own rows are put in the order the repository reads the
         // saved dictionary back; that is the only reordering here, and it touches no library entry.
         var personal = enabled.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance).ToList();
-        var libraries = input.LibraryEntries;
-        var effective = CleanupPrompt.ComposeVocabulary(personal, libraries);
+        var localLibraries = input.LibraryEntries;
+        var aiLibraries = input.AiLibraryEntries ?? localLibraries;
+        var localVocabulary = CleanupPrompt.ComposeVocabulary(personal, localLibraries);
+        var aiVocabulary = CleanupPrompt.ComposeVocabulary(personal, aiLibraries);
         var personalTerms = DictionaryLibraryComposer.Merge(personal, []).Count;
 
         if (!input.AiCleanupOn)
         {
             text.Append('.');
-            return AppendLocalUse(text, effective.Count, input.PostProcessingOn, onlyWhenOff: true).ToString();
+            return AppendLocalUse(text, localVocabulary.Count, input.PostProcessingOn, onlyWhenOff: true).ToString();
         }
 
-        if (libraries.Count > 0 && effective.Count > personalTerms)
+        if (localLibraries.Count > 0 && localVocabulary.Count > personalTerms)
         {
-            text.Append($" plus {Count(effective.Count - personalTerms)} from enabled libraries");
+            text.Append($" plus {Count(localVocabulary.Count - personalTerms)} from enabled word packs");
         }
 
         text.Append('.');
-        AppendLocalUse(text, effective.Count, input.PostProcessingOn, onlyWhenOff: false);
+        AppendLocalUse(text, localVocabulary.Count, input.PostProcessingOn, onlyWhenOff: false);
 
         var local = CleanupPrompt.ResolvePromptStyle(input.PromptStyle, input.Provider) == CleanupPromptStyle.Local;
         var glossary = CleanupPrompt.CountGlossary(
-            effective, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider));
-        var templates = effective.Count(e => e.Enabled && !string.IsNullOrWhiteSpace(e.Replacement) &&
+            aiVocabulary, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider));
+        var templates = aiVocabulary.Count(e => e.Enabled && !string.IsNullOrWhiteSpace(e.Replacement) &&
                                              !CleanupPrompt.IsVocabularyReplacement(e.Replacement));
 
         if (glossary.Eligible == 0)

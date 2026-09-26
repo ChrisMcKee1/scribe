@@ -300,5 +300,6 @@ public static class SessionBanner
 
     private static string DescribeInjection(AppSettings settings) =>
         $"method={settings.InjectionMethod} newlines={settings.NewlineHandling} " +
-        $"shiftEnter={settings.ShiftEnterLineBreaks} spaceAfter={settings.AddSpaceAfterDictation}";
+        $"shiftEnter={settings.ShiftEnterLineBreaks} spaceAfter={settings.AddSpaceAfterDictation} " +
+        $"accent={settings.AccentSource}";
 }

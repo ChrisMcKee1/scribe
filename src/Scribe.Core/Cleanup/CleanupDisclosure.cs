@@ -15,6 +15,9 @@ namespace Scribe.Core.Cleanup;
 /// </summary>
 public static class CleanupDisclosure
 {
+    /// <summary>The Add to dictionary line shown while AI cleanup is on.</summary>
+    public const string AddToDictionaryVocabularyLine = "AI cleanup also receives your words and word pack words as vocabulary.";
+
     /// <summary>
     /// The "What leaves this PC" card on the AI cleanup page: what every cleanup request carries, and
     /// where it goes.
@@ -23,7 +26,7 @@ public static class CleanupDisclosure
         "Foundry Local runs cleanup on this PC, so your text stays on it. Microsoft Foundry, " +
         "an OpenAI-compatible endpoint and GitHub Copilot receive, with every cleanup request, the text " +
         "Scribe recognized for that dictation, the cleanup instructions with your writing style (or the " +
-        "matching app profile's), and your enabled dictionary and library terms as vocabulary: up to " +
+        "matching app profile's), and your dictionary plus the word packs you let AI cleanup use as vocabulary: up to " +
         $"{Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {Count(CleanupPrompt.MaxGlossaryChars)} " +
         $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms with the Local prompt style, " +
         "whether or not the dictation mentions them. An entry whose written form spans more than one line or " +
@@ -37,6 +40,18 @@ public static class CleanupDisclosure
         "your vocabulary. Cleanup never sends your snippet templates, and audio never leaves this device. " +
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
+
+    public static string SummaryFor(CleanupProvider provider) => provider switch
+    {
+        CleanupProvider.FoundryLocal => "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.",
+        CleanupProvider.AzureFoundry => RemoteSummary("your Microsoft Foundry deployment"),
+        CleanupProvider.OpenAiCompatible => RemoteSummary("the address you enter"),
+        CleanupProvider.GitHubCopilot => RemoteSummary("GitHub"),
+        _ => RemoteSummary("the AI service"),
+    };
+
+    private static string RemoteSummary(string destination) =>
+        $"Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to {destination}. Audio never leaves this PC.";
 
     /// <summary>The title of the confirmation shown before AI dictionary suggestions send dictation text.</summary>
     public const string SuggestionConsentTitle = "Send recent dictations to your AI provider?";

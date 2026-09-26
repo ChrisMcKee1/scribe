@@ -1,0 +1,28 @@
+<UserControl x:Class="Scribe.App.Settings.SettingsStatusRow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             Visibility="Collapsed">
+    <Grid x:Name="RootGrid" MinHeight="32" Margin="0,12,0,0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ui:SymbolIcon x:Name="StatusIcon" Grid.Column="0" FontSize="{DynamicResource ScribeFontBodyLarge}" Width="16" Height="16" Margin="0,2,8,0"/>
+        <ui:ProgressRing x:Name="BusyRing" Grid.Column="0" Width="16" Height="16" Margin="0,2,8,0"
+                         IsIndeterminate="True" Visibility="Collapsed"/>
+        <TextBlock x:Name="StatusTextBlock" Grid.Column="1" FontSize="{DynamicResource ScribeFontCaption}" TextWrapping="Wrap"
+                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                   AutomationProperties.LiveSetting="Polite"/>
+        <StackPanel x:Name="ActionPanel" Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0">
+            <ui:Button x:Name="PrimaryButton" MinWidth="96" Click="PrimaryButton_Click"/>
+            <ui:Button x:Name="SecondaryButton" MinWidth="96" Margin="8,0,0,0" Click="SecondaryButton_Click"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

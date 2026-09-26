@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Scribe.Core.Models;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Persistence;
 
@@ -17,8 +18,13 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     private const string TimestampFormat = "O";
 
     private readonly ScribeDatabase _database;
+    private readonly HistoryDeletionNotifier _deletions;
 
-    public HistoryRepository(ScribeDatabase database) => _database = database;
+    public HistoryRepository(ScribeDatabase database, HistoryDeletionNotifier? deletions = null)
+    {
+        _database = database;
+        _deletions = deletions ?? new HistoryDeletionNotifier();
+    }
 
     /// <summary>
     /// Largest encoded capture this repository stores. A capture that could never fit under the
@@ -163,41 +169,140 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     public IReadOnlyList<HistoryEntry> GetRecent(int limit = 100)
     {
         using var connection = _database.Open();
+        using var command = CreateHistoryReadCommand(connection);
+        command.CommandText +=
+            """
+             FROM history
+            ORDER BY timestamp_utc DESC, id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+        return ReadHistoryEntries(command);
+    }
+
+    public IReadOnlyList<HistoryEntry> GetOlder(DateTimeOffset beforeUtc, long beforeId, int limit)
+    {
+        using var connection = _database.Open();
+        using var command = CreateHistoryReadCommand(connection);
+        command.CommandText +=
+            """
+             FROM history
+            WHERE timestamp_utc < $before
+                OR (timestamp_utc = $before AND id < $before_id)
+            ORDER BY timestamp_utc DESC, id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$before", FormatTimestamp(beforeUtc));
+        command.Parameters.AddWithValue("$before_id", beforeId);
+        command.Parameters.AddWithValue("$limit", limit);
+        return ReadHistoryEntries(command);
+    }
+
+    public IReadOnlyList<HistoryEntry> Search(string query, int limit)
+    {
+        if (limit <= 0 || string.IsNullOrWhiteSpace(query))
+        {
+            return [];
+        }
+
+        using var connection = _database.Open();
+        using var command = CreateHistoryReadCommand(connection, ", text LIKE $query ESCAPE '\\' AS text_match");
+        command.CommandText +=
+            """
+             FROM history
+            WHERE text LIKE $query ESCAPE '\'
+                OR target_app IS NOT NULL
+            ORDER BY timestamp_utc DESC, id DESC;
+            """;
+        command.Parameters.AddWithValue("$query", $"%{EscapeLike(query.Trim())}%");
+
+        var results = new List<HistoryEntry>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read() && results.Count < limit)
+        {
+            var entry = ReadHistoryEntry(reader);
+            if (reader.GetInt64(10) != 0 || FriendlyAppMatches(entry, query))
+            {
+                results.Add(entry);
+            }
+        }
+
+        return results;
+    }
+
+    private SqliteCommand CreateHistoryReadCommand(SqliteConnection connection, string extraSelect = "")
+    {
         var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
         var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
         var hasRatingColumn = EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL");
         var cleanupExpression = hasCleanupColumn ? "cleanup_ms" : "NULL";
         var modelExpression = hasModelColumn ? "transcription_model_id" : "NULL";
         var ratingExpression = hasRatingColumn ? "ai_rating" : "NULL";
-        using var command = connection.CreateCommand();
+        var command = connection.CreateCommand();
         command.CommandText =
             $"""
             SELECT id, timestamp_utc, text, audio_ms, decode_ms, {cleanupExpression},
-                   target_app, audio_blob_id, {modelExpression}, {ratingExpression}
-            FROM history
-            ORDER BY timestamp_utc DESC
-            LIMIT $limit;
+                   target_app, audio_blob_id, {modelExpression}, {ratingExpression}{extraSelect}
             """;
-        command.Parameters.AddWithValue("$limit", limit);
+        return command;
+    }
 
+    private static List<HistoryEntry> ReadHistoryEntries(SqliteCommand command)
+    {
         var results = new List<HistoryEntry>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            results.Add(new HistoryEntry(
+            results.Add(ReadHistoryEntry(reader));
+        }
+
+        return results;
+    }
+
+    private static HistoryEntry ReadHistoryEntry(SqliteDataReader reader) =>
+        new(
+            reader.GetInt64(0),
+            DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            reader.GetString(2),
+            reader.GetInt32(3),
+            reader.GetInt32(4),
+            reader.IsDBNull(5) ? null : reader.GetInt32(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetInt64(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9));
+
+    private static bool FriendlyAppMatches(HistoryEntry entry, string query) =>
+        !string.IsNullOrWhiteSpace(entry.TargetApp) &&
+        AppDisplayName.For(entry.TargetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+
+    private static string EscapeLike(string query) =>
+        query.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+
+    private static HistoryEntry? GetById(SqliteConnection connection, SqliteTransaction transaction, long id)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT id, timestamp_utc, text, audio_ms, decode_ms, target_app, audio_blob_id
+            FROM history
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new HistoryEntry(
                 reader.GetInt64(0),
                 DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 reader.GetString(2),
                 reader.GetInt32(3),
                 reader.GetInt32(4),
-                reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetInt64(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9)));
-        }
-
-        return results;
+                TargetApp: reader.IsDBNull(5) ? null : reader.GetString(5),
+                AudioBlobId: reader.IsDBNull(6) ? null : reader.GetInt64(6))
+            : null;
     }
 
     public CapturedAudio? GetAudio(long blobId)
@@ -253,10 +358,12 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     public void Delete(long id)
     {
         int changes;
+        HistoryEntry? deleted;
         using (_database.EnterWriteScope())
         {
             using var connection = _database.Open();
             using var transaction = connection.BeginTransaction();
+            deleted = GetById(connection, transaction, id);
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText =
@@ -273,6 +380,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             command.Parameters.AddWithValue("$id", id);
             changes = command.ExecuteNonQuery();
             transaction.Commit();
+            if (changes > 0 && deleted is not null)
+            {
+                PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.Entry, deleted));
+            }
         }
 
         if (changes > 0)
@@ -295,6 +406,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             entries = command.ExecuteNonQuery();
             recordings = ListStoredAudio(connection);
             transaction.Commit();
+            if (entries > 0)
+            {
+                PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.Clear));
+            }
         }
 
         /*
@@ -340,18 +455,26 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         // (however old) must stay playable, mirroring the ownership rule in Delete().
         try
         {
-            using var writeScope = _database.EnterWriteScope();
-            using var connection = _database.Open();
-            using var transaction = connection.BeginTransaction();
+            int removed;
+            using (_database.EnterWriteScope())
+            {
+                using var connection = _database.Open();
+                using var transaction = connection.BeginTransaction();
 
-            var removed = DeleteEntriesOlderThan(connection, cutoffUtc);
-            var unreferenced = ListStoredAudio(connection)
-                .Where(blob => !blob.Referenced)
-                .Select(blob => blob.Id)
-                .ToList();
-            DeleteUnreferencedAudio(connection, unreferenced, cutoffUtc);
+                removed = DeleteEntriesOlderThan(connection, cutoffUtc);
+                var unreferenced = ListStoredAudio(connection)
+                    .Where(blob => !blob.Referenced)
+                    .Select(blob => blob.Id)
+                    .ToList();
+                DeleteUnreferencedAudio(connection, unreferenced, cutoffUtc);
 
-            transaction.Commit();
+                transaction.Commit();
+                if (removed > 0)
+                {
+                    PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+                }
+            }
+
             return removed;
         }
         catch
@@ -365,9 +488,28 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     public int DeleteEntriesOlderThan(DateTimeOffset cutoffUtc)
     {
-        using var writeScope = _database.EnterWriteScope();
-        using var connection = _database.Open();
-        return DeleteEntriesOlderThan(connection, cutoffUtc);
+        int removed;
+        using (_database.EnterWriteScope())
+        {
+            using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
+            removed = DeleteEntriesOlderThan(connection, cutoffUtc);
+            transaction.Commit();
+            if (removed > 0)
+            {
+                PublishCommittedDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
+            }
+        }
+
+        return removed;
+    }
+
+    private void PublishCommittedDeletion(HistoryDeletion deletion)
+    {
+        // A dictation can still finish in the few instructions after commit and before this revision bump.
+        // Closing that window would put a database-side lock on the dictation path, so this publishes at
+        // the first non-throwing point after a successful commit and accepts that tiny race.
+        _deletions.Notify(deletion);
     }
 
     public int ClearAudioOlderThan(DateTimeOffset cutoffUtc)

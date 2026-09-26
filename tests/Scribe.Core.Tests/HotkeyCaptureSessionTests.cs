@@ -39,7 +39,7 @@ public sealed class HotkeyCaptureSessionTests
         var press = capture.Press(button);
         Assert.Equal(HotkeyCaptureOutcome.Recorded, press.Outcome);
         Assert.True(press.Handled);
-        Assert.Equal(name + "  (add another key or mouse button, or release)", press.Text);
+        Assert.Equal(name + " (press a second key, or let go)", press.Text);
 
         var release = capture.Release(button, HotkeyMode.Toggle);
         Assert.Equal(HotkeyCaptureOutcome.Completed, release.Outcome);
@@ -60,8 +60,8 @@ public sealed class HotkeyCaptureSessionTests
     {
         var capture = new HotkeyCaptureSession();
 
-        Assert.Equal("Left Ctrl  (add another key or mouse button, or release)", capture.Press(LeftCtrl).Text);
-        Assert.Equal("Left Ctrl+Mouse Back (button 4)  (release to set)", capture.Press(Back).Text);
+        Assert.Equal("Left Ctrl (press a second key, or let go)", capture.Press(LeftCtrl).Text);
+        Assert.Equal("Left Ctrl+Mouse Back (button 4) (let go to finish)", capture.Press(Back).Text);
         Assert.Equal(HotkeyCaptureOutcome.Unchanged, capture.Release(Back, HotkeyMode.Hold).Outcome); // Ctrl still down
         var done = capture.Release(LeftCtrl, HotkeyMode.Hold);
 
@@ -184,8 +184,8 @@ public sealed class HotkeyCaptureSessionTests
         string? Layout(uint key) => key == 0xBA ? ";" : null;
         var capture = new HotkeyCaptureSession(Layout);
 
-        Assert.Equal("Page Down  (add another key or mouse button, or release)", capture.Press(PageDown).Text);
-        Assert.Equal("Page Down+;  (release to set)", capture.Press(0xBA).Text);
+        Assert.Equal("Page Down (press a second key, or let go)", capture.Press(PageDown).Text);
+        Assert.Equal("Page Down+; (let go to finish)", capture.Press(0xBA).Text);
         capture.Release(0xBA, HotkeyMode.Hold);
         var done = capture.Release(PageDown, HotkeyMode.Hold);
 
@@ -235,12 +235,13 @@ public sealed class HotkeyCaptureSessionTests
     {
         var settings = AppSettings.CreateDefault();
         settings.Hotkey = HotkeyCaptureSession.Build([Back], HotkeyMode.Hold);
+        settings.EnableAiCleanup = true;
         settings.DictationOnlyHotkey = HotkeyCaptureSession.Build([LeftCtrl, Middle], HotkeyMode.Toggle);
 
         var (title, body) = HotkeyText.Gesture(settings);
 
-        Assert.Equal("Hold, speak, release", title);
-        Assert.StartsWith("Hold Mouse Back (button 4) and start talking.", body);
+        Assert.Equal("Hold, speak, let go", title);
+        Assert.StartsWith("Hold Mouse Back (button 4) and start talking. Let go when you're done", body);
         Assert.Contains("Press Left Ctrl+Middle mouse button instead to dictate without AI cleanup.", body);
         Assert.DoesNotContain("Fn", body);
     }
@@ -295,7 +296,7 @@ public sealed class HotkeyCaptureSessionTests
     {
         var capture = new HotkeyCaptureSession(_ => "from the layout");
 
-        Assert.Equal(name + "  (add another key or mouse button, or release)", capture.Press(key).Text);
+        Assert.Equal(name + " (press a second key, or let go)", capture.Press(key).Text);
         var done = capture.Release(key, HotkeyMode.Hold);
 
         Assert.Equal(
@@ -370,10 +371,10 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Equal(HotkeyCaptureOutcome.TooMany, chord.Press(0x79).Outcome);
 
         var shortcut = new HotkeyCaptureSession();
-        Assert.EndsWith("(add another key or mouse button, or release)", shortcut.Press(LeftCtrl).Text);
-        Assert.EndsWith("(add a key or mouse button, or release)", shortcut.Press(LeftShift).Text);
-        Assert.EndsWith("(add a key or mouse button, or release)", shortcut.Press(LeftAlt).Text);
-        Assert.Equal("Left Ctrl+Left Shift+Left Alt+F13  (release to set)", shortcut.Press(0x7C).Text);
+        Assert.EndsWith("(press a second key, or let go)", shortcut.Press(LeftCtrl).Text);
+        Assert.EndsWith("(press a second key, or let go)", shortcut.Press(LeftShift).Text);
+        Assert.EndsWith("(press a second key, or let go)", shortcut.Press(LeftAlt).Text);
+        Assert.Equal("Left Ctrl+Left Shift+Left Alt+F13 (let go to finish)", shortcut.Press(0x7C).Text);
         Assert.Equal(HotkeyCaptureOutcome.TooMany, shortcut.Press(0x7D).Outcome); // a second key
         Assert.Equal(HotkeyCaptureOutcome.Recorded, shortcut.Press(RightShift).Outcome); // a fifth input, a modifier
         Assert.Equal(HotkeyCaptureOutcome.TooMany, shortcut.Press(RightCtrl).Outcome); // a sixth
@@ -414,7 +415,7 @@ public sealed class HotkeyCaptureSessionTests
     {
         var capture = new HotkeyCaptureSession();
         capture.Press(LeftWin);
-        Assert.EndsWith("+F13  (release to set)", capture.Press(0x7C).Text);
+        Assert.EndsWith("+F13 (let go to finish)", capture.Press(0x7C).Text);
         capture.Release(0x7C, HotkeyMode.Hold);
 
         var done = capture.Release(LeftWin, HotkeyMode.Hold);
@@ -469,7 +470,7 @@ public sealed class HotkeyCaptureSessionTests
 
         // The button's own warning comes first: it is the one the user meets every time.
         Assert.Equal(
-            "Press Mouse Back (button 4) last when you use this hotkey: a mouse button pressed before the keys held " +
+            "Press Mouse Back (button 4) last when you use this shortcut: a mouse button pressed before the keys held " +
             "with it still reaches the app under the pointer.",
             warned.Message);
         Assert.Equal(new HotkeyBinding(Back, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true,
@@ -504,7 +505,7 @@ public sealed class HotkeyCaptureSessionTests
         }
 
         Assert.Equal(
-            "Press F13 last when you use this hotkey: pressed before the keys held with it, it still reaches the app " +
+            "Press F13 last when you use this shortcut: pressed before the keys held with it, it still reaches the app " +
             "you're using.",
             done.Message);
         Assert.Equal(new HotkeyBinding(0x7C, KeyModifiers.Control | KeyModifiers.Alt, HotkeyMode.Hold, Suppress: true,
@@ -528,7 +529,9 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Contains("_capture.Release(HotkeyCapture.VirtualKeyOf(e.ChangedButton), ActiveSelectedMode)", code);
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(code, @"if \(step\.Handled\)\s*\{\s*e\.Handled = true;").Count);
         Assert.Contains("AddHook(CaptureNonClientMouseButtons)", code);
+        Assert.Contains("x:Name=\"MouseButtonsHintText\"", xaml);
         Assert.Contains("MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;", code);
+        Assert.Contains("MouseButtonsHintText.Visibility = Visibility.Collapsed;", code);
     }
 
     [Fact]
@@ -539,7 +542,8 @@ public sealed class HotkeyCaptureSessionTests
         var xaml = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
         var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
 
-        Assert.Contains("Hold: keep the key, mouse button, chord or shortcut down while speaking.", xaml);
+        Assert.Contains("Choose Change, then press a key, two keys or a mouse button", xaml);
+        Assert.Contains("Press and hold", code);
         Assert.DoesNotContain("two-part chord", xaml);
         Assert.Contains("The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.", code);
     }

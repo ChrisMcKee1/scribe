@@ -11,13 +11,17 @@ public static class SavedSettingsNotice
     private const string Problem = "couldn't use your saved settings.";
 
     /// <summary>The tray's note at startup.</summary>
-    public const string AtStartup = Problem + " Open Settings, review them and save.";
+    public const string AtStartup = "Scribe couldn't use your saved settings, so it's using defaults for now. Open Settings, review them and choose Save to keep them.";
 
     /// <summary>For the tray: why a change made there is refused.</summary>
     /// <param name="change">What the user tried to change, as the tray names it.</param>
-    public static string FromTray(string change) => $"{Problem} Open Settings, review them and save before changing {change}.";
+    public static string FromTray(string change) => $"Scribe couldn't use your saved settings, so it's using defaults. Open Settings, review them and choose Save. Then you can change {change} here.";
 
     /// <summary>For the Settings window, where the user already is: why a control will not change yet.</summary>
     /// <param name="change">What the user tried to change, as the window names it.</param>
     public static string InSettings(string change) => $"Scribe {Problem} Review them and save before changing {change}.";
+
+    /// <summary>The inline warning shown on every Settings page while defaults stand in for a lost document.</summary>
+    public static string ForWindow() =>
+        "Scribe couldn't use your saved settings, so it's using defaults. Review them and choose Save to keep them.";
 }

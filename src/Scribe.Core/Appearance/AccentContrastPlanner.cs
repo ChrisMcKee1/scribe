@@ -33,6 +33,9 @@ public enum ThemeColor
     /// </summary>
     ControlFillSecondary,
 
+    /// <summary><c>SubtleFillColorSecondary</c>, translucent over the page: a selected item fill.</summary>
+    SubtleFillSecondary,
+
     /// <summary><c>ControlStrongStrokeColorDefault</c>, translucent: the border of an unchecked box.</summary>
     StrongStroke,
 
@@ -72,12 +75,6 @@ public enum ThemeColor
     /// <summary><c>AccentTextFillColorTertiaryBrush</c> as WPF-UI wrote it.</summary>
     AccentTextTertiary,
 
-    /// <summary><c>SystemColors.HotTrackColor</c>: the colour WPF's own Hyperlink style draws a link in.</summary>
-    Hyperlink,
-
-    /// <summary>The red WPF's own Hyperlink style draws a hovered link in.</summary>
-    HyperlinkHover,
-
     /// <summary><c>PaletteOrangeColor</c>: a caution badge.</summary>
     PaletteOrange,
 
@@ -108,6 +105,9 @@ public enum AccentForegroundRole
 
     /// <summary>The text of a selected list or navigation item, on the primary accent.</summary>
     SelectedItem,
+
+    /// <summary>The text of a selected list or navigation item, on the subtle selected fill.</summary>
+    SelectedSubtleItem,
 
     /// <summary>The check, or the dash, in a checked box, at rest, hovered and pressed (WPF-UI draws it with one brush).</summary>
     CheckGlyph,
@@ -161,6 +161,9 @@ public enum AccentShadeRole
     /// <summary>A link while hovered.</summary>
     HyperlinkHover,
 
+    /// <summary>A usage chart bar.</summary>
+    ChartBar,
+
     /// <summary>The track of a switch that is on, at rest.</summary>
     SwitchTrack,
 
@@ -169,6 +172,12 @@ public enum AccentShadeRole
 
     /// <summary>The track of a switch that is on, pressed.</summary>
     SwitchTrackPressed,
+
+    /// <summary>The accent pill for a selected list or navigation item.</summary>
+    SelectionIndicator,
+
+    /// <summary>The current-period usage chart bar.</summary>
+    ChartBarCurrent,
 }
 
 /// <summary>Whether a foreground is text (SC 1.4.3) or a glyph that marks a state (SC 1.4.11).</summary>
@@ -230,6 +239,13 @@ public sealed record CheckBoxPerimeter(SrgbColor Color, bool IsStrongStroke, dou
 /// <param name="AgainstSurfaces">Its lowest contrast against the surfaces the list is drawn on.</param>
 public sealed record SelectionOutline(SrgbColor Color, double? AgainstFill, double AgainstSurfaces);
 
+/// <summary>The subtle selected-list treatment.</summary>
+/// <param name="TextRatio">The selected text's lowest contrast against the subtle fill.</param>
+/// <param name="Indicator">The accent pill colour.</param>
+/// <param name="IndicatorOriginalRatio">The uncorrected accent's lowest contrast against rail and page backgrounds.</param>
+/// <param name="IndicatorRatio">The drawn pill's lowest contrast against rail and page backgrounds.</param>
+public sealed record SelectedSubtleItemCue(double TextRatio, SrgbColor Indicator, double IndicatorOriginalRatio, double IndicatorRatio);
+
 /// <summary>What a theme's coloured fills and accent-coloured text need, and the selection cues.</summary>
 /// <param name="Mode">Whether anything was planned.</param>
 /// <param name="Foregrounds">One per foreground role whose fills could be read; none in a contrast theme.</param>
@@ -248,6 +264,7 @@ public sealed record SelectionOutline(SrgbColor Color, double? AgainstFill, doub
 /// it changes no width.
 /// </param>
 /// <param name="SelectedItemFillRatio">The selected-item fill against the surfaces, when it could be read.</param>
+/// <param name="SelectedSubtleItemCue">The subtle-fill selection treatment for the rail and selectable lists.</param>
 public sealed record AccentContrastPlan(
     AccentContrastMode Mode,
     IReadOnlyList<RoleForeground> Foregrounds,
@@ -255,7 +272,8 @@ public sealed record AccentContrastPlan(
     CheckBoxPerimeter? CheckBoxPerimeter,
     bool SelectedRowCue,
     SelectionOutline? SelectedItemOutline,
-    double? SelectedItemFillRatio)
+    double? SelectedItemFillRatio,
+    SelectedSubtleItemCue? SelectedSubtleItemCue)
 {
     /// <summary>
     /// Whether Scribe's own overrides apply at all: true only in a light or dark theme. Every Scribe trigger that changes
@@ -279,6 +297,10 @@ public static class AccentContrastPlanner
     private static readonly SrgbColor LightSurface = SrgbColor.FromRgb(0xF3, 0xF3, 0xF3);
     private static readonly SrgbColor DarkSurface = SrgbColor.FromRgb(0x20, 0x20, 0x20);
 
+    // Redesign nested panels join the general measured set: the end points cover the specified range.
+    private static readonly SrgbColor[] LightNestedSurfaces = [SrgbColor.Parse("#EAEAEA"), SrgbColor.Parse("#E5E5E5")];
+    private static readonly SrgbColor[] DarkNestedSurfaces = [SrgbColor.Parse("#383838"), SrgbColor.Parse("#404040")];
+
     // The themes' own text tones, where the resources cannot be read (Light.xaml and Dark.xaml in WPF-UI 4.3.0).
     private static readonly SrgbColor LightBodyText = SrgbColor.Parse("#E4000000");
     private static readonly SrgbColor DarkBodyText = SrgbColor.White;
@@ -292,14 +314,16 @@ public static class AccentContrastPlanner
         new(AccentShadeRole.AccentTextPrimary, ThemeColor.AccentTextPrimary, WcagContrast.TextMinimum),
         new(AccentShadeRole.AccentTextSecondary, ThemeColor.AccentTextSecondary, WcagContrast.TextMinimum),
         new(AccentShadeRole.AccentTextTertiary, ThemeColor.AccentTextTertiary, WcagContrast.TextMinimum),
-        new(AccentShadeRole.Hyperlink, ThemeColor.Hyperlink, WcagContrast.TextMinimum),
-        new(AccentShadeRole.HyperlinkHover, ThemeColor.HyperlinkHover, WcagContrast.TextMinimum),
+        new(AccentShadeRole.Hyperlink, ThemeColor.AccentTextPrimary, WcagContrast.TextMinimum),
+        new(AccentShadeRole.HyperlinkHover, ThemeColor.AccentTextSecondary, WcagContrast.TextMinimum),
+        new(AccentShadeRole.ChartBar, ThemeColor.AccentFill, WcagContrast.NonTextMinimum),
 
         // ToggleSwitch.xaml: once on, the stroked track fades out and the visible one has no stroke, so the fill is
         // the only thing that can stand out from the page: ToggleSwitchFillOn, then its PointerOver and Pressed tones.
         new(AccentShadeRole.SwitchTrack, ThemeColor.AccentPrimary, WcagContrast.NonTextMinimum),
         new(AccentShadeRole.SwitchTrackHover, ThemeColor.AccentFillHover, WcagContrast.NonTextMinimum),
         new(AccentShadeRole.SwitchTrackPressed, ThemeColor.AccentFillPressed, WcagContrast.NonTextMinimum),
+        new(AccentShadeRole.SelectionIndicator, ThemeColor.AccentFill, WcagContrast.NonTextMinimum),
     ];
 
     // Which fills each foreground sits on, from WPF-UI 4.3.0's templates, one role per resource a template reads. A
@@ -323,6 +347,10 @@ public static class AccentContrastPlanner
         // ListBoxItem.xaml: a selected item stays on ListBoxItemSelectedBackgroundThemeBrush while hovered.
         new(AccentForegroundRole.SelectedItem, ForegroundKind.Text, [TextConvention.OnAccent],
             [Fill.Of(ThemeColor.AccentPrimary)], []),
+
+        // Phase 2 selected lists: primary text on a subtle fill, with a separate accent pill carrying the selection.
+        new(AccentForegroundRole.SelectedSubtleItem, ForegroundKind.Text, [TextConvention.Body],
+            [Fill.Of(ThemeColor.SubtleFillSecondary)], []),
 
         // CheckBox.xaml: CheckBoxCheckGlyphForeground on CheckBoxCheckBackgroundFillChecked, and on its PointerOver and
         // Pressed fills; one brush for all three states.
@@ -360,7 +388,7 @@ public static class AccentContrastPlanner
     public static IReadOnlyList<AccentForegroundRole> AllRoles { get; } = Roles.Select(r => r.Role).ToArray();
 
     /// <summary>Every shade role a plan in a light or dark theme can hold.</summary>
-    public static IReadOnlyList<AccentShadeRole> AllShades { get; } = ShadeSpecs.Select(s => s.Role).ToArray();
+    public static IReadOnlyList<AccentShadeRole> AllShades { get; } = ShadeSpecs.Select(s => s.Role).Append(AccentShadeRole.ChartBarCurrent).ToArray();
 
     /// <param name="theme">The theme WPF-UI applied.</param>
     /// <param name="systemHighContrast">Whether Windows is in a contrast theme, whatever WPF-UI applied.</param>
@@ -376,12 +404,12 @@ public static class AccentContrastPlanner
         // the light or dark app theme itself), and either way the system pairs decide, not a planned colour.
         if (theme == AppearanceTheme.HighContrast || systemHighContrast)
         {
-            return new AccentContrastPlan(AccentContrastMode.ContrastTheme, [], [], null, false, null, null);
+            return new AccentContrastPlan(AccentContrastMode.ContrastTheme, [], [], null, false, null, null, null);
         }
 
         if (theme == AppearanceTheme.Unknown)
         {
-            return new AccentContrastPlan(AccentContrastMode.UnknownTheme, [], [], null, false, null, null);
+            return new AccentContrastPlan(AccentContrastMode.UnknownTheme, [], [], null, false, null, null, null);
         }
 
         var light = theme == AppearanceTheme.Light;
@@ -394,10 +422,31 @@ public static class AccentContrastPlanner
         {
             if (colors.TryGetValue(spec.Source, out var source))
             {
+                var shadeSurfaces = spec.Role == AccentShadeRole.SelectionIndicator
+                    ? SelectionIndicatorSurfaces(colors, page)
+                    : surfaces;
+                if (shadeSurfaces.Count == 0)
+                {
+                    continue;
+                }
+
                 // Lighter in the dark theme, darker in the light one: away from the page, whatever side the colour is on.
-                var result = ContrastShade.Ensure(source, surfaces, spec.Required, lighter: !light);
+                var result = ContrastShade.Ensure(source, shadeSurfaces, spec.Required, lighter: !light);
                 shades.Add(new ShadeCorrection(spec.Role, result.Original, result.Color, spec.Required, result.OriginalRatio, result.Ratio));
             }
+        }
+
+        if (shades.FirstOrDefault(s => s.Role == AccentShadeRole.ChartBar) is { } chartBar)
+        {
+            var distinct = ContrastShade.Ensure(chartBar.Color, [chartBar.Color], 1.5, lighter: !light);
+            var readable = ContrastShade.Ensure(distinct.Color, surfaces, WcagContrast.NonTextMinimum, lighter: !light);
+            shades.Add(new ShadeCorrection(
+                AccentShadeRole.ChartBarCurrent,
+                chartBar.Color,
+                readable.Color,
+                WcagContrast.NonTextMinimum,
+                ContrastShade.Lowest(chartBar.Color, surfaces),
+                readable.Ratio));
         }
 
         var foregrounds = new List<RoleForeground>(Roles.Length);
@@ -436,7 +485,9 @@ public static class AccentContrastPlanner
             itemOutline = new SelectionOutline(outline, againstFill, ContrastShade.Lowest(outline, surfaces));
         }
 
-        return new AccentContrastPlan(AccentContrastMode.Applied, foregrounds, shades, perimeter, true, itemOutline, selectedItemFillRatio);
+        var subtleCue = PlanSelectedSubtleCue(colors, page, surfaces, foregrounds, shades);
+
+        return new AccentContrastPlan(AccentContrastMode.Applied, foregrounds, shades, perimeter, true, itemOutline, selectedItemFillRatio, subtleCue);
 
         SrgbColor? Convention(TextConvention convention) => convention switch
         {
@@ -490,7 +541,16 @@ public static class AccentContrastPlanner
     // of them errs toward more contrast on the ones a given control is not on.
     private static List<SrgbColor> Surfaces(IReadOnlyDictionary<ThemeColor, SrgbColor> colors, SrgbColor page)
     {
+        var light = WcagContrast.RelativeLuminance(page) > 0.5;
         var surfaces = new List<SrgbColor> { page };
+        foreach (var nested in light ? LightNestedSurfaces : DarkNestedSurfaces)
+        {
+            if (!surfaces.Contains(nested))
+            {
+                surfaces.Add(nested);
+            }
+        }
+
         foreach (var key in new[] { ThemeColor.WindowBackground, ThemeColor.CardBackground, ThemeColor.ControlFill, ThemeColor.ControlFillSecondary })
         {
             if (colors.TryGetValue(key, out var color) && !surfaces.Contains(color.Over(page)))
@@ -500,6 +560,67 @@ public static class AccentContrastPlanner
         }
 
         return surfaces;
+    }
+
+    private static SelectedSubtleItemCue? PlanSelectedSubtleCue(
+        IReadOnlyDictionary<ThemeColor, SrgbColor> colors,
+        SrgbColor page,
+        IReadOnlyList<SrgbColor> surfaces,
+        IReadOnlyList<RoleForeground> foregrounds,
+        IReadOnlyList<ShadeCorrection> shades)
+    {
+        if (!colors.TryGetValue(ThemeColor.SubtleFillSecondary, out var subtleFill))
+        {
+            return null;
+        }
+
+        var text = foregrounds.FirstOrDefault(f => f.Role == AccentForegroundRole.SelectedSubtleItem);
+        var textRatio = text is null
+            ? 0
+            : surfaces.Min(surface => WcagContrast.Ratio(text.Foreground, subtleFill.Over(surface)));
+
+        if (shades.FirstOrDefault(s => s.Role == AccentShadeRole.SelectionIndicator) is not { } indicator)
+        {
+            return null;
+        }
+
+        var indicatorSurfaces = SelectionIndicatorSurfaces(colors, page);
+        return new SelectedSubtleItemCue(
+            textRatio,
+            indicator.Color,
+            indicator.OriginalRatio,
+            indicatorSurfaces.Count == 0
+                ? 0
+                : indicatorSurfaces.Min(surface => WcagContrast.Ratio(indicator.Color.Over(surface), surface)));
+    }
+
+    private static List<SrgbColor> SelectionIndicatorSurfaces(IReadOnlyDictionary<ThemeColor, SrgbColor> colors, SrgbColor page)
+    {
+        if (!colors.TryGetValue(ThemeColor.SubtleFillSecondary, out var subtleFill))
+        {
+            return [];
+        }
+
+        var under = new List<SrgbColor> { page };
+        foreach (var key in new[] { ThemeColor.WindowBackground, ThemeColor.CardBackground })
+        {
+            if (colors.TryGetValue(key, out var color) && !under.Contains(color.Over(page)))
+            {
+                under.Add(color.Over(page));
+            }
+        }
+
+        var selected = new List<SrgbColor>(under.Count);
+        foreach (var surface in under)
+        {
+            var composed = subtleFill.Over(surface);
+            if (!selected.Contains(composed))
+            {
+                selected.Add(composed);
+            }
+        }
+
+        return selected;
     }
 
     private static CheckBoxPerimeter? PlanPerimeter(

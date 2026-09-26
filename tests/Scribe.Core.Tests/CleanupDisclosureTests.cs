@@ -31,7 +31,7 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("with every cleanup request", text, StringComparison.Ordinal);
         Assert.Contains("the text Scribe recognized for that dictation", text, StringComparison.Ordinal);
         Assert.Contains("writing style", text, StringComparison.Ordinal);
-        Assert.Contains("enabled dictionary and library terms", text, StringComparison.Ordinal);
+        Assert.Contains("your dictionary plus the word packs you let AI cleanup use", text, StringComparison.Ordinal);
         Assert.Contains(
             $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {N(CleanupPrompt.MaxGlossaryChars)} characters",
             text, StringComparison.Ordinal);
@@ -56,6 +56,14 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("audio never leaves this device", text, StringComparison.Ordinal);
         Assert.Contains("GitHub Copilot sends all of this to GitHub", text, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData(CleanupProvider.FoundryLocal, "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.")]
+    [InlineData(CleanupProvider.AzureFoundry, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to your Microsoft Foundry deployment. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.OpenAiCompatible, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to the address you enter. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.GitHubCopilot, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to GitHub. Audio never leaves this PC.")]
+    public void Provider_summary_names_the_destination_and_never_audio(CleanupProvider provider, string expected) =>
+        Assert.Equal(expected, CleanupDisclosure.SummaryFor(provider));
 
     [Theory]
     [InlineData(CleanupProvider.AzureFoundry, "to your Microsoft Foundry deployment.")]
@@ -83,6 +91,7 @@ public sealed class CleanupDisclosureTests
             CleanupDisclosure.WhatCleanupSends, CleanupDisclosure.WhatCleanupNeverSends, CleanupDisclosure.SuggestionConsentTitle,
         };
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SuggestionConsentFor));
+        texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SummaryFor));
 
         foreach (var text in texts)
         {
@@ -96,7 +105,7 @@ public sealed class CleanupDisclosureTests
     {
         var root = RepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
-        var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var code = ReadSettingsWindowCode(root);
 
         Assert.Contains("{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}", xaml, StringComparison.Ordinal);
         Assert.Contains("{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}", xaml, StringComparison.Ordinal);
@@ -109,7 +118,7 @@ public sealed class CleanupDisclosureTests
     [Fact]
     public void The_suggestion_consent_is_bound_to_the_recipient_and_the_saved_provider()
     {
-        var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var code = ReadSettingsWindowCode(RepositoryRoot());
 
         // Asked about the recipient the service serves and the provider actually saved, and the history
         // is sent only to that recipient.
@@ -124,28 +133,30 @@ public sealed class CleanupDisclosureTests
         var assignments = Regex.Matches(code, Regex.Escape(Snapshot)).Select(m => m.Index).ToList();
         Assert.Equal(2, assignments.Count);
         var load = code.IndexOf("_settings = settingsRepository.Load();", StringComparison.Ordinal);
-        var store = code.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
-        var apply = code.IndexOf("_applySettings(_settings);", store, StringComparison.Ordinal);
+        var request = code.IndexOf("private WordPackSaveProtocolRequest BuildWordPackSaveRequest(", StringComparison.Ordinal);
+        var store = code.IndexOf("_settingsRepository.SaveBundle(", request, StringComparison.Ordinal);
+        var apply = code.IndexOf("useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings)", request, StringComparison.Ordinal);
         Assert.True(load >= 0 && load < assignments[0] && assignments[0] < store, "The snapshot is not taken where the settings load.");
-        Assert.True(store < assignments[1] && assignments[1] < apply, "The snapshot does not follow the store.");
+        Assert.True(store < assignments[1] && store < apply, "The snapshot does not follow the store.");
     }
 
     [Fact]
     public void Only_the_save_that_stored_the_window_s_document_applies_it()
     {
         var root = RepositoryRoot();
-        var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var code = ReadSettingsWindowCode(root);
 
         // One call puts settings into effect from the window, the successful Save's: after the store, before the
         // handlers of a Save that failed. A failed Save leaves every edit in _settings, a picked provider among them,
         // so any other caller would apply what nothing stored.
         var call = Assert.Single(Regex.Matches(code, @"_applySettings\s*(\(|\?\.|\.Invoke\b)"));
-        Assert.StartsWith("_applySettings(_settings);", code[call.Index..], StringComparison.Ordinal);
+        Assert.StartsWith("_applySettings(_settings)", code[call.Index..], StringComparison.Ordinal);
         var save = code.IndexOf("private async Task<bool> TrySaveAsync()", StringComparison.Ordinal);
-        var store = code.IndexOf("_settingsRepository.SaveBundle(", save, StringComparison.Ordinal);
-        var failed = code.IndexOf("catch (Exception ex) when (_closed)", store, StringComparison.Ordinal);
+        var request = code.IndexOf("private WordPackSaveProtocolRequest BuildWordPackSaveRequest(", StringComparison.Ordinal);
+        var store = code.IndexOf("_settingsRepository.SaveBundle(", request, StringComparison.Ordinal);
+        var protocolCall = code.IndexOf("_wordPackSaveProtocol.SaveAsync(", save, StringComparison.Ordinal);
         Assert.True(
-            save >= 0 && save < store && store < call.Index && call.Index < failed,
+            save >= 0 && protocolCall > save && store < call.Index,
             "The window applies its own document outside the successful Save.");
 
         // Nor is the delegate handed on another way: besides its field, its assignment and that call, it only goes to
@@ -153,7 +164,8 @@ public sealed class CleanupDisclosureTests
         // generation they ask for, which the window awaits before it says the change is in effect.
         var uses = code.Split('\n').Select(line => line.Trim()).Where(line => Regex.IsMatch(line, @"\b_applySettings\b")).ToList();
         Assert.All(uses, line => Assert.True(
-            line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" or "var applying = _applySettings(_settings);" ||
+            line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" ||
+            line is "useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings)," ||
             line.StartsWith("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
             $"The window uses _applySettings in a way this test does not know: {line}"));
 
@@ -175,6 +187,7 @@ public sealed class CleanupDisclosureTests
         var policy = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md")));
 
         Assert.Contains("every cleanup request sends that provider", policy, StringComparison.Ordinal);
+        Assert.Contains("the word packs you let AI cleanup use", policy, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions any of it", policy, StringComparison.Ordinal);
         Assert.Contains("whether or not post-processing is switched on", policy, StringComparison.Ordinal);
         Assert.Contains(
@@ -288,6 +301,14 @@ public sealed class CleanupDisclosureTests
     // Markdown wraps lines and emphasizes words, so a phrase is looked for in the text as it reads.
     private static string Flatten(string markdown) =>
         Regex.Replace(markdown.Replace("*", string.Empty, StringComparison.Ordinal), @"\s+", " ");
+
+    private static string ReadSettingsWindowCode(string root) =>
+        string.Join(
+            '\n',
+            Directory.GetFiles(Path.Combine(root, "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+                .OrderBy(path => Path.GetFileName(path).Equals("SettingsWindow.xaml.cs", StringComparison.Ordinal) ? 0 : 1)
+                .ThenBy(path => path, StringComparer.Ordinal)
+                .Select(File.ReadAllText));
 
     private static string RepositoryRoot()
     {

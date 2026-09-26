@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 
 namespace Scribe.Core.PostProcessing;
 
@@ -16,9 +17,29 @@ public sealed class LastTranscriptStore
     public const int PreviewLength = 42;
 
     private readonly object _gate = new();
+    private readonly Func<long> _currentRevision;
+
+    public LastTranscriptStore()
+        : this(() => 0)
+    {
+    }
+
+    public LastTranscriptStore(HistoryDeletionNotifier deletionNotifier)
+        : this(() => deletionNotifier.Revision)
+    {
+    }
+
+    internal LastTranscriptStore(Func<long> currentRevision)
+    {
+        _currentRevision = currentRevision;
+    }
+
+    public sealed record RetainedTranscript(Guid Id, string HistoryText, string Text, DateTimeOffset TimestampUtc, long AddedAtRevision);
+
+    private sealed record Slot(Guid Id, string HistoryText, string Current, DateTimeOffset TimestampUtc, long AddedAtRevision);
 
     // Most recent first. A plain list is fine at this size: inserts shift at most Capacity items.
-    private readonly List<string> _entries = new(Capacity);
+    private readonly List<Slot> _entries = new(Capacity);
 
     public void Set(string text)
     {
@@ -29,15 +50,16 @@ public sealed class LastTranscriptStore
 
         lock (_gate)
         {
-            // Re-dictating identical text must not burn ring slots on adjacent duplicates: the
-            // transcript is already recoverable at the top of the list, so keep it there and
-            // preserve the older, distinct entries beneath it.
-            if (_entries.Count > 0 && string.Equals(_entries[0], text, StringComparison.Ordinal))
+            // Re-dictating identical text still represents a new capture. Keep one top slot for adjacent
+            // duplicates, but refresh its deletion revision and timestamp so a late history notice for the
+            // earlier capture cannot remove the new tray copy.
+            if (_entries.Count > 0 && string.Equals(_entries[0].Current, text, StringComparison.Ordinal))
             {
+                _entries[0] = new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, _currentRevision());
                 return;
             }
 
-            _entries.Insert(0, text);
+            _entries.Insert(0, new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, _currentRevision()));
             if (_entries.Count > Capacity)
             {
                 _entries.RemoveAt(_entries.Count - 1);
@@ -78,9 +100,9 @@ public sealed class LastTranscriptStore
             var changed = false;
             for (var i = 0; i < _entries.Count; i++)
             {
-                if (string.Equals(_entries[i], original, StringComparison.Ordinal))
+                if (string.Equals(_entries[i].Current, original, StringComparison.Ordinal))
                 {
-                    _entries[i] = updated;
+                    _entries[i] = _entries[i] with { Current = updated };
                     changed = true;
                 }
             }
@@ -95,7 +117,7 @@ public sealed class LastTranscriptStore
     /// while <see cref="Update"/> searches an empty ring, so a correction would appear to save and
     /// then quietly fail to fix the dictation it came from.
     ///
-    /// Only ever fills a ring that is empty, so it can never displace live dictations.
+    /// Live dictations already in the ring stay newest, and seeded entries fill the older slots without duplicates.
     /// </summary>
     public void Seed(IEnumerable<string>? transcripts)
     {
@@ -106,11 +128,7 @@ public sealed class LastTranscriptStore
 
         lock (_gate)
         {
-            if (_entries.Count > 0)
-            {
-                return;
-            }
-
+            var liveCount = _entries.Count;
             foreach (var text in transcripts)
             {
                 if (string.IsNullOrWhiteSpace(text) || _entries.Count >= Capacity)
@@ -118,8 +136,47 @@ public sealed class LastTranscriptStore
                     continue;
                 }
 
-                _entries.Add(text);
+                if (_entries.Take(liveCount).Any(entry => string.Equals(entry.Current, text, StringComparison.Ordinal) || string.Equals(entry.HistoryText, text, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                _entries.Add(new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, _currentRevision()));
             }
+        }
+    }
+
+    public bool SeedHistory(IEnumerable<HistoryEntry>? entries, long capturedRevision, Func<long> currentRevision)
+    {
+        if (entries is null)
+        {
+            return true;
+        }
+
+        lock (_gate)
+        {
+            if (currentRevision() != capturedRevision)
+            {
+                return false;
+            }
+
+            var liveCount = _entries.Count;
+            foreach (var history in entries)
+            {
+                if (string.IsNullOrWhiteSpace(history.Text) || _entries.Count >= Capacity)
+                {
+                    continue;
+                }
+
+                if (_entries.Take(liveCount).Any(entry => string.Equals(entry.Current, history.Text, StringComparison.Ordinal) || string.Equals(entry.HistoryText, history.Text, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                _entries.Add(new Slot(Guid.NewGuid(), history.Text, history.Text, history.TimestampUtc, capturedRevision));
+            }
+
+            return true;
         }
     }
 
@@ -129,7 +186,7 @@ public sealed class LastTranscriptStore
         {
             if (_entries.Count > 0)
             {
-                return _entries[0];
+                return _entries[0].Current;
             }
         }
 
@@ -137,6 +194,59 @@ public sealed class LastTranscriptStore
             .Select(entry => entry.Text)
             .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
     }
+
+    public Guid? CurrentId()
+    {
+        lock (_gate)
+        {
+            return _entries.Count == 0 ? null : _entries[0].Id;
+        }
+    }
+
+    public string? Get(Guid id)
+    {
+        lock (_gate)
+        {
+            return _entries.FirstOrDefault(entry => entry.Id == id)?.Current;
+        }
+    }
+
+
+    public IReadOnlyList<Guid> ApplyDeletion(HistoryDeletion deletion)
+    {
+        lock (_gate)
+        {
+            var removed = _entries
+                .Where(entry => HistoryDeletionNotifier.Covers(deletion, entry.HistoryText, entry.TimestampUtc, entry.AddedAtRevision))
+                .Select(entry => entry.Id)
+                .ToArray();
+            _entries.RemoveAll(entry => removed.Contains(entry.Id));
+            return removed;
+        }
+    }
+
+    /// <summary>Removes every retained transcript.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _entries.Clear();
+        }
+    }
+
+    /// <summary>Removes every retained copy of one transcript.</summary>
+    public IReadOnlyList<Guid> Forget(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+
+        return ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.Entry, new HistoryEntry(0, DateTimeOffset.UtcNow, text, 0, 0), Revision: long.MaxValue));
+    }
+
+    public IReadOnlyList<Guid> ForgetOlderThan(DateTimeOffset cutoffUtc) =>
+        ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
 
     /// <summary>
     /// Returns an immutable snapshot of the retained transcripts, most recent first.
@@ -146,7 +256,15 @@ public sealed class LastTranscriptStore
     {
         lock (_gate)
         {
-            return _entries.ToArray();
+            return _entries.Select(entry => entry.Current).ToArray();
+        }
+    }
+
+    public IReadOnlyList<RetainedTranscript> GetRecentEntries()
+    {
+        lock (_gate)
+        {
+            return _entries.Select(entry => new RetainedTranscript(entry.Id, entry.HistoryText, entry.Current, entry.TimestampUtc, entry.AddedAtRevision)).ToArray();
         }
     }
 

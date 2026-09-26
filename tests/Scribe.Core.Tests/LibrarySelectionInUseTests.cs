@@ -279,7 +279,12 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         Assert.Contains("baseEntries, services.GetRequiredService<ILibraryVocabularySource>().Current.Entries);", app, StringComparison.Ordinal);
         Assert.DoesNotContain("GetEnabledLibraryEntries", app, StringComparison.Ordinal);
         Assert.DoesNotContain("EnabledDictionaryLibraryIds", app, StringComparison.Ordinal);
-        var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var window = string.Join(
+            '\n',
+            Directory.GetFiles(Path.Combine(root, "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+                .OrderBy(path => Path.GetFileName(path).Equals("SettingsWindow.xaml.cs", StringComparison.Ordinal) ? 0 : 1)
+                .ThenBy(path => path, StringComparer.Ordinal)
+                .Select(File.ReadAllText));
         Assert.Contains("var vocabulary = _libraryVocabulary.Current;", window, StringComparison.Ordinal);
         Assert.Contains("[.. vocabulary.AiScope.PermittedLibraryIds],", window, StringComparison.Ordinal);
         Assert.DoesNotContain("_enabledLibrariesInUse", window, StringComparison.Ordinal);

@@ -31,6 +31,112 @@ public class HistoryRowFormatTests
         Assert.Equal(HistoryRowFormat.NotApplicable, HistoryRowFormat.Latency(-4));
     }
 
+    [Fact]
+    public void Cleanup_column_uses_seconds_or_not_recorded()
+    {
+        using var _ = new CultureScope("en-US");
+
+        Assert.Equal("0.9 s", HistoryRowFormat.CleanupTime(900));
+        Assert.Equal("Not recorded", HistoryRowFormat.CleanupTime(null));
+    }
+
+    [Fact]
+    public void Page_line_changes_after_older_rows_are_loaded()
+    {
+        Assert.Equal(HistoryPageLine.Hidden, HistoryRowFormat.PageLine(199, 200, loadedOlder: false, mayHaveOlder: false, olderLoadFailed: false));
+        Assert.Equal(
+            new HistoryPageLine("Showing your latest 200 dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Load older"),
+            HistoryRowFormat.PageLine(200, 200, loadedOlder: false, mayHaveOlder: true, olderLoadFailed: false));
+        Assert.Equal(
+            new HistoryPageLine("Showing 400 dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Load older"),
+            HistoryRowFormat.PageLine(400, 200, loadedOlder: true, mayHaveOlder: true, olderLoadFailed: false));
+        Assert.Equal(
+            new HistoryPageLine("Showing 450 dictations.", ShowLoadOlder: false, LoadOlderButtonText: "Load older"),
+            HistoryRowFormat.PageLine(450, 200, loadedOlder: true, mayHaveOlder: false, olderLoadFailed: false));
+    }
+
+    [Fact]
+    public void Failed_older_page_keeps_the_shown_rows_and_offers_retry()
+    {
+        Assert.Equal(
+            new HistoryPageLine("Couldn't load older dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Try again"),
+            HistoryRowFormat.PageLine(200, 200, loadedOlder: false, mayHaveOlder: true, olderLoadFailed: true));
+    }
+
+    [Theory]
+    [InlineData(0, 200, "No dictations match your search.", true)]
+    [InlineData(1, 200, "1 dictation matches.", false)]
+    [InlineData(12, 200, "12 dictations match.", false)]
+    [InlineData(200, 200, "The first 200 matches are shown.", false)]
+    public void Search_line_names_matches_and_the_cap(int count, int cap, string text, bool clear)
+    {
+        Assert.Equal(new HistorySearchLine(text, clear), HistoryRowFormat.SearchLine(count, cap));
+    }
+
+    [Fact]
+    public void Empty_state_uses_the_current_shortcut_action()
+    {
+        Assert.Equal(
+            "No dictations yet. Hold Page Down in any app and speak.",
+            HistoryRowFormat.EmptyState("Hold", "Page Down"));
+        Assert.Equal(
+            "No dictations yet. Press Page Down in any app and speak.",
+            HistoryRowFormat.EmptyState("Press", "Page Down"));
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false, false)]
+    [InlineData(true, false, false, false, true)]
+    [InlineData(true, true, true, true, true)]
+    public void Toolbar_state_depends_on_rows_and_selection(
+        bool hasRows,
+        bool hasSelection,
+        bool copy,
+        bool delete,
+        bool deleteAll)
+    {
+        Assert.Equal(new HistoryToolbarState(copy, delete, deleteAll), HistoryRowFormat.Toolbar(hasRows, hasSelection));
+    }
+
+    [Fact]
+    public void Load_state_places_failures_without_covering_rows()
+    {
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: false, ShowToolbar: false, ShowCenteredStatus: true, ShowInlineStatus: false, ShowSearchNoMatches: false, ShowRetry: true),
+            HistoryRowFormat.LoadState(hasRows: false, loadFailed: true, searchActive: false));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: true, ShowSearchNoMatches: false, ShowRetry: true),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: true, searchActive: false));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: false, ShowSearchNoMatches: false),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: false));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: false, ShowSearchNoMatches: true),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: true));
+    }
+
+    [Fact]
+    public void A_retry_says_it_is_loading_where_the_failure_was_and_never_over_the_rows()
+    {
+        // Review of a1e3867, item 5: Try again with rows shown drew "Loading history..." in the centred panel over them.
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: true, ShowSearchNoMatches: false, ShowRetry: false),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: false, loading: true));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: false, ShowToolbar: false, ShowCenteredStatus: true, ShowInlineStatus: false, ShowSearchNoMatches: false, ShowRetry: false),
+            HistoryRowFormat.LoadState(hasRows: false, loadFailed: false, searchActive: false, loading: true));
+        Assert.Equal("Loading history...", HistoryRowFormat.LoadingText);
+        Assert.Equal("Couldn't load your history.", HistoryRowFormat.LoadFailedText);
+    }
+
+    [Theory]
+    [InlineData(90, false, "Keeps dictations for 90 days. Doesn't save recordings.")]
+    [InlineData(1, false, "Keeps dictations for 1 day. Doesn't save recordings.")]
+    [InlineData(365, true, "Keeps dictations for 1 year. Saves a recording with each dictation for up to 7 days.")]
+    [InlineData(0, true, "Keeps dictations until you delete them. Saves a recording with each dictation for up to 7 days.")]
+    public void History_settings_summary_names_retention_and_recordings(int days, bool recordings, string expected) =>
+        Assert.Equal(expected, HistorySettingsSummary.Describe(days, recordings));
+
     [Theory]
     [InlineData(412, "412 ms")]
     [InlineData(3412, "3,412 ms")]
@@ -74,6 +180,26 @@ public class HistoryRowFormatTests
     public void No_audio_reads_as_not_applicable()
     {
         Assert.Equal(HistoryRowFormat.NotApplicable, HistoryRowFormat.Audio(0));
+    }
+
+    [Fact]
+    public void Details_line_reports_the_recorded_cleanup_time()
+    {
+        using var _ = new CultureScope("en-US");
+
+        Assert.Equal(
+            "Recorded 12.0 s. Recognized in 0.4 s. AI cleanup took 0.9 s.",
+            HistoryRowFormat.Details(12_000, 400, 900));
+    }
+
+    [Fact]
+    public void Details_line_says_when_cleanup_time_was_not_recorded()
+    {
+        using var _ = new CultureScope("en-US");
+
+        Assert.Equal(
+            "Recorded 12.0 s. Recognized in 0.4 s. No AI cleanup time was recorded.",
+            HistoryRowFormat.Details(12_000, 400, null));
     }
 
     /// <summary>Pins the thread culture for one assertion and restores it afterwards.</summary>

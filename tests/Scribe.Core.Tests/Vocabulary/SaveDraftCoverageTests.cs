@@ -15,7 +15,8 @@ public sealed class SaveDraftCoverageTests
 {
     private static readonly XNamespace X = "http://schemas.microsoft.com/winfx/2006/xaml";
 
-    private static readonly string[] WalkedPages = ["SectionGeneral", "SectionDictation", "SectionOverlay", "SectionAi"];
+    // The Settings redesign moved the stored controls onto these (Phase 3a): the old General and Overlay pages are gone.
+    private static readonly string[] WalkedPages = ["SectionDictation", "SectionAi", "SectionAdvanced", "HistorySettingsCard"];
 
     // The kinds of editor the draft's walk reads (by XAML element name), or containers of them.
     private static readonly string[] WalkedKinds = ["TextBox", "PasswordBox", "NumberBox", "ToggleSwitch", "CheckBox", "RadioButton", "ComboBox", "Slider"];
@@ -26,11 +27,11 @@ public sealed class SaveDraftCoverageTests
         ["Hotkey"] = "_pendingBinding with { Mode = SelectedMode }",
         ["DictationOnlyHotkey"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
         ["EnableAiCleanup"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
+        ["AiCleanupModel"] = "SelectedFoundryModelAlias",
         ["AiCleanupAzureSubscriptionId"] = Subscription,
         ["AiCleanupAzureSubscriptionName"] = Subscription,
         ["AiCleanupAzureSubscriptionTenantId"] = Subscription,
         ["Profiles"] = "BuildProfiles()",
-        ["EnabledDictionaryLibraryIds"] = "CollectEnabledLibraryIds()",
     };
 
     // Values the save stores that nothing edited during its wait can change, with the reason.
@@ -47,6 +48,8 @@ public sealed class SaveDraftCoverageTests
         ["HasCompletedFirstRun"] = "the first-run welcome's one-time flag, set by the welcome, never by an editor in Settings",
         ["HasRetiredSeedVocabulary"] = "startup migration bookkeeping (SeedVocabularyRetirement), never shown in Settings",
         ["HasResetFoundryDemotions"] = "startup migration bookkeeping (FoundryDemotionReset), never shown in Settings",
+        ["EnabledDictionaryLibraryIds"] =
+            "word pack switches are stored by the library payload; a settings-only Save keeps the stored projection",
     };
 
     private const string Subscription =
@@ -100,17 +103,45 @@ public sealed class SaveDraftCoverageTests
         // are carried by whether they differ from storage (and a row edit in progress); the intents' revisions only order
         // this Save against the tray's own writes, which store themselves, and a tray change that alters what this window
         // would store alters ForSave, which the draft reads.
-        var bundle = Regex.Match(save, @"_settingsRepository\.SaveBundle\((?<arguments>[^;]*)\);");
+        var request = Body(window, "private WordPackSaveProtocolRequest BuildWordPackSaveRequest(");
+        var bundle = Regex.Match(request, @"_settingsRepository\.SaveBundle\((?<arguments>[^;]*)\);");
         Assert.True(bundle.Success, "SaveBundle's call was not found.");
-        var arguments = Regex.Split(bundle.Groups["arguments"].Value, @",\s*(?![^()]*\))").Select(argument => argument.Trim()).ToList();
-        Assert.Equal(4, arguments.Count);
-        Assert.Equal("_settings", arguments[0]);
-        Assert.Equal("entries", arguments[1]);
-        Assert.Equal("snippets", arguments[2]);
-        Assert.StartsWith("new ExternalIntents(", arguments[3], StringComparison.Ordinal);
-        Assert.Contains("_dictionaryLoad.HasChanges(DictionarySignature())", draft, StringComparison.Ordinal);
+        Assert.Contains("_settings", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("entries", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("snippets", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("intents ?? new ExternalIntents(0, 0)", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("payload", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("sections.Write(draft.Part(\"async-sections\"), capture);", draft, StringComparison.Ordinal);
+        Assert.Contains("DictionarySignature()", window, StringComparison.Ordinal);
         Assert.Contains("RowEditInProgress(DictionaryGrid)", draft, StringComparison.Ordinal);
-        Assert.Contains("_snippetLoad.HasChanges(SnippetSignature())", draft, StringComparison.Ordinal);
+        Assert.Contains("SnippetSignature()", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ai_cleanup_radio_buttons_have_accessible_names_and_help_text()
+    {
+        var xaml = Document().Descendants()
+            .Where(element => element.Attribute(X + "Name") is not null)
+            .ToDictionary(element => element.Attribute(X + "Name")!.Value, element => element);
+        var radios = new Dictionary<string, (string Title, string Description)>
+        {
+            ["AiProviderLocalRadio"] = ("AiProviderLocalTitle", "AiProviderLocalDescription"),
+            ["AiProviderCopilotRadio"] = ("AiProviderCopilotTitle", "AiProviderCopilotDescription"),
+            ["AiProviderFoundryRadio"] = ("AiProviderFoundryTitle", "AiProviderFoundryDescription"),
+            ["AiProviderCustomRadio"] = ("AiProviderCustomTitle", "AiProviderCustomDescription"),
+            ["AzureCliRadio"] = ("AzureCliRadioTitle", "AzureCliRadioDescription"),
+            ["AzureServicePrincipalRadio"] = ("AzureServicePrincipalRadioTitle", "AzureServicePrincipalRadioDescription"),
+            ["AzureApiKeyRadio"] = ("AzureApiKeyRadioTitle", "AzureApiKeyRadioDescription"),
+        };
+
+        foreach (var (radioName, (title, description)) in radios)
+        {
+            var radio = xaml[radioName];
+            Assert.Equal($"{{Binding ElementName={title}}}", Attribute(radio, "AutomationProperties.LabeledBy"));
+            Assert.Equal($"{{Binding Text, ElementName={description}}}", Attribute(radio, "AutomationProperties.HelpText"));
+            Assert.True(xaml.ContainsKey(title), title);
+            Assert.True(xaml.ContainsKey(description), description);
+        }
     }
 
     [Fact]
@@ -190,7 +221,7 @@ public sealed class SaveDraftCoverageTests
         Assert.Contains("var draft = new Scribe.Core.Vocabulary.DraftSnapshot();", draft, StringComparison.Ordinal);
         Assert.Contains("return draft.Hash();", draft, StringComparison.Ordinal);
         Assert.Contains("Scribe.Core.Vocabulary.DraftSnapshot draft)", editors, StringComparison.Ordinal);
-        foreach (var component in new[] { ".Binding(", ".Microphone(", ".Subscription(", ".Profiles(BuildProfiles())", ".LibrarySet(" })
+        foreach (var component in new[] { ".Binding(", ".Microphone(", ".Subscription(", ".Profiles(BuildProfiles())", "sections.Write(" })
         {
             Assert.Contains(component, draft, StringComparison.Ordinal);
         }
@@ -209,7 +240,9 @@ public sealed class SaveDraftCoverageTests
         foreach (var name in signatures)
         {
             var expression = Regex.Match(window, $@"private string {name}\(\)\s*=>\s*(?<body>[^;]+);");
-            var body = expression.Success ? expression.Groups["body"].Value : Body(window, $"private string {name}()");
+            var body = name == "SaveDraftSignature"
+                ? Body(window, "private string SaveDraftSignature(SaveDraftSections sections")
+                : expression.Success ? expression.Groups["body"].Value : Body(window, $"private string {name}()");
             Assert.Contains("new Scribe.Core.Vocabulary.DraftSnapshot()", body, StringComparison.Ordinal);
             Assert.Contains(".Hash()", body, StringComparison.Ordinal);
             AssertNoJoining(body, name);
@@ -370,11 +403,16 @@ public sealed class SaveDraftCoverageTests
 
     private static string Squash(string code) => Regex.Replace(code, @"\s+", string.Empty);
 
+    private static string? Attribute(XElement element, string localName) =>
+        element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == localName)?.Value;
+
     private static (string Window, string Save, string Draft, IReadOnlyCollection<string> Skipped, IReadOnlyDictionary<string, XElement> Xaml) Sources()
     {
-        var window = File.ReadAllText(Path.Combine(Root(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var window = string.Join("\n", Directory.EnumerateFiles(Path.Combine(Root(), "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
-        var draft = Body(window, "private string SaveDraftSignature()");
+        var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
         Assert.True(skippedList.Success, "The draft's list of controls the walk skips was not found.");
         var skipped = skippedList.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

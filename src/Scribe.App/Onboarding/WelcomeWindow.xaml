@@ -3,24 +3,26 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="Welcome to Scribe"
-        Width="560" Height="640" MinWidth="460" MinHeight="520"
+        Width="560" Height="640" MinWidth="440" MinHeight="460"
         WindowStartupLocation="CenterScreen"
-        ResizeMode="NoResize"
+        ResizeMode="CanResize"
+        ShowInTaskbar="True"
+        Topmost="False"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
         WindowCornerPreference="Round">
     <ui:FluentWindow.Resources>
-        <Style TargetType="TextBlock" x:Key="TipTitle">
-            <Setter Property="FontSize" Value="14"/>
+        <Style TargetType="TextBlock" x:Key="CardTitle">
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
-        <Style TargetType="TextBlock" x:Key="TipBody">
-            <Setter Property="FontSize" Value="13"/>
+        <Style TargetType="TextBlock" x:Key="CardDescription">
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
-            <Setter Property="Margin" Value="0,3,0,0"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
     </ui:FluentWindow.Resources>
 
@@ -31,99 +33,133 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="Welcome to Scribe">
+        <ui:TitleBar Grid.Row="0" Title="Welcome to Scribe" ShowMaximize="False">
             <ui:TitleBar.Icon>
-                <ui:SymbolIcon Symbol="Mic24"/>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <Grid Grid.Row="1" Margin="28,8,28,0">
-            <StackPanel>
-                <!-- Hero -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
-                    <ui:SymbolIcon Symbol="Mic48"
-                                   FontSize="40"
-                                   Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
-                                   VerticalAlignment="Center"/>
-                </StackPanel>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="28,8,28,16">
+                <!-- The brand mark bitmap stays in contrast themes like any app icon; code suppresses only the XAML-drawn blue bars. -->
+                <Grid Width="64" Height="64" HorizontalAlignment="Center" AutomationProperties.Name="Scribe">
+                    <Image x:Name="WelcomeStaticMark" Source="pack://application:,,,/Assets/scribe-mark.png"
+                           Width="64" Height="64" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <Grid x:Name="WelcomeAnimatedMark" Width="64" Height="64" Visibility="Collapsed">
+                        <Image Source="pack://application:,,,/Assets/scribe-mark-nobars.png"
+                               Width="64" Height="64" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <Canvas Width="64" Height="64" IsHitTestVisible="False">
+                            <Rectangle Canvas.Left="24.75" Canvas.Top="22.125" Width="1.875" Height="4.125"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar1Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="27.75" Canvas.Top="19.875" Width="1.875" Height="8.625"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar2Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="31" Canvas.Top="16.125" Width="2" Height="15.625"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar3Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="34.375" Canvas.Top="19.875" Width="1.875" Height="8.625"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar4Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="37.375" Canvas.Top="22.125" Width="1.875" Height="4.125"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar5Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                        </Canvas>
+                    </Grid>
+                </Grid>
                 <TextBlock Text="Welcome to Scribe"
-                           FontSize="24" FontWeight="SemiBold"
+                           FontSize="{DynamicResource ScribeFontTitle}" FontWeight="SemiBold"
                            HorizontalAlignment="Center" Margin="0,12,0,0"
                            Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                <TextBlock Text="Speak, and your words land wherever your cursor is."
-                           FontSize="13" TextAlignment="Center" TextWrapping="Wrap"
-                           Margin="0,6,0,0"
+                <TextBlock Text="Speak, and Scribe types your words wherever your cursor is."
+                           FontSize="{DynamicResource ScribeFontBody}" TextAlignment="Center" TextWrapping="Wrap"
+                           Margin="0,4,0,0"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
 
-                <!-- The core gesture. Each card lays its icon and text out in a two-column grid rather than a
-                     horizontal StackPanel: a StackPanel measures its children at infinite width in the stacking
-                     direction, so a wrapping TextBlock inside one never wraps and runs past the card's edge. -->
-                <ui:Card Margin="0,20,0,0">
+                <ui:Card Margin="0,20,0,0" Padding="16,12">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="Keyboard24" FontSize="22"
-                                       VerticalAlignment="Top" Margin="0,2,14,0"
-                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                        <ui:SymbolIcon Symbol="Keyboard24" FontSize="{DynamicResource ScribeFontIconLarge}" VerticalAlignment="Top" Margin="0,2,14,0"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
-                            <TextBlock x:Name="GestureTitle" Style="{StaticResource TipTitle}" Text="Hold, speak, release"/>
-                            <TextBlock x:Name="GestureHint" Style="{StaticResource TipBody}"/>
+                            <TextBlock x:Name="GestureTitle" Style="{StaticResource CardTitle}"/>
+                            <TextBlock x:Name="GestureHint" Style="{StaticResource CardDescription}"/>
+                            <TextBlock x:Name="SecondaryShortcutText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
+                            <TextBlock x:Name="LaptopHintText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
                         </StackPanel>
                     </Grid>
                 </ui:Card>
 
-                <!-- Privacy -->
-                <ui:Card Margin="0,10,0,0">
+                <ui:Card Margin="0,8,0,0" Padding="16,12">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="ShieldTask24" FontSize="22"
-                                       VerticalAlignment="Top" Margin="0,2,14,0"
-                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                        <ui:SymbolIcon Symbol="ShieldTask24" FontSize="{DynamicResource ScribeFontIconLarge}" VerticalAlignment="Top" Margin="0,2,14,0"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Style="{StaticResource TipTitle}" Text="Private by design"/>
-                            <TextBlock Style="{StaticResource TipBody}"
-                                       Text="Everything runs on your PC. Your audio never leaves the machine."/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Audio stays on this PC"/>
+                            <TextBlock Style="{StaticResource CardDescription}"
+                                       Text="Speech recognition runs on your PC, and your audio never leaves it."/>
                         </StackPanel>
                     </Grid>
                 </ui:Card>
 
-                <!-- Tips -->
-                <ui:Card Margin="0,10,0,0">
+                <ui:Card Margin="0,8,0,0" Padding="16,12">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <ui:SymbolIcon Symbol="Lightbulb24" FontSize="22"
-                                       VerticalAlignment="Top" Margin="0,2,14,0"
-                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                        <ui:SymbolIcon Symbol="Lightbulb24" FontSize="{DynamicResource ScribeFontIconLarge}" VerticalAlignment="Top" Margin="0,2,14,0"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Style="{StaticResource TipTitle}" Text="Good to know"/>
-                            <TextBlock Style="{StaticResource TipBody}"
-                                       Text="Scribe lives in your system tray. Right-click the microphone icon for settings and quick actions."/>
-                            <TextBlock Style="{StaticResource TipBody}"
-                                       Text="Prefer a mouse button? In Settings, choose Set and press it."/>
-                            <TextBlock Style="{StaticResource TipBody}"
-                                       Text="Turn on optional AI cleanup to polish grammar and punctuation as you dictate."/>
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Good to know"/>
+                            <TextBlock Style="{StaticResource CardDescription}"
+                                       Text="Select the Scribe icon next to the clock to open Settings, or right-click it for quick actions. Don't see it? Select Show hidden icons (the up arrow). You can also open Scribe from the Start menu."/>
+                            <TextBlock Style="{StaticResource CardDescription}"
+                                       Text="Prefer a mouse button? In Settings, choose Change next to your shortcut, then press the middle, Back or Forward button."/>
+                            <TextBlock Style="{StaticResource CardDescription}"
+                                       Text="Optional AI cleanup fixes punctuation and grammar. Set it up in Settings, AI cleanup."/>
                         </StackPanel>
                     </Grid>
                 </ui:Card>
             </StackPanel>
-        </Grid>
+        </ScrollViewer>
 
-        <!-- Buttons. "Got it" is also the Cancel button, so Escape dismisses the welcome like every other
-             Scribe dialog, without opening settings. -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                    Margin="28,16,28,20">
-            <ui:Button x:Name="SettingsButton" Content="Open settings" MinWidth="120"
-                       Margin="0,0,8,0" Click="SettingsButton_Click"/>
-            <ui:Button x:Name="GotItButton" Content="Got it" Appearance="Primary"
-                       MinWidth="96" Click="GotItButton_Click" IsDefault="True" IsCancel="True"/>
-        </StackPanel>
+        <Border Grid.Row="2" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="28,12,28,20">
+            <WrapPanel HorizontalAlignment="Right">
+                <ui:Button x:Name="TryItButton" Content="Try it now" Appearance="Primary" MinWidth="104"
+                           Margin="0,0,8,8" Click="TryItButton_Click"/>
+                <ui:Button x:Name="SettingsButton" Content="Open settings" MinWidth="120"
+                           Margin="0,0,8,8" Click="SettingsButton_Click"/>
+                <ui:Button x:Name="CloseButton" Content="Close" MinWidth="96" IsCancel="True"
+                           Margin="0,0,0,8" Click="CloseButton_Click"/>
+            </WrapPanel>
+        </Border>
     </Grid>
 </ui:FluentWindow>

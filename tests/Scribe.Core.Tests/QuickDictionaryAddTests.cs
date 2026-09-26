@@ -235,21 +235,16 @@ public sealed class QuickDictionaryAddTests
     }
 
     [Fact]
-    public void An_empty_replacement_is_allowed_and_described_as_a_removal()
+    public void Compatibility_overload_keeps_empty_replacement_as_a_savable_removal()
     {
-        var plan = QuickDictionaryAdd.Build("um", "", wholeWord: true, Empty);
+        var legacy = QuickDictionaryAdd.Build("um", "", wholeWord: true, Empty);
+        var redesigned = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("um", "", Remove: false, WholeWord: true), QuickAddVocabulary.Compose(Empty, [], [], []));
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.Create, plan.Kind);
-        Assert.Equal(string.Empty, plan.Entry!.Replacement);
-
-        // The message has to say what will happen without using "delete", which testers read as
-        // deleting something they already have rather than dropping a word from future dictations.
-        Assert.Contains("leave \"um\" out", plan.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("delete", plan.Message, StringComparison.OrdinalIgnoreCase);
-
-        // And it must not claim the rule is already stored: this message is shown while the user is
-        // still typing, so past tense would let them walk away from an unsaved rule.
-        Assert.DoesNotContain("saved", plan.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Create, legacy.Kind);
+        Assert.True(legacy.CanSave);
+        Assert.Equal(string.Empty, legacy.Entry!.Replacement);
+        Assert.Equal("Scribe will leave \"um\" out of what you dictate.", legacy.Message);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Pending, redesigned.Kind);
     }
 
     [Fact]

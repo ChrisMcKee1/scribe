@@ -74,7 +74,7 @@ public static class MicrophoneChoices
     public const string DefaultSuffix = " (default)";
 
     /// <summary>Builds the picker. <paramref name="devices"/> are the active input devices, in any order.</summary>
-    public static MicrophoneMenu Build(IReadOnlyList<AudioDevice> devices, MicrophoneSelection current)
+    public static MicrophoneMenu Build(IReadOnlyList<AudioDevice> devices, MicrophoneSelection current, bool markWindowsDefault = true)
     {
         ArgumentNullException.ThrowIfNull(devices);
 
@@ -90,7 +90,7 @@ public static class MicrophoneChoices
         {
             choices.Add(new MicrophoneChoice(
                 MicrophoneChoiceKind.Device,
-                device.IsDefault ? device.Name + DefaultSuffix : device.Name,
+                device.IsDefault && markWindowsDefault ? device.Name + DefaultSuffix : device.Name,
                 new MicrophoneSelection(device.Id, device.Name)));
         }
 

@@ -117,6 +117,9 @@ public enum SettingsAccelerator
 
     /// <summary>Ctrl+Shift+N, New word pack, on the Word packs tab.</summary>
     NewLibrary,
+
+    /// <summary>Alt+Left, Back to word packs, on the Word packs tab while a stacked card covers the list.</summary>
+    BackToWordPacks,
 }
 
 /// <summary>What the window knows when an accelerator is pressed.</summary>
@@ -129,9 +132,10 @@ public readonly record struct AcceleratorState(bool HotkeyCapture, bool ImeCompo
 /// The Settings window's close guard, Escape order and accelerator gate (plan 3.9, review findings S4, S6, R16, UX-02).
 /// </summary>
 /// <remarks>
-/// Every close the user starts (Cancel, an unconsumed Escape, Alt+F4, the close button, the tray's Quit) asks when a
-/// tracked section has unsaved changes, with Keep editing focused, because the prompt is usually reached by one Escape
-/// too many and Enter must not commit half-typed rows. A close Windows or an update starts never waits on a prompt.
+/// Every close the user starts (Cancel, an unconsumed Escape, Alt+F4, the close button, the tray's Quit, or an update
+/// restart) asks when a tracked section has unsaved changes, with Keep editing focused, because the prompt is usually
+/// reached by one Escape too many and Enter must not commit half-typed rows. A close Windows starts, sign-out or
+/// shutdown, never waits on a prompt.
 /// Profiles and general settings are not tracked yet: that needs a baseline of the settings document free of side
 /// effects, which is a later change. Pure.
 /// </remarks>
@@ -144,7 +148,7 @@ public static class SettingsCloseGuard
     public static CloseDecision Decide(UnsavedSections sections, CloseTrigger trigger)
     {
         var tracked = sections & (UnsavedSections.Libraries | UnsavedSections.Dictionary | UnsavedSections.Snippets);
-        if (tracked == UnsavedSections.None || trigger is CloseTrigger.UpdateRestart or CloseTrigger.SignOut or CloseTrigger.Shutdown)
+        if (tracked == UnsavedSections.None || trigger is CloseTrigger.SignOut or CloseTrigger.Shutdown)
         {
             return new CloseDecision(false, null, [], null);
         }
