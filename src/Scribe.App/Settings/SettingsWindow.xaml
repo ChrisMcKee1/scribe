@@ -950,7 +950,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Longest recording" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Style="{StaticResource CardDescription}"
-                                                       Text="A recording stops at this length and Scribe types what it heard, so a stuck key cannot record forever."/>
+                                                       Text="A recording stops at this length and Scribe types what it heard, so a stuck key can't record forever."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ComboBox x:Name="MaxDictationCombo" Width="240" DisplayMemberPath="Label"
