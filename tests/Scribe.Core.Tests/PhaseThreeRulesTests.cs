@@ -59,6 +59,16 @@ public sealed class PhaseThreeRulesTests
             text);
     }
 
+    [Theory]
+    [InlineData(KeyModifiers.Control, null)]
+    [InlineData(KeyModifiers.None, 0x4Bu)]
+    public void Shortcut_caveats_do_not_promise_a_mouse_button_is_swallowed_in_a_chord_or_with_a_modifier(KeyModifiers modifiers, uint? secondary)
+    {
+        var binding = new HotkeyBinding(MouseButtons.Middle, modifiers, HotkeyMode.Hold, true) { SecondaryVirtualKey = secondary };
+
+        Assert.Null(ShortcutCaveats.For(binding));
+    }
+
     [Fact]
     public void Shortcut_caveats_are_empty_for_regular_keys()
     {

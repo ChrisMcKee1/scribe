@@ -33,7 +33,9 @@ public static class ShortcutCaveats
             return null;
         }
 
-        if (MouseButtons.Uses(binding))
+        // Only a button bound on its own, with no modifier, is swallowed whenever it is pressed. In a chord the first input
+        // still reaches the app, and with a modifier the button alone still does its usual job, so neither gets this line.
+        if (binding.Modifiers == KeyModifiers.None && binding.SecondaryVirtualKey is null && MouseButtons.IsBindable(binding.VirtualKey))
         {
             return "While Scribe runs, this mouse button doesn't do its usual job in other apps, unless you hold Ctrl, Shift, Alt or the Windows key.";
         }

@@ -900,6 +900,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// <summary>Navigates to a section still addressed by older validation code.</summary>
     private void ShowSection(Grid section)
     {
+        // Both callers report a problem in a row of Your words, which the Word packs tab would hide.
+        if (ReferenceEquals(section, SectionDictionary))
+        {
+            DictionaryTabs.SelectedItem = YourWordsTab;
+        }
+
         foreach (var pair in PagePanels)
         {
             if (ReferenceEquals(pair.Value, section))
@@ -1062,32 +1068,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
-            VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
             AutoStopCheck.IsChecked = _settings.AutoStopOnSilence;
-            PostCheck.IsChecked = _settings.ApplyPostProcessing;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             StoreAudioHintText.Text = StorageRetentionPolicy.StoredAudioHint;
-            ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
             SpaceAfterDictationCheck.IsChecked = _settings.AddSpaceAfterDictation;
             LoadDurationChoices(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, _settings.HistoryRetentionDays);
-            LoadDurationChoices(MaxDictationCombo, MaxDictationCustomBox, DurationChoiceKind.MaxDictation, _settings.MaxDictationMinutes);
-            LoadDurationChoices(IdleReleaseCombo, IdleReleaseCustomBox, DurationChoiceKind.IdleRelease, _settings.ReleaseModelsAfterIdleMinutes);
-            UpdateAdvancedSectionHeaders();
             HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
-
-            var items = (InjectionChoice[])InjectionCombo.ItemsSource;
-            InjectionCombo.SelectedItem =
-                items.FirstOrDefault(i => i.Method == _settings.InjectionMethod) ?? items[0];
-
-            var newlineItems = (NewlineChoice[])NewlineCombo.ItemsSource;
-            NewlineCombo.SelectedItem =
-                newlineItems.FirstOrDefault(i => i.Mode == _settings.NewlineHandling) ?? newlineItems[0];
-
-            ThreadsCombo.ItemsSource = ThreadChoices.Build(_settings.DecodeThreads);
-            ThreadsCombo.SelectedValuePath = nameof(ThreadChoice.Value);
-            ThreadsCombo.SelectedValue = _settings.DecodeThreads;
-            LoadTranscriptionModelChoices(_settings.TranscriptionModelId);
-            UpdateTranscriptionModelUi();
+            LoadAdvancedControls(_settings);
+            UpdateAdvancedSectionHeaders(_settings);
 
             LoadAiSettings();
         }
@@ -1097,28 +1085,30 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void UpdateAdvancedSectionHeaders()
+    private void UpdateAdvancedSectionHeaders(AppSettings source)
     {
-        AdvancedSpeechHeader.Text = SectionHeaderText("Speech recognition", AdvancedSection.SpeechRecognition);
-        AdvancedRecordingHeader.Text = SectionHeaderText("Recording", AdvancedSection.Recording);
-        AdvancedTypingHeader.Text = SectionHeaderText("Typing into apps", AdvancedSection.TypingIntoApps);
-        AdvancedTextChangesHeader.Text = SectionHeaderText("Text changes", AdvancedSection.TextChanges);
-        AdvancedAppearanceHeader.Text = SectionHeaderText("Appearance", AdvancedSection.Appearance);
+        AdvancedSpeechHeader.Text = SectionHeaderText("Speech recognition", AdvancedSection.SpeechRecognition, source);
+        AdvancedRecordingHeader.Text = SectionHeaderText("Recording", AdvancedSection.Recording, source);
+        AdvancedTypingHeader.Text = SectionHeaderText("Typing into apps", AdvancedSection.TypingIntoApps, source);
+        AdvancedTextChangesHeader.Text = SectionHeaderText("Text changes", AdvancedSection.TextChanges, source);
+        AdvancedAppearanceHeader.Text = SectionHeaderText("Appearance", AdvancedSection.Appearance, source);
     }
 
-    private string SectionHeaderText(string title, AdvancedSection section)
+    private static string SectionHeaderText(string title, AdvancedSection section, AppSettings source)
     {
-        var suffix = AdvancedDefaults.SectionHeader(section, _settings);
+        var suffix = AdvancedDefaults.SectionHeader(section, source);
         return string.IsNullOrEmpty(suffix) ? title : $"{title}  {suffix}";
     }
 
     private void UpdateFirstRunHint()
     {
+        // Until RefreshFirstRunHint has read the count, and after a failed read, the count is unknown and counts as not
+        // empty, so the hint stays hidden.
         var state = FirstRunHint.ShouldShow(
             SettingsLoadState.Loaded,
-            _history.GetRecent(1).Count,
+            _firstRunHistoryCount ?? 1,
             dismissed: false,
-            ShortcutInstruction(_pendingBinding));
+            ShortcutInstruction(_pendingBinding with { Mode = SelectedMode }));
         FirstRunHintBar.Title = state.Title;
         FirstRunHintBar.Message = state.Message;
         FirstRunHintBar.IsOpen = state.Show;
@@ -1149,6 +1139,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 : "AI cleanup is off, so this works like the dictation shortcut."
             : "Set a shortcut first.";
         SetCaveat(DictationOnlyCaveatText, ShortcutCaveats.For(_pendingDictationOnlyBinding));
+        UpdateSilenceStop();
     }
 
     private static void SetCaveat(TextBlock textBlock, string? text)
@@ -5228,6 +5219,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
             _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
+            _settings.AccentSource = AccentSourceCheck.IsChecked == true ? AccentSource.Windows : AccentSource.Scribe;
             _settings.AddSpaceAfterDictation = SpaceAfterDictationCheck.IsChecked == true;
             // NumberBox.Value is a nullable double: a cleared box falls back to the saved value
             // rather than silently becoming 0, which here means "off/forever".

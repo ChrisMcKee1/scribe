@@ -651,6 +651,7 @@
                                                        Margin="8,0,0,0" MinWidth="72"
                                                        Click="CaptureButton_Click"/>
                                             <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="210" Margin="8,0,0,0"
+                                                      SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Dictation shortcut, hold or toggle"/>
                                         </Grid>
@@ -674,6 +675,7 @@
                                             <ui:Button x:Name="DictationOnlyClearButton" Grid.Column="2" Content="Remove" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyClearButton_Click"/>
                                             <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="210" Margin="8,0,0,0"
+                                                      SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Shortcut without AI cleanup, hold or toggle"/>
                                         </Grid>
@@ -906,7 +908,7 @@
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Free memory when Scribe isn't used"/>
                                             <ui:NumberBox x:Name="IdleReleaseCustomBox" Width="96" Margin="8,0,0,0"
-                                                          Minimum="1" Maximum="120" SmallChange="1"
+                                                          SmallChange="1"
                                                           MaxDecimalPlaces="0" ClearButtonEnabled="False"
                                                           SpinButtonPlacementMode="Inline"
                                                           Visibility="Collapsed"
@@ -942,7 +944,7 @@
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Longest recording"/>
                                             <ui:NumberBox x:Name="MaxDictationCustomBox" Width="96" Margin="8,0,0,0"
-                                                          Minimum="1" Maximum="1440" SmallChange="1"
+                                                          SmallChange="1"
                                                           MaxDecimalPlaces="0" ClearButtonEnabled="False"
                                                           SpinButtonPlacementMode="Inline"
                                                           Visibility="Collapsed"
@@ -1415,19 +1417,18 @@
 
                     <!-- ============================ Dictionary ============================ -->
                     <Grid x:Name="SectionDictionary" Visibility="Collapsed">
+                        <!-- List page shell (6.5.6): the tabs fill the star row, so each tab's grid owns its scrolling. -->
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="DictionaryPageTitle" Text="Dictionary" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Replace spoken words or phrases with the spelling you actually want. 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
                         </StackPanel>
-                        <TabControl Grid.Row="1">
-                            <TabItem Header="Your words">
+                        <TabControl x:Name="DictionaryTabs" Grid.Row="1">
+                            <TabItem x:Name="YourWordsTab" Header="Your words">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1585,7 +1586,7 @@
                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                           Background="Transparent" BorderThickness="0"
                                           RowStyle="{StaticResource LibraryRow}"
-                                          AutomationProperties.LabeledBy="{Binding ElementName=LibrariesPageTitle}">
+                                          AutomationProperties.Name="Word packs">
                                     <DataGrid.Columns>
                                         <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
                                                                 ElementStyle="{StaticResource LibraryOnCheckBox}"
@@ -1644,8 +1645,6 @@
                                 </Grid>
                             </ui:Card>
                         </Grid>
-                        <TextBlock Grid.Row="2" Style="{StaticResource CardDescription}" Margin="2,8,2,0"
-                                   Text="Tip: click a word pack to preview its terms on the right. Enable the ones you want, turn off any you don't, then save."/>
 
                                 </Grid>
                             </TabItem>
@@ -1972,7 +1971,7 @@
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Keep dictations"/>
                                             <ui:NumberBox x:Name="HistoryRetentionCustomBox" Width="96" Margin="8,0,0,0"
-                                                          Minimum="1" Maximum="3650" SmallChange="1"
+                                                          SmallChange="1"
                                                           MaxDecimalPlaces="0" ClearButtonEnabled="False"
                                                           SpinButtonPlacementMode="Inline"
                                                           Visibility="Collapsed"

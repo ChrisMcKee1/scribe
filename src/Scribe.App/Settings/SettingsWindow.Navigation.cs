@@ -73,6 +73,7 @@ public partial class SettingsWindow
         NavList.SelectedValuePath = nameof(NavigationItem.Page);
         NavList.ItemsSource = view;
         NavList.SelectedValue = SettingsPage.Dictation;
+        RefreshFirstRunHint();
     }
 
     private SettingsPage? CurrentNavigationPage()

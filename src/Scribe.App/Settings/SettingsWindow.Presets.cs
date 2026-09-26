@@ -29,6 +29,7 @@ public partial class SettingsWindow
             : Visibility.Collapsed;
     }
 
+    // Only called after ValidateDurationChoices passed, so a custom selection holds a whole number in range here.
     private static int SelectedDurationValue(ComboBox combo, Wpf.Ui.Controls.NumberBox customBox, int fallback)
     {
         if (combo.SelectedItem is not DurationChoice choice)
@@ -44,16 +45,27 @@ public partial class SettingsWindow
         return customBox.Value is double value ? (int)Math.Round(value) : fallback;
     }
 
-    private bool ValidateDurationChoices()
-    {
-        return ValidateDuration(DurationChoiceKind.HistoryRetention, SettingsPage.History, HistoryRetentionCustomBox, SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, _settings.HistoryRetentionDays)) &&
-               ValidateDuration(DurationChoiceKind.MaxDictation, SettingsPage.Advanced, MaxDictationCustomBox, SelectedDurationValue(MaxDictationCombo, MaxDictationCustomBox, _settings.MaxDictationMinutes)) &&
-               ValidateDuration(DurationChoiceKind.IdleRelease, SettingsPage.Advanced, IdleReleaseCustomBox, SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, _settings.ReleaseModelsAfterIdleMinutes));
-    }
+    private bool ValidateDurationChoices() =>
+        ValidateDuration(DurationChoiceKind.HistoryRetention, SettingsPage.History, HistoryRetentionCombo, HistoryRetentionCustomBox) &&
+        ValidateDuration(DurationChoiceKind.MaxDictation, SettingsPage.Advanced, MaxDictationCombo, MaxDictationCustomBox) &&
+        ValidateDuration(DurationChoiceKind.IdleRelease, SettingsPage.Advanced, IdleReleaseCombo, IdleReleaseCustomBox);
 
-    private bool ValidateDuration(DurationChoiceKind kind, SettingsPage page, Wpf.Ui.Controls.NumberBox control, int value)
+    // A preset needs no check: several of them are 0 ("Until I delete them", "No limit", "Never"), which the custom range
+    // rightly refuses. Only a custom entry is checked, as typed: the custom boxes have no Minimum or Maximum, because WPF-UI's
+    // NumberBox clamps to those when it loses focus, which would turn a typed 0 into 1 day of history without a word. An
+    // empty or fractional entry is refused like an out-of-range one.
+    private bool ValidateDuration(DurationChoiceKind kind, SettingsPage page, ComboBox combo, Wpf.Ui.Controls.NumberBox customBox)
     {
-        if (DurationChoices.ValidateCustom(kind, page, control.Name, value) is not { } issue)
+        if (combo.SelectedItem is not DurationChoice { IsCustom: true })
+        {
+            return true;
+        }
+
+        var typed = customBox.Value;
+        var value = typed is double number && !double.IsNaN(number) && Math.Abs(number - Math.Round(number)) < 1e-9
+            ? (int)Math.Clamp(Math.Round(number), int.MinValue, int.MaxValue)
+            : int.MinValue;
+        if (DurationChoices.ValidateCustom(kind, page, customBox.Name, value) is not { } issue)
         {
             return true;
         }
