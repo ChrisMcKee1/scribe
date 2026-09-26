@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Scribe.Core.Feedback;
@@ -150,7 +151,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            e.Handled = true;
+            _ = HandleEscapeAsync();
+            return;
+        }
+
         var accelerator =
+            Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S ? SettingsAccelerator.Save :
             Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F ? SettingsAccelerator.Find :
             Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.N ? SettingsAccelerator.AddTerm :
             Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N ? SettingsAccelerator.NewLibrary :
@@ -169,6 +178,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         e.Handled = true;
         switch (accelerator.Value)
         {
+            case SettingsAccelerator.Save:
+                _ = SaveFromAcceleratorAsync();
+                break;
             case SettingsAccelerator.Find:
                 LibrarySearchBox.Focus();
                 LibrarySearchBox.SelectAll();
@@ -308,6 +320,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         InitializeComponent();
         InitializeNavigation();
+        InitializeFooterAndClose();
+        InitializeWindowFit();
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -1518,6 +1532,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     Replacement = entry.Replacement,
                     WholeWord = entry.WholeWord,
                     Enabled = entry.Enabled,
+                    Origin = DraftRowOrigin.Saved,
+                    LoadedPattern = entry.Pattern,
+                    LoadedReplacement = entry.Replacement,
+                    LoadedWholeWord = entry.WholeWord,
+                    LoadedEnabled = entry.Enabled,
                 };
                 row.PropertyChanged += DictionaryRow_PropertyChanged;
                 _rows.Add(row);
@@ -2899,6 +2918,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         e.Handled = true;
+        if (e.Key == Key.Escape)
+        {
+            CancelCapture();
+            return;
+        }
         ApplyCaptureStep(_capture.Press(HotkeyCapture.VirtualKeyOf(e)));
     }
 
@@ -3152,7 +3176,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Model installation failed", ex.Message);
+            _log.LogWarning("Could not download the speech model ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't download the speech model", UserFacingError.Describe("download the speech model", UserFacingErrorDestination.InternetService, ex).Message);
         }
         finally
         {
@@ -5280,7 +5305,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Restore failed", $"Couldn't restore the frontier prompt: {ex.Message}");
+            _log.LogWarning("Could not restore the frontier prompt ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't restore the frontier prompt", "Couldn't restore the frontier prompt. Try again.");
         }
     }
 
@@ -5297,7 +5323,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Restore failed", $"Couldn't restore the local prompt: {ex.Message}");
+            _log.LogWarning("Could not restore the local prompt ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't restore the local prompt", "Couldn't restore the local prompt. Try again.");
         }
     }
 
@@ -5520,6 +5547,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private Task<bool> ConfirmRiskyAsync(string title, string content, string confirmText) =>
         ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: true));
+
+    private Task<bool> ConfirmRiskyAsync(string title, string content, string confirmText, string cancelText) =>
+        ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: true, cancelText: cancelText));
 
     private async Task<bool> ShowConfirmationAsync(Wpf.Ui.Controls.MessageBox dialog)
     {
@@ -5751,7 +5781,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
-                ShowInfo("Settings saved.");
+                ShowInfo("Changes saved.");
             }
         }
         finally
@@ -5772,6 +5802,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
+                _closeAccepted = true;
                 Close();
             }
         }
@@ -5977,8 +6008,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         // Commit any in-progress grid edit first so validation sees the latest input.
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-        LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+        CommitPendingGridEdits();
+
+        if (!ValidateDraftBeforeSave())
+        {
+            return false;
+        }
 
         // Only validate and save the dictionary/snippets when the user actually changed them.
         // Pre-existing bad data in an untouched section (e.g. a duplicate entry that was loaded
@@ -6220,7 +6255,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not save settings:\n{ex.Message}");
+            _log.LogWarning("Could not save Settings ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't save changes", "Couldn't save changes. Your edits are still here. Try again.");
             return false;
         }
     }
@@ -6479,7 +6515,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not read your history:\n{ex.Message}");
+                _log.LogWarning("Could not read history for AI suggestions ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't read history", UserFacingError.Describe("read your history", UserFacingErrorDestination.Database, ex).Message);
             }
 
             return;
@@ -6544,7 +6581,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not get AI suggestions:\n{ex.Message}");
+                _log.LogWarning("Could not get AI suggestions ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't get AI suggestions", UserFacingError.Describe("get AI suggestions", UserFacingErrorDestination.InternetService, ex).Message);
             }
         }
     }
@@ -6560,7 +6598,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+                _log.LogWarning("Could not scan history for dictionary cleanup ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't scan history", UserFacingError.Describe("scan your history", UserFacingErrorDestination.Database, ex).Message);
             }
 
             return;
@@ -6656,7 +6695,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+                _log.LogWarning("Could not scan history for dictionary cleanup ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't scan history", UserFacingError.Describe("scan your history", UserFacingErrorDestination.Database, ex).Message);
             }
 
             return;
@@ -6778,7 +6818,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not save the template:\n{ex.Message}");
+            _log.LogWarning("Could not save the dictionary template ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't save the template", UserFacingError.Describe("save the template", UserFacingErrorDestination.File, ex).Message);
         }
     }
 
@@ -6807,7 +6848,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not export the dictionary:\n{ex.Message}");
+            _log.LogWarning("Could not export the dictionary ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't export the dictionary", UserFacingError.Describe("export the dictionary", UserFacingErrorDestination.File, ex).Message);
         }
     }
 
@@ -6832,7 +6874,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not read that file:\n{ex.Message}");
+            _log.LogWarning("Could not read the dictionary import file ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't read that file", UserFacingError.Describe("read that file", UserFacingErrorDestination.File, ex).Message);
             return;
         }
 
@@ -6899,7 +6942,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 Replacement = entry.Replacement,
                 WholeWord = entry.WholeWord,
                 Enabled = entry.Enabled,
-            };
+            Origin = DraftRowOrigin.New,
+            Touched = true,
+        };
 
             if (op.Kind == DictionaryImportMerger.OperationKind.Update)
             {
@@ -6925,7 +6970,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private static int ClampNumberBox(double? value, int fallback, int max) =>
         value is null ? Math.Clamp(fallback, 0, max) : Math.Clamp((int)Math.Round(value.Value), 0, max);
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
+    private async void CloseButton_Click(object sender, RoutedEventArgs e) => await RequestCloseAsync(CloseTrigger.CancelButton);
 
     // These records back ComboBoxes that use DisplayMemberPath, which sets what is drawn but not
     // what is announced: without a ToString override a screen reader reads the record's default
@@ -7032,6 +7077,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         private string _coverageTooltip = string.Empty;
 
         public long Id { get; set; }
+        public DraftRowOrigin Origin { get; set; } = DraftRowOrigin.New;
+        public bool Touched { get; set; }
+        public string? LoadedPattern { get; set; }
+        public string? LoadedReplacement { get; set; }
+        public bool LoadedWholeWord { get; set; } = true;
+        public bool LoadedEnabled { get; set; } = true;
+        public string RowKey => Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
 
         public string Pattern
         {
@@ -7110,6 +7162,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             field = value;
+            if (name is nameof(Pattern) or nameof(Replacement) or nameof(WholeWord) or nameof(Enabled))
+            {
+                Touched = true;
+            }
+
             OnPropertyChanged(name);
             return true;
         }
