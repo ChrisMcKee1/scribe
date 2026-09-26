@@ -195,6 +195,8 @@ public static class TryDictationReportClassifier
     public const string AudioCaptureFailed = "Recording did not finish.";
     public const string NoSpeechDetected = "No speech was detected.";
     public const string NoSpeechRecognized = "No speech was recognized.";
+    public const string SilenceTrimmingFailed = "Silence trimming failed.";
+    public const string SpeechRecognitionFailed = "Speech recognition failed.";
     public const string SilentCapture = "Only silence was recorded.";
     public const string AiCleanupFailed = "AI cleanup did not finish.";
     public const string DictionaryAndSnippetsFailed = "Dictionary and snippets did not finish.";
@@ -203,8 +205,8 @@ public static class TryDictationReportClassifier
     public static string FailureReasonForStage(string? stage) => stage switch
     {
         StageAudioCapture => AudioCaptureFailed,
-        StageVoiceActivityDetection => NoSpeechDetected,
-        StageSpeechRecognition => NoSpeechRecognized,
+        StageVoiceActivityDetection => SilenceTrimmingFailed,
+        StageSpeechRecognition => SpeechRecognitionFailed,
         StageAiCleanup => AiCleanupFailed,
         StageDictionaryAndSnippets => DictionaryAndSnippetsFailed,
         StageTextInsertion => TextInsertionFailed,

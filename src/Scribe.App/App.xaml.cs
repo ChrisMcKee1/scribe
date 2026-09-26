@@ -974,20 +974,28 @@ public partial class App : Application
     /// it belongs to is still what the pill shows. Showing a warning puts the pill in its recording state, so one that ran
     /// after a pause or a stop had been shown would bring back a recording pill that nothing would ever hide.
     /// </summary>
-    private void OnRecordingWarning(long recordingRevision, string reason)
+    private void ShowRecordingWarningOrNotice(DictationProblemReport report, string reason, DictationProblemNotice notice)
     {
-        if (recordingRevision <= 0)
+        if (_dictationState is not { } relay)
         {
-            return; // the recording was already over when the warning was raised
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
         }
 
-        _dictationState?.PublishIfCurrent(recordingRevision, () =>
+        if (DictationProblemRouting.DecideRecordingWarning(
+                report.Problem,
+                recordingIndicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
+                report.RecordingRevision,
+                report.RecordingRevision) == DictationProblemSurface.Notice)
         {
-            if (_controller?.CurrentSettings.ShowOverlay == true)
-            {
-                _overlay?.ShowRecordingWarning(reason);
-            }
-        });
+            ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+            return;
+        }
+
+        relay.PublishIfCurrent(
+            report.RecordingRevision,
+            () => _overlay?.ShowRecordingWarning(reason),
+            () => ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action)));
     }
 
     /// <summary>
@@ -1359,7 +1367,7 @@ public partial class App : Application
 
         if (!controllerError && routing == DictationProblemSurface.RecordingPill)
         {
-            OnRecordingWarning(report.RecordingRevision, DictationProblemText.PillLine(report, mode) ?? notice.Title);
+            ShowRecordingWarningOrNotice(report, DictationProblemText.PillLine(report, mode) ?? notice.Title, notice);
             return;
         }
 

@@ -560,8 +560,16 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             TryDictationReportClassifier.StageSpeechRecognition,
             TryDictationReportClassifier.NoSpeechRecognized));
         Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageVoiceActivityDetection,
+            TryDictationReportClassifier.SilenceTrimmingFailed));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.SpeechRecognitionFailed));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
             TryDictationReportClassifier.StageSpeechRecognition,
             "The speech recognizer crashed."));
+        Assert.Equal(TryDictationReportClassifier.SilenceTrimmingFailed, TryDictationReportClassifier.FailureReasonForStage(TryDictationReportClassifier.StageVoiceActivityDetection));
+        Assert.Equal(TryDictationReportClassifier.SpeechRecognitionFailed, TryDictationReportClassifier.FailureReasonForStage(TryDictationReportClassifier.StageSpeechRecognition));
         Assert.Equal(FailureStage.TextInsertion, TryDictationReportClassifier.StageFrom(TryDictationReportClassifier.StageTextInsertion));
         Assert.True(TryDictationReportClassifier.IsMicrophoneProblem(TryDictationReportClassifier.StageAudioCapture));
     }
@@ -799,6 +807,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
                 nameof(TryDictationReportClassifier.StageTextInsertion) => TryDictationReportClassifier.StageTextInsertion,
                 nameof(TryDictationReportClassifier.NoSpeechDetected) => TryDictationReportClassifier.NoSpeechDetected,
                 nameof(TryDictationReportClassifier.NoSpeechRecognized) => TryDictationReportClassifier.NoSpeechRecognized,
+                nameof(TryDictationReportClassifier.SilenceTrimmingFailed) => TryDictationReportClassifier.SilenceTrimmingFailed,
+                nameof(TryDictationReportClassifier.SpeechRecognitionFailed) => TryDictationReportClassifier.SpeechRecognitionFailed,
                 nameof(TryDictationReportClassifier.AudioCaptureFailed) => TryDictationReportClassifier.AudioCaptureFailed,
                 nameof(TryDictationReportClassifier.SilentCapture) => TryDictationReportClassifier.SilentCapture,
                 nameof(TryDictationReportClassifier.AiCleanupFailed) => TryDictationReportClassifier.AiCleanupFailed,

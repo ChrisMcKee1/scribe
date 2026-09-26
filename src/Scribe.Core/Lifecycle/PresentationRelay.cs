@@ -66,11 +66,20 @@ public sealed class PresentationRelay<T>
     /// </summary>
     public void PublishIfCurrent(long revision, Action work)
     {
+        PublishIfCurrent(revision, work, null);
+    }
+
+    /// <summary>
+    /// Queues work that belongs to the change numbered <paramref name="revision"/>, or <paramref name="ifNotCurrent"/>
+    /// when that change is no longer the rendered one by the time the rendering thread reaches it.
+    /// </summary>
+    public void PublishIfCurrent(long revision, Action work, Action? ifNotCurrent)
+    {
         ArgumentNullException.ThrowIfNull(work);
 
         try
         {
-            _post(() => RunIfCurrent(revision, work));
+            _post(() => RunIfCurrent(revision, work, ifNotCurrent));
         }
         catch (Exception ex)
         {
@@ -78,12 +87,13 @@ public sealed class PresentationRelay<T>
         }
     }
 
-    private void RunIfCurrent(long revision, Action work)
+    private void RunIfCurrent(long revision, Action work, Action? ifNotCurrent)
     {
         try
         {
             if (revision <= 0 || _isClosed() || Interlocked.Read(ref _lastRendered) != revision)
             {
+                ifNotCurrent?.Invoke();
                 return;
             }
 

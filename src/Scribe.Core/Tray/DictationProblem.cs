@@ -52,6 +52,23 @@ public static class DictationProblemRouting
             recordingIndicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
         _ => recordingIndicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
     };
+
+    public static DictationProblemSurface DecideRecordingWarning(
+        DictationProblem problem,
+        bool recordingIndicatorOn,
+        long recordingRevision,
+        long lastRenderedRevision)
+    {
+        var decision = Decide(problem, recordingIndicatorOn);
+        if (decision != DictationProblemSurface.RecordingPill)
+        {
+            return decision;
+        }
+
+        return recordingRevision > 0 && recordingRevision == lastRenderedRevision
+            ? DictationProblemSurface.RecordingPill
+            : DictationProblemSurface.Notice;
+    }
 }
 
 public static class DictationProblemText

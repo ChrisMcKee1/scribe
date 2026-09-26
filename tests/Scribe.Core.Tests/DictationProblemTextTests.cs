@@ -134,7 +134,6 @@ public sealed class DictationProblemTextTests
             Assert.Equal(Expected(problem, indicatorOn: true), on);
             Assert.Equal(Expected(problem, indicatorOn: false), off);
         }
-
         static DictationProblemSurface Expected(DictationProblem problem, bool indicatorOn) => problem switch
         {
             DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
@@ -143,6 +142,39 @@ public sealed class DictationProblemTextTests
                 indicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
             _ => indicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
         };
+    }
+
+    [Fact]
+    public void Recording_warning_routing_falls_back_to_notice_when_revision_is_not_live()
+    {
+        Assert.Equal(
+            DictationProblemSurface.Notice,
+            DictationProblemRouting.DecideRecordingWarning(
+                DictationProblem.MicrophoneMuted,
+                recordingIndicatorOn: true,
+                recordingRevision: 0,
+                lastRenderedRevision: 3));
+        Assert.Equal(
+            DictationProblemSurface.Notice,
+            DictationProblemRouting.DecideRecordingWarning(
+                DictationProblem.FallbackMicrophone,
+                recordingIndicatorOn: true,
+                recordingRevision: 2,
+                lastRenderedRevision: 3));
+        Assert.Equal(
+            DictationProblemSurface.RecordingPill,
+            DictationProblemRouting.DecideRecordingWarning(
+                DictationProblem.MicrophoneMuted,
+                recordingIndicatorOn: true,
+                recordingRevision: 3,
+                lastRenderedRevision: 3));
+        Assert.Equal(
+            DictationProblemSurface.Notice,
+            DictationProblemRouting.DecideRecordingWarning(
+                DictationProblem.MicrophoneMuted,
+                recordingIndicatorOn: false,
+                recordingRevision: 3,
+                lastRenderedRevision: 3));
     }
 
     [Fact]
