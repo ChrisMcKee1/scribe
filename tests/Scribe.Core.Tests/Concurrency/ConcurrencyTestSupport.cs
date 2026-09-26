@@ -115,8 +115,9 @@ internal sealed class ReleaseAtExit(params ManualResetEventSlim[] gates) : IDisp
 
 /// <summary>
 /// A background thread of a test's own that keeps what its work throws instead of letting it end the test host, which would
-/// hide the failure (stream TR round 5): the test that started it joins it and then calls <see cref="ThrowIfFailed"/>. A
-/// join of one never started returns at once, so a finally can join every thread a test made whatever failed first.
+/// hide the failure (stream TR round 5): the test that started it joins it and then calls <see cref="ThrowIfFailed"/>. It
+/// counts as started only once its start returned (round 6), and a join of one not started returns at once, so a finally
+/// can join every thread a test made whatever failed first, a start that threw included.
 /// </summary>
 internal sealed class TestThread
 {
@@ -147,11 +148,14 @@ internal sealed class TestThread
 
     public void Start()
     {
-        _started = true;
         _thread.Start();
+
+        // Only now: a thread whose start threw is still unstarted, and joining one throws ThreadStateException, which
+        // would replace the failure a finally is unwinding.
+        Volatile.Write(ref _started, true);
     }
 
-    public bool Join(TimeSpan timeout) => !_started || _thread.Join(timeout);
+    public bool Join(TimeSpan timeout) => !Volatile.Read(ref _started) || _thread.Join(timeout);
 
     public void ThrowIfFailed() => Volatile.Read(ref _failure)?.Throw();
 }
