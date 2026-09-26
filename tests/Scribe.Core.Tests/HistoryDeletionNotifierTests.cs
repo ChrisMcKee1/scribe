@@ -15,13 +15,19 @@ public sealed class HistoryDeletionNotifierTests
         using var database = new ScribeDatabase(new AppPaths(folder.Path), NullLogger<ScribeDatabase>.Instance);
         var notifier = new HistoryDeletionNotifier();
         var seen = new List<HistoryDeletion>();
-        notifier.Deleted += seen.Add;
+        notifier.Deleted += deletion =>
+        {
+            lock (seen)
+            {
+                seen.Add(deletion);
+            }
+        };
         var repo = new HistoryRepository(database, notifier);
         var old = repo.Add(Entry("old", DateTimeOffset.UtcNow.AddDays(-10)));
         var one = repo.Add(Entry("one", DateTimeOffset.UtcNow.AddDays(-3)));
 
         repo.Delete(one.Id);
-        WaitUntil(() => seen.Count == 1);
+        WaitUntil(() => Count(seen) == 1);
         Assert.Equal(HistoryDeletionKind.Entry, seen.Single().Kind);
         Assert.Equal("one", seen.Single().Entry!.Text);
         Assert.Equal(1, seen.Single().Revision);
@@ -31,13 +37,13 @@ public sealed class HistoryDeletionNotifierTests
 
         var cutoff = DateTimeOffset.UtcNow.AddDays(-5);
         Assert.Equal(1, repo.DeleteEntriesOlderThan(cutoff));
-        WaitUntil(() => seen.Count == 2);
+        WaitUntil(() => Count(seen) == 2);
         Assert.Equal(HistoryDeletionKind.OlderThan, seen[1].Kind);
         Assert.Equal(cutoff, seen[1].CutoffUtc);
 
         repo.Add(Entry("clear", DateTimeOffset.UtcNow));
         repo.Clear();
-        WaitUntil(() => seen.Count == 3);
+        WaitUntil(() => Count(seen) == 3);
         Assert.Equal(HistoryDeletionKind.Clear, seen[2].Kind);
         Assert.Equal(3, seen.Count);
         _ = old;
@@ -61,23 +67,23 @@ public sealed class HistoryDeletionNotifierTests
             if (change == StorageChange.HistoryCleared)
             {
                 storageCallbackEntered.Set();
-                Assert.True(releaseStorageCallback.Wait(TimeSpan.FromSeconds(5)));
+                Assert.True(releaseStorageCallback.Wait(Bound));
             }
         };
         notifier.Deleted += deletion =>
         {
-            Assert.True(releaseDeletionDelivery.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(releaseDeletionDelivery.Wait(Bound));
             store.ApplyDeletion(deletion);
             deletionDelivered.Set();
         };
 
         var clearTask = Task.Run(repo.Clear);
-        Assert.True(storageCallbackEntered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(storageCallbackEntered.Wait(Bound));
         store.Set("after");
         releaseDeletionDelivery.Set();
-        Assert.True(deletionDelivered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(deletionDelivered.Wait(Bound));
         releaseStorageCallback.Set();
-        await clearTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await clearTask.WaitAsync(Bound);
 
         Assert.Equal(["after"], store.GetRecent());
     }
@@ -118,7 +124,7 @@ public sealed class HistoryDeletionNotifierTests
             // The deletion is published before the committing thread leaves its write scope, so the gate is only certain
             // to be free once the delete has returned. A delivery run synchronously under the writer would never see that
             // and leave gateFree unset.
-            if (deleteReturned.Wait(TimeSpan.FromSeconds(5)))
+            if (deleteReturned.Wait(Bound))
             {
                 using var scope = database.TryEnterWriteScope();
                 gateFree = scope.Held;
@@ -133,12 +139,24 @@ public sealed class HistoryDeletionNotifierTests
         Assert.True(gateFree);
     }
 
+    private static int Count(List<HistoryDeletion> seen)
+    {
+        lock (seen)
+        {
+            return seen.Count;
+        }
+    }
+
     private static HistoryEntry Entry(string text, DateTimeOffset timestamp) =>
         new(0, timestamp, text, AudioMilliseconds: 100, DecodeMilliseconds: 10);
 
+    // Delivery runs on a background queue, so these waits only bound a failure: a machine busy with parallel builds took
+    // longer than 5 seconds to schedule it, and a passing run never waits this long.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private static void WaitUntil(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var deadline = DateTime.UtcNow + Bound;
         while (!condition())
         {
             if (DateTime.UtcNow > deadline)
