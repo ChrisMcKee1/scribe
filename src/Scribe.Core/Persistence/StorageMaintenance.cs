@@ -180,6 +180,10 @@ public sealed class StorageMaintenance : IDisposable
 
             ArmLocked(_options.InitialDelay);
         }
+
+        // Outside the lock, since the request takes it again: a library hold-back noted before this start (the app's first
+        // publication precedes it) asks for its pass now that the trigger arms one (Grok's G2 on the integration).
+        _libraryJanitor?.Retry.MaintenanceStarted();
     }
 
     /// <summary>
@@ -225,30 +229,32 @@ public sealed class StorageMaintenance : IDisposable
     /// <summary>
     /// Asks for a pass soon. Coalesced: a burst of requests becomes one pass, never sooner than
     /// <see cref="StorageMaintenanceOptions.MinimumSpacing"/> after the previous one, and a request
-    /// during a pass becomes one more pass after it.
+    /// during a pass becomes one more pass after it. Returns whether the request was taken: false before
+    /// <see cref="Start"/> and after <see cref="Stop"/>, when nothing is scheduled.
     /// </summary>
     /// <param name="reclaimEverything">
     /// Return every free page to the disk even below the usual threshold, as after Clear history.
     /// </param>
-    internal void RequestRun(bool reclaimEverything = false)
+    internal bool RequestRun(bool reclaimEverything = false)
     {
         lock (_lock)
         {
             if (!_started || _closed)
             {
-                return;
+                return false;
             }
 
             _reclaimRequested |= reclaimEverything;
             if (_running)
             {
                 RequestFollowUpLocked(_options.TriggerDelay);
-                return;
+                return true;
             }
 
             var now = Elapsed;
             var due = Later(now + _options.TriggerDelay, _lastFinished + _options.MinimumSpacing);
             ArmLocked(due - now);
+            return true;
         }
     }
 

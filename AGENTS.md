@@ -1111,8 +1111,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   generation matches. Every outbound cleanup request is handed over only through `TryHandOff` with the scope it was
   admitted under. Committed content that cannot be read right now is held back (no rows, no hash), and dictation runs on
   the personal dictionary alone until a recovery can read it again: `LibraryRecoveryRetry` asks storage maintenance for a
-  pass at once, then again 30 s later doubling to 5 minutes while the hold-back lasts, and stops when content is back or
-  shutdown begins.
+  pass right away, then again 30 s later doubling to 5 minutes while the hold-back lasts, and stops when content is back or
+  shutdown begins. A request maintenance cannot take yet stays owed: the app's first publication comes from
+  `DictationController.Start`, before maintenance is resolved and started, so that request is made when `Start` runs,
+  and the startup pass comes after the 10 s trigger delay rather than the first pass's 30 s.
 - **Formats.** A managed file this version writes carries `# scribe-format: 2` and 0.4.3's raw metadata lines; one without
   the marker is read exactly as 0.4.3 read it. An export is UTF-8 with a byte order mark, quoted metadata and the
   reversible formula guard (`# formula-guard: 1`); an import decodes strictly with an ANSI fallback. Every write is encoded

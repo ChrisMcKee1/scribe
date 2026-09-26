@@ -40,6 +40,141 @@ public sealed class LibraryRecoveryRetryTests : IDisposable
     }
 
     [Fact]
+    public void A_hold_back_published_before_storage_maintenance_exists_is_asked_for_as_soon_as_maintenance_starts()
+    {
+        // The production order (App.StartAsync): DictationController.Start publishes the first vocabulary before storage
+        // maintenance is resolved and started, so the hold-back is noted with nothing connected to ask (Grok's G2 on the
+        // integration). The request is kept, and made when maintenance starts: the first pass comes after the trigger
+        // delay, not the ordinary first pass's initial delay.
+        var (service, files) = HeldBackStart();
+        Assert.Empty(service.Current.Entries);
+        Assert.True(service.Janitor.Retry.Pending);
+
+        using var maintenance = Constructed(service);
+        maintenance.Start(AppSettings.CreateDefault);
+        var pass = _maintenanceClock.SingleTimer;
+        Assert.Equal(Options.TriggerDelay, pass.DueTime);
+
+        files.EnumerateFault = null;
+        RunPass(pass);
+        Assert.Contains(service.Current.Entries, entry => entry.Replacement == "Kubernetes");
+        Assert.False(service.Janitor.Retry.Pending);
+    }
+
+    [Fact]
+    public void A_hold_back_published_after_maintenance_connects_and_before_it_starts_is_asked_for_when_it_starts()
+    {
+        // Maintenance exists (a session on defaults resolves it early) but has not started, so its trigger arms nothing yet.
+        var (service, _) = HeldBackStart();
+        using var maintenance = Constructed(service);
+        Assert.Empty(service.Current.Entries);
+
+        maintenance.Start(AppSettings.CreateDefault);
+
+        Assert.Equal(Options.TriggerDelay, _maintenanceClock.SingleTimer.DueTime);
+    }
+
+    [Fact]
+    public void A_hold_back_that_ended_before_maintenance_starts_leaves_its_first_pass_where_it_was()
+    {
+        var (service, files) = HeldBackStart();
+        Assert.Empty(service.Current.Entries);
+        files.EnumerateFault = null;
+        Assert.Equal(LibraryFileState.Available, service.LoadCatalog().Find("team")!.State);
+        Assert.False(service.Janitor.Retry.Pending);
+
+        using var maintenance = Constructed(service);
+        maintenance.Start(AppSettings.CreateDefault);
+
+        Assert.Equal(Options.InitialDelay, _maintenanceClock.SingleTimer.DueTime);
+    }
+
+    [Fact]
+    public void A_request_the_trigger_refuses_stays_owed_until_one_is_taken_and_is_dropped_when_the_hold_back_ends_or_at_shutdown()
+    {
+        // The retry's own bookkeeping, with a trigger that refuses until it is told to take requests (a maintenance that
+        // has not started): owed across a connection, made once at the start, then no longer owed.
+        var retry = new LibraryRecoveryRetry(_fixture.Time);
+        var accepting = false;
+        var attempts = 0;
+        var taken = 0;
+        bool Trigger()
+        {
+            attempts++;
+            if (accepting)
+            {
+                taken++;
+            }
+
+            return accepting;
+        }
+
+        retry.NotePublished(heldBack: true);
+        retry.Connect(Trigger);
+        Assert.Equal(1, attempts);
+        accepting = true;
+        retry.MaintenanceStarted();
+        retry.MaintenanceStarted();
+        Assert.Equal(1, taken);
+        Assert.Equal(2, attempts);
+
+        // A hold-back that ends owes nothing, even when the trigger refused its request.
+        accepting = false;
+        retry.NotePublished(heldBack: false);
+        retry.NotePublished(heldBack: true);
+        Assert.Equal(3, attempts);
+        retry.NotePublished(heldBack: false);
+        accepting = true;
+        retry.MaintenanceStarted();
+        Assert.Equal(3, attempts);
+
+        // After shutdown nothing is asked for, owed or not.
+        accepting = false;
+        retry.NotePublished(heldBack: true);
+        Assert.Equal(4, attempts);
+        retry.Stop();
+        accepting = true;
+        retry.MaintenanceStarted();
+        retry.Connect(Trigger);
+        Assert.Equal(4, attempts);
+        Assert.Equal(1, taken);
+    }
+
+    [Fact]
+    public void Every_request_the_trigger_refuses_stays_owed_a_due_retry_included()
+    {
+        // The class's contract, with a trigger that takes the request that begins the hold-back and refuses the first retry
+        // that comes due: that retry is owed, and the next chance to ask (here the start signal) makes it.
+        var retry = new LibraryRecoveryRetry(_fixture.Time);
+        var taken = 0;
+        var accepting = true;
+        retry.Connect(() =>
+        {
+            if (accepting)
+            {
+                taken++;
+            }
+
+            return accepting;
+        });
+        retry.NotePublished(heldBack: true);
+        Assert.Equal(1, taken);
+
+        accepting = false;
+        var timer = _fixture.Time.SingleTimer;
+        _fixture.Time.Advance(timer.DueTime!.Value);
+        timer.Fire();
+        Assert.Equal(1, retry.Retries);
+        Assert.Equal(1, taken);
+
+        accepting = true;
+        retry.MaintenanceStarted();
+        Assert.Equal(2, taken);
+        retry.MaintenanceStarted();
+        Assert.Equal(2, taken);
+    }
+
+    [Fact]
     public void A_hold_back_asks_for_a_pass_at_once_and_ends_at_the_first_pass_that_can_list_the_journal()
     {
         var (service, files) = HeldBackStart();
@@ -224,11 +359,13 @@ public sealed class LibraryRecoveryRetryTests : IDisposable
     private DictionaryLibraryService Real(ILibraryFileSystem? files = null) =>
         _fixture.Service(files, composer: LibraryComposer.Instance, overlay: BuiltInLibraryOverlay.Instance);
 
+    private StorageMaintenance Constructed(DictionaryLibraryService service, IHistoryMaintenance? history = null) =>
+        new(_fixture.Database, history ?? new HistoryRepository(_fixture.Database), new CleanupFailureLog(_fixture.Database),
+            NullLogger.Instance, _maintenanceClock, Options, service.Janitor);
+
     private StorageMaintenance Started(DictionaryLibraryService service, IHistoryMaintenance? history = null)
     {
-        var maintenance = new StorageMaintenance(
-            _fixture.Database, history ?? new HistoryRepository(_fixture.Database), new CleanupFailureLog(_fixture.Database),
-            NullLogger.Instance, _maintenanceClock, Options, service.Janitor);
+        var maintenance = Constructed(service, history);
         maintenance.Start(AppSettings.CreateDefault);
         return maintenance;
     }
