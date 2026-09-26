@@ -225,7 +225,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
 
         // Match the system light/dark theme + accent colour and enable the Mica backdrop.
-        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
+        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
 
         InitializeComponent();
 

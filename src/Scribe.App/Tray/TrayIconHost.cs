@@ -6,6 +6,7 @@ using System.Windows.Media;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Scribe.App.Dictation;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -84,6 +85,7 @@ internal sealed class TrayIconHost : IDisposable
         _menu = new ContextMenu();
         ApplyMenuTheme();
         ApplicationThemeManager.Changed += OnApplicationThemeChanged;
+        AccentContrastResources.Replanned += OnAccentReplanned;
         _menu.Opened += (_, _) => RebuildMenu();
 
         _currentIcon = TrayIcons.CreateIdle();
@@ -126,6 +128,9 @@ internal sealed class TrayIconHost : IDisposable
             ApplyMenuTheme();
             RebuildMenu();
         });
+
+    private void OnAccentReplanned() =>
+        Dispatch(ApplyMenuTheme);
 
     private void ApplyMenuTheme()
     {
@@ -565,6 +570,7 @@ internal sealed class TrayIconHost : IDisposable
     {
         _disposed = true;
         ApplicationThemeManager.Changed -= OnApplicationThemeChanged;
+        AccentContrastResources.Replanned -= OnAccentReplanned;
         _icon.Dispose();
         _retiredIcon?.Dispose();
         _retiredIcon = null;
@@ -580,5 +586,4 @@ internal sealed class TrayIconHost : IDisposable
         public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
     }
 }
-
 

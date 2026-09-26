@@ -87,7 +87,7 @@ public partial class QuickAddWindow : FluentWindow
         _vocabulary = ReadVocabulary();
         _currentPlan = new QuickDictionaryAdd.Plan(QuickDictionaryAdd.PlanKind.Empty, null, string.Empty, QuickDictionaryAdd.PlanSeverity.None);
 
-        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
+        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
         InitializeComponent();
         ApplyWindowFit();
         SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);

@@ -2207,7 +2207,7 @@
                                                             <Border Height="64" MaxWidth="18"
                                                                     HorizontalAlignment="Stretch"
                                                                     VerticalAlignment="Bottom"
-                                                                    Background="{DynamicResource AccentFillColorDefaultBrush}"
+                                                                    Background="{DynamicResource {x:Static infra:AccentContrastKeys.ChartBar}}"
                                                                     CornerRadius="2,2,0,0"
                                                                     RenderTransformOrigin="0.5,1"
                                                                     SnapsToDevicePixels="True">

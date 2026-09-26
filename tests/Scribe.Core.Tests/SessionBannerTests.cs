@@ -63,7 +63,18 @@ public class SessionBannerTests : IDisposable
 
         var injection = Compose(settings).Split(Environment.NewLine).Single(line => line.Contains("injection: ", StringComparison.Ordinal));
 
-        Assert.EndsWith($"shiftEnter=True spaceAfter={addSpace}", injection, StringComparison.Ordinal);
+        Assert.EndsWith($"shiftEnter=True spaceAfter={addSpace} accent=Scribe", injection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Banner_records_the_accent_source_by_name_only()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.AccentSource = AccentSource.Windows;
+
+        var injection = Compose(settings).Split(Environment.NewLine).Single(line => line.Contains("injection: ", StringComparison.Ordinal));
+
+        Assert.EndsWith("accent=Windows", injection, StringComparison.Ordinal);
     }
 
     [Fact]

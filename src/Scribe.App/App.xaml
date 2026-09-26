@@ -32,11 +32,11 @@
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemOutline}" Color="Transparent"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemForeground}" Color="#FF000000"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemIndicator}" Color="Transparent"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.ChartBar}" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.ChartBarCurrent}" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"/>
 
-            <!-- A link. WPF-UI 4.3.0 has no style for Hyperlink, so a link draws in WPF's own: SystemColors.HotTrackColor
-                 at rest, #0066CC, which is 2.93:1 on the dark page whatever the accent, and red while hovered, 4.07:1
-                 there and 3.60:1 on the light page. In a light or dark theme it takes the lightness
-                 AccentContrastResources corrected; in a contrast theme the flag is off and WPF's style draws the
+            <!-- A link. WPF-UI 4.3.0 has no style for Hyperlink. In a light or dark theme Scribe uses the planned
+                 accent text shades for links; in a contrast theme the flag is off and WPF's style draws the
                  theme's link colours, as before. No BasedOn: WPF's own style still applies under this one. -->
             <Style TargetType="Hyperlink">
                 <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
