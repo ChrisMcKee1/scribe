@@ -32,6 +32,13 @@ public static class AiContentReport
 {
     /// <summary>Where reports go. Not a GitHub URL: Store certification rejected that explicitly.</summary>
     public const string SupportAddress = "support@mckeesolutions.ai";
+    public const string UnrecordedAttribution = "The AI service and model for this dictation weren't recorded.";
+    public const string ExplanationWithAttribution = "The report contains the AI result, the AI service and model, and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.";
+    public const string ExplanationWithoutAttribution = "The report contains the AI result and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.";
+    public const string CopyFailed = "Couldn't copy the report. Select the text and copy it yourself.";
+
+    public static string Explanation(bool hasAttribution) =>
+        hasAttribution ? ExplanationWithAttribution : ExplanationWithoutAttribution;
 
     /// <summary>
     /// Composes the report body.
@@ -48,8 +55,8 @@ public static class AiContentReport
     /// </param>
     public static string Build(
         string output,
-        string provider,
-        string model,
+        string? provider,
+        string? model,
         string appVersion,
         DateTimeOffset whenUtc,
         string? sourceText = null)
@@ -58,10 +65,19 @@ public static class AiContentReport
 
         builder.AppendLine("Reporting an AI result produced by Scribe.")
                .AppendLine()
-               .AppendLine($"Scribe version : {appVersion}")
-               .AppendLine($"Provider       : {provider}")
-               .AppendLine($"Model          : {model}")
-               .AppendLine($"Produced (UTC) : {whenUtc:yyyy-MM-dd HH:mm:ss}")
+               .AppendLine($"Scribe version : {appVersion}");
+
+        if (string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model))
+        {
+            builder.AppendLine(UnrecordedAttribution);
+        }
+        else
+        {
+            builder.AppendLine($"Provider       : {provider}")
+                   .AppendLine($"Model          : {model}");
+        }
+
+        builder.AppendLine($"Produced (UTC) : {whenUtc:yyyy-MM-dd HH:mm:ss}")
                .AppendLine()
                .AppendLine("--- AI OUTPUT ---")
                .AppendLine(output ?? string.Empty)

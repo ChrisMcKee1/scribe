@@ -361,10 +361,54 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Usage_period_state_keeps_old_period_while_loading_or_failed()
     {
-        Assert.Equal("Showing Last 7 days. Loading Last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);
+        Assert.Equal("Counting your dictations...", UsagePeriodState.Describe(null, UsagePeriod.Last30Days, false).StatusText);
+        Assert.Equal("Usage isn't available right now.", UsagePeriodState.Describe(null, UsagePeriod.Last30Days, true).StatusText);
+        Assert.Equal("Showing the last 7 days. Loading the last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);
+        Assert.Equal("All kept history", UsagePeriodState.Label(UsagePeriod.AllKeptHistory));
         var failed = UsagePeriodState.Describe(UsagePeriod.Last90Days, null, true);
-        Assert.Equal("Showing Last 90 days. Usage isn't available right now.", failed.StatusText);
+        Assert.Equal("Showing the last 90 days. Usage isn't available right now.", failed.StatusText);
         Assert.True(failed.ShowRetry);
+    }
+
+    [Fact]
+    public void Usage_coverage_line_avoids_retained_jargon()
+    {
+        Assert.Null(UsagePeriodState.CoverageLine("Last 30 days", 0, capped: false, limit: 5000));
+        Assert.Equal("Last 30 days: 1 dictation.", UsagePeriodState.CoverageLine("Last 30 days", 1, capped: false, limit: 5000));
+        Assert.Equal("Last 30 days: 48 dictations.", UsagePeriodState.CoverageLine("Last 30 days", 48, capped: false, limit: 5000));
+        Assert.Equal("All kept history: based on your latest 5,000 dictations.", UsagePeriodState.CoverageLine("All kept history", 5000, capped: true, limit: 5000));
+    }
+
+    [Theory]
+    [InlineData(0, "0 s")]
+    [InlineData(24.5, "25 s")]
+    [InlineData(59.9, "60 s")]
+    [InlineData(60, "1 min")]
+    [InlineData(546, "9.1 min")]
+    [InlineData(4320, "1.2 hr")]
+    public void Usage_durations_match_tile_copy(double seconds, string expected) =>
+        Assert.Equal(expected, UsagePeriodState.FormatDuration(TimeSpan.FromSeconds(seconds)));
+
+    [Fact]
+    public void Usage_trend_axis_labels_match_granularity()
+    {
+        var daily = UsagePeriodState.AxisLabels(
+            [
+                new(new DateOnly(2026, 9, 1), 1, 10),
+                new(new DateOnly(2026, 9, 2), 2, 20),
+            ],
+            UsageAnalyzer.TrendGranularity.Daily);
+        Assert.Equal(["Sep 1", "Sep 2", "Sep 2"], daily);
+
+        var weekly = UsagePeriodState.AxisLabels(
+            [
+                new(new DateOnly(2026, 9, 1), 1, 10),
+                new(new DateOnly(2026, 9, 8), 2, 20),
+                new(new DateOnly(2026, 9, 15), 3, 30),
+            ],
+            UsageAnalyzer.TrendGranularity.Weekly);
+        Assert.Equal(["Week of Sep 1", "Week of Sep 8", "Week of Sep 15"], weekly);
+        Assert.Equal(["Sep 1", "Sep 1", "Sep 1"], UsagePeriodState.AxisLabels([new(new DateOnly(2026, 9, 1), 1, 10)], UsageAnalyzer.TrendGranularity.Daily));
     }
 
     [Fact]
@@ -384,6 +428,9 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.False(insight.IsEnabled);
         Assert.Equal("AI cleanup isn't ready yet.", insight.DisabledReason);
         Assert.Contains("GitHub Copilot", insight.Description, StringComparison.Ordinal);
+        Assert.Contains("Foundry Local on this PC", UsageInsightAvailability.Describe(true, true, CleanupProvider.FoundryLocal).Description, StringComparison.Ordinal);
+        Assert.Contains("your AI service", UsageInsightAvailability.Describe(true, true, CleanupProvider.OpenAiCompatible).Description, StringComparison.Ordinal);
+        Assert.Equal("Couldn't get a summary. Try again.", UsageSummaryText.Exception);
     }
 
     [Fact]

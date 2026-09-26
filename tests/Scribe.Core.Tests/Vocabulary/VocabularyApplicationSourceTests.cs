@@ -53,7 +53,7 @@ public sealed class VocabularyApplicationSourceTests
         var add = Body(window, "private async void UsageNovelTermAddButton_Click(");
         var reapply = add.IndexOf("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);", StringComparison.Ordinal);
         var refreshed = add.IndexOf("var refresh = await reapplied.Vocabulary;", StringComparison.Ordinal);
-        var added = add.IndexOf("to your dictionary.\"", StringComparison.Ordinal);
+        var added = add.IndexOf("This is already saved.", StringComparison.Ordinal);
         Assert.True(reapply > 0 && reapply < refreshed && refreshed < added, "The Usage page's Add is reported before dictation can use it.");
         Assert.Contains("VocabularyNotice.SavedButNotApplied(", add, StringComparison.Ordinal);
 
@@ -385,7 +385,21 @@ public sealed class VocabularyApplicationSourceTests
         return source[start..end];
     }
 
-    private static string Read(params string[] parts) => File.ReadAllText(Path.Combine([Root(), .. parts]));
+    private static string Read(params string[] parts)
+    {
+        if (parts is ["src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"])
+        {
+            var folder = Path.Combine(Root(), "src", "Scribe.App", "Settings");
+            return string.Join(
+                '\n',
+                Directory.GetFiles(folder, "SettingsWindow*.cs")
+                    .OrderBy(path => Path.GetFileName(path).Equals("SettingsWindow.xaml.cs", StringComparison.Ordinal) ? 0 : 1)
+                    .ThenBy(path => path, StringComparer.Ordinal)
+                    .Select(File.ReadAllText));
+        }
+
+        return File.ReadAllText(Path.Combine([Root(), .. parts]));
+    }
 
     private static string Root()
     {

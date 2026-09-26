@@ -269,16 +269,75 @@ public static class UsagePeriodState
         _ => throw new ArgumentOutOfRangeException(nameof(period), period, null),
     };
 
-    public static UsagePeriodDescription Describe(UsagePeriod shownPeriod, UsagePeriod? loadingPeriod, bool loadFailed)
+    public static string SentenceLabel(UsagePeriod period) => period switch
     {
-        if (loadFailed)
+        UsagePeriod.Last7Days => "the last 7 days",
+        UsagePeriod.Last30Days => "the last 30 days",
+        UsagePeriod.Last90Days => "the last 90 days",
+        UsagePeriod.AllKeptHistory => "all kept history",
+        _ => throw new ArgumentOutOfRangeException(nameof(period), period, null),
+    };
+
+    public static UsagePeriodDescription Describe(UsagePeriod? shownPeriod, UsagePeriod? loadingPeriod, bool loadFailed)
+    {
+        if (shownPeriod is null)
         {
-            return new UsagePeriodDescription($"Showing {Label(shownPeriod)}. Usage isn't available right now.", ShowRetry: true);
+            return loadFailed
+                ? new UsagePeriodDescription("Usage isn't available right now.", ShowRetry: true)
+                : new UsagePeriodDescription("Counting your dictations...", ShowRetry: false);
         }
 
-        return loadingPeriod is { } next && next != shownPeriod
-            ? new UsagePeriodDescription($"Showing {Label(shownPeriod)}. Loading {Label(next)}...", ShowRetry: false)
-            : new UsagePeriodDescription(Label(shownPeriod), ShowRetry: false);
+        if (loadFailed)
+        {
+            return new UsagePeriodDescription($"Showing {SentenceLabel(shownPeriod.Value)}. Usage isn't available right now.", ShowRetry: true);
+        }
+
+        return loadingPeriod is { } next && next != shownPeriod.Value
+            ? new UsagePeriodDescription($"Showing {SentenceLabel(shownPeriod.Value)}. Loading {SentenceLabel(next)}...", ShowRetry: false)
+            : new UsagePeriodDescription(Label(shownPeriod.Value), ShowRetry: false);
+    }
+
+    public static string? CoverageLine(string periodLabel, int dictations, bool capped, int limit)
+    {
+        if (dictations == 0)
+        {
+            return null;
+        }
+
+        return capped
+            ? $"{periodLabel}: based on your latest {limit:N0} dictations."
+            : $"{periodLabel}: {dictations:N0} dictation{(dictations == 1 ? string.Empty : "s")}.";
+    }
+
+    public static string FormatDuration(TimeSpan duration)
+    {
+        var seconds = Math.Max(0, duration.TotalSeconds);
+        return seconds switch
+        {
+            < 60 => $"{Math.Round(seconds, MidpointRounding.AwayFromZero):N0} s",
+            < 3600 => $"{seconds / 60:0.#} min",
+            _ => $"{seconds / 3600:0.#} hr",
+        };
+    }
+
+    public static IReadOnlyList<string> AxisLabels(IReadOnlyList<Diagnostics.UsageAnalyzer.TrendPoint> points, Diagnostics.UsageAnalyzer.TrendGranularity granularity)
+    {
+        if (points.Count == 0)
+        {
+            return [string.Empty, string.Empty, string.Empty];
+        }
+
+        var first = points[0];
+        var middle = points[points.Count / 2];
+        var last = points[^1];
+        return [Format(first.Start, granularity), Format(middle.Start, granularity), Format(last.Start, granularity)];
+    }
+
+    private static string Format(DateOnly date, Diagnostics.UsageAnalyzer.TrendGranularity granularity)
+    {
+        var value = date.ToDateTime(TimeOnly.MinValue);
+        var formatted = value.ToString("MMM d", CultureInfo.CurrentCulture);
+        return granularity == Diagnostics.UsageAnalyzer.TrendGranularity.Weekly ? $"Week of {formatted}" : formatted;
     }
 }
 
@@ -327,10 +386,22 @@ public static class UsageInsightAvailability
 
     private static string ProviderName(CleanupProvider provider) => provider switch
     {
-        CleanupProvider.FoundryLocal => "On this PC",
+        CleanupProvider.FoundryLocal => "Foundry Local on this PC",
         CleanupProvider.AzureFoundry => "Microsoft Foundry",
-        CleanupProvider.OpenAiCompatible => "Another AI service",
+        CleanupProvider.OpenAiCompatible => "your AI service",
         CleanupProvider.GitHubCopilot => "GitHub Copilot",
         _ => "AI cleanup",
     };
+}
+
+public static class UsageSummaryText
+{
+    public const string Running = "Getting a summary...";
+    public const string NotReady = "AI cleanup isn't ready yet.";
+    public const string RecipientChangedNothingSent = "Your AI cleanup service changed before the summary was requested, so nothing was sent. Try again.";
+    public const string RecipientChangedAfterSending = "AI cleanup changed while the summary was being requested, so it was stopped. Try again.";
+    public const string LibraryScopeNarrowed = "Your usage changed while the summary was being prepared. Try again.";
+    public const string NoAnswer = "The AI service didn't return a summary. Try again.";
+    public const string Exception = "Couldn't get a summary. Try again.";
+    public const string SnapshotChanged = "Your usage changed while the summary was being prepared. Try again once the page has updated.";
 }
