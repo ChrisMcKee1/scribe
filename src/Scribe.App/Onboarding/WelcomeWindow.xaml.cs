@@ -17,7 +17,9 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly Action _openSettings;
     private readonly Action _tryItNow;
+    private DoubleAnimation? _welcomeLastAnimation;
     private bool _welcomeAnimationStarted;
+    private bool _welcomeAnimationFinished;
 
     public WelcomeWindow((string Title, string Body) gesture, Action openSettings, Action? tryItNow = null)
     {
@@ -30,6 +32,9 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
         GestureHint.Text = NormalizeGestureBody(gesture.Body);
         ApplyWindowFit();
         Loaded += WelcomeWindow_Loaded;
+        StateChanged += WelcomeWindow_StateChanged;
+        IsVisibleChanged += WelcomeWindow_IsVisibleChanged;
+        Closed += WelcomeWindow_Closed;
         SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
     }
 
@@ -41,26 +46,96 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _welcomeAnimationStarted = true;
-        if (!SystemParameters.ClientAreaAnimation || !IsVisible)
+        if (!SystemParameters.ClientAreaAnimation || SystemParameters.HighContrast || !IsVisible)
         {
-            WelcomeStaticMark.Visibility = Visibility.Visible;
-            WelcomeAnimatedMark.Visibility = Visibility.Collapsed;
+            ShowStaticWelcomeMark();
             return;
         }
 
         WelcomeStaticMark.Visibility = Visibility.Collapsed;
         WelcomeAnimatedMark.Visibility = Visibility.Visible;
+        var scales = WelcomeBarScales();
         var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
-        foreach (var scale in new[] { WelcomeBar1Scale, WelcomeBar2Scale, WelcomeBar3Scale, WelcomeBar4Scale, WelcomeBar5Scale })
+        for (var i = 0; i < scales.Length; i++)
         {
-            scale.BeginAnimation(
-                ScaleTransform.ScaleYProperty,
-                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(600))
-                {
-                    EasingFunction = easing,
-                    FillBehavior = FillBehavior.HoldEnd,
-                });
+            var animation = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(600))
+            {
+                EasingFunction = easing,
+                FillBehavior = FillBehavior.HoldEnd,
+            };
+            if (i == scales.Length - 1)
+            {
+                animation.Completed += WelcomeBarsAnimation_Completed;
+                _welcomeLastAnimation = animation;
+            }
+
+            scales[i].BeginAnimation(ScaleTransform.ScaleYProperty, animation);
         }
+    }
+
+    private void WelcomeWindow_StateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            FinishWelcomeAnimation();
+        }
+    }
+
+    private void WelcomeWindow_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is false)
+        {
+            FinishWelcomeAnimation();
+        }
+    }
+
+    private void WelcomeWindow_Closed(object? sender, EventArgs e)
+    {
+        FinishWelcomeAnimation();
+        Loaded -= WelcomeWindow_Loaded;
+        StateChanged -= WelcomeWindow_StateChanged;
+        IsVisibleChanged -= WelcomeWindow_IsVisibleChanged;
+        Closed -= WelcomeWindow_Closed;
+    }
+
+    private void WelcomeBarsAnimation_Completed(object? sender, EventArgs e) => FinishWelcomeAnimation();
+
+    private ScaleTransform[] WelcomeBarScales() =>
+    [
+        WelcomeBar1Scale,
+        WelcomeBar2Scale,
+        WelcomeBar3Scale,
+        WelcomeBar4Scale,
+        WelcomeBar5Scale,
+    ];
+
+    private void FinishWelcomeAnimation()
+    {
+        if (_welcomeAnimationFinished)
+        {
+            return;
+        }
+
+        _welcomeAnimationFinished = true;
+        if (_welcomeLastAnimation is not null)
+        {
+            _welcomeLastAnimation.Completed -= WelcomeBarsAnimation_Completed;
+            _welcomeLastAnimation = null;
+        }
+
+        foreach (var scale in WelcomeBarScales())
+        {
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            scale.ScaleY = 1;
+        }
+
+        ShowStaticWelcomeMark();
+    }
+
+    private void ShowStaticWelcomeMark()
+    {
+        WelcomeStaticMark.Visibility = Visibility.Visible;
+        WelcomeAnimatedMark.Visibility = Visibility.Collapsed;
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)

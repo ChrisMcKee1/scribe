@@ -41,6 +41,7 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="28,8,28,16">
+                <!-- The brand mark bitmap stays in contrast themes like any app icon; code suppresses only the XAML-drawn blue bars. -->
                 <Grid Width="64" Height="64" HorizontalAlignment="Center" AutomationProperties.Name="Scribe">
                     <Image x:Name="WelcomeStaticMark" Source="pack://application:,,,/Assets/scribe-mark.png"
                            Width="64" Height="64" RenderOptions.BitmapScalingMode="HighQuality"/>

@@ -65,6 +65,20 @@ public sealed class ScribeBrandTests
         }
     }
 
+    [Fact]
+    public void Welcome_bars_are_gated_by_animation_and_contrast_settings()
+    {
+        var welcome = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Onboarding", "WelcomeWindow.xaml.cs"));
+        var animationCheck = welcome.IndexOf("SystemParameters.ClientAreaAnimation", StringComparison.Ordinal);
+        var contrastCheck = welcome.IndexOf("SystemParameters.HighContrast", StringComparison.Ordinal);
+        var startAnimation = welcome.IndexOf("BeginAnimation", StringComparison.Ordinal);
+
+        Assert.True(animationCheck >= 0, "Welcome must check Windows animation effects before animating bars.");
+        Assert.True(contrastCheck >= 0, "Welcome must check contrast mode before animating bars.");
+        Assert.True(animationCheck < startAnimation, "The animation-effects check must run before the bars animate.");
+        Assert.True(contrastCheck < startAnimation, "The contrast check must run before the bars animate.");
+    }
+
     [Theory]
     // Save at rest: white on the light accent button, black on the dark one.
     [InlineData("#FFFFFF", "#0C48CF", 7.39)]

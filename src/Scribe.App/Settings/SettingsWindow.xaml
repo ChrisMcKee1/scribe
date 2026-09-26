@@ -429,19 +429,15 @@
                                                Margin="0,0,3,0" Fill="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
                                     <Rectangle x:Name="LevelBar2" Width="2" Height="10" RadiusX="1" RadiusY="1"
                                                Margin="0,0,3,0" Fill="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
-                                    <Rectangle x:Name="LevelBar3" Width="2" Height="7" RadiusX="1" RadiusY="1"
+                                    <Rectangle x:Name="LevelBar3" Width="2" Height="6" RadiusX="1" RadiusY="1"
                                                Fill="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
                                 </StackPanel>
                             </Border>
-                            <Border x:Name="FocusRing" Width="54" Height="22" CornerRadius="9"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    BorderBrush="{DynamicResource TextFillColorPrimaryBrush}"
-                                    BorderThickness="0"
-                                    IsHitTestVisible="False"/>
                         </Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="FocusRing" Property="BorderThickness" Value="1"/>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Pill" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                                <Setter TargetName="Pill" Property="BorderThickness" Value="1.5"/>
                             </Trigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
