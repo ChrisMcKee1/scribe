@@ -177,7 +177,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.EditPack();
             harness.Hold(hold);
             var saveTask = harness.SaveAsync();
@@ -214,7 +214,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.UseProductionSignature = true;
             if (operation == "restore")
             {
@@ -279,7 +279,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.EditPack();
             harness.Hold("complete");
             var save = harness.SaveAsync();
@@ -299,7 +299,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             harness.EditPack();
             harness.Store.Status = LibrarySaveStatus.CommitUnknown;
             Assert.False((await harness.SaveAsync()).Success);
@@ -487,7 +487,7 @@ public sealed class WordPackSaveProtocolTests
     {
         await ProtocolHarness.RunOnOwnerAsync(async owner =>
         {
-            var harness = ProtocolHarness.Create(owner);
+            using var harness = ProtocolHarness.Create(owner);
             var original = harness.Workspace.CreateLibrary();
             harness.Workspace.AddTerm(original, new TermValues("ga", "general availability"));
             var copy = harness.Workspace.Duplicate(original);
@@ -579,8 +579,11 @@ public sealed class WordPackSaveProtocolTests
         Assert.DoesNotContain("string.IsNullOrEmpty(row.Replacement)", wordPackEditor, StringComparison.Ordinal);
     }
 
-    private sealed class ProtocolHarness
+    private sealed class ProtocolHarness : IDisposable
     {
+        // A hang guard, never the verdict: work that was told to hold always reaches its hold (stream TR round 7).
+        private static readonly TimeSpan HoldBound = TimeSpan.FromSeconds(30);
+
         private readonly int _owner;
         private readonly Dictionary<string, Hold> _holds = new(StringComparer.OrdinalIgnoreCase);
 
@@ -675,17 +678,29 @@ public sealed class WordPackSaveProtocolTests
 
         public void Hold(string name) => _holds[name] = new Hold();
 
+        // Fails the test when the work never reaches its hold. Going on after a timeout, as a 5 s wait whose result was
+        // ignored once did, would judge a save that had not got there yet, as if it had.
         public async Task WaitForHoldAsync(string name)
         {
             if (_holds.TryGetValue(name, out var hold))
             {
-                await Task.WhenAny(hold.Hit.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+                await hold.Hit.Task.WaitAsync(HoldBound);
             }
         }
 
         public void Release(string name)
         {
             if (_holds.TryGetValue(name, out var hold))
+            {
+                hold.Release.TrySetResult();
+            }
+        }
+
+        // Opens every hold on every way out of a test that declares the harness with using, so work parked at one, or the
+        // pool thread the catalog load blocks there, never outlives a test that failed before its release.
+        public void Dispose()
+        {
+            foreach (var hold in _holds.Values)
             {
                 hold.Release.TrySetResult();
             }
@@ -831,9 +846,14 @@ public sealed class WordPackSaveProtocolTests
 
         public override void Post(SendOrPostCallback d, object? state)
         {
-            if (!_queue.IsAddingCompleted)
+            try
             {
                 _queue.Add((d, state));
+            }
+            catch (InvalidOperationException)
+            {
+                // The pump has ended with its test, so this work has nowhere to run. Post is called from whatever thread
+                // completed the awaited task, often the pool's, where a throw would end the test host (stream TR round 7).
             }
         }
     }
