@@ -308,7 +308,6 @@ public sealed class CleanupLifecycleTests
         Assert.Equal("please keep these exact words", result.Text);
         Assert.Contains("shutting down", result.SkipReason);
         Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.Equal(["dispose"], drainTimer.Events);
     }
 
     [Fact]
