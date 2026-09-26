@@ -7,6 +7,8 @@ public enum SettingsSearchRequirementKind
 {
     CheckBox,
     Radio,
+    View,
+    Action,
 }
 
 public sealed record SettingsSearchRequirement(
@@ -59,6 +61,10 @@ public static class SettingsSearchIndex
         new("AzureServicePrincipalRadio", "An app registration (service principal)", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresAzureApiKey =
         new("AzureApiKeyRadio", "An API key", SettingsSearchRequirementKind.Radio);
+    private static readonly SettingsSearchRequirement RequiresAzureSignIn =
+        new("AzureSignInStatusRow", "Sign in to Azure", SettingsSearchRequirementKind.Action);
+    private static readonly SettingsSearchRequirement RequiresAzureManualDetails =
+        new("AzureManualToggleButton", "Enter details manually", SettingsSearchRequirementKind.View);
 
     public static IReadOnlyList<SettingsSearchEntry> Entries { get; } =
     [
@@ -82,13 +88,13 @@ public static class SettingsSearchIndex
         Entry("ai.azure.auth.sp", SettingsPage.AiCleanup, "AzureServicePrincipalRadio", "An app registration (service principal)", ["sign in", "entra", "client"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.key", SettingsPage.AiCleanup, "AzureApiKeyRadio", "An API key", ["sign in", "resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.tenant", SettingsPage.AiCleanup, "AzureTenantBox", "Tenant ID (optional)", ["directory", "azure cli"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureCli]),
-        Entry("ai.azure.subscription", SettingsPage.AiCleanup, "AzureSubscriptionBox", "Subscription", ["azure"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureCli]),
-        Entry("ai.azure.model", SettingsPage.AiCleanup, "AzureModelBox", "Model", ["deployment", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureCli]),
+        Entry("ai.azure.subscription", SettingsPage.AiCleanup, "AzureSubscriptionBox", "Subscription", ["azure"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureCli, RequiresAzureSignIn]),
+        Entry("ai.azure.model", SettingsPage.AiCleanup, "AzureModelBox", "Model", ["deployment", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureCli, RequiresAzureSignIn]),
         Entry("ai.azure.sp.tenant", SettingsPage.AiCleanup, "SpTenantBox", "Directory (tenant) ID", ["service principal", "entra"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureServicePrincipal]),
         Entry("ai.azure.sp.client", SettingsPage.AiCleanup, "SpClientIdBox", "Application (client) ID", ["service principal", "app registration"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureServicePrincipal]),
         Entry("ai.azure.sp.secret", SettingsPage.AiCleanup, "SpClientSecretBox", "Client secret", ["service principal", "password"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureServicePrincipal]),
-        Entry("ai.azure.endpoint", SettingsPage.AiCleanup, "AzureEndpointBox", "Endpoint", ["address", "url", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
-        Entry("ai.azure.deployment", SettingsPage.AiCleanup, "AzureDeploymentBox", "Deployment name", ["model", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
+        Entry("ai.azure.endpoint", SettingsPage.AiCleanup, "AzureEndpointBox", "Endpoint", ["address", "url", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureManualDetails]),
+        Entry("ai.azure.deployment", SettingsPage.AiCleanup, "AzureDeploymentBox", "Deployment name", ["model", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureManualDetails]),
         Entry("ai.azure.key", SettingsPage.AiCleanup, "AzureApiKeyBox", "API key", ["resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureApiKey]),
         Entry("ai.custom.endpoint", SettingsPage.AiCleanup, "CustomEndpointBox", "Server address", ["url", "ollama", "lm studio", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.custom.model", SettingsPage.AiCleanup, "CustomModelBox", "Model name", ["model", "ollama", "lm studio", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),

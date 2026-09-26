@@ -4,6 +4,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Scribe.Core.Settings;
 using UiAutoSuggestBox = Wpf.Ui.Controls.AutoSuggestBox;
@@ -15,37 +16,63 @@ namespace Scribe.App.Settings;
 
 public partial class SettingsWindow
 {
-    private sealed record SettingsSearchSuggestion(string DisplayText, SettingsSearchResult? Result, bool IsSelectable = true);
+    private sealed record SettingsSearchSuggestion(string DisplayText, SettingsSearchResult? Result, bool IsSelectable = true)
+    {
+        public override string ToString() => DisplayText;
+    }
 
     private readonly ObservableCollection<SettingsSearchSuggestion> _settingsSearchSuggestions = new();
     private SettingsSearchResult? _highlightedSettingsSearchResult;
     private TextBlock? _settingsSearchHiddenHint;
     private Panel? _settingsSearchHiddenHintPanel;
     private ToggleButton? _settingsSearchHiddenToggleParent;
+    private ListView? _settingsSearchSuggestionsList;
+    private int _settingsSearchGeneration;
+    private bool _settingsSearchClosed;
 
     private void InitializeSettingsSearch()
     {
         SettingsSearchBox.ItemsSource = _settingsSearchSuggestions;
-        SettingsSearchBox.Loaded += (_, _) =>
+        SettingsSearchBox.LostKeyboardFocus += SettingsSearchFocus_LostKeyboardFocus;
+        SettingsSearchBox.Loaded += (_, _) => AttachSettingsSearchTemplateParts();
+        Closed += (_, _) =>
         {
-            SettingsSearchBox.ApplyTemplate();
-            if (SettingsSearchBox.Template.FindName("PART_TextBox", SettingsSearchBox) is UIElement textBox)
-            {
-                textBox.PreviewKeyDown += SettingsSearchInnerTextBox_PreviewKeyDown;
-            }
+            _settingsSearchClosed = true;
+            _settingsSearchGeneration++;
         };
+    }
+
+    private void AttachSettingsSearchTemplateParts()
+    {
+        SettingsSearchBox.ApplyTemplate();
+        if (SettingsSearchBox.Template.FindName("PART_TextBox", SettingsSearchBox) is UIElement textBox)
+        {
+            AutomationProperties.SetName(textBox, "Find a setting");
+        }
+
+        if (SettingsSearchBox.Template.FindName("PART_SuggestionsList", SettingsSearchBox) is ListView list)
+        {
+            _settingsSearchSuggestionsList = list;
+            list.PreviewMouseLeftButtonUp -= SettingsSearchSuggestionsList_PreviewMouseLeftButtonUp;
+            list.PreviewMouseLeftButtonUp += SettingsSearchSuggestionsList_PreviewMouseLeftButtonUp;
+            list.PreviewKeyDown -= SettingsSearchSuggestionsList_PreviewKeyDown;
+            list.PreviewKeyDown += SettingsSearchSuggestionsList_PreviewKeyDown;
+            list.LostKeyboardFocus -= SettingsSearchFocus_LostKeyboardFocus;
+            list.LostKeyboardFocus += SettingsSearchFocus_LostKeyboardFocus;
+        }
     }
 
     private void SettingsSearchBox_TextChanged(UiAutoSuggestBox sender, UiAutoSuggestBoxTextChangedEventArgs args)
     {
         args.Handled = true;
+        var generation = ++_settingsSearchGeneration;
         _highlightedSettingsSearchResult = null;
         var text = args.Text ?? string.Empty;
         var results = SettingsSearchIndex.Search(text);
         _settingsSearchSuggestions.Clear();
         if (string.IsNullOrWhiteSpace(text))
         {
-            QueueSettingsSearchPopupState(sender, text, open: false);
+            QueueSettingsSearchPopupState(sender, text, open: false, generation);
             return;
         }
 
@@ -61,34 +88,22 @@ public partial class SettingsWindow
             }
         }
 
-        QueueSettingsSearchPopupState(sender, text, open: true);
+        QueueSettingsSearchPopupState(sender, text, open: true, generation);
     }
 
     private void SettingsSearchBox_SuggestionChosen(UiAutoSuggestBox sender, UiAutoSuggestBoxSuggestionChosenEventArgs args)
     {
-        if (args.SelectedItem is not SettingsSearchSuggestion { Result: { } result } suggestion || !suggestion.IsSelectable)
-        {
-            args.Handled = true;
-            return;
-        }
-
-        if (sender.IsSuggestionListOpen && Mouse.LeftButton != MouseButtonState.Pressed)
+        if (args.SelectedItem is SettingsSearchSuggestion { Result: { } result } suggestion && IsCurrentSuggestion(suggestion))
         {
             _highlightedSettingsSearchResult = result;
-            args.Handled = true;
-            return;
         }
 
-        OpenSettingsSearchResult(result);
         args.Handled = true;
     }
 
     private void SettingsSearchBox_QuerySubmitted(UiAutoSuggestBox sender, UiAutoSuggestBoxQuerySubmittedEventArgs args)
     {
-        var result = _highlightedSettingsSearchResult is { } highlighted &&
-            _settingsSearchSuggestions.Any(suggestion => ReferenceEquals(suggestion.Result, highlighted))
-                ? highlighted
-                : _settingsSearchSuggestions.FirstOrDefault(suggestion => suggestion.IsSelectable)?.Result;
+        var result = CurrentHighlightedResult() ?? FirstCurrentResult();
         if (result is not null)
         {
             OpenSettingsSearchResult(result);
@@ -96,32 +111,101 @@ public partial class SettingsWindow
         }
     }
 
-    private void SettingsSearchInnerTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    private void SettingsSearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Escape || SettingsSearchBox.IsSuggestionListOpen || string.IsNullOrEmpty(SettingsSearchBox.Text))
+        if (e.Key != Key.Escape)
         {
             return;
         }
 
-        SettingsSearchBox.Text = string.Empty;
-        SettingsSearchBox.IsSuggestionListOpen = false;
+        if (SettingsSearchBox.IsSuggestionListOpen)
+        {
+            DismissSettingsSearchSuggestions(clearText: false);
+            e.Handled = true;
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(SettingsSearchBox.Text))
+        {
+            SettingsSearchBox.Text = string.Empty;
+            DismissSettingsSearchSuggestions(clearText: false);
+            e.Handled = true;
+        }
+    }
+
+    private void SettingsSearchSuggestionsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject) is not { DataContext: SettingsSearchSuggestion suggestion } ||
+            !TryGetCurrentResult(suggestion, out var result))
+        {
+            return;
+        }
+
+        OpenSettingsSearchResult(result);
         e.Handled = true;
     }
 
-    private void QueueSettingsSearchPopupState(UiAutoSuggestBox sender, string text, bool open) =>
+    private void SettingsSearchSuggestionsList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || _settingsSearchSuggestionsList?.SelectedItem is not SettingsSearchSuggestion suggestion ||
+            !TryGetCurrentResult(suggestion, out var result))
+        {
+            return;
+        }
+
+        OpenSettingsSearchResult(result);
+        e.Handled = true;
+    }
+
+    private void SettingsSearchFocus_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        var generation = _settingsSearchGeneration;
         Dispatcher.BeginInvoke(
             DispatcherPriority.Input,
             () =>
             {
-                if (string.Equals(sender.Text, text, StringComparison.Ordinal))
+                if (generation != _settingsSearchGeneration)
+                {
+                    return;
+                }
+
+                var focused = Keyboard.FocusedElement as DependencyObject;
+                if (!IsWithin(SettingsSearchBox, focused) && !IsWithin(_settingsSearchSuggestionsList, focused))
+                {
+                    DismissSettingsSearchSuggestions(clearText: false);
+                }
+            });
+    }
+
+    private void QueueSettingsSearchPopupState(UiAutoSuggestBox sender, string text, bool open, int generation) =>
+        Dispatcher.BeginInvoke(
+            DispatcherPriority.Input,
+            () =>
+            {
+                if (generation == _settingsSearchGeneration &&
+                    string.Equals(sender.Text, text, StringComparison.Ordinal) &&
+                    (!open || sender.IsKeyboardFocusWithin))
                 {
                     sender.IsSuggestionListOpen = open;
                 }
             });
 
+    private void DismissSettingsSearchSuggestions(bool clearText)
+    {
+        _settingsSearchGeneration++;
+        SettingsSearchBox.IsSuggestionListOpen = false;
+        _highlightedSettingsSearchResult = null;
+        if (clearText)
+        {
+            SettingsSearchBox.Text = string.Empty;
+        }
+    }
+
     private void OpenSettingsSearchResult(SettingsSearchResult result)
     {
+        var generation = ++_settingsSearchGeneration;
         SettingsSearchBox.IsSuggestionListOpen = false;
+        _highlightedSettingsSearchResult = null;
         ShowPage(result.Page);
         SelectDictionarySearchTab(result);
         ExpandSearchContainers(result.ControlName);
@@ -132,10 +216,29 @@ public partial class SettingsWindow
             return;
         }
 
-        if (FindName(result.ControlName) is FrameworkElement target && target.IsVisible)
+        _ = FocusSearchTargetWhenVisibleAsync(result, generation);
+    }
+
+    private async Task FocusSearchTargetWhenVisibleAsync(SettingsSearchResult result, int generation)
+    {
+        var page = result.Page;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(1);
+        while (!_settingsSearchClosed && generation == _settingsSearchGeneration && CurrentNavigationPage() == page)
         {
-            target.BringIntoView();
-            _ = target.Focus();
+            if (FindName(result.ControlName) is FrameworkElement { IsVisible: true } target)
+            {
+                target.BringIntoView();
+                _ = target.Focus();
+                return;
+            }
+
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                return;
+            }
+
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Loaded);
+            await Task.Delay(50);
         }
     }
 
@@ -143,22 +246,104 @@ public partial class SettingsWindow
     {
         foreach (var requirement in result.Requirements)
         {
-            if (FindName(requirement.ControlName) is not FrameworkElement target || RequirementSatisfied(target))
+            if (RequirementSatisfied(requirement))
             {
                 continue;
             }
 
-            target.BringIntoView();
-            _ = target.Focus();
-            ShowSettingsSearchHiddenHint(target, requirement);
-            return true;
+            if (requirement.Kind == SettingsSearchRequirementKind.View)
+            {
+                if (TrySatisfyViewRequirement(requirement))
+                {
+                    UpdateLayout();
+                    continue;
+                }
+
+                continue;
+            }
+
+            if (requirement.Kind == SettingsSearchRequirementKind.Action)
+            {
+                FocusAzureSignInRequirement(requirement);
+                return true;
+            }
+
+            if (FindName(requirement.ControlName) is FrameworkElement target)
+            {
+                target.BringIntoView();
+                _ = target.Focus();
+                ShowSettingsSearchHiddenHint(target, requirement);
+                return true;
+            }
         }
 
         return false;
     }
 
-    private static bool RequirementSatisfied(FrameworkElement target) =>
-        target is ToggleButton { IsChecked: true };
+    private bool RequirementSatisfied(SettingsSearchRequirement requirement)
+    {
+        if (requirement.Kind == SettingsSearchRequirementKind.View)
+        {
+            return !NeedsAzureManualDetails(requirement);
+        }
+
+        if (requirement.Kind == SettingsSearchRequirementKind.Action)
+        {
+            return CurrentAzureSettingsAccess.ShowDiscovery;
+        }
+
+        return FindName(requirement.ControlName) is ToggleButton { IsChecked: true };
+    }
+
+    private bool NeedsAzureManualDetails(SettingsSearchRequirement requirement) =>
+        string.Equals(requirement.ControlName, "AzureManualToggleButton", StringComparison.Ordinal) &&
+        CurrentAzureSettingsAccess.ShowManualToggleButton &&
+        !CurrentAzureSettingsAccess.ShowEndpointPanel;
+
+    private bool TrySatisfyViewRequirement(SettingsSearchRequirement requirement)
+    {
+        if (!NeedsAzureManualDetails(requirement))
+        {
+            return false;
+        }
+
+        _azureManualConfiguration = true;
+        ApplyAzureSettingsAccess();
+        return true;
+    }
+
+    private void FocusAzureSignInRequirement(SettingsSearchRequirement requirement)
+    {
+        var target = AzureSignInStatusRow.FocusPrimaryButton()
+            ? (FrameworkElement)AzureSignInStatusRow
+            : AzureSignInStatusRow;
+        target.BringIntoView();
+        ShowSettingsSearchHiddenHint(AzureSignInStatusRow, requirement);
+    }
+
+    private SettingsSearchResult? CurrentHighlightedResult() =>
+        _highlightedSettingsSearchResult is { } highlighted &&
+        _settingsSearchSuggestions.Any(suggestion => ReferenceEquals(suggestion.Result, highlighted))
+            ? highlighted
+            : null;
+
+    private SettingsSearchResult? FirstCurrentResult() =>
+        _settingsSearchSuggestions.FirstOrDefault(suggestion => suggestion.IsSelectable)?.Result;
+
+    private bool TryGetCurrentResult(SettingsSearchSuggestion suggestion, out SettingsSearchResult result)
+    {
+        result = null!;
+        if (!IsCurrentSuggestion(suggestion) || suggestion.Result is null)
+        {
+            return false;
+        }
+
+        result = suggestion.Result;
+        return true;
+    }
+
+    private bool IsCurrentSuggestion(SettingsSearchSuggestion suggestion) =>
+        suggestion.IsSelectable && _settingsSearchSuggestions.Any(current => ReferenceEquals(current, suggestion));
 
     private void SelectDictionarySearchTab(SettingsSearchResult result)
     {
@@ -199,11 +384,9 @@ public partial class SettingsWindow
             return;
         }
 
-        var verb = requirement.Kind == SettingsSearchRequirementKind.Radio ? "Choose" : "Turn on";
-        var label = StripRecommendedSuffix(requirement.Label);
         _settingsSearchHiddenHint = new TextBlock
         {
-            Text = $"{verb} \"{label}\" to see this setting.",
+            Text = RequirementHint(requirement),
             Margin = new Thickness(parent is ToggleButton ? 28 : 0, 6, 0, 0),
             TextWrapping = TextWrapping.Wrap,
             Style = TryFindResource("CardDescription") as Style,
@@ -222,6 +405,13 @@ public partial class SettingsWindow
             toggle.Unchecked += SettingsSearchHiddenParent_Changed;
         }
     }
+
+    private static string RequirementHint(SettingsSearchRequirement requirement) => requirement.Kind switch
+    {
+        SettingsSearchRequirementKind.Radio => $"Choose \"{StripRecommendedSuffix(requirement.Label)}\" to see this setting.",
+        SettingsSearchRequirementKind.Action => "Sign in to Azure to see this setting.",
+        _ => $"Turn on \"{requirement.Label}\" to see this setting.",
+    };
 
     private static string StripRecommendedSuffix(string label) =>
         label.EndsWith(" (recommended)", StringComparison.Ordinal)
@@ -247,4 +437,32 @@ public partial class SettingsWindow
         _settingsSearchHiddenHint = null;
         _settingsSearchHiddenHintPanel = null;
     }
+
+    private static T? FindAncestor<T>(DependencyObject? start)
+        where T : DependencyObject
+    {
+        for (var current = start; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is T match)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsWithin(DependencyObject? root, DependencyObject? value)
+    {
+        for (var current = value; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, root))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
+

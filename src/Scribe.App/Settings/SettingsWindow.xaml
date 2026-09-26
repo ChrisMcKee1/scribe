@@ -546,7 +546,8 @@
                                    UpdateTextOnSelect="False"
                                    TextChanged="SettingsSearchBox_TextChanged"
                                    QuerySubmitted="SettingsSearchBox_QuerySubmitted"
-                                   SuggestionChosen="SettingsSearchBox_SuggestionChosen">
+                                   SuggestionChosen="SettingsSearchBox_SuggestionChosen"
+                                   PreviewKeyDown="SettingsSearchBox_PreviewKeyDown">
                     <ui:AutoSuggestBox.ItemTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"/>
@@ -555,6 +556,7 @@
                     <ui:AutoSuggestBox.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
                             <Setter Property="IsEnabled" Value="{Binding IsSelectable}"/>
+                            <Setter Property="AutomationProperties.Name" Value="{Binding DisplayText}"/>
                         </Style>
                     </ui:AutoSuggestBox.ItemContainerStyle>
                 </ui:AutoSuggestBox>

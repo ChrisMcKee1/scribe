@@ -28,6 +28,13 @@ public sealed class SettingsSearchIndexTests
         ["AboutStoreLinkBox"] = "About shows a share link as read-only support information.",
     };
 
+    private static readonly IReadOnlyDictionary<string, string> LabelExceptions = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["try.page"] = "The page-level Try dictation destination focuses the test box, whose accessible name is more specific.",
+        ["dictionary.words"] = "The destination is a Dictionary tab header inside the TabControl, not the TabControl label.",
+        ["dictionary.word-packs"] = "The destination is a Dictionary tab header inside the TabControl, not the TabControl label.",
+    };
+
     [Theory]
     [InlineData("hotkey", "Dictation shortcut", SettingsPage.Dictation)]
     [InlineData("shortcut", "Dictation shortcut", SettingsPage.Dictation)]
@@ -93,17 +100,35 @@ public sealed class SettingsSearchIndexTests
     }
 
     [Theory]
-    [InlineData("AiModelBox", "AiCleanupCheck", "AiProviderLocalRadio")]
-    [InlineData("AzureModelBox", "AiCleanupCheck", "AiProviderFoundryRadio", "AzureCliRadio")]
-    [InlineData("SpClientSecretBox", "AiCleanupCheck", "AiProviderFoundryRadio", "AzureServicePrincipalRadio")]
-    [InlineData("AzureApiKeyBox", "AiCleanupCheck", "AiProviderFoundryRadio", "AzureApiKeyRadio")]
-    [InlineData("CustomModelBox", "AiCleanupCheck", "AiProviderCustomRadio")]
-    [InlineData("CopilotModelCombo", "AiCleanupCheck", "AiProviderCopilotRadio")]
+    [InlineData("AiModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio")]
+    [InlineData("AzureModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "Radio:AzureCliRadio", "Action:AzureSignInStatusRow")]
+    [InlineData("AzureEndpointBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "View:AzureManualToggleButton")]
+    [InlineData("AzureDeploymentBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "View:AzureManualToggleButton")]
+    [InlineData("SpClientSecretBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "Radio:AzureServicePrincipalRadio")]
+    [InlineData("AzureApiKeyBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "Radio:AzureApiKeyRadio")]
+    [InlineData("CustomModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderCustomRadio")]
+    [InlineData("CopilotModelCombo", "CheckBox:AiCleanupCheck", "Radio:AiProviderCopilotRadio")]
     public void Hidden_targets_carry_the_requirement_chain(string controlName, params string[] requirementControls)
     {
         var entry = SettingsSearchIndex.Entries.Single(entry => entry.ControlName == controlName);
+        var actual = entry.Requirements?
+            .Select(requirement => $"{requirement.Kind}:{requirement.ControlName}")
+            .ToArray();
 
-        Assert.Equal(requirementControls, entry.Requirements?.Select(requirement => requirement.ControlName).ToArray());
+        Assert.Equal(requirementControls, actual);
+    }
+
+    [Fact]
+    public void Azure_view_gates_match_azure_settings_access_policy()
+    {
+        var signedOut = AzureSettingsAccess.Resolve(true, signedIn: false, manualConfigurationRequested: false, hasApiKey: false);
+        var signedInClosed = AzureSettingsAccess.Resolve(true, signedIn: true, manualConfigurationRequested: false, hasApiKey: false);
+        var signedInOpen = AzureSettingsAccess.Resolve(true, signedIn: true, manualConfigurationRequested: true, hasApiKey: false);
+
+        Assert.False(signedOut.ShowDiscovery);
+        Assert.True(signedInClosed.ShowManualToggleButton);
+        Assert.False(signedInClosed.ShowEndpointPanel);
+        Assert.True(signedInOpen.ShowEndpointPanel);
     }
 
     [Fact]
@@ -137,7 +162,7 @@ public sealed class SettingsSearchIndexTests
     {
         var indexed = SettingsSearchIndex.Entries
             .Select(entry => entry.ControlName)
-            .Concat(SettingsSearchIndex.Entries.SelectMany(entry => entry.Requirements ?? [] ).Select(requirement => requirement.ControlName))
+            .Concat(SettingsSearchIndex.Entries.SelectMany(entry => entry.Requirements ?? []).Select(requirement => requirement.ControlName))
             .ToHashSet(StringComparer.Ordinal);
         var missing = LoadXaml().Descendants()
             .Where(IsSettingControl)
@@ -151,48 +176,106 @@ public sealed class SettingsSearchIndexTests
     }
 
     [Fact]
-    public void Entry_labels_follow_the_visible_labeled_by_text_when_present()
+    public void Entry_labels_follow_the_visible_xaml_label_or_have_a_reason()
+    {
+        var mismatches = LabelMismatches(LoadXaml());
+
+        Assert.Empty(mismatches);
+        Assert.All(LabelExceptions, exception => Assert.False(string.IsNullOrWhiteSpace(exception.Value)));
+    }
+
+    [Fact]
+    public void Label_test_fails_when_a_bound_label_changes_without_the_index()
     {
         var document = LoadXaml();
-        var elementsByName = document.Descendants()
-            .Where(element => element.Attribute(Xaml + "Name") is not null)
-            .ToDictionary(element => (string)element.Attribute(Xaml + "Name")!, StringComparer.Ordinal);
+        var hotkeyTitle = document.Descendants()
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "HotkeyTitle");
+        hotkeyTitle.SetAttributeValue("Text", "Changed shortcut");
 
-        foreach (var entry in SettingsSearchIndex.Entries)
-        {
-            if (!elementsByName.TryGetValue(entry.ControlName, out var element))
-            {
-                continue;
-            }
+        var mismatches = LabelMismatches(document);
 
-            var expected = LabelFor(element, elementsByName);
-            if (expected is null)
-            {
-                continue;
-            }
-
-            Assert.Equal(expected, entry.Label);
-        }
+        Assert.Contains(mismatches, mismatch => mismatch.StartsWith("dictation.shortcut:", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Window_source_overrides_wpf_ui_filtering_and_defers_popup_state()
     {
-        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.Search.cs"));
+        var source = SettingsSearchSource();
 
         Assert.Contains("args.Handled = true;", source, StringComparison.Ordinal);
         Assert.Contains("DispatcherPriority.Input", source, StringComparison.Ordinal);
         Assert.Contains("No settings found", source, StringComparison.Ordinal);
+        Assert.Contains("generation == _settingsSearchGeneration", source, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Window_source_keeps_arrow_highlights_separate_from_clicks_and_enter()
+    public void Window_source_owns_result_activation_instead_of_suggestion_chosen()
     {
-        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.Search.cs"));
+        var source = SettingsSearchSource();
 
-        Assert.Contains("sender.IsSuggestionListOpen && Mouse.LeftButton != MouseButtonState.Pressed", source, StringComparison.Ordinal);
+        Assert.Contains("SettingsSearchSuggestionsList_PreviewMouseLeftButtonUp", source, StringComparison.Ordinal);
+        Assert.Contains("SettingsSearchSuggestionsList_PreviewKeyDown", source, StringComparison.Ordinal);
+        Assert.Contains("args.Handled = true;", source, StringComparison.Ordinal);
         Assert.Contains("_highlightedSettingsSearchResult = result;", source, StringComparison.Ordinal);
-        Assert.Contains("_highlightedSettingsSearchResult is { } highlighted", source, StringComparison.Ordinal);
+        Assert.Contains("TryGetCurrentResult", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Window_source_handles_escape_before_wpf_ui_inner_text_box()
+    {
+        var source = SettingsSearchSource();
+        var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+
+        Assert.Contains("PreviewKeyDown=\"SettingsSearchBox_PreviewKeyDown\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("if (SettingsSearchBox.IsSuggestionListOpen)", source, StringComparison.Ordinal);
+        Assert.Contains("SettingsSearchBox.Text = string.Empty;", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Window_source_names_inner_text_box_and_suggestion_items()
+    {
+        var source = SettingsSearchSource();
+        var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+
+        Assert.Contains("PART_TextBox", source, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.SetName(textBox, \"Find a setting\")", source, StringComparison.Ordinal);
+        Assert.Contains("AutomationProperties.Name\" Value=\"{Binding DisplayText}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("public override string ToString() => DisplayText;", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Window_source_waits_for_expanded_targets_to_become_visible()
+    {
+        var source = SettingsSearchSource();
+
+        Assert.Contains("FocusSearchTargetWhenVisibleAsync", source, StringComparison.Ordinal);
+        Assert.Contains("DateTimeOffset.UtcNow.AddSeconds(1)", source, StringComparison.Ordinal);
+        Assert.Contains("CurrentNavigationPage() == page", source, StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<string> LabelMismatches(XDocument document)
+    {
+        var elementsByName = document.Descendants()
+            .Where(element => element.Attribute(Xaml + "Name") is not null)
+            .ToDictionary(element => (string)element.Attribute(Xaml + "Name")!, StringComparer.Ordinal);
+        var mismatches = new List<string>();
+        foreach (var entry in SettingsSearchIndex.Entries)
+        {
+            if (LabelExceptions.ContainsKey(entry.Id))
+            {
+                continue;
+            }
+
+            Assert.True(elementsByName.TryGetValue(entry.ControlName, out var element), $"{entry.Id} target missing from XAML.");
+            var label = LabelFor(element!, elementsByName);
+            Assert.False(string.IsNullOrWhiteSpace(label), $"{entry.Id} has no resolvable XAML label and no exception reason.");
+            if (!string.Equals(label, entry.Label, StringComparison.Ordinal))
+            {
+                mismatches.Add($"{entry.Id}: expected {label}, index {entry.Label}");
+            }
+        }
+
+        return mismatches;
     }
 
     private static bool IsSettingControl(XElement element)
@@ -208,15 +291,72 @@ public sealed class SettingsSearchIndexTests
 
     private static string? LabelFor(XElement element, IReadOnlyDictionary<string, XElement> elementsByName)
     {
-        var labeledBy = element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "LabeledBy")?.Value;
+        var labeledBy = element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName.EndsWith(".LabeledBy", StringComparison.Ordinal))?.Value;
         var labelName = ExtractElementName(labeledBy);
         if (labelName is not null && elementsByName.TryGetValue(labelName, out var labelElement))
         {
-            return (string?)labelElement.Attribute("Text") ?? (string?)labelElement.Attribute("Content") ?? (string?)labelElement.Attribute("Header");
+            return TextFrom(labelElement);
         }
 
-        return (string?)element.Attribute("Content") ?? (string?)element.Attribute("Header");
+        return AttributeValue(element, "Content") ??
+            AttributeValue(element, "Header") ??
+            PreviousText(element) ??
+            AttributeValue(element, "AutomationProperties.Name");
     }
+
+    private static string? PreviousText(XElement element)
+    {
+        foreach (var previous in element.ElementsBeforeSelf().Reverse())
+        {
+            if (IsDescriptionLike(previous))
+            {
+                continue;
+            }
+
+            var text = TitleTextFrom(previous);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TitleTextFrom(XElement element)
+    {
+        if (IsTitleLike(element))
+        {
+            return TextFrom(element);
+        }
+
+        var title = element.Descendants()
+            .FirstOrDefault(IsTitleLike);
+        return title is not null
+            ? TextFrom(title)
+            : TextFrom(element) ?? element.Descendants().Select(TextFrom).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static bool IsDescriptionLike(XElement element) =>
+        element.Name.LocalName == "TextBlock" &&
+        (((string?)element.Attribute("Style"))?.Contains("CardDescription", StringComparison.Ordinal) == true ||
+         ((string?)element.Attribute("Style"))?.Contains("PageSubtitle", StringComparison.Ordinal) == true);
+
+    private static bool IsTitleLike(XElement element)
+    {
+        var name = (string?)element.Attribute(Xaml + "Name") ?? string.Empty;
+        var style = (string?)element.Attribute("Style") ?? string.Empty;
+        return element.Name.LocalName == "TextBlock" &&
+            (name.Contains("Title", StringComparison.Ordinal) ||
+             name.Contains("Label", StringComparison.Ordinal) ||
+             style.Contains("CardTitle", StringComparison.Ordinal));
+    }
+
+    private static string? TextFrom(XElement element) =>
+        AttributeValue(element, "Text") ?? AttributeValue(element, "Content") ?? AttributeValue(element, "Header");
+
+    private static string? AttributeValue(XElement element, string localName) =>
+        element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == localName)?.Value;
 
     private static string? ExtractElementName(string? binding)
     {
@@ -244,6 +384,9 @@ public sealed class SettingsSearchIndexTests
             "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
         return XDocument.Load(path, LoadOptions.PreserveWhitespace | LoadOptions.SetLineInfo);
     }
+
+    private static string SettingsSearchSource() =>
+        File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.Search.cs"));
 
     private static string RepositoryRoot()
     {
