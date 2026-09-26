@@ -1,4 +1,4 @@
-<ui:FluentWindow x:Class="Scribe.App.Settings.SettingsWindow"
+﻿<ui:FluentWindow x:Class="Scribe.App.Settings.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
@@ -30,12 +30,12 @@
         </Style>
 
         <Style TargetType="TextBlock" x:Key="PageTitle">
-            <Setter Property="FontSize" Value="26"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontTitle}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="PageSubtitle">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
@@ -43,54 +43,54 @@
             <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="SectionHeader">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Margin" Value="1,24,0,8"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardTitle">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="RailLabel">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardDescription">
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="StatusText" BasedOn="{StaticResource CardDescription}"/>
         <Style TargetType="TextBlock" x:Key="TryDictationResultLabel">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,16,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="TryDictationResultText">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="MetricValue">
-            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontSubtitle}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="MetricLabel" BasedOn="{StaticResource CardDescription}"/>
         <Style TargetType="TextBlock" x:Key="DetailTitle">
-            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBodyLarge}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="PathText">
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="FontFamily" Value="Consolas"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
@@ -656,7 +656,7 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Orientation="Horizontal">
-                            <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="20"/>
+                            <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="{DynamicResource ScribeFontSubtitle}"/>
                             <TextBlock Text="{Binding Label}" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
                     </DataTemplate>
@@ -984,7 +984,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="TranscriptionModelTitle" Text="Speech model" Style="{StaticResource CardTitle}"/>
                                         <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
-                                                  Width="320" HorizontalAlignment="Left"
+                                                  MinWidth="320" HorizontalAlignment="Left"
                                                   DisplayMemberPath="Label"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=TranscriptionModelTitle}"
                                                   SelectionChanged="TranscriptionModelCombo_SelectionChanged">
@@ -1020,7 +1020,7 @@
                                             <TextBlock Style="{StaticResource CardDescription}"
                                                        Text="How many processor threads speech recognition uses. Automatic suits most PCs."/>
                                         </StackPanel>
-                                        <ComboBox x:Name="ThreadsCombo" Grid.Column="1" Width="240"
+                                        <ComboBox x:Name="ThreadsCombo" Grid.Column="1" MinWidth="240"
                                                   DisplayMemberPath="Label"
                                                   AutomationProperties.Name="Processor threads"/>
                                     </Grid>
@@ -1038,7 +1038,7 @@
                                                        Text="Unloads the speech model after this long without a dictation, freeing memory. The next dictation takes a second or two longer to start."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="IdleReleaseCombo" Width="240" DisplayMemberPath="Label"
+                                            <ComboBox x:Name="IdleReleaseCombo" MinWidth="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Free memory when Scribe isn't used"/>
                                             <ui:NumberBox x:Name="IdleReleaseCustomBox" Width="96" Margin="8,0,0,0"
@@ -1074,7 +1074,7 @@
                                                        Text="A recording stops at this length and Scribe types what it heard, so a stuck key can't record forever."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="MaxDictationCombo" Width="240" DisplayMemberPath="Label"
+                                            <ComboBox x:Name="MaxDictationCombo" MinWidth="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Longest recording"/>
                                             <ui:NumberBox x:Name="MaxDictationCustomBox" Width="96" Margin="8,0,0,0"
@@ -2102,7 +2102,7 @@
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <ui:SymbolIcon x:Name="TryDictationSummaryIcon" Grid.Column="0" Symbol="CheckmarkCircle24" FontSize="16" Margin="0,2,8,0"
+                                                    <ui:SymbolIcon x:Name="TryDictationSummaryIcon" Grid.Column="0" Symbol="CheckmarkCircle24" FontSize="{DynamicResource ScribeFontBodyLarge}" Margin="0,2,8,0"
                                                                    Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
                                                     <TextBlock x:Name="TryDictationSummaryText" Grid.Column="1"
                                                                Style="{StaticResource TryDictationResultText}"
@@ -2225,7 +2225,7 @@
                                             <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource CardDescription}" Text="Older dictations are deleted automatically."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="HistoryRetentionCombo" Width="240" DisplayMemberPath="Label"
+                                            <ComboBox x:Name="HistoryRetentionCombo" MinWidth="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Keep dictations"/>
                                             <ui:NumberBox x:Name="HistoryRetentionCustomBox" ValueChanged="HistoryRetentionCustomBox_ValueChanged" Width="96" Margin="8,0,0,0"

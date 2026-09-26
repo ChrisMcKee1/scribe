@@ -5,7 +5,7 @@ namespace Scribe.Core.Tests;
 public sealed partial class XamlFontSizeSourceTests
 {
     [Fact]
-    public void Scribe_app_xaml_has_no_inline_text_font_sizes()
+    public void Scribe_app_xaml_has_no_inline_text_font_sizes_or_literal_font_size_setters()
     {
         var root = FindRepositoryRoot();
         var files = Directory.EnumerateFiles(Path.Combine(root, "src", "Scribe.App"), "*.xaml", SearchOption.AllDirectories);
@@ -15,7 +15,7 @@ public sealed partial class XamlFontSizeSourceTests
             var lines = File.ReadAllLines(file);
             for (var i = 0; i < lines.Length; i++)
             {
-                if (InlineFontSize().IsMatch(lines[i]) && !AllowedInlineIconSize(lines[i]))
+                if ((InlineFontSize().IsMatch(lines[i]) && !AllowedInlineIconSize(lines[i])) || LiteralFontSizeSetter().IsMatch(lines[i]))
                 {
                     violations.Add($"{Path.GetRelativePath(root, file)}:{i + 1}:{lines[i].Trim()}");
                 }
@@ -46,4 +46,9 @@ public sealed partial class XamlFontSizeSourceTests
 
     [GeneratedRegex("FontSize=\\\"[0-9]")]
     private static partial Regex InlineFontSize();
+
+    // A style setter with a number stays at 100% whatever Windows' text size: a merge once put the literal values back in
+    // every Settings text style while every inline size had already moved to the ScribeFont ramp.
+    [GeneratedRegex("<Setter\\s+Property=\\\"(TextElement\\.)?FontSize\\\"\\s+Value=\\\"[0-9]")]
+    private static partial Regex LiteralFontSizeSetter();
 }
