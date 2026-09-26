@@ -658,7 +658,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             string.Equals(r.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase));
 
         DictionaryEntry persisted;
-        var addedByQuickAdd = row is null;
+
+        // An unsaved grid row (id 0) is inserted into storage below, so for storage this is an addition too.
+        var addedByQuickAdd = row is null || row.Id == 0;
         if (row is null)
         {
             persisted = _dictionary.Add(entry with { Id = 0 });
@@ -704,8 +706,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return persisted;
     }
 
-    private void ShowQuickAddDictionaryNotice(string heard, bool added) =>
+    // A Settings save in progress owns the window's notice (Saving..., then its result), so the correction is still stored
+    // but not announced over it.
+    private void ShowQuickAddDictionaryNotice(string heard, bool added)
+    {
+        if (_saveInProgress)
+        {
+            return;
+        }
+
         ShowInfo($"{(added ? "Added" : "Updated")} \"{heard}\" from Add to dictionary. This is already saved.");
+    }
 
     // A write that stored this row outside Save (quick add, learning from history) makes it part of what is saved, so its
     // baseline entry is replaced by what was stored; every other row's baseline stays as it was, whatever else is unsaved.
