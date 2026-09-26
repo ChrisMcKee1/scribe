@@ -194,6 +194,8 @@ internal static class AccentContrastResources
     private static string? _lastOutcome;
     private static string? _lastResolverOutcome;
     private static int _lastMissing = -1;
+    private static bool _refreshing;
+    private static bool _refreshRequested;
 
     internal static Func<Color> WindowsAccent { get; set; } = ApplicationAccentColorManager.GetColorizationColor;
 
@@ -259,15 +261,37 @@ internal static class AccentContrastResources
             return null;
         }
 
+        if (!app.Dispatcher.CheckAccess())
+        {
+            app.Dispatcher.BeginInvoke(new Action(() => Refresh()));
+            return null;
+        }
+
+        if (_refreshing)
+        {
+            _refreshRequested = true;
+            return null;
+        }
+
         try
         {
-            if (!app.Dispatcher.CheckAccess())
+            // Replanned subscribers can synchronously ask for another refresh. Queue that as a follow-up pass instead
+            // of nesting plans forever, and cap it so a broken subscriber cannot starve the UI thread.
+            _refreshing = true;
+            AccentContrastPlan? plan = null;
+            var extraPasses = 0;
+            while (true)
             {
-                app.Dispatcher.BeginInvoke(new Action(() => Refresh()));
-                return null;
-            }
+                _refreshRequested = false;
+                plan = Apply(app.Resources);
+                if (!_refreshRequested || extraPasses >= 2)
+                {
+                    _refreshRequested = false;
+                    return plan;
+                }
 
-            return Apply(app.Resources);
+                extraPasses++;
+            }
         }
         catch (Exception ex)
         {
@@ -275,6 +299,10 @@ internal static class AccentContrastResources
             // would stop the tray's own handler and fail the theme change that raised it.
             TryLogFailure(ex);
             return null;
+        }
+        finally
+        {
+            _refreshing = false;
         }
     }
 
@@ -423,7 +451,7 @@ internal static class AccentContrastResources
         }
         catch (Exception ex)
         {
-            TryLogFailure(ex);
+            TryLogAccentFailure(ex);
         }
     }
 
@@ -683,6 +711,20 @@ internal static class AccentContrastResources
         }
         catch
         {
+        }
+    }
+
+    private static void TryLogAccentFailure(Exception ex)
+    {
+        try
+        {
+            _log?.LogWarning(
+                "Could not apply the accent; the previous accent colours stay ({Failure}).",
+                FailureShape.Describe(ex));
+        }
+        catch
+        {
+            // As above.
         }
     }
 

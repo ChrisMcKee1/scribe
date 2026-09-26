@@ -25,26 +25,26 @@ public sealed class AccentSourceSettingsRepositoryTests : IDisposable
         Assert.Contains($"\"accentSource\":\"{source}\"", repository.Get("app_settings"));
     }
 
-    [Fact]
-    public void Missing_or_unknown_accent_source_reads_as_scribe_without_failing_load()
+    [Theory]
+    [InlineData("{}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":\"Purple\"}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":\"1\"}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":\"0\"}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":\"Scribe, Windows\"}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":\"windows\"}", AccentSource.Windows)]
+    [InlineData("{\"accentSource\":\"WINDOWS\"}", AccentSource.Windows)]
+    [InlineData("{\"accentSource\":1}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":null}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":{}}", AccentSource.Scribe)]
+    [InlineData("{\"accentSource\":[]}", AccentSource.Scribe)]
+    public void Missing_or_unknown_accent_source_reads_tolerantly_without_failing_load(string json, AccentSource expected)
     {
         using var db = _folder.Open();
         var repository = new SettingsRepository(db);
 
-        repository.Set("app_settings", "{}");
-        Assert.Equal(AccentSource.Scribe, repository.Load().AccentSource);
-        Assert.False(repository.LastLoadFailed);
+        repository.Set("app_settings", json);
 
-        repository.Set("app_settings", "{\"accentSource\":\"Purple\"}");
-        Assert.Equal(AccentSource.Scribe, repository.Load().AccentSource);
-        Assert.False(repository.LastLoadFailed);
-
-        repository.Set("app_settings", "{\"accentSource\":7}");
-        Assert.Equal(AccentSource.Scribe, repository.Load().AccentSource);
-        Assert.False(repository.LastLoadFailed);
-
-        repository.Set("app_settings", "{\"accentSource\":null}");
-        Assert.Equal(AccentSource.Scribe, repository.Load().AccentSource);
+        Assert.Equal(expected, repository.Load().AccentSource);
         Assert.False(repository.LastLoadFailed);
     }
 

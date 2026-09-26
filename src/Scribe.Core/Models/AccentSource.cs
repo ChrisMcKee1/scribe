@@ -21,11 +21,18 @@ internal sealed class AccentSourceJsonConverter : JsonConverter<AccentSource>
 {
     public override AccentSource Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        if (reader.TokenType == JsonTokenType.String &&
-            Enum.TryParse<AccentSource>(reader.GetString(), ignoreCase: true, out var source) &&
-            Enum.IsDefined(source))
+        if (reader.TokenType == JsonTokenType.String)
         {
-            return source;
+            var value = reader.GetString();
+            if (string.Equals(value, nameof(AccentSource.Scribe), StringComparison.OrdinalIgnoreCase))
+            {
+                return AccentSource.Scribe;
+            }
+
+            if (string.Equals(value, nameof(AccentSource.Windows), StringComparison.OrdinalIgnoreCase))
+            {
+                return AccentSource.Windows;
+            }
         }
 
         if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)

@@ -101,6 +101,26 @@ public sealed class AccentContrastPlannerTests
     private static AccentContrastPlan Plan(string accent, bool light) =>
         AccentContrastPlanner.Plan(light ? AppearanceTheme.Light : AppearanceTheme.Dark, false, Colours(accent, light));
 
+    private static Dictionary<ThemeColor, SrgbColor> ScribeColours(bool light)
+    {
+        var set = light ? ScribeBrand.LightAccent : ScribeBrand.DarkAccent;
+        var fill = light ? set.Primary : set.Secondary;
+        var colors = Theme(light, Hex(set.Primary), Hex(set.Secondary), Hex(set.Tertiary));
+        colors[ThemeColor.AccentPrimary] = set.Primary;
+        colors[ThemeColor.AccentFill] = fill;
+        colors[ThemeColor.AccentFillHover] = fill.WithAlpha(229);
+        colors[ThemeColor.AccentFillPressed] = fill.WithAlpha(204);
+        colors[ThemeColor.AccentTextPrimary] = set.Secondary;
+        colors[ThemeColor.AccentTextSecondary] = set.Tertiary;
+        colors[ThemeColor.AccentTextTertiary] = set.Primary;
+        return colors;
+    }
+
+    private static AccentContrastPlan ScribePlan(bool light) =>
+        AccentContrastPlanner.Plan(light ? AppearanceTheme.Light : AppearanceTheme.Dark, false, ScribeColours(light));
+
+    private static string Hex(SrgbColor color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
     private static SrgbColor[] Surfaces(bool light) =>
         // Includes the redesign nested panel endpoints, which tighten several exact expected ratios.
         light
@@ -609,6 +629,116 @@ public sealed class AccentContrastPlannerTests
         Assert.NotNull(plan.For(AccentForegroundRole.SelectedItem));
         Assert.NotNull(plan.For(AccentForegroundRole.InfoBadge));
         Assert.NotNull(plan.For(AccentShadeRole.SwitchTrack));
+    }
+
+    [Fact]
+    public void Signal_On_light_palette_acceptance_keeps_brand_fills_and_repairs_pressed_label()
+    {
+        var plan = ScribePlan(light: true);
+
+        // Acceptance: with source Scribe, every specified final role pair passes and the brand fills draw exactly as
+        // specified, while the existing repairs stay active. Do not assert zero corrections: the pressed label repair
+        // and current chart bar are expected.
+        AssertEveryForegroundMeets(plan);
+        AssertKeepsThemeForeground(plan, SrgbColor.White,
+            AccentForegroundRole.AccentButton,
+            AccentForegroundRole.CheckGlyph,
+            AccentForegroundRole.SwitchKnob,
+            AccentForegroundRole.SwitchKnobHover,
+            AccentForegroundRole.SwitchKnobPressed);
+        Assert.Equal(SrgbColor.White, Role(plan, AccentForegroundRole.AccentButtonPressed).Foreground);
+        Assert.False(Role(plan, AccentForegroundRole.AccentButtonPressed).Choice.IsThemeForeground);
+
+        foreach (var shade in plan.Shades)
+        {
+            Assert.Equal(shade.Role == AccentShadeRole.ChartBarCurrent, shade.Changed);
+        }
+
+        Assert.Equal(C("#0035B1"), Shade(plan, AccentShadeRole.Hyperlink).Color);
+        Assert.Equal(C("#00298E"), Shade(plan, AccentShadeRole.HyperlinkHover).Color);
+        Assert.Equal(C("#0C48CF"), Shade(plan, AccentShadeRole.SelectionIndicator).Color);
+        Assert.Equal(C("#0C48CF"), Shade(plan, AccentShadeRole.ChartBar).Color);
+        AssertChartCurrent(plan, light: true, "#083391");
+    }
+
+    [Fact]
+    public void Signal_On_dark_palette_acceptance_keeps_brand_fills_and_lifts_nested_tertiary_text()
+    {
+        var plan = ScribePlan(light: false);
+
+        // Acceptance: with source Scribe, every specified final role pair passes and the brand fills draw exactly as
+        // specified, while the existing repairs stay active. Do not assert zero corrections: tertiary accent text is
+        // lifted on #404040 and the current chart bar is intentionally distinct.
+        AssertEveryForegroundMeets(plan);
+        AssertKeepsThemeForeground(plan, SrgbColor.Black,
+            AccentForegroundRole.AccentButton,
+            AccentForegroundRole.CheckGlyph,
+            AccentForegroundRole.SwitchKnob,
+            AccentForegroundRole.SwitchKnobHover,
+            AccentForegroundRole.SwitchKnobPressed);
+        Assert.Equal(SrgbColor.Black, Role(plan, AccentForegroundRole.AccentButtonPressed).Foreground);
+        Assert.True(Role(plan, AccentForegroundRole.AccentButtonPressed).Choice.IsThemeForeground);
+
+        foreach (var shade in plan.Shades)
+        {
+            var expectedChanged = shade.Role is AccentShadeRole.AccentTextTertiary or AccentShadeRole.ChartBarCurrent;
+            Assert.Equal(expectedChanged, shade.Changed);
+        }
+
+        Assert.Equal(C("#81AAFF"), Shade(plan, AccentShadeRole.AccentTextTertiary).Color);
+        Assert.True(Shade(plan, AccentShadeRole.AccentTextTertiary).Meets);
+        Assert.Equal(C("#88B0FE"), Shade(plan, AccentShadeRole.Hyperlink).Color);
+        Assert.Equal(C("#A1C1FE"), Shade(plan, AccentShadeRole.HyperlinkHover).Color);
+        Assert.Equal(C("#88B0FE"), Shade(plan, AccentShadeRole.SelectionIndicator).Color);
+        Assert.Equal(C("#88B0FE"), Shade(plan, AccentShadeRole.ChartBar).Color);
+        AssertChartCurrent(plan, light: false, "#C4D8FF");
+    }
+
+    [Theory]
+    [InlineData("navy", true)]
+    [InlineData("navy", false)]
+    [InlineData("gold", true)]
+    [InlineData("gold", false)]
+    public void Windows_accent_chart_bars_are_readable_and_the_current_bar_is_distinct_where_possible(string accent, bool light)
+    {
+        var plan = Plan(accent, light);
+        var chart = Shade(plan, AccentShadeRole.ChartBar).Color;
+        var current = Shade(plan, AccentShadeRole.ChartBarCurrent).Color;
+
+        Assert.All(Surfaces(light), surface =>
+        {
+            Assert.True(WcagContrast.Ratio(chart, surface) >= WcagContrast.NonTextMinimum);
+            Assert.True(WcagContrast.Ratio(current, surface) >= WcagContrast.NonTextMinimum);
+        });
+        Assert.True(WcagContrast.Ratio(chart, current) >= 1.5 || current == SrgbColor.Black || current == SrgbColor.White);
+    }
+
+    private static void AssertEveryForegroundMeets(AccentContrastPlan plan)
+    {
+        Assert.All(plan.Foregrounds, foreground =>
+        {
+            Assert.True(foreground.Choice.MeetsInEveryState, foreground.Role.ToString());
+            Assert.True(foreground.Choice.AllStatesRatio >= foreground.ApplicableMinimum, foreground.Role.ToString());
+        });
+    }
+
+    private static void AssertKeepsThemeForeground(AccentContrastPlan plan, SrgbColor color, params AccentForegroundRole[] roles)
+    {
+        foreach (var role in roles)
+        {
+            var foreground = Role(plan, role);
+            Assert.True(foreground.Choice.IsThemeForeground, role.ToString());
+            Assert.Equal(color, foreground.Foreground);
+        }
+    }
+
+    private static void AssertChartCurrent(AccentContrastPlan plan, bool light, string expected)
+    {
+        var chart = Shade(plan, AccentShadeRole.ChartBar).Color;
+        var current = Shade(plan, AccentShadeRole.ChartBarCurrent).Color;
+        Assert.Equal(C(expected), current);
+        Assert.All(Surfaces(light), surface => Assert.True(WcagContrast.Ratio(current, surface) >= WcagContrast.NonTextMinimum));
+        Assert.True(WcagContrast.Ratio(current, chart) >= 1.5);
     }
 
     [Theory]
