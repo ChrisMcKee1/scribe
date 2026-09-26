@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
@@ -27,6 +28,8 @@ internal sealed class TrayIconHost : IDisposable
     private readonly TaskbarIcon _icon;
     private readonly UiThreadDispatch _ui;
     private readonly ICommand _settingsCommand;
+    private readonly ControlTemplate _menuItemTemplate;
+    private readonly ControlTemplate _submenuHeaderTemplate;
 
     private bool _disposed;
     private System.Drawing.Icon? _currentIcon;
@@ -65,6 +68,7 @@ internal sealed class TrayIconHost : IDisposable
     public Func<bool>? UpdateReadyProvider { get; set; }
     public Func<string?>? UpdateVersionProvider { get; set; }
     public Func<TrayCondition>? ConditionProvider { get; set; }
+    public Func<bool>? CopyLastAvailableProvider { get; set; }
 
     public TrayIconHost(Action<Exception>? onUpdateFailure = null)
     {
@@ -75,6 +79,8 @@ internal sealed class TrayIconHost : IDisposable
             onFailure: onUpdateFailure);
 
         _settingsCommand = new RelayCommand(() => SettingsRequested?.Invoke());
+        _menuItemTemplate = CreateMenuItemTemplate(hasSubmenu: false);
+        _submenuHeaderTemplate = CreateMenuItemTemplate(hasSubmenu: true);
         _menu = new ContextMenu();
         ApplyMenuTheme();
         ApplicationThemeManager.Changed += OnApplicationThemeChanged;
@@ -148,7 +154,7 @@ internal sealed class TrayIconHost : IDisposable
         _condition = ConditionProvider?.Invoke() ?? _condition;
         var state = new TrayMenuState(
             _updateReady,
-            recent.Count > 0,
+            CopyLastAvailableProvider?.Invoke() ?? true,
             CurrentAiCleanupItem(),
             _state == DictationState.Paused,
             recent.Take(5).Select(text => LastTranscriptStore.FormatPreview(text, maxLength: 42)).ToArray());
@@ -210,7 +216,7 @@ internal sealed class TrayIconHost : IDisposable
             IsCheckable = item.Kind == TrayItemKind.Check,
             IsChecked = item.Kind == TrayItemKind.Check && item.IsChecked,
         };
-        ApplyCheckIcon(menuItem, item.Kind == TrayItemKind.Check, item.IsChecked);
+        ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
 
         if (item.Kind == TrayItemKind.Submenu && item.Children is { Count: > 0 })
         {
@@ -240,6 +246,7 @@ internal sealed class TrayIconHost : IDisposable
             Header = EscapeHeader(item.Label),
             IsEnabled = item.Enabled,
         };
+        ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
         if (item.Command == TrayCommand.CopyRecentDictation && index < recent.Count)
         {
             var text = recent[index];
@@ -282,7 +289,7 @@ internal sealed class TrayIconHost : IDisposable
                     IsChecked = i == picker.SelectedIndex,
                     IsEnabled = choice.Kind != MicrophoneChoiceKind.Unavailable,
                 };
-                ApplyCheckIcon(child, isCheckable: true, child.IsChecked);
+                ApplyTrayTemplate(child, hasSubmenu: false);
                 var selection = choice.Selection;
                 child.Click += (_, _) => MicrophoneChosen?.Invoke(selection);
                 parent.Items.Add(child);
@@ -295,6 +302,7 @@ internal sealed class TrayIconHost : IDisposable
 
         parent.Items.Add(new Separator());
         var soundSettings = new MenuItem { Header = "Windows _sound settings" };
+        ApplyTrayTemplate(soundSettings, hasSubmenu: false);
         soundSettings.Click += (_, _) => SoundSettingsRequested?.Invoke();
         parent.Items.Add(soundSettings);
         return parent;
@@ -362,17 +370,56 @@ internal sealed class TrayIconHost : IDisposable
 
     private static string EscapeHeader(string label) => label.Replace("_", "__", StringComparison.Ordinal);
 
-    private static void ApplyCheckIcon(MenuItem item, bool isCheckable, bool isChecked)
+    private void ApplyTrayTemplate(MenuItem item, bool hasSubmenu)
     {
-        if (!isCheckable)
-        {
-            item.Icon = new TextBlock { Width = 16 };
-            return;
-        }
+        item.Template = hasSubmenu ? _submenuHeaderTemplate : _menuItemTemplate;
+    }
 
-        item.Icon = isChecked
-            ? new Wpf.Ui.Controls.SymbolIcon { Symbol = Wpf.Ui.Controls.SymbolRegular.Checkmark24, FontSize = 16 }
-            : new TextBlock { Width = 16 };
+    private static ControlTemplate CreateMenuItemTemplate(bool hasSubmenu)
+    {
+        var arrowColumn = hasSubmenu ? "<ColumnDefinition Width=\"20\"/>" : string.Empty;
+        var arrow = hasSubmenu
+            ? "<TextBlock Grid.Column=\"2\" Text=\"›\" VerticalAlignment=\"Center\" HorizontalAlignment=\"Center\" Foreground=\"{DynamicResource TextFillColorSecondaryBrush}\"/>"
+            : string.Empty;
+        var popup = hasSubmenu
+            ? """
+                        <Popup x:Name="PART_Popup" AllowsTransparency="True" Focusable="False" IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" Placement="Right" PopupAnimation="Fade">
+                            <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="4" Padding="4">
+                                <ScrollViewer CanContentScroll="True">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+"""
+            : string.Empty;
+        var xaml = $$"""
+            <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             TargetType="{x:Type MenuItem}">
+                <Border x:Name="Border" Margin="4,1,4,1" Background="Transparent" CornerRadius="4">
+                    <Grid Margin="8,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="24"/>
+                            <ColumnDefinition Width="*"/>{{arrowColumn}}
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="CheckGlyph" Text="✓" Visibility="Collapsed" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                        <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" Margin="4,0,16,0" VerticalAlignment="Center"/>{{arrow}}{{popup}}
+                    </Grid>
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsHighlighted" Value="True">
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                    </Trigger>
+                    <Trigger Property="IsEnabled" Value="False">
+                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorDisabledBrush}"/>
+                    </Trigger>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible"/>
+                    </Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate>
+""";
+        return (ControlTemplate)XamlReader.Parse(xaml);
     }
 
     public void SetState(DictationState state) => Dispatch(() =>
@@ -440,9 +487,9 @@ internal sealed class TrayIconHost : IDisposable
         if (_menu.IsOpen) RebuildMenu();
     });
 
-    public void ShowError(string message) => Dispatch(() => _icon.ShowNotification("Scribe", message, NotificationIcon.Error, timeout: TimeSpan.FromSeconds(6)));
+    public void ShowError(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
 
-    public void ShowInfo(string message) => Dispatch(() => _icon.ShowNotification("Scribe", message, NotificationIcon.Info, timeout: TimeSpan.FromSeconds(6)));
+    public void ShowInfo(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
 
     public void ShowNotification(string message, bool isError = false) => Dispatch(() =>
         _icon.ShowNotification("Scribe", message, isError ? NotificationIcon.Error : NotificationIcon.Info, timeout: TimeSpan.FromSeconds(6)));
