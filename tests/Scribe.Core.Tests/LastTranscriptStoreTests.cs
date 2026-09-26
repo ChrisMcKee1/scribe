@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Xunit;
 
@@ -289,13 +290,163 @@ public sealed class LastTranscriptStoreTests
         store.Set("live");
         store.Seed(["from history"]);
 
-        Assert.Equal(new[] { "live" }, store.GetRecent());
+        Assert.Equal(new[] { "live", "from history" }, store.GetRecent());
 
         var empty = new LastTranscriptStore();
         empty.Seed(Enumerable.Range(0, LastTranscriptStore.Capacity + 3).Select(i => $"h{i}"));
 
         Assert.Equal(LastTranscriptStore.Capacity, empty.GetRecent().Count);
         Assert.Null(Record.Exception(() => empty.Seed(null)));
+    }
+
+    [Fact]
+    public void Seed_history_merges_under_live_dictations_and_skips_duplicates()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("live");
+        store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow.AddMinutes(-1), "live", 1, 1),
+            new HistoryEntry(2, DateTimeOffset.UtcNow.AddMinutes(-2), "older", 1, 1),
+        ], 0, () => 0);
+
+        Assert.Equal(["live", "older"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Seed_history_rejects_stale_read_after_delete_revision_moves()
+    {
+        var store = new LastTranscriptStore();
+        var revision = 0L;
+        var readRevision = revision;
+        revision++;
+
+        Assert.False(store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow, "deleted", 1, 1),
+        ], readRevision, () => revision));
+        Assert.Empty(store.GetRecent());
+    }
+
+    [Fact]
+    public void Seed_history_rejects_stale_read_after_clear_revision_moves()
+    {
+        var store = new LastTranscriptStore();
+        var revision = 4L;
+        var readRevision = revision;
+        revision++;
+
+        Assert.False(store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow, "cleared", 1, 1),
+        ], readRevision, () => revision));
+        Assert.Empty(store.GetRecent());
+    }
+
+    [Fact]
+    public void Notice_ids_stop_copying_after_their_entry_is_forgotten()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("copy me");
+        var id = store.CurrentId();
+
+        Assert.NotNull(id);
+        Assert.Equal("copy me", store.Get(id.Value));
+
+        store.Forget("copy me");
+
+        Assert.Null(store.Get(id.Value));
+    }
+
+    [Fact]
+    public void Forget_older_than_removes_only_seeded_history_before_cutoff()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddHours(-1);
+        var store = new LastTranscriptStore();
+        store.Set("live");
+        store.SeedHistory([
+            new HistoryEntry(1, cutoff.AddMinutes(-1), "old", 1, 1),
+            new HistoryEntry(2, cutoff.AddMinutes(1), "new", 1, 1),
+        ], 0, () => 0);
+
+        Assert.NotEmpty(store.ForgetOlderThan(cutoff));
+
+        Assert.Equal(["live", "new"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Entry_deletion_removes_only_copies_added_before_the_notice_revision()
+    {
+        var revision = 1L;
+        var store = new LastTranscriptStore(() => revision);
+        store.Set("same");
+        revision = 2;
+        store.Set("other");
+        store.Set("same");
+
+        var deletion = new HistoryDeletion(
+            HistoryDeletionKind.Entry,
+            new HistoryEntry(1, DateTimeOffset.UtcNow, "same", 1, 1),
+            Revision: 2);
+
+        Assert.Single(store.ApplyDeletion(deletion));
+
+        Assert.Equal(["same", "other"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Clear_deletion_keeps_dictations_added_after_the_clear_committed()
+    {
+        var revision = 0L;
+        var store = new LastTranscriptStore(() => revision);
+        store.Set("before");
+        revision = 1;
+        store.Set("after");
+
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.Clear, Revision: 1));
+
+        Assert.Equal(["after"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Retention_deletion_removes_by_history_time()
+    {
+        var cutoff = DateTimeOffset.UtcNow;
+        var store = new LastTranscriptStore();
+        store.SeedHistory([
+            new HistoryEntry(1, cutoff.AddMinutes(-1), "old", 1, 1),
+            new HistoryEntry(2, cutoff.AddMinutes(1), "new", 1, 1),
+        ], 0, () => 0);
+
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoff, Revision: 1));
+
+        Assert.Equal(["new"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Repeated_dictation_after_clear_commit_survives_late_clear_notice()
+    {
+        var revision = 0L;
+        var store = new LastTranscriptStore(() => revision);
+        store.Set("repeat");
+        revision = 1;
+        store.Set("repeat");
+
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.Clear, Revision: 1));
+
+        Assert.Equal(["repeat"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Repeated_seeded_dictation_uses_live_time_for_retention()
+    {
+        var store = new LastTranscriptStore();
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-5);
+        store.SeedHistory([
+            new HistoryEntry(1, DateTimeOffset.UtcNow.AddDays(-10), "repeat", 1, 1),
+        ], 0, () => 0);
+
+        store.Set("repeat");
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoff, Revision: 1));
+
+        Assert.Equal(["repeat"], store.GetRecent());
     }
 
     [Fact]
@@ -330,7 +481,7 @@ public sealed class LastTranscriptStoreTests
         store.Set("other");
         store.Set("repeat");
 
-        Assert.True(store.Forget("repeat"));
+        Assert.NotEmpty(store.Forget("repeat"));
 
         Assert.Equal(["other"], store.GetRecent());
     }
@@ -341,8 +492,8 @@ public sealed class LastTranscriptStoreTests
         var store = new LastTranscriptStore();
         store.Set("one");
 
-        Assert.False(store.Forget("missing"));
-        Assert.False(store.Forget(null));
+        Assert.Empty(store.Forget("missing"));
+        Assert.Empty(store.Forget(null));
         Assert.Equal(["one"], store.GetRecent());
     }
 
@@ -354,7 +505,7 @@ public sealed class LastTranscriptStoreTests
         store.Set("cloud pilot");
         Assert.True(store.Update("cloud pilot", "Copilot"));
 
-        Assert.True(store.Forget("cloud pilot"));
+        Assert.NotEmpty(store.Forget("cloud pilot"));
 
         Assert.Empty(store.GetRecent());
     }
@@ -367,7 +518,7 @@ public sealed class LastTranscriptStoreTests
         Assert.True(store.Update("cloud pilot", "Copilot"));
         Assert.True(store.Update("Copilot", "GitHub Copilot"));
 
-        Assert.True(store.Forget("cloud pilot"));
+        Assert.NotEmpty(store.Forget("cloud pilot"));
 
         Assert.Empty(store.GetRecent());
     }

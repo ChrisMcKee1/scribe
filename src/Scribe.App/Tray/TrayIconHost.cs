@@ -45,6 +45,7 @@ internal sealed class TrayIconHost : IDisposable
     private string? _shortcutSentence;
     private HotkeyMode _hotkeyMode = HotkeyMode.Hold;
     private TrayCondition _condition;
+    private TrayNoticeAction _lastNoticeAction;
 
     public event Action? QuitRequested;
     public event Action? SettingsRequested;
@@ -53,7 +54,9 @@ internal sealed class TrayIconHost : IDisposable
     public event Action? AddToDictionaryRequested;
     public event Action? CopyLastDictationRequested;
     public event Action<string>? CopyRecentDictationRequested;
+    public event Action<Guid, string>? CopyRecentDictationByIdRequested;
     public Func<IReadOnlyList<string>>? RecentDictationsProvider { get; set; }
+    public Func<IReadOnlyList<LastTranscriptStore.RetainedTranscript>>? RecentTranscriptProvider { get; set; }
     public event Action? WelcomeRequested;
     public event Action? OpenStoreRequested;
     public event Action? ShareAppRequested;
@@ -67,6 +70,7 @@ internal sealed class TrayIconHost : IDisposable
     public event Action? RestartToUpdateRequested;
     public event Action? OpenHistoryRequested;
     public event Action? SetUpAiCleanupRequested;
+    public event Action<TrayNoticeAction>? NoticeActionRequested;
 
     public Func<TrayAiCleanupItem>? AiCleanupItemProvider { get; set; }
     public Func<bool>? UpdateReadyProvider { get; set; }
@@ -106,6 +110,7 @@ internal sealed class TrayIconHost : IDisposable
             DoubleClickCommand = _settingsCommand,
         };
 
+        _icon.TrayBalloonTipClicked += (_, _) => RaiseNoticeAction();
         _icon.TrayContextMenuOpen += (_, _) => FocusMenu();
         _icon.ForceCreate(false);
         RebuildMenu();
@@ -161,7 +166,8 @@ internal sealed class TrayIconHost : IDisposable
 
         ApplyMenuTheme();
         _menu.Items.Clear();
-        var recent = ReadRecentDictations();
+        var recentEntries = ReadRecentTranscripts();
+        var recent = recentEntries.Select(entry => entry.Text).ToArray();
         _updateReady = UpdateReadyProvider?.Invoke() ?? _updateReady;
         _updateVersion = UpdateVersionProvider?.Invoke() ?? _updateVersion;
         _condition = ConditionProvider?.Invoke() ?? _condition;
@@ -174,8 +180,27 @@ internal sealed class TrayIconHost : IDisposable
 
         foreach (var item in TrayMenu.Build(state).Items)
         {
-            AddMenuItem(_menu.Items, item, recent);
+            AddMenuItem(_menu.Items, item, recent, recentEntries);
         }
+    }
+
+    private IReadOnlyList<LastTranscriptStore.RetainedTranscript> ReadRecentTranscripts()
+    {
+        try
+        {
+            if (RecentTranscriptProvider is { } provider)
+            {
+                return provider();
+            }
+        }
+        catch
+        {
+            return [];
+        }
+
+        return ReadRecentDictations()
+            .Select(text => new LastTranscriptStore.RetainedTranscript(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, 0))
+            .ToArray();
     }
 
     private IReadOnlyList<string> ReadRecentDictations()
@@ -207,7 +232,7 @@ internal sealed class TrayIconHost : IDisposable
         return new TrayAiCleanupItem(TrayAiCleanupKind.Toggle, "AI cleanup", _aiCleanupEnabled, true);
     }
 
-    private void AddMenuItem(ItemCollection target, TrayMenuItem item, IReadOnlyList<string> recent)
+    private void AddMenuItem(ItemCollection target, TrayMenuItem item, IReadOnlyList<string> recent, IReadOnlyList<LastTranscriptStore.RetainedTranscript> recentEntries)
     {
         if (item.Kind == TrayItemKind.Separator)
         {
@@ -235,7 +260,7 @@ internal sealed class TrayIconHost : IDisposable
         {
             for (var i = 0; i < item.Children.Count; i++)
             {
-                AddRecentMenuChild(menuItem.Items, item.Children[i], i, recent);
+                AddRecentMenuChild(menuItem.Items, item.Children[i], i, recent, recentEntries);
             }
         }
         else if (item.Command is { } command)
@@ -246,7 +271,7 @@ internal sealed class TrayIconHost : IDisposable
         target.Add(menuItem);
     }
 
-    private void AddRecentMenuChild(ItemCollection target, TrayMenuItem item, int index, IReadOnlyList<string> recent)
+    private void AddRecentMenuChild(ItemCollection target, TrayMenuItem item, int index, IReadOnlyList<string> recent, IReadOnlyList<LastTranscriptStore.RetainedTranscript> recentEntries)
     {
         if (item.Kind == TrayItemKind.Separator)
         {
@@ -262,8 +287,8 @@ internal sealed class TrayIconHost : IDisposable
         ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
         if (item.Command == TrayCommand.CopyRecentDictation && index < recent.Count)
         {
-            var text = recent[index];
-            menuItem.Click += (_, _) => RunCommand(TrayCommand.CopyRecentDictation, menuItem, text);
+            var entry = recentEntries[index];
+            menuItem.Click += (_, _) => CopyRecentDictationByIdRequested?.Invoke(entry.Id, entry.Text);
         }
         else if (item.Command is { } command)
         {
@@ -595,12 +620,40 @@ internal sealed class TrayIconHost : IDisposable
         if (_menu.IsOpen) RebuildMenu();
     });
 
-    public void ShowError(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
+    public void ShowNotice(TrayNotice notice) => Dispatch(() =>
+    {
+        var delivery = TrayNoticeDelivery.For(notice.Kind);
+        _lastNoticeAction = notice.Action;
+        _icon.ShowNotification(
+            notice.Title,
+            notice.Body,
+            ToNotificationIcon(delivery.Icon),
+            customIconHandle: null,
+            largeIcon: false,
+            sound: !delivery.Silent,
+            respectQuietTime: delivery.RespectQuietTime,
+            realtime: delivery.Realtime,
+            timeout: NoticeTimeout(notice.Kind));
+    });
 
-    public void ShowInfo(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
+    private void RaiseNoticeAction()
+    {
+        var action = _lastNoticeAction;
+        if (action != TrayNoticeAction.None)
+        {
+            NoticeActionRequested?.Invoke(action);
+        }
+    }
 
-    public void ShowNotification(string message, bool isError = false) => Dispatch(() =>
-        _icon.ShowNotification("Scribe", message, isError ? NotificationIcon.Error : NotificationIcon.Info, timeout: TimeSpan.FromSeconds(6)));
+    private static NotificationIcon ToNotificationIcon(TrayNotificationIcon icon) => icon switch
+    {
+        TrayNotificationIcon.Warning => NotificationIcon.Warning,
+        TrayNotificationIcon.Error => NotificationIcon.Error,
+        _ => NotificationIcon.Info,
+    };
+
+    private static TimeSpan? NoticeTimeout(TrayNoticeKind kind) =>
+        kind == TrayNoticeKind.Info ? TimeSpan.FromSeconds(8) : null;
 
     private void RetireIcon(System.Drawing.Icon? replaced)
     {

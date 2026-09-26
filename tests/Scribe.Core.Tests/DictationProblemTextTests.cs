@@ -68,6 +68,14 @@ public sealed class DictationProblemTextTests
         Assert.Equal(DictationProblem.ModelLoadFailed, DictationProblemText.FromLegacy("model failed to load, see logs"));
         Assert.Equal(DictationProblem.MicrophoneMuted, DictationProblemText.FromLegacy("microphone is muted, unmute it to dictate"));
         Assert.Equal(DictationProblem.DurationLimit, DictationProblemText.FromLegacy("dictation hit the 10 minute limit and was transcribed"));
+        Assert.Equal(DictationProblem.FallbackMicrophone, DictationProblemText.FromLegacy("\"Laptop\" isn't available, so Scribe is using the Windows default microphone."));
+    }
+
+    [Fact]
+    public void Controller_fallback_microphone_text_stays_mapped()
+    {
+        var controller = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Dictation", "DictationController.cs"));
+        Assert.Contains("isn't available, so Scribe is using the Windows default microphone", controller, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -111,4 +119,16 @@ public sealed class DictationProblemTextTests
 
     private static object?[] Row(DictationProblem problem, string? device, string? chosen, string? used, int minutes, HotkeyMode mode, string shortcut, string title, string body, TrayNoticeKind kind, bool silent, string? pill, TrayNoticeAction action) =>
         [problem, device, chosen, used, minutes, mode, shortcut, title, body, kind, silent, pill, action];
+
+    private static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return root.FullName;
+    }
 }

@@ -38,8 +38,9 @@ public sealed class TrayCoreRedesignT0Tests
         var setup = TrayAiCleanup.Describe(settings, setupComplete: false, CleanupStatus.Disabled, settingsRecovered: false);
         var unavailable = TrayAiCleanup.Describe(settings, setupComplete: true, CleanupStatus.Unavailable, settingsRecovered: false);
 
-        Assert.Equal("Set up AI cleanup...", setup.Label);
-        Assert.False(setup.IsCheckItem);
+        Assert.Equal("AI cleanup", setup.Label);
+        Assert.True(setup.IsCheckItem);
+        Assert.True(setup.Checked);
         Assert.Equal("AI cleanup (not ready)", unavailable.Label);
         Assert.True(unavailable.Checked);
     }
@@ -164,7 +165,7 @@ public sealed class TrayCoreRedesignT0Tests
         store.Set("two");
         store.Set("one");
 
-        Assert.True(store.Forget("one"));
+        Assert.NotEmpty(store.Forget("one"));
         Assert.Equal(["two"], store.GetRecent());
         store.Clear();
         Assert.Empty(store.GetRecent());

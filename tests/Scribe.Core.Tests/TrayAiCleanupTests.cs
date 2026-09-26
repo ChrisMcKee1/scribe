@@ -10,13 +10,37 @@ public sealed class TrayAiCleanupTests
     public void Not_setup_opens_settings_without_toggle()
     {
         var settings = AppSettings.CreateDefault();
-        settings.EnableAiCleanup = true;
+        settings.EnableAiCleanup = false;
 
         var item = TrayAiCleanup.Describe(settings, setupComplete: false, CleanupStatus.Disabled, settingsRecovered: false);
 
         Assert.Equal(TrayAiCleanupKind.SetUp, item.Kind);
         Assert.Equal("Set up AI cleanup...", item.Label);
         Assert.False(item.IsCheckItem);
+        Assert.False(item.Checked);
+    }
+
+    [Fact]
+    public void On_without_setup_is_checked_toggle_so_turning_off_never_downloads()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+
+        var item = TrayAiCleanup.Describe(settings, setupComplete: false, CleanupStatus.Initializing, settingsRecovered: false);
+
+        Assert.Equal(TrayAiCleanupKind.Toggle, item.Kind);
+        Assert.True(item.Checked);
+    }
+
+    [Fact]
+    public void Off_with_downloaded_model_is_toggle()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = false;
+
+        var item = TrayAiCleanup.Describe(settings, setupComplete: true, CleanupStatus.Disabled, settingsRecovered: false);
+
+        Assert.Equal(TrayAiCleanupKind.Toggle, item.Kind);
         Assert.False(item.Checked);
     }
 
@@ -36,7 +60,7 @@ public sealed class TrayAiCleanupTests
     [Fact]
     public void Providers_have_setup_requirements()
     {
-        var foundry = AppSettings.CreateDefault().withSettings(s => s.AiCleanupProvider = CleanupProvider.FoundryLocal);
+        var foundry = AppSettings.CreateDefault().withSettings(s => { s.AiCleanupProvider = CleanupProvider.FoundryLocal; s.EnableAiCleanup = false; });
         var azure = AppSettings.CreateDefault().withSettings(s => { s.AiCleanupProvider = CleanupProvider.AzureFoundry; s.AiCleanupAzureEndpoint = "https://example.openai.azure.com"; s.AiCleanupAzureDeployment = null; });
         var custom = AppSettings.CreateDefault().withSettings(s => { s.AiCleanupProvider = CleanupProvider.OpenAiCompatible; s.AiCleanupCustomEndpoint = "http://localhost:11434/v1"; s.AiCleanupCustomModel = null; });
         var copilot = AppSettings.CreateDefault().withSettings(s => s.AiCleanupProvider = CleanupProvider.GitHubCopilot);

@@ -15,6 +15,7 @@ public enum TrayNoticeAction
     OpenSettingsAiCleanup,
     OpenSettingsDictionary,
     OpenSettingsDiagnostics,
+    OpenSettingsHistory,
     CopyLastDictation,
     CopyFixedDictation,
     OpenSoundSettings,
@@ -64,4 +65,26 @@ public static class TrayNotices
     public static TrayNotice AiCleanupEpisodeFailed() => new("AI cleanup isn't working", "Scribe types what it hears until it's fixed. Open Settings, AI cleanup to see why.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettingsAiCleanup);
     public static TrayNotice SavedSettingsStartup() => new("Using default settings", "Scribe couldn't use your saved settings, so it's using defaults for now. Open Settings, review them and choose Save to keep them.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettings);
     public static TrayNotice SavedSettingsTray(string change) => new("Your settings need a review", $"Scribe couldn't use your saved settings, so it's using defaults. Open Settings, review them and choose Save. Then you can change {change} here.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettings);
+    public static TrayNotice QuickAddSavedButDictionaryNotOn() => new("Saved, but not in use yet", "Scribe saved your word but couldn't start using it. Quit and reopen Scribe to use it.", TrayNoticeKind.Warning);
+    public static TrayNotice FoundryStorageReclaimed(string body) => new("AI files removed", body, TrayNoticeKind.Info);
+    public static TrayNotice DatabaseRepaired(string body) => new("Scribe repaired its data", body, TrayNoticeKind.Warning, TrayNoticeAction.OpenSettingsDiagnostics);
+    public static TrayNotice AiCleanupActivation(string body)
+    {
+        var title = body.StartsWith("AI cleanup is off", StringComparison.OrdinalIgnoreCase)
+            ? "AI cleanup is off"
+            : "AI cleanup is on";
+        var text = body;
+        const string onPrefix = "AI cleanup is on. ";
+        const string offPrefix = "AI cleanup is off. ";
+        if (text.StartsWith(onPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            text = text[onPrefix.Length..];
+        }
+        else if (text.StartsWith(offPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            text = text[offPrefix.Length..];
+        }
+
+        return new TrayNotice(title, text, TrayNoticeKind.Info);
+    }
 }

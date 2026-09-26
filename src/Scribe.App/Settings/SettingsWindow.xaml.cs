@@ -615,6 +615,63 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Select(r => new DictionaryEntry(
                 r.Id, r.Pattern.Trim(), r.Replacement.Trim(), r.WholeWord, r.Enabled))
             .ToList();
+
+    internal IReadOnlyList<string> PendingQuickAddSpokenForms()
+    {
+        if (!_dictionaryLoad.IsLoaded)
+        {
+            return [];
+        }
+
+        return DictionaryDraftDiff.ChangedSpokenForms(_dictionary.GetAll(), CurrentDictionaryEntries()).ToList();
+    }
+
+    internal void ShowDictionaryEntry(string spoken)
+    {
+        ShowPage(SettingsPage.Dictionary, nameof(DictionaryGrid));
+        if (!_dictionaryLoad.IsLoaded || string.IsNullOrWhiteSpace(spoken))
+        {
+            return;
+        }
+
+        var row = _rows.FirstOrDefault(candidate =>
+            string.Equals(candidate.Pattern.Trim(), spoken.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+        {
+            return;
+        }
+
+        DictionaryGrid.SelectedItem = row;
+        DictionaryGrid.ScrollIntoView(row);
+        DictionaryGrid.Focus();
+    }
+
+    internal void AddDictionaryDraft(string spoken)
+    {
+        ShowPage(SettingsPage.Dictionary, nameof(DictionaryGrid));
+        if (string.IsNullOrWhiteSpace(spoken))
+        {
+            return;
+        }
+
+        var existing = _rows.FirstOrDefault(candidate =>
+            string.Equals(candidate.Pattern.Trim(), spoken.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            DictionaryGrid.SelectedItem = existing;
+            DictionaryGrid.ScrollIntoView(existing);
+            return;
+        }
+
+        var row = new DictionaryRow { Pattern = spoken.Trim(), WholeWord = true, Enabled = true };
+        _rows.Add(row);
+        DictionaryGrid.ScrollIntoView(row);
+        DictionaryGrid.UpdateLayout();
+        DictionaryGrid.SelectedItem = row;
+        DictionaryGrid.CurrentCell = new DataGridCellInfo(row, DictionaryGrid.Columns.Count > 1 ? DictionaryGrid.Columns[1] : DictionaryGrid.Columns[0]);
+        DictionaryGrid.Focus();
+        DictionaryGrid.BeginEdit();
+    }
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
     {
         if (_updates?.IsStoreManaged == true)
@@ -3703,7 +3760,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         try
         {
-            Clipboard.SetText(path);
+            if (!ScribeClipboard.SetText(path))
+            {
+                throw new InvalidOperationException("Clipboard busy.");
+            }
+
             ShowInfo($"Copied {label}.");
         }
         catch (Exception ex)
@@ -4730,14 +4791,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// Puts the report on the clipboard, swallowing the failure.
     /// </summary>
     /// <remarks>
-    /// Clipboard.SetText throws when another process holds the clipboard open, which is common and
+    /// The clipboard helper returns false when another process holds the clipboard open, which is common and
     /// transient. Losing the report is bad; taking the Settings window down over it is worse.
     /// </remarks>
     private void CopyReportToClipboard(string report)
     {
         try
         {
-            Clipboard.SetText(report);
+            if (!ScribeClipboard.SetText(report))
+            {
+                throw new InvalidOperationException("Clipboard busy.");
+            }
         }
         catch (Exception ex)
         {
@@ -6711,12 +6775,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            Clipboard.SetText(row.Text);
-            ShowInfo("Copied the selected dictation.");
+            var copied = ScribeClipboard.SetText(row.Text);
+            ShowInfo(
+                copied ? "Copied the selected dictation." : "Couldn't copy the dictation. Try again.",
+                copied ? Wpf.Ui.Controls.InfoBarSeverity.Success : Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
-        catch (Exception ex)
+        catch
         {
-            ShowInfo($"Couldn't copy the dictation: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't copy the dictation. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -6739,14 +6805,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             LoadHistory();
             ShowInfo("Deleted the selected history entry.");
         }
-        catch (Exception ex)
+        catch
         {
             if (_closed)
             {
                 return;
             }
 
-            ShowInfo($"Couldn't delete the history entry: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't delete the history entry. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
             UpdateHistorySelection();
         }
     }
@@ -6774,14 +6840,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             LoadHistory();
             ShowInfo("Cleared dictation history.");
         }
-        catch (Exception ex)
+        catch
         {
             if (_closed)
             {
                 return;
             }
 
-            ShowInfo($"Couldn't clear history: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            ShowInfo("Couldn't clear history. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
             HistoryClearButton.IsEnabled = _historyRows.Count > 0;
         }
     }
