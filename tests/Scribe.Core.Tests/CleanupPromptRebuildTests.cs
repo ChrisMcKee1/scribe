@@ -327,6 +327,7 @@ public sealed class CleanupPromptRebuildTests
         await using var harness = new CleanupHarness();
         var fake = new FakeProvider();
         var svc = harness.Service;
+        harness.DrainOnManualClock();
         svc.ProviderFactoryForTesting = fake.Connect;
         svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Contoso." });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);

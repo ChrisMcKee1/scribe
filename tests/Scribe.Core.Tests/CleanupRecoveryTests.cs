@@ -614,6 +614,7 @@ public sealed class CleanupRecoveryTests
     {
         await using var harness = NewHarness();
         var svc = harness.Service;
+        harness.DrainOnManualClock();
         await ParkInitializationInModelLoadAsync(harness);
         harness.Phi.LoadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var load = svc.LoadFoundryModelAsync(CleanupHarness.OtherAlias);

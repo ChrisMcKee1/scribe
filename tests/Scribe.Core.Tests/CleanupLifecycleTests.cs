@@ -8,7 +8,8 @@ namespace Scribe.Core.Tests;
 /// disposal. Admission closes atomically, admitted work is cancelled cooperatively and awaited,
 /// and only then are the runtime, clients and semaphores released; one that will not stop in time
 /// keeps them rather than having them disposed underneath it. Interleavings are forced with gates,
-/// never with sleeps.
+/// never with sleeps, and a test that expects disposal to release once the work in flight stops runs the drain on a
+/// clock only it moves (<see cref="CleanupHarness.DrainOnManualClock"/>), so the real 5 s never decides it.
 /// </summary>
 public sealed class CleanupLifecycleTests
 {
@@ -106,6 +107,7 @@ public sealed class CleanupLifecycleTests
     {
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
+        harness.DrainOnManualClock();
         harness.Runtime.EpGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var listing = svc.ListFoundryModelsAsync();
@@ -179,6 +181,7 @@ public sealed class CleanupLifecycleTests
     {
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
+        harness.DrainOnManualClock();
         harness.Host.CreateGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Host.IgnoreCancellation = true;
 
@@ -200,6 +203,7 @@ public sealed class CleanupLifecycleTests
     {
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
+        harness.DrainOnManualClock();
         harness.Runtime.EpGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Runtime.IgnoreCancellation = true;
 
@@ -224,6 +228,7 @@ public sealed class CleanupLifecycleTests
     {
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
+        harness.DrainOnManualClock();
         harness.Qwen.LoadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Qwen.LoadIgnoresCancellation = true;
 
@@ -251,7 +256,12 @@ public sealed class CleanupLifecycleTests
     [Fact]
     public async Task Disposal_during_a_dictation_keeps_the_raw_text_and_waits_for_the_call()
     {
+        // The call is held after it sees the disposal's cancellation, for as long as the test likes, and the drain runs on a
+        // clock only the test moves: the drain can then end only because the call stopped, never because a loaded machine
+        // took longer than the real 5 s to unwind it (which is how this test used to fail with LeftToProcessExit).
         var requestArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unwind = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var probed = 0;
         var http = new ScriptedHttpHandler(async (_, ct) =>
         {
@@ -261,11 +271,20 @@ public sealed class CleanupLifecycleTests
             }
 
             requestArrived.TrySetResult();
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (ct.Register(() => cancelled.TrySetResult()))
+            {
+                await cancelled.Task;
+            }
+
+            cancelSeen.TrySetResult();
+            await unwind.Task;
             await Task.Delay(Timeout.Infinite, ct);
             throw new InvalidOperationException("unreachable");
         });
         await using var harness = new CleanupHarness(http: http);
         var svc = harness.Service;
+        var clock = harness.DrainOnManualClock();
         svc.Configure(CleanupHarness.Custom("https://cleanup.example.test/v1"));
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
@@ -273,6 +292,15 @@ public sealed class CleanupLifecycleTests
         await requestArrived.Task.WaitAsync(Bound);
         var dispose = svc.DisposeAsync().AsTask();
 
+        // DisposeAsync returned at its first wait, the drain, which the held call keeps open: production's 5 s timer is
+        // armed on the test's clock.
+        var drainTimer = Assert.Single(clock.Timers);
+        Assert.Equal(TimeSpan.FromSeconds(5), drainTimer.DueTime);
+        await cancelSeen.Task.WaitAsync(Bound);
+        Assert.False(dictation.IsCompleted, "The call is still unwinding.");
+        Assert.False(dispose.IsCompleted, "Disposal waits for the call.");
+
+        unwind.SetResult();
         var result = await dictation.WaitAsync(Bound);
         await dispose.WaitAsync(Bound);
 
@@ -280,6 +308,16 @@ public sealed class CleanupLifecycleTests
         Assert.Equal("please keep these exact words", result.Text);
         Assert.Contains("shutting down", result.SkipReason);
         Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+        Assert.Equal(["dispose"], drainTimer.Events);
+    }
+
+    [Fact]
+    public async Task Production_drains_for_five_seconds_on_the_system_clock()
+    {
+        await using var harness = new CleanupHarness();
+
+        Assert.Equal(TimeSpan.FromSeconds(5), harness.Service.DisposalDrainTimeout);
+        Assert.Same(TimeProvider.System, harness.Service.DisposalDrainClock);
     }
 
     [Fact]

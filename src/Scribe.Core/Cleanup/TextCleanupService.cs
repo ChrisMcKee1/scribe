@@ -482,6 +482,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// </summary>
     internal TimeSpan DisposalDrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// The clock <see cref="DisposalDrainTimeout"/> runs on. The system clock, which is the one
+    /// <see cref="Task.WaitAsync(TimeSpan)"/> uses, so production waits exactly as it did without it; a test puts the drain
+    /// on a clock only it moves, so work that is slow to unwind on a loaded machine never races the real timeout.
+    /// </summary>
+    internal TimeProvider DisposalDrainClock { get; set; } = TimeProvider.System;
+
     /// <summary>What the last disposal did. Test-only observability for the release-or-leak decision.</summary>
     internal CleanupDisposalOutcome DisposalOutcome { get; private set; }
 
@@ -5617,7 +5624,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         // releasing a client or runtime in use turns a slow shutdown into a crash.
         try
         {
-            await drained.WaitAsync(DisposalDrainTimeout).ConfigureAwait(false);
+            await drained.WaitAsync(DisposalDrainTimeout, DisposalDrainClock).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
