@@ -136,6 +136,13 @@ public sealed class RemoteDesktopHookPathTests
         yield return typeof(KeyboardHookFilter).GetMethod(nameof(KeyboardHookFilter.IsProbe), Any)!;
         yield return typeof(KeyboardHookFilter).GetMethod(nameof(KeyboardHookFilter.Identity), Any)!;
         yield return typeof(KeyEventIdentity).GetMethod(nameof(KeyEventIdentity.Same), Any)!;
+
+        // What the engine runs for a key event before and around its machines (review round 3): the one drain, the passing
+        // and uncertainty judgement on the view it leaves, and the machines' call.
+        foreach (var name in new[] { nameof(HotkeyEngine.OnKeyEvent), "PassesWholeKeystroke", "InsideUncertaintyWindow", "ProcessInput" })
+        {
+            yield return typeof(HotkeyEngine).GetMethod(name, Any)!;
+        }
         foreach (var name in new[] { nameof(KeyEventPassOn.IsEcho), nameof(KeyEventPassOn.Enter), nameof(KeyEventPassOn.Leave) })
         {
             yield return typeof(KeyEventPassOn).GetMethod(name, Any)!;

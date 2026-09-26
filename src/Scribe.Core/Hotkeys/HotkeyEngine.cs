@@ -103,6 +103,11 @@ internal sealed class HotkeyEngine
     private int _uncertaintyWindowMs = KeyRepeatTiming.WorstCaseWindowMs;
     private long _uncertainPresses;
 
+    // The keys whose current keystroke passes whole because a hook ahead of Scribe's may have seen its press: judged
+    // uncertain, or reaching only a registration a move replaced, and not released since (PassesWholeKeystroke; review round
+    // 3). Kept here, not in the machines, so no clear of their view can end it. Owner thread only.
+    private readonly KeySet _passingKeystrokes = new();
+
     // The mouse buttons whose press was swallowed and whose release has not been seen since, one bit per button code, and
     // SealedDebts once the engine is retired. A new press of the button retires its debt, since buttons never repeat: the
     // release went up where no hook could see it. A time no hook saw the mouse (a mouse hook found gone, the gap a
@@ -391,9 +396,10 @@ internal sealed class HotkeyEngine
     /// remote session and kept it, so that neither this engine nor GetAsyncKeyState knows the key is held (a kept
     /// low-level event never reaches the asynchronous state); its next autorepeat now reaches this engine first. So for
     /// <see cref="UncertaintyWindowMs"/> from here, a key-down of a key this engine neither holds nor has seen go up since is
-    /// uncertain (<see cref="OnKeyEvent"/>): judged, so a dictation still starts or ends, but never swallowed, nor is the
-    /// rest of its keystroke, so the hook that forwarded the press also gets the release. A key seen going up since, and
-    /// any key once the window is over, is judged as ever.
+    /// uncertain (<see cref="OnKeyEvent"/>, judged on the view the pending commands leave): judged, so a dictation still
+    /// starts or ends, but never swallowed, nor is the rest of its keystroke until its release, whatever clears the machines'
+    /// view meanwhile, so the hook that forwarded the press also gets the release. A key seen going up since, and any key once
+    /// the window is over, is judged as ever. Keys whose keystroke is passing stay so across a new registration ahead.
     /// </summary>
     public void OnRegisteredAhead(uint tick)
     {
@@ -417,34 +423,68 @@ internal sealed class HotkeyEngine
     /// <summary>Any thread, for tests: how many key-downs were judged uncertain and so passed with their whole keystroke.</summary>
     internal long UncertainPresses => Interlocked.Read(ref _uncertainPresses);
 
-    // Owner thread, on the keyboard callback's path: two field reads, a subtraction, and for a key-down two bit tests; for a
-    // release inside the window one bit set. No lock, no allocation, no call into Windows. The time difference is taken as
-    // signed, so the tick count's wrap is ignored (GetMessageTime: "subtract the time of the first message from the time of
-    // the second message (ignoring overflow)") and an event stamped a little before the registration, an autorepeat that
-    // was on its way when the hook moved, counts as inside the window. The first event stamped past the window closes it,
-    // so a time stamp far from the registration's cannot open it again, a wrap of the tick count included.
-    private bool IsUncertain(uint virtualKey, bool isDown, uint eventTime)
+    // Owner thread, on the keyboard callback's path, once the pending commands are applied (see OnKeyEvent): whether nothing
+    // of this event's keystroke may be swallowed, because a hook ahead of Scribe's may have seen its press. That is a key-down
+    // judged uncertain inside the window a move or a reinstall opened (a key the view neither holds nor has seen go up since
+    // the hook became the newest registration), or one that reached only a registration a move replaced (mayBeSwallowed
+    // false, KeyboardHookFilter.Route), and then every repeat and the release of that same keystroke: the key is kept here
+    // until its release is seen, whatever the machines forget meanwhile. The machines alone kept such a keystroke
+    // unswallowed only while they still held its key, so a command that clears their view (a capture start or end, new
+    // bindings) or a desktop switch made its next repeat a fresh press once the window had closed, swallowed with its
+    // release (review round 3, found while checking item 1). A release of a key held here is never swallowed. A key whose
+    // release went unseen (let go on the lock screen, where the hook is not called) stays until its next release, so its
+    // next press passes once, whole: that fails open (the dictation still starts), where forgetting it could strand the key
+    // in a session that saw the press. Bit operations on two KeySets and one interlocked count: no lock, no allocation, no
+    // call into Windows.
+    private bool PassesWholeKeystroke(uint virtualKey, bool isDown, bool mayBeSwallowed, uint eventTime)
     {
-        var window = Volatile.Read(ref _uncertaintyWindowMs);
-        if (window <= 0 || unchecked((int)(eventTime - _aheadSince)) >= window)
-        {
-            _uncertaintyArmed = false;
-            return false;
-        }
-
+        var insideWindow = _uncertaintyArmed && InsideUncertaintyWindow(eventTime);
         if (!isDown)
         {
-            _releasedSinceAhead.Add(virtualKey);
-            return false;
+            if (insideWindow)
+            {
+                _releasedSinceAhead.Add(virtualKey);
+            }
+
+            return _passingKeystrokes.Remove(virtualKey);
         }
 
-        if (IsPressed(virtualKey) || _releasedSinceAhead.Contains(virtualKey))
+        if (_passingKeystrokes.Contains(virtualKey))
         {
-            return false;
+            return true;
         }
 
-        Interlocked.Increment(ref _uncertainPresses);
-        return true;
+        var uncertain = insideWindow && !IsPressed(virtualKey) && !_releasedSinceAhead.Contains(virtualKey);
+        if (uncertain)
+        {
+            Interlocked.Increment(ref _uncertainPresses);
+        }
+
+        if (uncertain || !mayBeSwallowed)
+        {
+            _passingKeystrokes.Add(virtualKey);
+            return true;
+        }
+
+        return false;
+    }
+
+    // Owner thread: whether an event stamped eventTime falls inside the window the hook's last registration ahead opened. Two
+    // field reads and a subtraction. The time difference is taken as signed, so the tick count's wrap is ignored
+    // (GetMessageTime: "subtract the time of the first message from the time of the second message (ignoring overflow)") and
+    // an event stamped a little before the registration, an autorepeat that was on its way when the hook moved, counts as
+    // inside. The first event stamped past the window closes it, so a time stamp far from the registration's cannot open it
+    // again, a wrap of the tick count included.
+    private bool InsideUncertaintyWindow(uint eventTime)
+    {
+        var window = Volatile.Read(ref _uncertaintyWindowMs);
+        if (window > 0 && unchecked((int)(eventTime - _aheadSince)) < window)
+        {
+            return true;
+        }
+
+        _uncertaintyArmed = false;
+        return false;
     }
 
     /// <summary>
@@ -575,8 +615,8 @@ internal sealed class HotkeyEngine
     /// <param name="mayBeSwallowed">
     /// False for an event that reached a keyboard hook registration a move ahead replaced without passing the current one
     /// (<c>KeyboardHookFilter.Route</c>): it is judged, so the key view stays whole and a dictation can start or end, but
-    /// nothing is swallowed, now or for the rest of the keystroke. An uncertain key-down (see <see cref="OnRegisteredAhead"/>)
-    /// is judged the same way.
+    /// nothing is swallowed, now or for the rest of the keystroke, until its release is seen, whatever clears the machines'
+    /// view in between. An uncertain key-down (see <see cref="OnRegisteredAhead"/>) is judged the same way.
     /// </param>
     /// <param name="eventTime">The event's time stamp (KBDLLHOOKSTRUCT.time, the tick-count clock).</param>
     public HookDecision OnKeyEvent(uint virtualKey, bool isDown, bool mayBeSwallowed = true, uint eventTime = 0)
@@ -604,7 +644,7 @@ internal sealed class HotkeyEngine
         // fresh press on the view the commands had just cleared: swallowed, with its release. Nothing drains again until the
         // machines have processed the event.
         ApplyPendingCommands();
-        if (_uncertaintyArmed && IsUncertain(virtualKey, isDown, eventTime))
+        if (PassesWholeKeystroke(virtualKey, isDown, mayBeSwallowed, eventTime))
         {
             mayBeSwallowed = false;
         }
