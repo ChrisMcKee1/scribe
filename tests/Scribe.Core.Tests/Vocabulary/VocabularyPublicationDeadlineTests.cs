@@ -64,6 +64,11 @@ public sealed class VocabularyPublicationDeadlineTests
             warning.Message);
         Assert.DoesNotContain("quill", rig.Log.AllText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("team", rig.Log.AllText, StringComparison.OrdinalIgnoreCase);
+
+        // Retired: a tick delivered again while the read is still blocked finds nothing to answer and logs nothing more.
+        deadline.Fire();
+        Assert.Same(answer, await saving);
+        Assert.Single(rig.Log.Entries, entry => entry.Level == LogLevel.Warning);
     }
 
     [Fact]
