@@ -1692,9 +1692,14 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
       account, and again right before the write, after any launch, because a launch replays the latest state
       first. Without this a helper relaunched for dictation A's outcome replayed dictation B's `RECORDING` and
       then wrote A's `TYPED` over it. The engine's anchor move writes the applied anchor as it stands when it is
-      written, so it never puts back an older one.
-- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview and restores the
-  applied position on the first engine command after one.
+      written, so it never puts back an older one. A preview's commands carry no state, only their preview's
+      generation, and the preview gate judges them the same two ways: when they are taken, and again right after
+      the launch (`OverlayPreviewGate.ConfirmWrite`), before anything of them is written. Without the second
+      judgement a preview's recording look passed the gate, launched a replacement helper, and was written over the
+      Processing that the launch had replayed for a dictation started meanwhile.
+- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview, both when the consumer takes
+  them and at their write, and restores the applied position on the first engine command after one; an end
+  turned away at its write leaves that restore to the next engine command.
 - **The pill is drawn in Signal On** (the palette decision's section 5, `OverlayWindow.xaml`): an opaque navy
   gradient face with a sheen over its top 45%, and one edge drawn inside it for the state: 1.5 DIP blue while
   listening, a 1 DIP neutral hairline while processing and after text was typed, 1 DIP pink when nothing, or not
@@ -1709,10 +1714,10 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   WindowText edge in every state, Highlight for the bars and dots, and WindowText for the icons. WinUI picks that
   dictionary itself; the window also reads the contrast state in its own process at each show (the state line's
   `contrast=`). `OverlayPillSourceTests` holds every colour the overlay's XAML writes, read from the parsed
-  document whatever the quotes or syntax, to the palette (Transparent aside) and each brush to its role's
-  colours, the contrast dictionary to system colours, and every theme resource, storyboard target and icon path
-  the window names to one that exists: a missing theme key throws only when the window loads, which no build
-  catches.
+  document whatever the quotes or syntax (a markup extension's arguments, quoted either way, included), to the
+  palette (Transparent aside) and each brush to its role's colours, the contrast dictionary to system colours,
+  and every theme resource, storyboard target and icon path the window names to one that exists: a missing theme
+  key throws only when the window loads, which no build catches.
 - **Motion follows Windows "Animation effects"**, read with `UISettings.AnimationsEnabled` at each show (the state
   line's `animations=`): with it on, the pill fades in over 120 ms and out over 150 ms and the processing dots
   bounce; with it off there are no fades and the dots stand still. The level bars follow the level either way,
@@ -1764,7 +1769,8 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   after N idle minutes`, `Overlay helper released because dictation was paused` (with `, once the outcome on
   screen had hidden` when it waited, after `Overlay release on pause waits N ms for the outcome on screen to hide.`),
   `Overlay relaunch retry due after a N ms cooldown`, `Overlay command <verb> failed; tearing down for relaunch.`
-  and, at Debug, `Overlay command <verb> skipped: a newer state replaced it.`
+  and, at Debug, `Overlay command <verb> skipped: a newer state replaced it.` and `Overlay command <verb> skipped: a
+  newer request superseded its preview.`
 
 ## Accent contrast (read before touching theme resources or anything drawn on an accent fill)
 
