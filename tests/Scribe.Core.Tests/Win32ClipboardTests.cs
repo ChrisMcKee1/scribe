@@ -155,50 +155,45 @@ public class Win32ClipboardTests
 
     private readonly record struct Snapshot(bool Empty, string? Text);
 
+    // The test's own reads, which only observe what the borrow and the restore left: they keep asking for the clipboard
+    // until a deadline of the test's own, because another program (a clipboard manager, the shell) can hold it briefly at
+    // any moment, and the borrower's six attempts 15 ms apart, which these used to reuse, fail a read that a hold of about
+    // 100 ms delays even when the borrow and the restore worked (review round 4 of stream TR, A6). The borrower's own
+    // TryBorrow and Restore keep production's retries.
+    private static readonly TimeSpan ReadDeadline = TimeSpan.FromSeconds(30);
+    private const int ReadRetryDelayMs = 15;
+
     private static byte[] ReadReceipt(IClipboardNative native)
     {
         var receipt = new byte[ClipboardBorrower.ReceiptBytes];
         uint format = native.RegisterFormat(ClipboardBorrower.ReceiptFormatName);
-        for (int attempt = 0; attempt < ClipboardBorrower.OpenAttempts; attempt++)
-        {
-            if (native.TryOpen())
-            {
-                try
-                {
-                    return format != 0 && native.TryReadData(format, receipt) ? receipt : [];
-                }
-                finally
-                {
-                    native.Close();
-                }
-            }
-
-            Thread.Sleep(ClipboardBorrower.OpenRetryDelayMs);
-        }
-
-        throw new InvalidOperationException("The clipboard stayed busy.");
+        return WhileOpen(native, () => format != 0 && native.TryReadData(format, receipt) ? receipt : []);
     }
 
-    private static Snapshot Read(IClipboardNative native)
+    private static Snapshot Read(IClipboardNative native) =>
+        WhileOpen(native, () => new Snapshot(native.FormatCount == 0, native.TryReadText(out var text) ? text : null));
+
+    private static T WhileOpen<T>(IClipboardNative native, Func<T> read)
     {
-        for (int attempt = 0; attempt < ClipboardBorrower.OpenAttempts; attempt++)
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (!native.TryOpen())
         {
-            if (native.TryOpen())
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started) > ReadDeadline)
             {
-                try
-                {
-                    return new Snapshot(native.FormatCount == 0, native.TryReadText(out var text) ? text : null);
-                }
-                finally
-                {
-                    native.Close();
-                }
+                throw new InvalidOperationException($"The clipboard stayed busy for {ReadDeadline.TotalSeconds:0} s.");
             }
 
-            Thread.Sleep(ClipboardBorrower.OpenRetryDelayMs);
+            Thread.Sleep(ReadRetryDelayMs);
         }
 
-        throw new InvalidOperationException("The clipboard stayed busy.");
+        try
+        {
+            return read();
+        }
+        finally
+        {
+            native.Close();
+        }
     }
 
     // Clipboard work follows the injector's convention: a joined STA thread.
