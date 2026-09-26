@@ -22,6 +22,7 @@ public partial class SettingsWindow
 
     private void UpdateTextSizeAdaptiveLayouts()
     {
+        ResetGridColumnsForTextScale();
         ApplyListPaneWidths();
         UpdateUsageMetricLayout();
 
@@ -91,6 +92,35 @@ public partial class SettingsWindow
         DictionarySearchBox.Margin = twoRows ? new Thickness(0, 8, 0, 0) : new Thickness(0);
     }
 
+    // A DataGrid's Auto column grows to fit and never shrinks by itself, so after a text size decrease every grid would keep
+    // its large column widths until Settings reopened: when the text scale changes, every grid's Auto columns measure again.
+    // Auto assigned to an Auto column changes nothing, so the width goes through 0 first.
+    private double _gridColumnsFactor = 1;
+
+    private void ResetGridColumnsForTextScale()
+    {
+        var factor = TextScaleService.CurrentFactor;
+        if (_gridColumnsFactor.Equals(factor))
+        {
+            return;
+        }
+
+        _gridColumnsFactor = factor;
+        foreach (var grid in new[] { HistoryGrid, UsageAppsGrid, UsageTrendGrid, FailuresGrid, LibraryGrid, LibraryTermsGrid })
+        {
+            ResetAutoColumns(grid);
+        }
+    }
+
+    private static void ResetAutoColumns(DataGrid grid)
+    {
+        foreach (var column in grid.Columns.Where(column => column.Width.IsAuto))
+        {
+            column.Width = new DataGridLength(0);
+            column.Width = DataGridLength.Auto;
+        }
+    }
+
     // Above 100% each of Your words' text columns keeps room for a few words, and the grid scrolls sideways instead of
     // cutting every word to a few letters. The other columns get their natural width as a minimum too: with a star column
     // present the DataGrid otherwise takes the text columns' minimums out of the other columns, down to 20 DIP. A new text
@@ -107,11 +137,9 @@ public partial class SettingsWindow
             foreach (var column in DictionaryGrid.Columns)
             {
                 column.ClearValue(DataGridColumn.MinWidthProperty);
-                if (column.Width.IsAuto)
-                {
-                    column.Width = DataGridLength.Auto;
-                }
             }
+
+            ResetAutoColumns(DictionaryGrid);
 
             if (factor > 1)
             {
