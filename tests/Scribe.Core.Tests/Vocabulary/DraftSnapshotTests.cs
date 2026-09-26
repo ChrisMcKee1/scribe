@@ -85,11 +85,13 @@ public sealed class DraftSnapshotTests
                 .Select(name => (Key: name ?? "(null)", Hash: new DraftSnapshot().Binding(binding with { DisplayName = name }).Hash()))
                 .Append((Key: "none", Hash: new DraftSnapshot().Binding(null).Hash())));
 
-        // Parts never run into the values after them.
+        // Parts never run into the values after them, or into nothing after them.
         AssertDistinct(
-            from part in new[] { "a", "ab" }
-            from value in new[] { "b", string.Empty }
-            select (Key: Key(part, value), Hash: new DraftSnapshot().Part(part).Text(value).Hash()));
+            from part in new[] { "a", "ab", "as1:b" }
+            from value in new string?[] { "b", string.Empty, "(end)" }
+            select (
+                Key: Key(part, value),
+                Hash: value == "(end)" ? new DraftSnapshot().Part(part).Hash() : new DraftSnapshot().Part(part).Text(value).Hash()));
     }
 
     [Fact]
