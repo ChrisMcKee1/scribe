@@ -1514,6 +1514,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         else if (e.PropertyName == nameof(LibraryRow.AiCleanup))
         {
             _wordPackWorkspace?.SetAiPermission(row.Id, row.AiCleanup);
+            Dispatcher.BeginInvoke(RefreshDictionaryStatus);
         }
     }
 
@@ -5576,6 +5577,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ShowWordPackSaveResult(result);
     }
 
+    private void RefreshWordPackCatalogSnapshot()
+
+    {
+        try
+
+        {
+            _wordPackCatalog = _libraryStore.LoadCatalog();
+        }
+
+        catch (Exception ex)
+
+        {
+            _wordPackCatalog = null;
+
+            _log.LogWarning("Could not refresh the word pack catalog snapshot after save: {Failure}", FailureShape.DescribeWithStack(ex));
+        }
+    }
+
     private void RefreshWordPackRowsFromWorkspace()
     {
         if (_wordPackWorkspace is null)
@@ -5688,6 +5707,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         void OnWordPacksChanged()
         {
+            RefreshWordPackCatalogSnapshot();
             RefreshWordPackList();
             RefreshWordPackRowsFromWorkspace();
             RefreshDictionaryStatus();
@@ -6357,7 +6377,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             set => Set(ref _coverageLibraryReplacement, value);
         }
 
-        public string ReplacementDisplay => string.IsNullOrEmpty(Replacement) ? "(removes these words)" : Replacement;
+        public string ReplacementDisplay
+
+        {
+            get => string.IsNullOrEmpty(Replacement) ? "(removes these words)" : Replacement;
+
+            set => Replacement = value == "(removes these words)" ? string.Empty : value ?? string.Empty;
+        }
 
         public bool ReplacementIsPlaceholder => string.IsNullOrEmpty(Replacement);
 

@@ -23,6 +23,8 @@ namespace Scribe.App.Settings;
 
 public partial class SettingsWindow
 {
+    private bool _dictionarySuggestionRunning;
+
     private void InitializeDictionaryGrid()
     {
         _dictionaryView = CollectionViewSource.GetDefaultView(_rows);
@@ -344,6 +346,12 @@ public partial class SettingsWindow
         // The entries the selected word packs compose to: precedence, not the list's A to Z order, decides which row
         // survives a shared spoken form. The hint counts them as given and never reorders them.
         var composition = CurrentLibraryComposition();
+        if (_wordPackWorkspace is not null && _wordPackCatalog is null)
+        {
+            DictionaryGlossaryHint.Text = "Word pack vocabulary is unavailable right now.";
+            return;
+        }
+
         var localEntries = composition?.LibraryEntries
             ?? DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(CurrentWordPackLibraries(), CollectEnabledLibraryIds()));
         var aiEntries = composition?.AiLibraryEntries ?? localEntries;
@@ -372,11 +380,20 @@ public partial class SettingsWindow
             .OrderBy(entry => entry.Pattern, StringComparer.Ordinal)
             .ToList();
 
-        return LibraryComposition.Preview(
-            _wordPackWorkspace.Draft,
-            _wordPackCatalog,
-            personal,
-            GlossaryBudget.For(SelectedPromptStyle, SelectedProvider));
+        try
+        {
+            return LibraryComposition.Preview(
+                _wordPackWorkspace.Draft,
+                _wordPackCatalog,
+                personal,
+                GlossaryBudget.For(SelectedPromptStyle, SelectedProvider));
+        }
+        catch (Exception ex)
+        {
+            _wordPackCatalog = null;
+            _log.LogWarning("Could not compose the word pack vocabulary preview: {Failure}", FailureShape.DescribeWithStack(ex));
+            return null;
+        }
     }
 
     private void UpdateSelectedDictionaryCoverageStatus()
@@ -400,44 +417,111 @@ public partial class SettingsWindow
     }
 
     private async void ReviewDictionaryOverlaps_Click(object? sender, RoutedEventArgs e)
+
     {
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        var dictionaryBefore = DictionarySignature();
+
+        var wordPacksBefore = LibrarySignature();
+
         var entries = BuildDictionaryEntries(out _);
+
         var report = CurrentLibraryComposition()?.OverlapReport(entries)
+
             ?? DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(entries, CurrentWordPackLibraries(), CollectEnabledLibraryIds());
+
         var redundant = report.Redundant.ToList();
+
         if (redundant.Count == 0)
+
         {
             ShowInfo("No words overlap with word packs.");
+
             return;
         }
 
-        var list = string.Join("\n", redundant.Take(8).Select(item => $"• {item.Pattern}"));
-        if (redundant.Count > 8)
+        var listed = redundant
+
+            .Select(overlap => _rows.FirstOrDefault(row => RedundantMatches(row, overlap)) is { } row
+
+                ? new ReviewedOverlap(row, row.Pattern, row.Replacement, row.WholeWord, row.Enabled)
+
+                : null)
+
+            .OfType<ReviewedOverlap>()
+
+            .ToList();
+
+        if (listed.Count == 0)
+
         {
-            list += $"\n• and {redundant.Count - 8:N0} more";
+            ShowInfo("The word list changed. Review overlaps again.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+
+            return;
         }
 
-        if (!await ConfirmAsync(
+        var list = string.Join("\n", listed.Take(8).Select(item => $"• {item.Pattern}"));
+
+        if (listed.Count > 8)
+
+        {
+            list += $"\n• and {listed.Count - 8:N0} more";
+        }
+
+        if (!await ShowConfirmationAsync(ThemedConfirmation.Create(
+
                 "Remove words a word pack already has?",
+
                 list,
-                $"Remove {redundant.Count:N0}"))
+
+                $"Remove {listed.Count:N0}",
+
+                cancelIsDefault: true,
+
+                cancelText: "Keep them")))
+
         {
             return;
         }
 
-        var filtered = DictionaryLibraryOverlapAnalyzer.RemoveRedundant(entries, report);
-        var keep = filtered.Select(entry => (entry.Pattern.Trim(), (entry.Replacement ?? string.Empty).Trim()))
-            .ToHashSet(RedundantDictionaryRowKeyComparer.Instance);
-        foreach (var row in _rows
-                     .Where(row => !string.IsNullOrWhiteSpace(row.Pattern) &&
-                                   !keep.Contains((row.Pattern.Trim(), (row.Replacement ?? string.Empty).Trim())))
-                     .ToList())
+        if (DictionarySignature() != dictionaryBefore || LibrarySignature() != wordPacksBefore)
+
         {
-            _rows.Remove(row);
+            ShowInfo("The word list changed. Review overlaps again.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+
+            return;
+        }
+
+        foreach (var item in listed.Where(item => _rows.Contains(item.Row) && item.StillMatches()))
+
+        {
+            _rows.Remove(item.Row);
         }
 
         RefreshDictionaryStatus();
+    }
+
+    private static bool RedundantMatches(DictionaryRow row, DictionaryOverlap overlap) =>
+
+        string.Equals(row.Pattern.Trim(), overlap.Pattern, StringComparison.OrdinalIgnoreCase) &&
+
+        string.Equals((row.Replacement ?? string.Empty).Trim(), overlap.Replacement, StringComparison.Ordinal) &&
+
+        row.Enabled;
+
+    private sealed record ReviewedOverlap(DictionaryRow Row, string Pattern, string Replacement, bool WholeWord, bool Enabled)
+
+    {
+        public bool StillMatches() =>
+
+            string.Equals(Row.Pattern, Pattern, StringComparison.Ordinal) &&
+
+            string.Equals(Row.Replacement, Replacement, StringComparison.Ordinal) &&
+
+            Row.WholeWord == WholeWord &&
+
+            Row.Enabled == Enabled;
     }
 
     // --- Dictionary suggestions from history -----------------------------------------------
@@ -482,8 +566,15 @@ public partial class SettingsWindow
     // or a second click would add every suggestion twice.
     private async Task RunDictionarySuggestionAsync(Func<Task> suggest)
     {
+        if (_dictionarySuggestionRunning)
+        {
+            return;
+        }
+
+        _dictionarySuggestionRunning = true;
         DictionarySuggestButton.ToolTip = null;
         DictionarySuggestButton.IsEnabled = false;
+        DictionaryEmptyLearnButton.IsEnabled = false;
         DictionarySuggestBusy.Visibility = Visibility.Visible;
         try
         {
@@ -493,8 +584,10 @@ public partial class SettingsWindow
         {
             if (!_closed)
             {
+                _dictionarySuggestionRunning = false;
                 DictionarySuggestBusy.Visibility = Visibility.Collapsed;
                 DictionarySuggestButton.IsEnabled = true;
+                DictionaryEmptyLearnButton.IsEnabled = true;
                 DictionarySuggestButton.ToolTip =
                     "Learn vocabulary from recent dictations. A configured remote AI provider receives " +
                     "a bounded text sample only after you confirm; otherwise Scribe scans locally.";

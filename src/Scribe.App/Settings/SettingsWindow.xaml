@@ -1502,48 +1502,58 @@
                                                             </Style>
                                                         </DataGridTextColumn.EditingElementStyle>
                                                     </DataGridTextColumn>
-                                                    <DataGridTemplateColumn Header="Scribe writes" Width="*" SortMemberPath="Replacement">
-                                                        <DataGridTemplateColumn.CellTemplate>
-                                                            <DataTemplate>
-                                                                <TextBlock Text="{Binding ReplacementDisplay}" TextWrapping="Wrap">
-                                                                    <TextBlock.Style>
-                                                                        <Style TargetType="TextBlock">
-                                                                            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding ReplacementIsPlaceholder}" Value="True">
-                                                                                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </TextBlock.Style>
-                                                                </TextBlock>
-                                                            </DataTemplate>
-                                                        </DataGridTemplateColumn.CellTemplate>
-                                                        <DataGridTemplateColumn.CellEditingTemplate>
-                                                            <DataTemplate>
-                                                                <TextBox Text="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Scribe writes"/>
-                                                            </DataTemplate>
-                                                        </DataGridTemplateColumn.CellEditingTemplate>
-                                                    </DataGridTemplateColumn>
-                                                    <DataGridTemplateColumn Header="Whole words only" Width="Auto">
-                                                        <DataGridTemplateColumn.HeaderStyle>
-                                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-                                                                <Setter Property="ToolTip" Value="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
-                                                                <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding ReplacementDisplay, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement">
+
+                                                        <DataGridTextColumn.ElementStyle>
+
+                                                            <Style TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
+
                                                                 <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+
+                                                                <Style.Triggers>
+
+                                                                    <DataTrigger Binding="{Binding ReplacementIsPlaceholder}" Value="True">
+
+                                                                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+                                                                    </DataTrigger>
+
+                                                                </Style.Triggers>
+
                                                             </Style>
-                                                        </DataGridTemplateColumn.HeaderStyle>
-                                                        <DataGridTemplateColumn.CellTemplate>
-                                                            <DataTemplate>
-                                                                <CheckBox IsChecked="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WholeWordCheckBox}"/>
-                                                            </DataTemplate>
-                                                        </DataGridTemplateColumn.CellTemplate>
-                                                        <DataGridTemplateColumn.CellEditingTemplate>
-                                                            <DataTemplate>
-                                                                <CheckBox IsChecked="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WholeWordCheckBoxEditing}"/>
-                                                            </DataTemplate>
-                                                        </DataGridTemplateColumn.CellEditingTemplate>
-                                                    </DataGridTemplateColumn>
+
+                                                        </DataGridTextColumn.ElementStyle>
+
+                                                        <DataGridTextColumn.EditingElementStyle>
+
+                                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
+
+                                                                <Setter Property="AutomationProperties.Name" Value="Scribe writes"/>
+
+                                                            </Style>
+
+                                                        </DataGridTextColumn.EditingElementStyle>
+
+                                                    </DataGridTextColumn>
+
+                                                    <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+
+                                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
+
+                                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}">
+
+                                                        <DataGridCheckBoxColumn.HeaderStyle>
+
+                                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+
+                                                                <Setter Property="ToolTip" Value="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
+
+                                                            </Style>
+
+                                                        </DataGridCheckBoxColumn.HeaderStyle>
+
+                                                    </DataGridCheckBoxColumn>
+
                                                     <DataGridTemplateColumn Header="Word pack" Width="160" CanUserSort="True"
                                                                             SortMemberPath="Coverage">
                                                         <DataGridTemplateColumn.CellTemplate>

@@ -101,6 +101,10 @@ public partial class SettingsWindow
         }
     }
 
-    private void TextChangesNoticeButton_Click(object sender, RoutedEventArgs e) =>
-        ShowPage(SettingsPage.Advanced, nameof(PostCheck));
+    private void TextChangesNoticeButton_Click(object sender, RoutedEventArgs e)
+    {
+        PostCheck.IsChecked = true;
+        RefreshTextChangesNotice();
+        UpdateDictionaryGlossaryHint();
+    }
 }
