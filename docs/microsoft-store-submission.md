@@ -282,21 +282,25 @@ Leave this blank for the first submission. Use it for subsequent Store updates.
 ## Screenshots
 
 Desktop screenshots must be PNG files at least 1366 by 768 pixels and no larger than 50 MB.
-Microsoft requires one and recommends at least four. The existing full Settings screenshots are
-2170 by 1663 and meet the technical minimum. They show an older build, so recapture the chosen
-screens after the Store-facing UI is final. `pill.png` is too small to submit by itself.
+Microsoft requires one and recommends at least four. The README's 0.5.0 screenshots
+(`docs/screenshots/*.png`, rendered with synthetic demo data) are 1240 by 900, **below the Store's
+width minimum**, so render the Store set from the same pages at 1366 by 900 or larger (the Settings
+redesign's off-screen harness takes a size) before a listing update. `pill.png` is too small to
+submit by itself. The listing can only be edited when no API submission is pending (see
+"Submitting to the Store" in AGENTS.md).
 
-Recommended order and captions:
+Recommended order and captions (file names as in `docs/screenshots/`):
 
-1. `settings-general.png`: Choose your microphone, push-to-talk keys, and local speech model.
-2. `overlay.png`: Place the compact recording indicator anywhere around your screen.
-3. `ai-foundry-local.png`: Keep optional AI cleanup on your PC with Foundry Local.
-4. `dictionary.png`: Teach Scribe names, acronyms, and technical vocabulary.
-5. `snippets.png`: Expand a spoken trigger into a reusable block of text.
-6. `profiles.png`: Adapt writing style and line breaks to each application.
-7. `history.png`: Review, recover, copy, or delete recent dictations stored locally.
-8. `usage.png`: Understand local usage trends without surveillance.
-9. `diagnostics.png`: Verify recognition and cleanup performance on your own hardware.
+1. `dictation.png`: Choose your microphone and push-to-talk shortcuts, and see how each one works.
+2. `ai-cleanup.png`: Keep optional AI cleanup on your PC with Foundry Local, or bring your own model.
+3. `dictionary.png`: Teach Scribe names, acronyms, and technical vocabulary.
+4. `word-packs.png`: Turn on ready-made word packs for your field, and edit them word by word.
+5. `try-dictation.png`: See what Scribe heard, what it typed, and each change it made.
+6. `snippets.png`: Expand a spoken trigger into a reusable block of text.
+7. `profiles.png`: Adapt writing style and line breaks to each application.
+8. `history.png`: Review, recover, copy, or delete recent dictations stored locally.
+9. `usage.png`: Understand local usage trends without surveillance.
+10. `diagnostics.png`: Verify recognition and cleanup performance on your own hardware.
 
 Before upload, inspect every screenshot for real names, transcripts, tenant IDs, endpoints,
 subscription names, API keys, or other personal information.

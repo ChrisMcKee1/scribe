@@ -89,26 +89,31 @@ cleanup; Personalize (Dictionary, Voice snippets, App profiles); Review (History
 (Advanced, Diagnostics, About). **Find a setting** searches every page by name, Settings follows your
 Windows text size, and closing it with unsaved changes asks before throwing them away.
 
-![Scribe general settings: microphone, hotkey and startup, with the navigation rail](docs/screenshots/settings-general.png)
+![The Dictation page: the microphone, and the two dictation shortcuts with how each one works](docs/screenshots/dictation.png)
+
+### Try it before you trust it
+Try dictation records one normal push-to-talk dictation and shows what Scribe heard, what it typed,
+each change your dictionary, word packs, snippets and AI cleanup made, and how long every step took.
+
+![Try dictation after a test: what Scribe heard, what it typed, and each change it made](docs/screenshots/try-dictation.png)
 
 ### Put the pill exactly where you want it
-Click a spot on the mini screen and **preview the real pill** at that position before you save.
-Optional silence auto-stop ends a toggle dictation when you go quiet.
-
-![Scribe overlay settings: position picker with on-screen preview](docs/screenshots/overlay.png)
+Click a spot on the miniature pill picker under Dictation, Recording indicator, and choose **Preview on
+screen** to see the real pill at that position before you save. Optional silence auto-stop ends a
+toggle dictation when you go quiet.
 
 ### Say a phrase, type a template
 Voice snippets expand a spoken trigger, like *"insert my standup update"*, into a saved,
 multi-line template. Text-expander speed, no keyboard required.
 
-![Scribe snippets: a trigger phrase expands to a saved template](docs/screenshots/snippets.png)
+![The Voice snippets page: say a short phrase and Scribe types the saved text](docs/screenshots/snippets.png)
 
 ### One voice, many registers
 Profiles adapt dictation to the app you're speaking into: the AI writing style and line-break
 behaviour switch automatically based on the focused window. First matching profile wins; everything
 else uses your global settings.
 
-![Scribe profiles: per-app writing style and line-break overrides](docs/screenshots/profiles.png)
+![The App profiles page: a different writing style for email in Outlook](docs/screenshots/profiles.png)
 
 ### Polish your words with AI, on your PC
 Turn on **AI cleanup** to have a language model fix punctuation, capitalization, sentence structure,
@@ -121,7 +126,7 @@ your PC, which can be several GB, and loading a model downloads that model. Scri
 model you chose, and when you switch to another provider it removes what Foundry Local downloaded,
 with a tray notice saying how much space it freed.
 
-![Scribe AI cleanup with Foundry Local: on-device model](docs/screenshots/ai-foundry-local.png)
+![The AI cleanup page: cleanup on, running on this PC with Foundry Local, and a model ready to set up](docs/screenshots/ai-cleanup.png)
 
 ### …or bring your own model
 Point Scribe at a model you've already deployed in **Microsoft Foundry**: it signs in with your
@@ -162,14 +167,16 @@ For a quick correction, choose **Add to dictionary** from the tray menu and pick
 dictation. **Save** adds the rule, refreshes the corrected words, and keeps the window open so you can
 keep working through the text. Choose **Save and close** when you're finished.
 
-![Scribe dictionary editor: spoken-to-replacement rules](docs/screenshots/dictionary.png)
+![The Dictionary page's Your words tab: words Scribe hears and how it writes them](docs/screenshots/dictionary.png)
+
+![The Word packs tab: ready-made lists of product names and terms, with one pack open in the editor](docs/screenshots/word-packs.png)
 
 ### Know exactly how fast it is
 The Diagnostics section computes latency percentiles from your own dictation history. Nothing is
 collected; it's your data on your disk. On a typical desktop CPU, Parakeet decodes at a real-time
 factor around **0.03×**, which is ~30× faster than the audio itself.
 
-![Scribe diagnostics: decode latency P50/P95 and real-time factor from local history](docs/screenshots/diagnostics.png)
+![The Diagnostics page: save diagnostics for a report, AI cleanup problems, and how fast dictation runs](docs/screenshots/diagnostics.png)
 
 ### Everything you said, on your disk
 History keeps your recent dictations reviewable and copyable, with per-entry audio if you opt in.
@@ -180,7 +187,7 @@ as 16-bit audio at about half the earlier size, and history text follows the ret
 After upgrading, Scribe compacts an older database once in the background, only while you are not
 dictating and Settings is closed, and it stops the moment you start dictating.
 
-![Scribe history: recent dictations with timing, target app and decode latency](docs/screenshots/history.png)
+![The History page: recent dictations with the app each went to](docs/screenshots/history.png)
 
 ### See how dictation fits your work
 The Usage section summarizes retained history across 7, 30 or 90 days, or all retained history.
@@ -192,7 +199,7 @@ already in your dictionary, leaving out any whose replacement is longer than one
 characters. Terms mined from your dictations but not yet in your dictionary stay
 on your machine, and it never sends transcript text, audio, application names or timestamps.
 
-![Scribe usage insights: totals, trend chart, top apps and recurring terminology with one-click add](docs/screenshots/usage.png)
+![The Usage page: how much you dictated, and in which apps](docs/screenshots/usage.png)
 
 ## 🚀 Getting started
 

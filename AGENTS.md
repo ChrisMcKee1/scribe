@@ -2058,10 +2058,23 @@ Each of these compiled warning-clean and showed only at run time or in a render,
 - **WPF-UI's AutoSuggestBox throws when its template is applied without a window handle,** so an off-screen render of the
   window has to hide Find a setting's box and render its list separately; and a render that detaches the window's content
   must give layout code that measures `Content` (the Word packs planner's `WordPackLayoutRoot`) another root.
-- **No literal FontSize in Scribe's styles or pages.** Settings follows Windows text size through the text scale service,
-  so a literal size in a style setter or on an element stays at 100% while every WPF-UI control grows; a source test fails
-  on one. A merge once put the text styles and five fixed-width combo boxes back on literals without a conflict, so
-  re-render at 150% and 225% after any merge that touches the styles.
+- **Every Scribe text size comes from the ScribeFont ramp.** `TextScaleService` writes `ScribeFontCaption`,
+  `ScribeFontBody`, `ScribeFontBodyLarge`, `ScribeFontSubtitle`, `ScribeFontTitle` (and WPF-UI's own font keys) into the
+  application resources from Windows' text size, so a style or element that sets a number stays at 100% while everything
+  around it grows. `XamlFontSizeSourceTests` fails on an inline numeric `FontSize` (except a `ui:SymbolIcon`) and on a
+  style setter with a literal `FontSize` anywhere in `src\Scribe.App`. A merge once put literal sizes back in every
+  Settings text style, and five combo boxes back on fixed widths, without a conflict, and nothing but a 225% render showed
+  it: render at `SCRIBE_TEXT_SCALE_FACTOR=2.25` after any merge that touches SettingsWindow.xaml's styles.
+- **Width versus MinWidth.** A combo or text box with a fixed `Width` clips its text once the text grows; use `MinWidth`
+  (the 100% value) so it grows with the text, and let the row wrap when it no longer fits.
+- **A DataGrid's Auto column grows and never shrinks by itself, and assigning Auto to an Auto column changes nothing.**
+  After a live text size decrease, `ResetAutoColumns` (`SettingsWindow.TextSizeLayout.cs`) sets such a column's width to 0
+  and back to Auto; once the Auto columns have measured, it sets each fixed column's declared width again, or the grid
+  takes width from those too.
+- **A DataGrid takes a star column's MinWidth out of its other columns.** Give the text columns their minimums (Your words
+  keeps 120 DIP times the text scale above 100%) only together with the other columns' natural widths as minimums,
+  measured after a pass with every minimum cleared (an Auto column never shrinks by itself), or the other columns are
+  squeezed to 20 DIP instead of the grid scrolling sideways (`UpdateDictionaryColumnMinimums`).
 
 ## Azure authentication (read before touching credentials)
 
