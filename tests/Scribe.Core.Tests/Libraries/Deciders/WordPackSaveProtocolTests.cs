@@ -454,6 +454,13 @@ public sealed class WordPackSaveProtocolTests
                 Assert.False(settled.Success);
                 Assert.Contains("weren't saved", settled.Message, StringComparison.Ordinal);
             }
+
+            // Settled to another generation, the draft is rebased onto what is stored, so the workspace and the catalog the
+            // shell is handed stay the same generation (the glossary composes against both).
+            if (settlement == "other")
+            {
+                Assert.Equal(99, harness.Workspace.Draft.BaseGeneration);
+            }
         });
     }
 

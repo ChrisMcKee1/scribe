@@ -312,7 +312,11 @@ public partial class SettingsWindow
     /// </summary>
     private void DictionaryAddButton_Click(object sender, RoutedEventArgs e)
     {
-        ClearDictionarySearchForNewRow();
+        if (!ClearDictionarySearchForNewRow())
+        {
+            return;
+        }
+
         var row = new DictionaryRow();
         _rows.Add(row);
 
@@ -328,15 +332,24 @@ public partial class SettingsWindow
         DictionaryGrid.BeginEdit();
     }
 
-    private void ClearDictionarySearchForNewRow()
+    // Clears Find a word so a row being added can be seen. A row still being edited is committed first: refreshing the view
+    // during an edit throws, which lost suggestions that arrived while a row was open. Returns false, clearing nothing, when
+    // that edit won't commit (an invalid cell), so the caller leaves the rows alone.
+    private bool ClearDictionarySearchForNewRow()
     {
         if (string.IsNullOrWhiteSpace(DictionarySearchBox.Text))
         {
-            return;
+            return true;
+        }
+
+        if (!DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true))
+        {
+            return false;
         }
 
         DictionarySearchBox.Text = string.Empty;
         _dictionaryView?.Refresh();
+        return true;
     }
 
     /// <summary>Removes the row whose delete button was pressed.</summary>
@@ -717,6 +730,8 @@ public partial class SettingsWindow
 
     private void AddSuggestionRows(IEnumerable<(string Pattern, string Replacement)> entries)
     {
+        // Rows are added even when an open edit won't commit (the search then stays, and the new rows may be filtered out
+        // until it's cleared): suggestions from a finished run are never dropped.
         ClearDictionarySearchForNewRow();
         DictionaryRow? first = null;
         foreach (var (pattern, replacement) in entries)

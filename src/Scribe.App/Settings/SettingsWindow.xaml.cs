@@ -5360,14 +5360,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             set => Set(ref _coverageLibraryReplacement, value);
         }
 
-        public string ReplacementDisplay
-
-        {
-            get => string.IsNullOrEmpty(Replacement) ? "(removes these words)" : Replacement;
-
-            set => Replacement = value == "(removes these words)" ? string.Empty : value ?? string.Empty;
-        }
-
         public bool ReplacementIsPlaceholder => string.IsNullOrEmpty(Replacement);
 
         public string DeleteName => $"Delete {(string.IsNullOrWhiteSpace(Pattern) ? "this word" : Pattern.Trim())}";
@@ -5404,7 +5396,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
             else if (name == nameof(Replacement))
             {
-                OnPropertyChanged(nameof(ReplacementDisplay));
                 OnPropertyChanged(nameof(ReplacementIsPlaceholder));
             }
             return true;

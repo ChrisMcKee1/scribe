@@ -76,7 +76,7 @@ public sealed class YourWordsReviewTests
 
         Assert.Contains("_dictionarySelectionPendingRestore = selected;", search, StringComparison.Ordinal);
         Assert.Contains("RestoreDictionarySelectionIfVisible();", search, StringComparison.Ordinal);
-        Assert.Contains("ClearDictionarySearchForNewRow();", add, StringComparison.Ordinal);
+        Assert.Contains("if (!ClearDictionarySearchForNewRow())", add, StringComparison.Ordinal);
         Assert.Contains("DictionarySearchBox.Text = string.Empty;", addDraft, StringComparison.Ordinal);
         Assert.Contains("ClearDictionarySearchForNewRow();", suggestions, StringComparison.Ordinal);
     }
@@ -89,8 +89,13 @@ public sealed class YourWordsReviewTests
         column = column[..column.IndexOf("<DataGridCheckBoxColumn Header=\"Whole words only\"", StringComparison.Ordinal)];
 
         Assert.Contains("Binding=\"{Binding Replacement, UpdateSourceTrigger=PropertyChanged}\"", column, StringComparison.Ordinal);
-        Assert.Contains("ReplacementIsPlaceholder", column, StringComparison.Ordinal);
+        Assert.Contains("CellStyle=\"{StaticResource DictionaryWrittenCell}\"", column, StringComparison.Ordinal);
         Assert.DoesNotContain("ReplacementDisplay", column, StringComparison.Ordinal);
+
+        // The placeholder is the cell's, shown only while the cell isn't editing (YourWordsGridSourceTests pins how).
+        var cell = xaml[xaml.IndexOf("x:Key=\"DictionaryWrittenCell\"", StringComparison.Ordinal)..];
+        cell = cell[..cell.IndexOf("</Style>", StringComparison.Ordinal)];
+        Assert.Contains("ReplacementIsPlaceholder", cell, StringComparison.Ordinal);
     }
 
     private static string ReadSettingsWindowCode()

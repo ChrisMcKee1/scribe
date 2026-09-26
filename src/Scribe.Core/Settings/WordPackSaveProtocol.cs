@@ -201,6 +201,9 @@ public sealed class WordPackSaveProtocol
             return await AcknowledgePublicationAsync(request, request.CaptureDraft()).ConfigureAwait(true);
         }
 
+        // Not saved: the draft keeps its edits on the catalog that is really stored now, so the workspace and the catalog the
+        // shell composes the glossary against stay the same generation.
+        pending.Rebase(catalog);
         ClearPending();
         request.OnWordPacksChanged?.Invoke(catalog);
         return FromNotice(WordPackNotices.FromSettlement(WordPackSettlement.NotSaved));

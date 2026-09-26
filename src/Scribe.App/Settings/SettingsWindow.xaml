@@ -447,6 +447,43 @@
             </Setter>
         </Style>
 
+        <!-- Your words' Scribe writes cell. A removal rule (no replacement) shows "(removes these words)" in secondary text
+             over the empty cell while it isn't being edited. The column's own TextBlock can't show it: DataGridTextColumn
+             binds its Text locally, which a style setter never overrides, so the placeholder is part of the cell. The
+             editor always edits the real Replacement, so the placeholder can never be stored. -->
+        <Style x:Key="DictionaryWrittenCell" TargetType="DataGridCell" BasedOn="{StaticResource KeyboardCell}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="4,0">
+                            <Grid>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                                <TextBlock x:Name="Placeholder"
+                                           Text="(removes these words)"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Margin="2,0,0,0"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           Visibility="Collapsed"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding ReplacementIsPlaceholder}" Value="True"/>
+                                    <Condition Binding="{Binding IsEditing, RelativeSource={RelativeSource Self}}" Value="False"/>
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible"/>
+                            </MultiDataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- The remove button in a Dictionary row is only an icon, so it is named after the entry it removes. -->
         <Style x:Key="DictionaryRemoveButton" TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
             <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Remove {0}'}"/>
@@ -1554,16 +1591,11 @@
                                                             </Style>
                                                         </DataGridTextColumn.EditingElementStyle>
                                                     </DataGridTextColumn>
-                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement">
+                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement"
+                                                                        CellStyle="{StaticResource DictionaryWrittenCell}">
                                                         <DataGridTextColumn.ElementStyle>
                                                             <Style TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
                                                                 <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding ReplacementIsPlaceholder}" Value="True">
-                                                                        <Setter Property="Text" Value="(removes these words)"/>
-                                                                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
                                                             </Style>
                                                         </DataGridTextColumn.ElementStyle>
                                                         <DataGridTextColumn.EditingElementStyle>
