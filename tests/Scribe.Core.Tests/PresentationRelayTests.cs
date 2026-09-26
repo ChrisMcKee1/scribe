@@ -438,6 +438,81 @@ public sealed class PresentationRelayTests
     }
 
     [Fact]
+    public void A_late_outcome_never_covers_a_newer_recording()
+    {
+        // A finished dictation's outcome rides its return to idle, so it carries that change's revision, and the next
+        // recording, numbered after it, always wins: here the dictation that returned to idle is preempted before it
+        // raises, and the next recording's start reaches the UI thread first.
+        var lifecycle = NewLifecycle();
+        var a = lifecycle.TryBeginRecording(() => "first");
+        var recordingA = lifecycle.TryPresentRecording(a.DictationId)!.Value;
+        var stopA = lifecycle.TryBeginProcessing(a.DictationId);
+        var idleA = lifecycle.ReturnToIdle(Timeout.InfiniteTimeSpan).Presentation;
+        lifecycle.EndProcessing(stopA.Admission!);
+        var b = lifecycle.TryBeginRecording(() => "second");
+        var recordingB = lifecycle.TryPresentRecording(b.DictationId)!.Value;
+        Assert.True(recordingB.Revision > idleA.Revision);
+
+        var posted = new Queue<Action>();
+        var pill = new List<string>();
+        var relay = new PresentationRelay<(DictationPresentation Change, string? Outcome)>(
+            posted.Enqueue, change => pill.Add(PillFor(change.Change, change.Outcome)), () => false);
+        relay.Publish(recordingA.Revision, (recordingA, null));
+        relay.Publish(stopA.Presentation.Revision, (stopA.Presentation, null));
+        relay.Publish(recordingB.Revision, (recordingB, null));
+        relay.Publish(idleA.Revision, (idleA, "Typed"));
+        RunAll(posted);
+
+        Assert.Equal(["recording", "processing", "recording"], pill);
+
+        // Delivered the way the shell posts its failure flash today, beside the relay rather than through it, the same late
+        // outcome lands on top of the newer recording.
+        var beside = new List<string>();
+        var besideRelay = new PresentationRelay<DictationPresentation>(
+            posted.Enqueue, change => beside.Add(PillFor(change, null)), () => false);
+        besideRelay.Publish(recordingA.Revision, recordingA);
+        besideRelay.Publish(stopA.Presentation.Revision, stopA.Presentation);
+        besideRelay.Publish(recordingB.Revision, recordingB);
+        posted.Enqueue(() => beside.Add("Typed"));
+        RunAll(posted);
+
+        Assert.Equal(["recording", "processing", "recording", "Typed"], beside);
+    }
+
+    [Fact]
+    public void An_outcome_rendered_in_order_is_shown_and_the_next_recording_replaces_it()
+    {
+        var lifecycle = NewLifecycle();
+        var posted = new Queue<Action>();
+        var pill = new List<string>();
+        var relay = new PresentationRelay<(DictationPresentation Change, string? Outcome)>(
+            posted.Enqueue, change => pill.Add(PillFor(change.Change, change.Outcome)), () => false);
+
+        var a = lifecycle.TryBeginRecording(() => "first");
+        var recordingA = lifecycle.TryPresentRecording(a.DictationId)!.Value;
+        relay.Publish(recordingA.Revision, (recordingA, null));
+        var stopA = lifecycle.TryBeginProcessing(a.DictationId);
+        relay.Publish(stopA.Presentation.Revision, (stopA.Presentation, null));
+        var idleA = lifecycle.ReturnToIdle(Timeout.InfiniteTimeSpan).Presentation;
+        relay.Publish(idleA.Revision, (idleA, "Nothing typed"));
+        lifecycle.EndProcessing(stopA.Admission!);
+        var b = lifecycle.TryBeginRecording(() => "second");
+        var recordingB = lifecycle.TryPresentRecording(b.DictationId)!.Value;
+        relay.Publish(recordingB.Revision, (recordingB, null));
+        RunAll(posted);
+
+        Assert.Equal(["recording", "processing", "Nothing typed", "recording"], pill);
+    }
+
+    // What the pill shows for a change, as the shell renders it: an outcome, when the change carries one, in place of the hide.
+    private static string PillFor(DictationPresentation change, string? outcome) => change.Phase switch
+    {
+        DictationPhase.Recording => "recording",
+        DictationPhase.Processing => "processing",
+        _ => outcome ?? "hide",
+    };
+
+    [Fact]
     public void Work_runs_inline_on_the_UI_thread_and_is_posted_from_anywhere_else()
     {
         using var ui = new FakeUiThread();
