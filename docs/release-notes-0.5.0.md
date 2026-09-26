@@ -1,4 +1,4 @@
-# Scribe 0.4.5
+# Scribe 0.5.0
 
 This release lets a spare mouse button be your push-to-talk key, makes dictating into Remote Desktop
 and virtual machines safer, and gives the recording pill a new look that tells you what each
