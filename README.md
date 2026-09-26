@@ -217,11 +217,10 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
 > **Upgrading?** Your hotkeys stay as they were (Right Ctrl, unless you changed it). To switch to
 > Page Down and Page Up, choose **Restore default hotkeys** in Settings, General, then Save. While
 > they are bound, Page Down and Page Up pressed on their own no longer page through documents in
-> other apps (except the few presses Scribe lets through around a Remote Desktop or virtual machine
-> window, described in [Remote Desktop and virtual machines](#remote-desktop-and-virtual-machines)),
-> and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held they work there
-> as before. Pick any other key or chord in Settings if you would rather keep them,
-> or if you present.
+> other apps, and a presentation remote stops changing slides (except the few presses Scribe lets
+> through, described in [Remote Desktop and virtual machines](#remote-desktop-and-virtual-machines));
+> with Ctrl, Shift, Alt or Win held they work there as before. Pick any other key or chord in
+> Settings if you would rather keep them, or if you present.
 
 ## 🎛️ How it works
 
