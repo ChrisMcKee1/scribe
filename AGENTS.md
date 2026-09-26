@@ -776,23 +776,32 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   followed by its release, in case the client registers once more without leaving the front. That keeps Scribe's hook
   ahead as a bound, not a seal: until the first move, and until the next one after a registration the client makes while
   it stays in front, the client's hook is still first, and a press in that gap can reach the session. Every step is taken
-  only if a remote client is still in front when it falls due, and the same remote window coming to the front again, with
-  nothing else in front since, keeps its sequence as scheduled rather than start it over (review round 2, item 3); a
-  window in between, or a step that finds no remote client in front, forgets it, so its return starts over. Notices and
-  ticks are decided by revision (round 2, item 4): `ForegroundNotice` publishes each notice with a revision (the window,
-  then an interlocked increment, then the SetEvent; the handler reads the revision first), a notice no newer than the last
-  one decided changes nothing (the notice's pool callbacks can overlap: a repeating registered wait re-arms before it runs
-  its callback, stream MB's round 11), and each schedule records its own number and its due time, as `ClosableTimer` does,
-  so neither a tick of an earlier schedule nor an early tick can take a newer one. Each move carries the foreground
+  only if a remote client is still in front when it falls due, and the same remote window noticed again, with no other
+  window published since the last decision, keeps its sequence as scheduled rather than start it over (review round 2,
+  item 3); a window in between, or a step that finds no remote client in front, forgets it, so its return starts over.
+  Notices coalesce (the handler reads only the latest window), so the same window alone does not prove that nothing
+  else was in front: `ForegroundPublication` counts each publication whose window differs from the one it replaces, and
+  the count travels with the notice (review round 3, item 2). Notices and ticks are decided by revision (round 2, item
+  4): `ForegroundNotice` publishes each notice with a revision (an interlocked exchange of the window, the change count
+  when it differs, then the revision, then the SetEvent; the handler reads the revision, then the count, then the
+  window), a notice no newer than the last one decided changes nothing (the notice's pool callbacks can overlap: a
+  repeating registered wait re-arms before it runs its callback, stream MB's round 11), and each schedule records its own
+  number and its due time, as `ClosableTimer` does, so neither a tick of an earlier schedule nor an early tick can take a
+  newer one. A decision that keeps the step (the same window, or another window at the release, the one step it leaves
+  in place) re-arms that step to run at once when its tick was taken and is still in flight, so a tick that read the
+  foreground before the notice cannot apply what it judged then (round 3, item 2). And while no step is scheduled, the
+  watchdog hands the window in front to the pool again once a period (`RenoticeForegroundIfIdle`), so a sequence that
+  ended while a client stayed in front (a step that read the foreground as a window was losing activation, when Windows
+  has none) starts over within 30 s; mid-sequence it publishes nothing. Each move carries the foreground
   revision and the window its step judged (`WM_HOTKEY_MOVE_AHEAD`'s wParam and lParam), and the hook thread drops it,
   right before registering, unless no notice was published since and that window is still in front (one
   `GetForegroundWindow` through the service's delegate, between messages, which also covers a change whose WinEvent the
   thread has not been handed yet; no process is looked up there): a move posted, or held back, before the user left for
   a local app is not made (round 2, item 5). Requests are posted thread messages (`WM_HOTKEY_MOVE_AHEAD`,
   `WM_HOTKEY_MOVE_RETRY`, `WM_HOTKEY_RELEASE_RETIRED`); nothing waits for the hook thread. No new setting: it is automatic,
-  and `KeyboardHookPrecedenceTests` drives it on a clock the test owns. Each time a remote client comes to the front, one
-  Information line records, by its process name, that a move is scheduled (not that one was made); the watchdog reports a
-  refused move (Warning) and a move that waited or was dropped (Debug) by count.
+  and `KeyboardHookPrecedenceTests` drives it on a clock the test owns. Each time a sequence starts for a remote client,
+  one Information line records, by its process name, that the client is in front and a move is scheduled (not that one
+  was made); the watchdog reports a refused move (Warning) and a move that waited or was dropped (Debug) by count.
 - **A move does not strand a keystroke that a hook ahead of Scribe's may have seen begin.** Such a hook may have forwarded
   the press into a remote session; if Scribe swallowed the rest of that keystroke after moving ahead, the session would
   keep the key down, and pressing it again would not help, because Scribe swallows that key (for a push-to-talk Right
@@ -813,16 +822,26 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   reinstall's registration; the first install replaces none and opens nothing), for a window a key-down of a key the
   engine neither holds nor has seen go up since is uncertain (`HotkeyEngine.OnRegisteredAhead`): judged, so a dictation
   still starts or ends, but never swallowed, and neither is the rest of its keystroke, so the hook that forwarded the
-  press also gets the release. The window is how long an autorepeat of a key held across the move can take to arrive,
+  press also gets the release. The engine keeps such a keystroke itself until its release (`PassesWholeKeystroke`;
+  review round 3, item 1): a key-down judged uncertain, or one that reached only a replaced registration, marks its key,
+  and every repeat and the release of that keystroke pass whatever clears the machines' view meanwhile (new bindings,
+  capture's start and end, a desktop switch), since the machines alone would take the next repeat for a fresh press and
+  swallow it with its release. The judgement is made on the view the machines then use: `OnKeyEvent` applies the pending
+  commands once, first, then judges, then processes, with no second drain between (the mouse path keeps its order). The
+  cost fails open: a key whose release went unseen (let go on the lock screen) stays marked, so its next press passes
+  once, whole. The window is how long an autorepeat of a key held across the move can take to arrive,
   from the user's keyboard settings (`KeyRepeatTiming`: SystemParametersInfo's SPI_GETKEYBOARDDELAY, "approximately 250
   ms" to "approximately 1 second", and SPI_GETKEYBOARDSPEED, "approximately 2.5" to "approximately 30" repetitions per second, "hardware-dependent" and off a
   linear scale "by as much as 20%"; read off the hook thread and published to the engine): the longer of the delay and
   the period, a quarter more, plus 250 ms, so 875 ms for Windows' defaults and 1.5 s at most, measured on the events' own
   time stamps (the tick count, compared signed). What can still reach the session: a press inside a window, of a key
-  Scribe has not seen go up since that move, passes through once, whole (a bound Page Down scrolls the session once, and
-  the dictation still starts); a key held across a move whose repeat comes later than the window allows is judged as a
-  fresh press; a key held at the instant Scribe first installs its hook opens no window. `KeyboardHookMoveSafetyTests` and
-  `KeyboardHookUncertaintyTests` pin the rules in memory; the CI tests
+  Scribe has not seen go up since that move, passes through whole, for as long as it is held (a bound Page Down pages
+  the session and keeps paging while it is held, its repeats passing with it; a bound Right Ctrl is pressed and released
+  there; the dictation still starts and ends); a key held across a move whose repeat comes later than the window allows
+  is judged as a fresh press; an event stamped far in the future (KEYBDINPUT.time is the caller's) closes the window
+  early; a key held at the instant Scribe first installs its hook opens no window. `KeyboardHookMoveSafetyTests`,
+  `KeyboardHookUncertaintyTests`, `KeyboardHookUncertaintyOrderTests` and `KeyboardHookPassingKeystrokeTests` pin the
+  rules in memory; the CI tests
   `Start_lets_a_key_already_on_its_way_to_a_replaced_registration_through_and_still_judges_it` (a real press held inside
   a hook ahead of Scribe's while the move lands) and
   `Start_lets_the_rest_of_a_keystroke_a_hook_ahead_of_it_kept_through_after_a_move` (a hook that forwards and keeps a key
@@ -1092,7 +1111,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   the acknowledgment that capture's end is applied: no sleep, and no drain through the pool, whose
   registered wait re-arms before its callback runs, so a later pass proves nothing about an earlier
   callback (review round 11, A13). `Start_serves_the_current_installation_s_repair_whatever_an_obsolete_one_asks_for`
-  pins A14.
+  pins A14. In memory, `HotkeyEngineHarness` takes the passes its service schedules through the service's internal
+  `scheduleReconcilePass` seam, on the thread that schedules, and a test runs them on its own thread
+  (`RunReconcilePasses`), so no in-memory test waits on the pool (review round 3, item 6: a 10 s wait for the pool's pass
+  failed under load) and no harness pass runs after its test; production keeps `Task.Run` and the 25 ms settle, and the
+  `Start_` tests that wait for it there say whether it was never scheduled or scheduled and never finished.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new

@@ -240,15 +240,21 @@ Dictating into a Remote Desktop, Azure Virtual Desktop, Windows 365, Hyper-V, VM
 or Citrix window works as it does anywhere else, with a few things Scribe does there. A remote
 client can install a keyboard hook of its own, which sees your push-to-talk key before Scribe's
 does. So after a remote window comes to the front, Scribe moves its hook ahead of the client's, and
-moves it ahead again while the window stays in front: a bound, not a seal, since a press in the gap
-before a move can still reach the remote session. A key you are already holding when Scribe moves
-is left alone: its repeats and its release go where its press went. Text is always typed into a
-remote window, never pasted, even when you chose Paste it in, because a remote session reads the
-clipboard only when it pastes, which can be after Scribe has put back what you had copied. It is
-typed in small batches with a short pause between them, never hundreds of keystrokes at once, which
-adds about a quarter of a second to a 180-character dictation and about a second to a 770-character
-one. And the keys Scribe presses for you (Shift+Enter for a line break) carry the real key codes
-remote clients forward.
+moves it ahead again while the window stays in front: a bound, not a seal. A press in the gap
+before a move can still reach the remote session, and so can a press in the moment right after one,
+which Scribe cannot tell from the repeat of a key held across the move: Scribe lets that keystroke
+through whole, repeats and release included, so a push-to-talk Page Down pages the session for as
+long as you hold it (the dictation still starts and ends). A key you are already holding when
+Scribe moves is left alone, even if you change Scribe's hotkey settings meanwhile: its repeats and
+its release go where its press went, as long as its next repeat reaches Scribe within the time your
+keyboard's repeat settings allow (under a second with the Windows defaults, a second and a half at
+most). A key whose repeat comes later than that, or a keystroke a program sends stamped with a time
+in the future, is taken as a new press. Text is always typed into a remote window, never pasted,
+even when you chose Paste it in, because a remote session reads the clipboard only when it pastes,
+which can be after Scribe has put back what you had copied. It is typed in small batches with a
+short pause between them, never hundreds of keystrokes at once, which adds about a quarter of a
+second to a 180-character dictation and about a second to a 770-character one. And the keys Scribe
+presses for you (Shift+Enter for a line break) carry the real key codes remote clients forward.
 
 ## 📚 The full feature catalog
 
