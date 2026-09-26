@@ -37,13 +37,26 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
         _foundryModel = EmptyToNull(settings.AiCleanupModel);
         _azureEndpoint = EmptyToNull(settings.AiCleanupAzureEndpoint);
         _azureDeployment = EmptyToNull(settings.AiCleanupAzureDeployment);
-        _azureSubscriptionId = EmptyToNull(settings.AiCleanupAzureSubscriptionId);
-        _azureSubscriptionTenantId = EmptyToNull(settings.AiCleanupAzureSubscriptionTenantId);
-        _azureAuthMode = settings.AiCleanupAzureAuthMode;
-        _azureTenantId = EmptyToNull(settings.AiCleanupAzureTenantId);
-        _azureClientId = EmptyToNull(settings.AiCleanupAzureClientId);
-        _azureClientSecret = RawEmptyToNull(settings.AiCleanupAzureClientSecret);
         _azureApiKey = RawEmptyToNull(settings.AiCleanupAzureApiKey);
+        if (_azureApiKey is not null)
+        {
+            _azureSubscriptionId = null;
+            _azureSubscriptionTenantId = null;
+            _azureAuthMode = AzureAuthMode.AzureCli;
+            _azureTenantId = null;
+            _azureClientId = null;
+            _azureClientSecret = null;
+        }
+        else
+        {
+            _azureSubscriptionId = EmptyToNull(settings.AiCleanupAzureSubscriptionId);
+            _azureSubscriptionTenantId = EmptyToNull(settings.AiCleanupAzureSubscriptionTenantId);
+            _azureAuthMode = settings.AiCleanupAzureAuthMode;
+            _azureTenantId = settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? EmptyToNull(settings.AiCleanupAzureTenantId) : EmptyToNull(settings.AiCleanupAzureTenantId);
+            _azureClientId = settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? EmptyToNull(settings.AiCleanupAzureClientId) : null;
+            _azureClientSecret = settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? RawEmptyToNull(settings.AiCleanupAzureClientSecret) : null;
+        }
+
         _customEndpoint = EmptyToNull(settings.AiCleanupCustomEndpoint);
         _customModel = EmptyToNull(settings.AiCleanupCustomModel);
         _customApiKey = RawEmptyToNull(settings.AiCleanupCustomApiKey);
@@ -109,6 +122,28 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
 
 }
 
+public sealed class RemoteActivityAuthorization
+{
+    internal RemoteActivityAuthorization(CleanupProvider provider, RemoteActivityFingerprint fingerprint, string? cliPath, string? model)
+    {
+        Provider = provider;
+        Fingerprint = fingerprint;
+        CliPath = EmptyToNull(cliPath);
+        Model = EmptyToNull(model);
+    }
+
+    public CleanupProvider Provider { get; }
+
+    internal RemoteActivityFingerprint Fingerprint { get; }
+
+    public string? CliPath { get; }
+
+    public string? Model { get; }
+
+    private static string? EmptyToNull(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
 public static class RemoteActivityPolicy
 {
     public static bool MayContact(AppSettings savedSettings, AppSettings draft, RemoteActivityTrigger trigger)
@@ -137,6 +172,57 @@ public static class RemoteActivityPolicy
         return RemoteActivityFingerprint.From(savedSettings).Equals(RemoteActivityFingerprint.From(draft));
     }
 
+    public static RemoteActivityAuthorization? CaptureAutomaticContact(
+        AppSettings savedSettings,
+        AppSettings draft,
+        RemoteActivityTrigger trigger,
+        string? cliPath = null)
+    {
+        if (!MayContact(savedSettings, draft, trigger))
+        {
+            return null;
+        }
+
+        return new RemoteActivityAuthorization(
+            savedSettings.AiCleanupProvider,
+            RemoteActivityFingerprint.From(savedSettings),
+            cliPath,
+            savedSettings.AiCleanupProvider == CleanupProvider.GitHubCopilot ? EmptyToNull(savedSettings.AiCleanupCopilotModel) : null);
+    }
+
+    /// <summary>
+    /// Whether an automatic contact captured earlier may still run: the saved settings still have that provider on with the
+    /// configuration it was captured for, and the page still shows exactly those saved settings. A draft edited meanwhile
+    /// (cleanup unticked, another model, another provider) withdraws it, even though nothing was saved.
+    /// </summary>
+    public static bool IsStillAuthorized(
+        RemoteActivityAuthorization? authorization,
+        AppSettings committedSettings,
+        AppSettings currentDraft,
+        string? cliPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(committedSettings);
+        ArgumentNullException.ThrowIfNull(currentDraft);
+        if (authorization is null || !committedSettings.EnableAiCleanup || committedSettings.AiCleanupProvider != authorization.Provider ||
+            !IsSavedAndActive(committedSettings, currentDraft))
+        {
+            return false;
+        }
+
+        if (!authorization.Fingerprint.Equals(RemoteActivityFingerprint.From(committedSettings)))
+        {
+            return false;
+        }
+
+        if (authorization.Provider == CleanupProvider.GitHubCopilot)
+        {
+            return Same(EmptyToNull(cliPath), authorization.CliPath) &&
+                Same(EmptyToNull(committedSettings.AiCleanupCopilotModel), authorization.Model);
+        }
+
+        return true;
+    }
+
     public static bool IsSavedAndActive(AppSettings savedSettings, AppSettings draft)
     {
         ArgumentNullException.ThrowIfNull(savedSettings);
@@ -152,16 +238,7 @@ public static class RemoteActivityPolicy
     {
         CleanupProvider.FoundryLocal =>
             Same(EmptyToNull(saved.AiCleanupModel), EmptyToNull(draft.AiCleanupModel)),
-        CleanupProvider.AzureFoundry =>
-            Same(EmptyToNull(saved.AiCleanupAzureEndpoint), EmptyToNull(draft.AiCleanupAzureEndpoint)) &&
-            Same(EmptyToNull(saved.AiCleanupAzureDeployment), EmptyToNull(draft.AiCleanupAzureDeployment)) &&
-            Same(EmptyToNull(saved.AiCleanupAzureSubscriptionId), EmptyToNull(draft.AiCleanupAzureSubscriptionId)) &&
-            Same(EmptyToNull(saved.AiCleanupAzureSubscriptionTenantId), EmptyToNull(draft.AiCleanupAzureSubscriptionTenantId)) &&
-            saved.AiCleanupAzureAuthMode == draft.AiCleanupAzureAuthMode &&
-            Same(EmptyToNull(saved.AiCleanupAzureTenantId), EmptyToNull(draft.AiCleanupAzureTenantId)) &&
-            Same(EmptyToNull(saved.AiCleanupAzureClientId), EmptyToNull(draft.AiCleanupAzureClientId)) &&
-            Same(RawEmptyToNull(saved.AiCleanupAzureClientSecret), RawEmptyToNull(draft.AiCleanupAzureClientSecret)) &&
-            Same(RawEmptyToNull(saved.AiCleanupAzureApiKey), RawEmptyToNull(draft.AiCleanupAzureApiKey)),
+        CleanupProvider.AzureFoundry => SameAzureConfiguration(saved, draft),
         CleanupProvider.OpenAiCompatible =>
             Same(EmptyToNull(saved.AiCleanupCustomEndpoint), EmptyToNull(draft.AiCleanupCustomEndpoint)) &&
             Same(EmptyToNull(saved.AiCleanupCustomModel), EmptyToNull(draft.AiCleanupCustomModel)) &&
@@ -170,6 +247,31 @@ public static class RemoteActivityPolicy
             Same(EmptyToNull(saved.AiCleanupCopilotModel), EmptyToNull(draft.AiCleanupCopilotModel)),
         _ => false,
     };
+
+    private static bool SameAzureConfiguration(AppSettings saved, AppSettings draft)
+    {
+        var savedApiKey = RawEmptyToNull(saved.AiCleanupAzureApiKey);
+        var draftApiKey = RawEmptyToNull(draft.AiCleanupAzureApiKey);
+        if (savedApiKey is not null || draftApiKey is not null)
+        {
+            return Same(EmptyToNull(saved.AiCleanupAzureEndpoint), EmptyToNull(draft.AiCleanupAzureEndpoint)) &&
+                Same(EmptyToNull(saved.AiCleanupAzureDeployment), EmptyToNull(draft.AiCleanupAzureDeployment)) &&
+                Same(savedApiKey, draftApiKey);
+        }
+
+        return Same(EmptyToNull(saved.AiCleanupAzureEndpoint), EmptyToNull(draft.AiCleanupAzureEndpoint)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureDeployment), EmptyToNull(draft.AiCleanupAzureDeployment)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureSubscriptionId), EmptyToNull(draft.AiCleanupAzureSubscriptionId)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureSubscriptionTenantId), EmptyToNull(draft.AiCleanupAzureSubscriptionTenantId)) &&
+            saved.AiCleanupAzureAuthMode == draft.AiCleanupAzureAuthMode &&
+            Same(EmptyToNull(saved.AiCleanupAzureTenantId), EmptyToNull(draft.AiCleanupAzureTenantId)) &&
+
+            // The app registration counts only for a service principal: Azure CLI stores none (AzureSignInFields), so a
+            // field its mode hides can't make saved settings read as unsaved.
+            (saved.AiCleanupAzureAuthMode != AzureAuthMode.ServicePrincipal ||
+                (Same(EmptyToNull(saved.AiCleanupAzureClientId), EmptyToNull(draft.AiCleanupAzureClientId)) &&
+                 Same(RawEmptyToNull(saved.AiCleanupAzureClientSecret), RawEmptyToNull(draft.AiCleanupAzureClientSecret))));
+    }
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -68,12 +68,31 @@ public partial class QuickAddWindow : FluentWindow
     public readonly record struct QuickAddResult(
         DictionaryEntry Entry,
         string? SourceTranscript,
-        string? CorrectedTranscript);
+        string? CorrectedTranscript,
+        bool CloseAfterSaving);
+
+    public sealed record QuickAddSource(Guid? Id, string HistoryText, string Text, DateTimeOffset TimestampUtc, long AddedAtRevision)
+    {
+        public QuickAddSource(Guid? id, string historyText, string text)
+            : this(id, historyText, text, DateTimeOffset.UtcNow, 0)
+        {
+        }
+    }
 
     public event Action<QuickAddResult>? Saved;
 
     public QuickAddWindow(
         IReadOnlyList<string> recentTranscripts,
+        Func<IReadOnlyList<DictionaryEntry>> loadExisting,
+        Func<DictionaryEntry, DictionaryEntry> persist,
+        ILogger? logger = null,
+        QuickAddWindowOptions? options = null)
+        : this(recentTranscripts.Select(text => new QuickAddSource(null, text, text)).ToList(), loadExisting, persist, logger, options)
+    {
+    }
+
+    public QuickAddWindow(
+        IReadOnlyList<QuickAddSource> recentTranscripts,
         Func<IReadOnlyList<DictionaryEntry>> loadExisting,
         Func<DictionaryEntry, DictionaryEntry> persist,
         ILogger? logger = null,
@@ -117,8 +136,8 @@ public partial class QuickAddWindow : FluentWindow
         Closing += QuickAddWindow_Closing;
 
         _sources = recentTranscripts
-            .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Select(t => new TranscriptSource(t))
+            .Where(source => !string.IsNullOrWhiteSpace(source.Text))
+            .Select(source => new TranscriptSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision))
             .ToList();
 
         if (_sources.Count == 0)
@@ -201,6 +220,95 @@ public partial class QuickAddWindow : FluentWindow
 
         UpdateFocusedChip();
         UpdateStatus(forceAnnouncement: false);
+    }
+
+    public void ForgetTranscriptIds(IReadOnlyCollection<Guid> ids)
+    {
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        var current = RecentPicker.SelectedItem as TranscriptSource;
+        var currentRemoved = current?.Id is { } currentId && ids.Contains(currentId);
+        _sources.RemoveAll(source => source.Id is { } id && ids.Contains(id));
+        RecentPicker.Items.Refresh();
+        if (!currentRemoved)
+        {
+            return;
+        }
+
+        var state = QuickAddSources.ClearCurrent(HasUnsavedSavableCorrection());
+        ClearDeletedTranscript(keepCorrection: state.KeepCorrection, state.Message);
+    }
+
+    public void ApplyHistoryDeletion(HistoryDeletion deletion)
+    {
+        var current = RecentPicker.SelectedItem as TranscriptSource;
+        var state = QuickAddSources.ApplyDeletion(
+            _sources,
+            current,
+            deletion,
+            source => source.Original,
+            source => source.TimestampUtc,
+            source => source.AddedAtRevision,
+            HasUnsavedSavableCorrection());
+        _sources.Clear();
+        _sources.AddRange(state.Sources);
+        RecentPicker.Items.Refresh();
+        if (state.CurrentRemoved)
+        {
+            ClearDeletedTranscript(state.KeepCorrection, state.Message);
+        }
+    }
+
+    public void ClearTranscripts()
+    {
+        var state = QuickAddSources.Clear(HasUnsavedSavableCorrection());
+        _sources.Clear();
+        RecentPicker.Items.Refresh();
+        ClearDeletedTranscript(state.KeepCorrection, state.Message);
+    }
+
+    private void ClearDeletedTranscript(bool keepCorrection, string? message)
+    {
+        _transcript = string.Empty;
+        _tokens = [];
+        _chips.Clear();
+        _fixedTranscript = null;
+        SavedDetailText.Visibility = Visibility.Collapsed;
+        CopyFixedButton.Visibility = Visibility.Collapsed;
+        if (keepCorrection)
+        {
+            ShowResult(new QuickDictionaryAdd.Plan(
+                QuickDictionaryAdd.PlanKind.NoChange,
+                null,
+                message ?? QuickAddSources.RemovedMessage,
+                QuickDictionaryAdd.PlanSeverity.Info));
+            return;
+        }
+
+        if (_sources.Count > 0)
+        {
+            RecentPicker.SelectedIndex = 0;
+        }
+        else
+        {
+            LoadTranscript(string.Empty);
+        }
+    }
+
+    public void UseHeardText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        RunWithoutFieldChanged(() => HeardBox.Text = text.Trim());
+        ShouldBeBox.Focus();
+        ShouldBeBox.CaretIndex = ShouldBeBox.Text.Length;
+        UpdateStatus(forceAnnouncement: true);
     }
 
     private void Chip_MouseDown(object sender, MouseButtonEventArgs e)
@@ -855,7 +963,7 @@ public partial class QuickAddWindow : FluentWindow
         var sourceTranscript = _transcript;
         var corrected = QuickDictionaryAdd.Apply(sourceTranscript, saved);
         var fixedTranscript = string.Equals(corrected, sourceTranscript, StringComparison.Ordinal) ? null : corrected;
-        Saved?.Invoke(new QuickAddResult(saved, sourceTranscript, fixedTranscript));
+        Saved?.Invoke(new QuickAddResult(saved, sourceTranscript, fixedTranscript, closeAfterSaving));
         if (closeAfterSaving)
         {
             _allowClose = true;
@@ -1017,9 +1125,13 @@ public partial class QuickAddWindow : FluentWindow
         }
     }
 
-    private sealed class TranscriptSource(string text) : INotifyPropertyChanged
+    private sealed class TranscriptSource(Guid? id, string historyText, string text, DateTimeOffset timestampUtc, long addedAtRevision) : INotifyPropertyChanged
     {
+        public Guid? Id { get; } = id;
+        public string Original { get; } = historyText;
         public string Text { get; private set; } = text;
+        public DateTimeOffset TimestampUtc { get; } = timestampUtc;
+        public long AddedAtRevision { get; } = addedAtRevision;
         public string Preview => LastTranscriptStore.FormatPreview(Text, maxLength: 64);
 
         public void Update(string text)
@@ -1069,10 +1181,6 @@ public partial class QuickAddWindow : FluentWindow
         public override string ToString() => Text;
     }
 }
-
-
-
-
 
 
 

@@ -70,11 +70,7 @@ public static class FoundryModelChoices
             parts.Add(size);
         }
 
-        if (string.Equals(model.Alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase))
-        {
-            parts.Add("recommended");
-        }
-        else if (ModelSizeBytes(model) >= 7_000_000_000)
+        if (ModelSizeBytes(model) >= 7_000_000_000 && !string.Equals(model.Alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase))
         {
             parts.Add("large download");
         }
@@ -84,7 +80,10 @@ public static class FoundryModelChoices
             parts.Add("downloaded");
         }
 
-        return $"{parts[0]}, {string.Join(", ", parts.Skip(1))}";
+        var label = $"{parts[0]}, {string.Join(", ", parts.Skip(1))}";
+        return string.Equals(model.Alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase)
+            ? label.Replace("about 1.3 GB", "about 1.3 GB (recommended)", StringComparison.Ordinal)
+            : label;
     }
 
     private static string CleanHint(CleanupModel model)

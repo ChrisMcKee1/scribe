@@ -614,22 +614,36 @@ public sealed class CleanupRecoveryTests
     {
         await using var harness = NewHarness();
         var svc = harness.Service;
-        await ParkInitializationInModelLoadAsync(harness);
-        harness.Phi.LoadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var load = svc.LoadFoundryModelAsync(CleanupHarness.OtherAlias);
-        await harness.Phi.LoadStarted.Task.WaitAsync(Bound);
-        var published = 0;
-        svc.StatusChanged += () => Interlocked.Increment(ref published);
+        harness.DrainOnManualClock();
+        TaskCompletionSource? parked = null;
+        var manualLoad = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            parked = await ParkInitializationInModelLoadAsync(harness);
+            harness.Phi.LoadGate = manualLoad;
+            var load = svc.LoadFoundryModelAsync(CleanupHarness.OtherAlias);
+            await harness.Phi.LoadStarted.Task.WaitAsync(Bound);
+            var published = 0;
+            svc.StatusChanged += () => Interlocked.Increment(ref published);
 
-        var dispose = svc.DisposeAsync().AsTask();
+            var dispose = svc.DisposeAsync().AsTask();
 
-        Assert.False(await load.WaitAsync(Bound));
-        await dispose.WaitAsync(Bound);
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.Equal(0, Volatile.Read(ref published));
-        Assert.Equal(1, harness.Qwen.LoadCalls);
-        Assert.Equal(1, harness.Runtime.Disposals);
-        Assert.False(harness.Runtime.DisposedWhileInUse);
+            Assert.False(await load.WaitAsync(Bound));
+            await dispose.WaitAsync(Bound);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.Equal(0, Volatile.Read(ref published));
+            Assert.Equal(1, harness.Qwen.LoadCalls);
+            Assert.Equal(1, harness.Runtime.Disposals);
+            Assert.False(harness.Runtime.DisposedWhileInUse);
+        }
+        finally
+        {
+            // Both waits end with the disposal's cancellation anyway; opened here too, because the drain is on the test's
+            // clock and nothing else would time it out. The initialization's gate is still on the fake if parking failed.
+            parked?.TrySetResult();
+            harness.Qwen.LoadGate?.TrySetResult();
+            manualLoad.TrySetResult();
+        }
     }
 
     [Fact]

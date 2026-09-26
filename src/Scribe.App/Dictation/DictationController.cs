@@ -10,6 +10,7 @@ using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
+using Scribe.Core.Overlay;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
@@ -156,12 +157,6 @@ internal sealed class DictationController : IDisposable
     /// raw recognition, final text, replacements, and per-stage timings for its focused text box.
     /// </summary>
     public event Action<DictationPipelineReport>? PipelineReported;
-
-    /// <summary>
-    /// Raised (on a background thread) when AI cleanup was enabled but failed at runtime, so the
-    /// dictation fell back to raw transcription. Carries a short reason for the failure overlay.
-    /// </summary>
-    public event Action<string>? CleanupFailed;
 
     /// <summary>
     /// Raised (on a background thread) when text injection failed but the finalized transcript was
@@ -774,18 +769,21 @@ internal sealed class DictationController : IDisposable
 
             // Guarded: a log failure here would skip the reset and leave the controller Recording for good.
             TryLog(log => log.LogError("Failed to start audio capture: {Failure}", FailureShape.DescribeWithStack(ex)));
-            AbandonRecording(id);
-            RaiseError("microphone unavailable");
+            const string failure = "microphone unavailable";
+            AbandonRecording(id, PillOutcome.Of(insertion: null, cleanupRequested: false, cleanup: null, failure));
+            RaiseError(failure);
         }
     }
 
     // A recording that never got going goes back to idle, unless a pause already admitted it to processing while its
     // device was opening: that processing owns the way back to idle, and returning here as well could end the next one.
-    private void AbandonRecording(long id)
+    // One whose microphone would not open tells the pill that nothing was typed, with that change.
+    private void AbandonRecording(long id, PillOutcome? outcome = null)
     {
         if (_lifecycle.TryAbandonRecording(id, IdleReleaseDelay(CurrentSettings)) is { } idle)
         {
-            Raise(idle.Presentation);
+            Raise(idle.Presentation, outcome: outcome);
+            LogOutcome(id, outcome);
         }
     }
 
@@ -1029,6 +1027,12 @@ internal sealed class DictationController : IDisposable
             session.StartedTimestamp);
         var currentStage = "Audio capture";
         long insertedTimestamp = 0;
+
+        // What the pill says about this dictation when it returns to idle (PillOutcome.Of decides): how the insertion went,
+        // what AI cleanup returned, and the failure processing reported, each set where the pipeline learns it.
+        InjectionResult? pillInsertion = null;
+        CleanupResult? pillCleanup = null;
+        string? pillFailure = null;
         try
         {
             // This dictation owns the capture from its admission until the capture is stopped and released, so that
@@ -1095,11 +1099,12 @@ internal sealed class DictationController : IDisposable
                 // somebody to go and change devices over it sends them to fix the wrong thing. A
                 // support log showed this exact misdirection: the device took five seconds to open,
                 // the user let go, and Scribe blamed their hardware.
-                RaiseError(heldSeconds < 1.0
+                pillFailure = heldSeconds < 1.0
                     ? "that was too quick, hold the key while you speak"
                     : device is null
                         ? "no audio captured. Check your microphone in Settings"
-                        : $"no audio from '{device}'. Pick a different microphone in Settings");
+                        : $"no audio from '{device}'. Pick a different microphone in Settings";
+                RaiseError(pillFailure);
                 return;
             }
 
@@ -1118,8 +1123,9 @@ internal sealed class DictationController : IDisposable
                 {
                     activity?.SetTag(ScribeTelemetry.TagVadKept, false);
                     activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.VadNoSpeech);
-                    if (RaiseSilentCaptureError(report, "Voice activity detection"))
+                    if (RaiseSilentCaptureError(report, "Voice activity detection") is { } silent)
                     {
+                        pillFailure = silent;
                         return;
                     }
 
@@ -1165,8 +1171,9 @@ internal sealed class DictationController : IDisposable
             if (result.IsEmpty)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.NoSpeech);
-                if (RaiseSilentCaptureError(report, "Speech recognition"))
+                if (RaiseSilentCaptureError(report, "Speech recognition") is { } silent)
                 {
+                    pillFailure = silent;
                     return;
                 }
 
@@ -1189,7 +1196,8 @@ internal sealed class DictationController : IDisposable
                     _audio.LastSignalReport?.Describe() ?? "unavailable");
                 report.Fail("Speech recognition", "No speech was recognized.");
                 RaisePipelineReport(report);
-                RaiseError("nothing was recognised, try again");
+                pillFailure = "nothing was recognised, try again";
+                RaiseError(pillFailure);
                 return;
             }
 
@@ -1258,21 +1266,20 @@ internal sealed class DictationController : IDisposable
 
                 if (cleanup.Outcome == CleanupOutcome.Failed)
                 {
-                    // Cleanup is unavailable or failed: keep the raw transcription, signal the UI FIRST
-                    // so the overlay flashes red immediately, then persist the failure on a background
-                    // thread. The failure log opens its own SQLite connection per call, so a busy
-                    // timeout there must never sit in front of raising the flash or injecting the raw
-                    // text. Cleanup stays enabled; runtime failures can retry on the next dictation.
+                    // Cleanup is unavailable or failed: keep the raw transcription and persist the failure on a
+                    // background thread. The failure log opens its own SQLite connection per call, so a busy
+                    // timeout there must never sit in front of injecting the raw text. The pill says so once the
+                    // text is in ("Typed without AI cleanup" and the reason; PillOutcome.Of). Cleanup stays enabled;
+                    // runtime failures can retry on the next dictation.
                     var reason = cleanup.FailureReason ?? "Intelligence failed.";
 
-                    // The reason is diagnostics-safe and goes to the overlay. The display detail, which
-                    // can name the endpoint's host or quote its own error, goes only to the Settings
-                    // failure log in the local database. The log line keeps to codes, as above.
+                    // The reason is diagnostics-safe and is what the pill shows. The display detail, which can name
+                    // the endpoint's host or quote its own error, goes only to the Settings failure log in the local
+                    // database. The log line keeps to codes, as above.
                     var localDetail = cleanup.DisplayDetail ?? reason;
                     _log.LogWarning(
                         "#{Id} AI cleanup failed ({Provider}, status {Status}); using raw transcription.",
                         session.Id, settings.AiCleanupProvider, _cleanup.Status);
-                    RaiseCleanupFailed(reason);
                     var rawForLog = result.Text;
                     _ = Task.Run(() => RecordCleanupFailure(settings, localDetail, rawForLog));
                 }
@@ -1298,6 +1305,7 @@ internal sealed class DictationController : IDisposable
                 }
             }
             report.Cleanup = cleanup;
+            pillCleanup = cleanup;
             report.CleanedText = recognized;
 
             currentStage = "Dictionary and snippets";
@@ -1356,6 +1364,7 @@ internal sealed class DictationController : IDisposable
                 cancellationToken);
             injectionTimer.Stop();
             var injection = insertion.Injection;
+            pillInsertion = injection;
             report.InjectionDuration = injectionTimer.Elapsed;
             report.Injection = injection;
             report.SpaceAddedAfterText = insertion.SpaceAdded;
@@ -1365,9 +1374,10 @@ internal sealed class DictationController : IDisposable
                 activity?.SetStatus(ActivityStatusCode.Error, injection.Error);
                 _log.LogWarning(
                     "Text injection failed for {App}: {Error}", targetApp ?? "the focused app", injection.Error);
-                RaiseError(injection.Error == InjectionResult.FocusChangedError
+                pillFailure = injection.Error == InjectionResult.FocusChangedError
                     ? "focus changed, so the dictation was not inserted"
-                    : "text could not be inserted completely");
+                    : "text could not be inserted completely";
+                RaiseError(pillFailure);
 
                 // The transcript was stored before typing began, so close the loop: without a hint the
                 // preserved text looks lost, because the overlay flash is the only other signal.
@@ -1411,7 +1421,8 @@ internal sealed class DictationController : IDisposable
             _log.LogInformation("Dictation skipped because no speech model is installed ({Failure}).", FailureShape.Describe(ex));
             report.Fail(currentStage, ex.Message);
             RaisePipelineReport(report);
-            RaiseError("choose a speech model in Settings");
+            pillFailure = "choose a speech model in Settings";
+            RaiseError(pillFailure);
         }
         catch (Exception ex)
         {
@@ -1420,11 +1431,14 @@ internal sealed class DictationController : IDisposable
             _log.LogError("Dictation processing failed: {Failure}", FailureShape.DescribeWithStack(ex));
             report.Fail(currentStage, ex.Message);
             RaisePipelineReport(report);
-            RaiseError("transcription failed");
+            pillFailure = "transcription failed";
+            RaiseError(pillFailure);
         }
         finally
         {
-            ResetToIdle(session.Id, insertedTimestamp);
+            // After the pipeline, never in it: the outcome is decided here from what it set, and shown with the return to
+            // idle, which already accepts the next press.
+            ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillFailure));
         }
     }
 
@@ -1454,13 +1468,13 @@ internal sealed class DictationController : IDisposable
     // A "no speech" outcome from a capture that never rose above digital silence is not a quiet
     // room, it is a mic that recorded nothing: muted in a meeting, hardware mute switch, taskbar
     // mic mute. Historically this fell through the silent VAD/no-speech discard paths and looked
-    // like Scribe simply did nothing. Returns true when the silent-capture error was raised so the
-    // caller can skip its own quiet discard.
-    private bool RaiseSilentCaptureError(DictationPipelineReport report, string stage)
+    // like Scribe simply did nothing. Returns the message it raised, which the pill shows too, so the
+    // caller can skip its own quiet discard; null when the capture was not silent.
+    private string? RaiseSilentCaptureError(DictationPipelineReport report, string stage)
     {
         if (!_audio.LastCaptureWasSilent)
         {
-            return false;
+            return null;
         }
 
         var device = _audio.LastDeviceName;
@@ -1468,10 +1482,11 @@ internal sealed class DictationController : IDisposable
             device ?? "default device");
         report.Fail(stage, "The capture contained only silence. The microphone is likely muted.");
         RaisePipelineReport(report);
-        RaiseError(device is null
+        var message = device is null
             ? "no sound was captured, your microphone may be muted"
-            : $"no sound from '{device}', it may be muted");
-        return true;
+            : $"no sound from '{device}', it may be muted";
+        RaiseError(message);
+        return message;
     }
 
     private void EnqueueHistory(
@@ -1510,7 +1525,7 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void ResetToIdle(long id, long insertedTimestamp)
+    private void ResetToIdle(long id, long insertedTimestamp, PillOutcome? outcome)
     {
         // A pause requested mid-capture takes effect here, once processing finishes. This only publishes idle: the
         // dictation calling it is still finishing, and only its own EndProcessing tells shutdown it is done.
@@ -1520,7 +1535,10 @@ internal sealed class DictationController : IDisposable
         // below still take to repaint the tray.
         var idleTimestamp = Stopwatch.GetTimestamp();
 
-        Raise(idle.Presentation);
+        // The outcome rides this change, under its revision: the shell shows it in place of the hide, and a newer
+        // recording's change is numbered after it, so it always wins.
+        Raise(idle.Presentation, outcome: outcome);
+        LogOutcome(id, outcome);
 
         // Numbers only: how long a successful dictation kept the next one waiting after its text was
         // in place, and how many presses were turned away while it processed.
@@ -1672,23 +1690,11 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void RaiseCleanupFailed(string reason)
-    {
-        try
-        {
-            CleanupFailed?.Invoke(reason);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning("A CleanupFailed handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
-        }
-    }
-
     // Raised on whichever thread made the change, after the lifecycle's gate is released, so it carries the revision the
     // gate gave the change: the shell keeps the newest, whatever order two raises arrive in. The handlers never wait for the
     // UI thread, which matters most on the audio capture thread: at shutdown the UI thread joins it. Once shutdown has begun
     // nobody needs the state any more, so nothing is raised.
-    private void Raise(DictationPresentation shown, bool aiPolishing = false)
+    private void Raise(DictationPresentation shown, bool aiPolishing = false, PillOutcome? outcome = null)
     {
         if (shown.Revision <= 0 || _lifecycle.IsClosing)
         {
@@ -1704,9 +1710,13 @@ internal sealed class DictationController : IDisposable
 
         ResilientEvent.InvokeAll(
             StateChanged,
-            new DictationStateChange(state, shown.Revision, aiPolishing),
+            new DictationStateChange(state, shown.Revision, aiPolishing, outcome),
             ex => TryLog(log => log.LogWarning("A StateChanged handler threw: {Failure}", FailureShape.DescribeWithStack(ex))));
     }
+
+    // The outcome's kind only: its detail is shown on the pill, and it can name a microphone.
+    private void LogOutcome(long id, PillOutcome? outcome) =>
+        TryLog(log => log.LogInformation("#{Id} finished with outcome {Outcome}.", id, (object?)outcome?.Kind ?? "None"));
 
     private static string? ProcessNameForWindow(nint handle)
     {
@@ -1860,7 +1870,12 @@ internal sealed class DictationController : IDisposable
 /// For Processing: the capture runs AI cleanup, from that capture's own settings (the dictation-only hotkey overrides the
 /// global setting), taken when it was admitted rather than read later, when a newer capture may already be live.
 /// </param>
-internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing);
+/// <param name="Outcome">
+/// For the return to idle that ends a dictation: what the pill says about it (<see cref="PillOutcome.Of"/>), to be shown in
+/// place of the hide. It carries this change's revision, so a late outcome never covers a newer recording. Null for every
+/// other change, and for a dictation discarded quietly.
+/// </param>
+internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing, PillOutcome? Outcome = null);
 
 /// <summary>A recoverable capture warning.</summary>
 /// <param name="Message">The notice for the tray.</param>

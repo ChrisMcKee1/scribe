@@ -1,4 +1,5 @@
 ﻿using Scribe.Core.Models;
+using Scribe.Core.Overlay;
 
 namespace Scribe.App.Overlay;
 
@@ -19,19 +20,25 @@ public interface IOverlayController
     /// </summary>
     void Warmup();
 
-    /// <summary>Listening: pulsing record dot + live input-level meter.</summary>
+    /// <summary>Listening: the listening edge and the live level bars.</summary>
     void ShowRecording();
 
-    /// <summary>Brief warning text while the recording indicator and live meter remain active.</summary>
+    /// <summary>Brief warning text while the recording indicator and live level bars remain active.</summary>
     void ShowRecordingWarning(string? reason);
 
-    /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
+    /// <summary>Processing: three dots, and words that say whether it is transcribing or AI cleanup.</summary>
     void ShowProcessing(bool aiPolishing);
 
-    /// <summary>Brief red "intelligence failed" flash, then auto-hides.</summary>
-    void ShowFailed(string? reason);
+    /// <summary>
+    /// A finished dictation's outcome (<see cref="PillOutcome"/>): a check and "Typed" briefly, or a notice with its
+    /// reason or next step, held on screen for its hold and then hidden by the overlay itself. Shown with the dictation's
+    /// return to idle, in place of the hide, so it rides that change's presentation revision and a late outcome never
+    /// covers a newer recording; a new recording replaces it at once. The helper is kept while it is on screen and is
+    /// never relaunched for it later (see <see cref="OverlayHelperLifetime"/>).
+    /// </summary>
+    void ShowOutcome(PillOutcome outcome);
 
-    /// <summary>Hides the pill (suppressed while a failure flash is still holding).</summary>
+    /// <summary>Hides the pill (ignored while an outcome is still holding on screen).</summary>
     void HideOverlay();
 
     /// <summary>Anchors the pill at the given screen position, now and across overlay relaunches.</summary>

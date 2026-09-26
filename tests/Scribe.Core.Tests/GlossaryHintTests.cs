@@ -260,7 +260,7 @@ public sealed class GlossaryHintTests
         var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
         var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
 
-        foreach (var handler in new[] { "AiCleanupCheck_Toggled", "AiProviderCombo_SelectionChanged", "AiPromptStyleCombo_SelectionChanged", "PostCheck_Toggled" })
+        foreach (var handler in new[] { "AiCleanupCheck_Toggled", "AiProviderRadio_Checked", "AiPromptStyleCombo_SelectionChanged", "PostCheck_Toggled" })
         {
             var start = code.IndexOf($"private void {handler}(", StringComparison.Ordinal);
             Assert.True(start >= 0, $"{handler} is missing.");

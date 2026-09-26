@@ -50,7 +50,7 @@ public static class ProfilePresets
     /// editor is exactly where markdown and code fences are wanted.
     /// </summary>
     public static Preset IdeIntegratedTerminals => new(
-        "For dictating into an IDE's integrated terminal. Warning: a process name cannot tell the terminal from the editor, so this removes line breaks in your source files too.",
+        "For dictating into an IDE's integrated terminal. Warning: this also removes line breaks while you edit source files.",
         new AppProfile
         {
             Name = "IDE integrated terminals",
@@ -69,7 +69,7 @@ public static class ProfilePresets
     /// recognition never contains, and each one submitted a partial message.
     /// </summary>
     public static Preset AiChatAndAgents => new(
-        "Claude, ChatGPT, GitHub Copilot, Microsoft 365 Copilot and Scout. Stops a multi-paragraph dictation being sent as several separate messages.",
+        "Claude, ChatGPT, GitHub Copilot, Microsoft 365 Copilot and Scout. Keeps a multi-paragraph dictation in one message.",
         new AppProfile
         {
             Name = "AI chat and agents",
@@ -89,7 +89,7 @@ public static class ProfilePresets
     /// rather than something bundled into a broader preset.
     /// </summary>
     public static Preset Teams => new(
-        "Only if Teams still sends your dictation early. Teams normally accepts Shift+Enter as a line break, so try it without this first.",
+        "Only if Teams still sends your dictation early. Teams usually accepts Shift+Enter as a line break, so try it without this first.",
         new AppProfile
         {
             Name = "Microsoft Teams",
@@ -102,7 +102,7 @@ public static class ProfilePresets
     /// user who has set the global mode to always flatten still gets real paragraphs in Word.
     /// </summary>
     public static Preset Documents => new(
-        "Word, Excel, PowerPoint, OneNote and Notepad. Keeps paragraph breaks even when the global setting flattens them.",
+        "Word, Excel, PowerPoint, OneNote and Notepad. Keeps paragraph breaks even when your Advanced setting uses one line.",
         new AppProfile
         {
             Name = "Documents",

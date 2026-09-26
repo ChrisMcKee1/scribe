@@ -41,6 +41,18 @@ public static class CleanupDisclosure
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
 
+    public static string SummaryFor(CleanupProvider provider) => provider switch
+    {
+        CleanupProvider.FoundryLocal => "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.",
+        CleanupProvider.AzureFoundry => RemoteSummary("your Microsoft Foundry deployment"),
+        CleanupProvider.OpenAiCompatible => RemoteSummary("the address you enter"),
+        CleanupProvider.GitHubCopilot => RemoteSummary("GitHub"),
+        _ => RemoteSummary("the AI service"),
+    };
+
+    private static string RemoteSummary(string destination) =>
+        $"Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to {destination}. Audio never leaves this PC.";
+
     /// <summary>The title of the confirmation shown before AI dictionary suggestions send dictation text.</summary>
     public const string SuggestionConsentTitle = "Send recent dictations to your AI provider?";
 

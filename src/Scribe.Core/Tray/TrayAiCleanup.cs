@@ -17,6 +17,11 @@ public readonly record struct TrayAiCleanupItem(TrayAiCleanupKind Kind, string L
 
 public static class TrayAiCleanup
 {
+    /// <remarks>
+    /// For Foundry Local, the caller supplies setupComplete from the model cache without initializing the SDK. An
+    /// uncached selected model beside another cached model is a known 0.4.5 limit: the tray may show the toggle, and the
+    /// cleanup service still performs the real load or setup when the setting is used.
+    /// </remarks>
     public static TrayAiCleanupItem Describe(AppSettings settings, bool setupComplete, CleanupStatus status, bool settingsRecovered)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -26,7 +31,7 @@ public static class TrayAiCleanup
         }
 
         var isSetUp = setupComplete && ProviderConfigured(settings);
-        if (!isSetUp)
+        if (!settings.EnableAiCleanup && !isSetUp)
         {
             return new TrayAiCleanupItem(TrayAiCleanupKind.SetUp, "Set up AI cleanup...", false, true);
         }

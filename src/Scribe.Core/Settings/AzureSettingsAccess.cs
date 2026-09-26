@@ -17,7 +17,10 @@ public static class AzureSettingsAccess
         bool ShowServicePrincipalFields,
         bool ShowCliTenant,
         bool ShowManualDetails,
-        bool ManualDetailsExpanded);
+        bool ManualDetailsExpanded,
+        bool ShowEndpointPanel,
+        bool ShowApiKeyPanel,
+        bool ShowManualToggleButton);
 
     public enum ValidationIssue
     {
@@ -77,13 +80,18 @@ public static class AzureSettingsAccess
                 ShowServicePrincipalFields: true,
                 ShowCliTenant: false,
                 ShowManualDetails: true,
-                ManualDetailsExpanded: true);
+                ManualDetailsExpanded: true,
+                ShowEndpointPanel: true,
+                ShowApiKeyPanel: false,
+                ShowManualToggleButton: false);
         }
 
         // The tenant is what an az login authenticates against: signing in passes it on whenever no
         // subscription is selected. It therefore shows whatever the sign-in state, because someone who
         // is not signed in yet, or whose saved tenant is the wrong one, has to be able to set it before
         // signing in. An API key never asks Entra for a token, so there is nothing for it to pin.
+        var manualDetails = apiKeySelected || signedIn;
+        var manualExpanded = apiKeySelected || manualConfigurationRequested || hasApiKey;
         return new State(
             ShowCliSetup: !cliInstalled,
             ShowDiscovery: signedIn,
@@ -93,8 +101,11 @@ public static class AzureSettingsAccess
             HasUsableAuthentication: signedIn || hasApiKey,
             ShowServicePrincipalFields: false,
             ShowCliTenant: !apiKeySelected,
-            ShowManualDetails: apiKeySelected || signedIn,
-            ManualDetailsExpanded: apiKeySelected || manualConfigurationRequested || hasApiKey);
+            ShowManualDetails: manualDetails,
+            ManualDetailsExpanded: manualExpanded,
+            ShowEndpointPanel: apiKeySelected || (signedIn && manualExpanded),
+            ShowApiKeyPanel: apiKeySelected,
+            ShowManualToggleButton: !apiKeySelected && signedIn);
     }
 
     public static ValidationIssue ValidateCleanup(

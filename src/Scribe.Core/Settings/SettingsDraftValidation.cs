@@ -395,6 +395,12 @@ public static class SettingsDraftValidator
         row.WholeWord == row.LoadedWholeWord &&
         row.Enabled == row.LoadedEnabled;
 
+    /// <summary>
+    /// A stored snippet row the user hasn't changed in any stored field (compared as validation compares them, trimmed).
+    /// Such a row is only warned about when incomplete, so a Save must keep it exactly as stored.
+    /// </summary>
+    public static bool IsUnchanged(SnippetDraftRow row) => Unchanged(row);
+
     private static bool Unchanged(SnippetDraftRow row) =>
         row.Origin == DraftRowOrigin.Saved &&
         IsSame(Trim(row.Phrase), Trim(row.LoadedPhrase)) &&

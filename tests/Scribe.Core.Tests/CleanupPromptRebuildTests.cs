@@ -327,42 +327,52 @@ public sealed class CleanupPromptRebuildTests
         await using var harness = new CleanupHarness();
         var fake = new FakeProvider();
         var svc = harness.Service;
-        svc.ProviderFactoryForTesting = fake.Connect;
-        svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Contoso." });
-        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.DrainOnManualClock();
 
-        // A dictation is in flight on a call that does not stop when asked, so disposal has to wait.
+        // A dictation is in flight on a call that does not stop when asked, so disposal has to wait; the call is let go in
+        // the finally too, since nothing times the drain out.
         var callStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        fake.Client.BeforeAnswer = async (call, _) =>
+        try
         {
-            if (call == 2)
+            svc.ProviderFactoryForTesting = fake.Connect;
+            svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Contoso." });
+            await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+            fake.Client.BeforeAnswer = async (call, _) =>
             {
-                callStarted.TrySetResult();
-                await release.Task;
-            }
-        };
-        var dictation = svc.CleanAsync(Dictated);
-        await callStarted.Task.WaitAsync(Bound);
-        var builtBefore = fake.Built.Count;
-        var statuses = new CleanupStatusRecorder(svc);
+                if (call == 2)
+                {
+                    callStarted.TrySetResult();
+                    await release.Task;
+                }
+            };
+            var dictation = svc.CleanAsync(Dictated);
+            await callStarted.Task.WaitAsync(Bound);
+            var builtBefore = fake.Built.Count;
+            var statuses = new CleanupStatusRecorder(svc);
 
-        var dispose = svc.DisposeAsync().AsTask();
-        Assert.False(dispose.IsCompleted, "Disposal waits for the dictation in flight.");
-        svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Fabrikam." });
+            var dispose = svc.DisposeAsync().AsTask();
+            Assert.False(dispose.IsCompleted, "Disposal waits for the dictation in flight.");
+            svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Fabrikam." });
 
-        Assert.Equal(builtBefore, fake.Built.Count);
-        release.SetResult();
-        await dictation.WaitAsync(Bound);
-        await dispose.WaitAsync(Bound);
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.Empty(statuses.Snapshot());
-        Assert.Equal(builtBefore, fake.Built.Count);
+            Assert.Equal(builtBefore, fake.Built.Count);
+            release.SetResult();
+            await dictation.WaitAsync(Bound);
+            await dispose.WaitAsync(Bound);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.Empty(statuses.Snapshot());
+            Assert.Equal(builtBefore, fake.Built.Count);
 
-        // And once disposed, a prompt change is simply refused.
-        svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Northwind." });
-        Assert.Equal(builtBefore, fake.Built.Count);
-        Assert.Equal(1, fake.Handshakes);
+            // And once disposed, a prompt change is simply refused.
+            svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Northwind." });
+            Assert.Equal(builtBefore, fake.Built.Count);
+            Assert.Equal(1, fake.Handshakes);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
     [Fact]

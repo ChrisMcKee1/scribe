@@ -21,6 +21,7 @@ public sealed class SettingsChangeTrackerTests
         Assert.Equal(
             "You have unsaved changes. Try dictation uses the settings Scribe is running with.",
             SettingsChangeTracker.TryDictationUnsavedNotice);
+        Assert.Equal("Restart Scribe before Try dictation uses these changes.", SettingsChangeTracker.TryDictationRestartNotice);
         Assert.Equal("Save now", SettingsChangeTracker.TryDictationSaveNow);
     }
 

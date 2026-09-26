@@ -89,6 +89,165 @@ public static class RecentApps
     }
 }
 
+
+public sealed record SnippetListItemText(string Primary, string? Secondary);
+
+public static class SnippetListText
+{
+    public static SnippetListItemText Describe(string? phrase, bool enabled)
+    {
+        var primary = string.IsNullOrWhiteSpace(phrase) ? "New snippet" : phrase.Trim();
+        return new SnippetListItemText(primary, enabled ? null : "Off");
+    }
+}
+
+public sealed record ProfileListItemText(string Primary, string Secondary);
+
+public static class ProfileListText
+{
+    public const string EmptyApps = "No apps";
+
+    public static ProfileListItemText Describe(string? name, string? apps)
+    {
+        var primary = string.IsNullOrWhiteSpace(name) ? "New profile" : name.Trim();
+        var secondary = FriendlyApps(apps);
+        return new ProfileListItemText(primary, secondary.Length == 0 ? EmptyApps : secondary);
+    }
+
+    public static string FriendlyApps(string? apps) =>
+        string.Join(", ", ProfileAppChips.FromProgramNames(apps).Select(chip => chip.DisplayName));
+
+    private static IEnumerable<string> SplitApps(string? apps) =>
+        (apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+}
+
+public sealed record ProfileAppChip(string GroupKey, string DisplayName, IReadOnlyList<string> ProgramNames, string RemoveName)
+
+{
+
+    public static ProfileAppChip FromProgramNames(IReadOnlyList<string> programNames)
+
+    {
+
+        ArgumentNullException.ThrowIfNull(programNames);
+
+        if (programNames.Count == 0)
+
+        {
+
+            throw new ArgumentException("At least one program name is required.", nameof(programNames));
+
+        }
+
+
+
+        var first = programNames[0];
+
+        var display = AppDisplayName.For(first);
+
+        return new ProfileAppChip(AppDisplayName.GroupKeyFor(first), display, programNames, $"Remove {display}");
+
+    }
+
+}
+
+
+
+public static class ProfileAppChips
+
+{
+
+    public static IReadOnlyList<ProfileAppChip> FromProgramNames(string? apps)
+
+    {
+
+        var normalized = ProgramNames.Normalize((apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        return normalized
+
+            .GroupBy(AppDisplayName.GroupKeyFor, StringComparer.OrdinalIgnoreCase)
+
+            .Select(group => ProfileAppChip.FromProgramNames(group.ToList()))
+
+            .ToList();
+
+    }
+
+
+
+    public static string RemoveGroup(string? apps, string groupKey)
+
+    {
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupKey);
+
+        var filtered = ProgramNames.Normalize((apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+
+            .Where(app => !string.Equals(AppDisplayName.GroupKeyFor(app), groupKey, StringComparison.OrdinalIgnoreCase));
+
+        return string.Join(", ", filtered);
+
+    }
+
+
+
+    public static string ToProgramNames(IEnumerable<ProfileAppChip> chips) =>
+
+        string.Join(", ", chips.SelectMany(chip => chip.ProgramNames));
+
+}
+
+
+
+public sealed record AppPickerCandidate(string ProcessName, string DisplayName, bool IsRunning, int RecentDictations = 0);
+
+public sealed record AppPickerOption(string ProcessName, string DisplayName, bool IsRunning, int RecentDictations)
+{
+    public string Label => $"{DisplayName} ({ProcessName})";
+}
+
+public static class AppPickerOptions
+{
+    public static IReadOnlyList<AppPickerOption> Build(
+        IEnumerable<AppPickerCandidate> runningApps,
+        IEnumerable<RecentApp> recentApps,
+        IEnumerable<string?> selectedApps)
+    {
+        ArgumentNullException.ThrowIfNull(runningApps);
+        ArgumentNullException.ThrowIfNull(recentApps);
+        ArgumentNullException.ThrowIfNull(selectedApps);
+
+        var selected = new HashSet<string>(ProgramNames.Normalize(selectedApps), StringComparer.OrdinalIgnoreCase);
+        var options = new Dictionary<string, AppPickerOption>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var app in runningApps
+            .Select(app => new AppPickerCandidate(
+                ProgramNames.Normalize([app.ProcessName]).FirstOrDefault() ?? string.Empty,
+                string.IsNullOrWhiteSpace(app.DisplayName) ? AppDisplayName.For(app.ProcessName) : app.DisplayName.Trim(),
+                IsRunning: true,
+                app.RecentDictations))
+            .Where(app => app.ProcessName.Length > 0 && !selected.Contains(app.ProcessName))
+            .OrderBy(app => app.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(app => app.ProcessName, StringComparer.OrdinalIgnoreCase))
+        {
+            options.TryAdd(app.ProcessName, new AppPickerOption(app.ProcessName, app.DisplayName, IsRunning: true, app.RecentDictations));
+        }
+
+        foreach (var app in recentApps.Where(app => !selected.Contains(app.ProcessName)))
+        {
+            if (options.TryGetValue(app.ProcessName, out var existing))
+            {
+                options[app.ProcessName] = existing with { RecentDictations = app.DictationCount };
+                continue;
+            }
+
+            options.Add(app.ProcessName, new AppPickerOption(app.ProcessName, app.DisplayName, IsRunning: false, app.DictationCount));
+        }
+
+        return options.Values.ToList();
+    }
+}
+
 public enum UsagePeriod
 {
     Last7Days,
