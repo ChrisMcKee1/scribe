@@ -21,11 +21,12 @@ namespace Scribe.Core.Vocabulary;
 /// (<see cref="ILibraryVocabularySource.Changed"/>); and a reload of the post-processor
 /// (<see cref="ITextPostProcessor.Reloaded"/>). One builder runs at a time, off the caller's thread, the first generation
 /// included (<see cref="StartAsync"/>). Requests that arrive while a build runs coalesce: one more build follows, reading
-/// its inputs after the newest request, and every request is answered by the first build that began after it, with
-/// <see cref="VocabularyRefreshOutcome.Applied"/> once that build's generation is published, so a caller that awaits the
-/// answer before saying a change is in effect says it only when the next dictation is admitted with it. A build that
-/// fails leaves the previous generation in use and answers <see cref="VocabularyRefreshOutcome.NotApplied"/>, so a
-/// generation is never half-built.
+/// its inputs after the newest request, and every request a caller awaits is answered by the first build that began after
+/// it (or by its deadline, below), with <see cref="VocabularyRefreshOutcome.Applied"/> once that build's generation is
+/// published, so a caller that awaits the answer before saying a change is in effect says it only when the next dictation
+/// is admitted with it. A build that fails leaves the previous generation in use and answers
+/// <see cref="VocabularyRefreshOutcome.NotApplied"/>, so a generation is never half-built. The two events ask for a build
+/// and await nothing.
 /// </para>
 /// <para>
 /// A build reads the library snapshot and then the personal dictionary, and compiles exactly those two. A commit of both
@@ -36,19 +37,51 @@ namespace Scribe.Core.Vocabulary;
 /// snapshot, so AI cleanup stays bound to the content that snapshot permitted (the library's new content refuses it).
 /// </para>
 /// <para>
+/// Every wait is bounded, and shutdown ends it. Startup waits at most <see cref="StartupDeadline"/> for the first
+/// generation (<see cref="StartAsync"/> then faults, and the app ends startup with its failure notice), and every later
+/// request is answered by <see cref="RefreshDeadline"/> at the latest (<see cref="VocabularyRefreshOutcome.TimedOut"/>), so
+/// no caller is held by a library or dictionary read that does not return. That read is synchronous I/O on the build's
+/// thread and cannot be abandoned, so nothing waits for it: a request its deadline answered is retired, and the build is
+/// left to finish. If it returns it publishes in order (one builder at a time, and tickets), so a later dictation gets
+/// what it read, and it answers only the requests still waiting. Disposal answers every waiting request at once
+/// (<see cref="VocabularyRefreshOutcome.Stopped"/>) without waiting for a build, and a build that returns after it
+/// publishes nothing.
+/// </para>
+/// <para>
 /// Each build takes a ticket, the number of requests made when it began, before it reads anything. Logs carry counts and
 /// generation numbers only, never a term, a library or its name.
 /// </para>
 /// </remarks>
 public sealed class VocabularyPublisher : IDisposable
 {
+    /// <summary>
+    /// How long startup waits for the first generation before giving up on it: thirty seconds, after which
+    /// <see cref="StartAsync"/> faults with a <see cref="TimeoutException"/>. A healthy first build takes well under a second;
+    /// the slowest it gets is the library source's cold first read of a large vocabulary on a slow or busy disk (after the
+    /// integration a catalog load, with any recovery it runs), then the dictionary read, which waits at most SQLite's
+    /// ten-second busy timeout for a lock, then the compile. Thirty seconds covers all three with room to spare, and still
+    /// ends a read that never returns, which would otherwise hold the single-instance mutex with no tray, no hotkey and no
+    /// way to quit.
+    /// </summary>
+    public static TimeSpan StartupDeadline { get; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long a later request waits before it is answered as not in use yet
+    /// (<see cref="VocabularyRefreshOutcome.TimedOut"/>): fifteen seconds. The library source is warm by then, so a healthy
+    /// build is the dictionary read, which waits at most SQLite's ten-second busy timeout for a lock, and the compile.
+    /// Fifteen seconds covers both and still releases a Settings save, the Usage page's Add, quick add and learning from
+    /// history from a build that never returns.
+    /// </summary>
+    public static TimeSpan RefreshDeadline { get; } = TimeSpan.FromSeconds(15);
+
     private readonly ILibraryVocabularySource _libraries;
     private readonly IDictionaryRepository _dictionary;
     private readonly ITextPostProcessor _postProcessor;
     private readonly ILogger<VocabularyPublisher> _log;
     private readonly Action<Action> _schedule;
+    private readonly TimeProvider _time;
     private readonly object _sync = new();
-    private readonly List<(long Ticket, TaskCompletionSource<VocabularyRefresh> Done)> _waiting = [];
+    private readonly List<Waiter> _waiting = [];
 
     private VocabularyGeneration _current = VocabularyGeneration.Empty;
 
@@ -72,12 +105,14 @@ public sealed class VocabularyPublisher : IDisposable
     }
 
     /// <param name="schedule">Runs a build off the caller's thread; the thread pool in production, a test's queue in tests.</param>
+    /// <param name="time">The clock behind the deadlines; the system clock by default, a test's manual clock in tests.</param>
     internal VocabularyPublisher(
         ILibraryVocabularySource libraries,
         IDictionaryRepository dictionary,
         ITextPostProcessor postProcessor,
         ILogger<VocabularyPublisher> log,
-        Action<Action> schedule)
+        Action<Action> schedule,
+        TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(libraries);
         ArgumentNullException.ThrowIfNull(dictionary);
@@ -89,6 +124,7 @@ public sealed class VocabularyPublisher : IDisposable
         _postProcessor = postProcessor;
         _log = log;
         _schedule = schedule;
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -108,8 +144,11 @@ public sealed class VocabularyPublisher : IDisposable
     /// Subscribes to the library vocabulary and to dictionary reloads, and asks for the first generation, built off the
     /// caller's thread like every other: the library source's first read can load a cold catalog, which must never run on
     /// the dispatcher. The app awaits the answer before the hotkey is installed, so the first dictation after startup never
-    /// runs without its vocabulary, and nothing waits for it synchronously. Idempotent in its subscriptions; each call asks
-    /// for a build. Throws <see cref="ObjectDisposedException"/> once disposed.
+    /// runs without its vocabulary, and nothing waits for it synchronously. The task completes with the first build's
+    /// answer (<see cref="VocabularyRefreshOutcome.NotApplied"/> when it could not read the dictionary, which is no reason
+    /// to stop startup; <see cref="VocabularyRefreshOutcome.Stopped"/> when shutdown began first), and faults with a
+    /// <see cref="TimeoutException"/> when that build has not returned by <see cref="StartupDeadline"/>. Idempotent in its
+    /// subscriptions; each call asks for a build. Throws <see cref="ObjectDisposedException"/> once disposed.
     /// </summary>
     public Task<VocabularyRefresh> StartAsync()
     {
@@ -124,21 +163,35 @@ public sealed class VocabularyPublisher : IDisposable
             }
         }
 
-        return RefreshAsync();
+        return FirstGenerationAsync(Request(StartupDeadline, first: true));
     }
 
     /// <summary>
     /// Asks for a new generation, built off the caller's thread from inputs read after this call. The task completes once a
     /// build answers the request: <see cref="VocabularyRefreshOutcome.Applied"/> with the generation it published, which is
     /// what a dictation admitted from then on is given; <see cref="VocabularyRefreshOutcome.NotApplied"/> with the
-    /// generation kept, when that build could not read the dictionary; or <see cref="VocabularyRefreshOutcome.Stopped"/>
-    /// once the publisher is disposed. It never faults. Whoever reports a stored change as in effect awaits it first, and
-    /// never waits on it synchronously.
+    /// generation kept, when that build could not read the dictionary; <see cref="VocabularyRefreshOutcome.TimedOut"/> with
+    /// the generation kept, when no build has answered it by <see cref="RefreshDeadline"/>; or
+    /// <see cref="VocabularyRefreshOutcome.Stopped"/> once the publisher is disposed. It never faults. Whoever reports a
+    /// stored change as in effect awaits it first, and never waits on it synchronously.
     /// </summary>
-    public Task<VocabularyRefresh> RefreshAsync()
+    public Task<VocabularyRefresh> RefreshAsync() => Request(RefreshDeadline, first: false);
+
+    // The first generation's answer, or a TimeoutException once its deadline answered it: startup then ends with its failure
+    // notice rather than hold the single-instance mutex with nothing on screen and no way to quit.
+    private static async Task<VocabularyRefresh> FirstGenerationAsync(Task<VocabularyRefresh> answer)
+    {
+        var first = await answer.ConfigureAwait(false);
+        return first.Outcome == VocabularyRefreshOutcome.TimedOut
+            ? throw new TimeoutException(
+                $"The first vocabulary generation was not built within {StartupDeadline.TotalSeconds:0} seconds.")
+            : first;
+    }
+
+    private Task<VocabularyRefresh> Request(TimeSpan deadline, bool first)
     {
         var done = new TaskCompletionSource<VocabularyRefresh>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var startBuilding = false;
+        bool startBuilding;
         lock (_sync)
         {
             if (_disposed)
@@ -147,34 +200,112 @@ public sealed class VocabularyPublisher : IDisposable
                 return done.Task;
             }
 
-            _waiting.Add((++_requested, done));
-            if (!_building)
-            {
-                _building = true;
-                startBuilding = true;
-            }
+            var waiter = new Waiter(++_requested, first, done);
+            _waiting.Add(waiter);
+
+            // Armed under the lock, so a build that answers the request first finds the timer to dispose, and a deadline that
+            // fires first finds the request still waiting.
+            waiter.Deadline = _time.CreateTimer(_ => OnDeadline(waiter, deadline), null, deadline, Timeout.InfiniteTimeSpan);
+            startBuilding = ClaimBuilderLocked();
         }
 
         if (startBuilding)
         {
-            try
-            {
-                _schedule(RunBuilds);
-            }
-            catch (Exception ex)
-            {
-                // A scheduler that refuses the work must not leave the requests waiting for a build that never runs.
-                TryLog(log => log.LogWarning(
-                    "A vocabulary generation build could not be scheduled ({Failure}).", FailureShape.Describe(ex)));
-                lock (_sync)
-                {
-                    _building = false;
-                    CompleteAllLocked(VocabularyRefreshOutcome.NotApplied);
-                }
-            }
+            StartBuilder();
         }
 
         return done.Task;
+    }
+
+    // A request nobody awaits (a new library vocabulary, a post-processor reload): one more build, with no answer to give
+    // and so no deadline to keep.
+    private void RequestBuild()
+    {
+        bool startBuilding;
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            ++_requested;
+            startBuilding = ClaimBuilderLocked();
+        }
+
+        if (startBuilding)
+        {
+            StartBuilder();
+        }
+    }
+
+    // Must be called under _sync. True when the caller is to start the one builder.
+    private bool ClaimBuilderLocked()
+    {
+        if (_building)
+        {
+            return false;
+        }
+
+        _building = true;
+        return true;
+    }
+
+    private void StartBuilder()
+    {
+        try
+        {
+            _schedule(RunBuilds);
+        }
+        catch (Exception ex)
+        {
+            // A scheduler that refuses the work must not leave the requests waiting for a build that never runs.
+            TryLog(log => log.LogWarning(
+                "A vocabulary generation build could not be scheduled ({Failure}).", FailureShape.Describe(ex)));
+            lock (_sync)
+            {
+                _building = false;
+                CompleteAllLocked(VocabularyRefreshOutcome.NotApplied);
+            }
+        }
+    }
+
+    // A request no build answered by its deadline is answered as not in use yet and retired, so its caller goes on
+    // without the read that has not returned. The build is left to finish: if it returns it publishes in order, and
+    // answers only the requests still waiting then.
+    private void OnDeadline(Waiter waiter, TimeSpan deadline)
+    {
+        bool retired;
+        long kept;
+        lock (_sync)
+        {
+            retired = _waiting.Remove(waiter);
+            if (retired)
+            {
+                waiter.Answer(new VocabularyRefresh(VocabularyRefreshOutcome.TimedOut, Current));
+            }
+
+            kept = Current.Number;
+        }
+
+        if (!retired)
+        {
+            return;
+        }
+
+        if (waiter.First)
+        {
+            TryLog(log => log.LogWarning(
+                "The first vocabulary generation was not built within {DeadlineMs} ms; startup gives up on it.",
+                (long)deadline.TotalMilliseconds));
+            return;
+        }
+
+        TryLog(log => log.LogWarning(
+            "A vocabulary generation was not built within {DeadlineMs} ms; its request is answered as not in use yet, " +
+            "dictation keeps generation {Number}, and the build goes on.",
+            (long)deadline.TotalMilliseconds,
+            kept));
     }
 
     public void Dispose()
@@ -199,12 +330,12 @@ public sealed class VocabularyPublisher : IDisposable
 
     // A library save or recovery and a post-processor reload each ask for a new generation; the handlers only schedule,
     // so the thread raising the event is never held up by a build.
-    private void OnLibrariesChanged(long libraryGeneration) => _ = RefreshAsync();
+    private void OnLibrariesChanged(long libraryGeneration) => RequestBuild();
 
-    private void OnDictionaryReloaded(long reload) => _ = RefreshAsync();
+    private void OnDictionaryReloaded(long reload) => RequestBuild();
 
     // One builder at a time: it keeps building while requests arrive faster than it builds, and each build answers every
-    // request made before it began.
+    // request still waiting that was made before it began (a deadline may have answered some already).
     private void RunBuilds()
     {
         try
@@ -329,17 +460,18 @@ public sealed class VocabularyPublisher : IDisposable
     }
 
     // Must be called under _sync. A request is answered by the first build that took its ticket after it, and applied when
-    // the generation in use was built for it or a later request, so from inputs read after it was made.
+    // the generation in use was built for it or a later request, so from inputs read after it was made. A request its
+    // deadline already answered is no longer here, so a build that finishes late answers only the requests still waiting.
     private void CompleteAnsweredLocked()
     {
         var current = Current;
         for (var i = _waiting.Count - 1; i >= 0; i--)
         {
-            var (ticket, done) = _waiting[i];
-            if (ticket <= _answered)
+            var waiter = _waiting[i];
+            if (waiter.Ticket <= _answered)
             {
-                done.TrySetResult(new VocabularyRefresh(
-                    _appliedTicket >= ticket ? VocabularyRefreshOutcome.Applied : VocabularyRefreshOutcome.NotApplied,
+                waiter.Answer(new VocabularyRefresh(
+                    _appliedTicket >= waiter.Ticket ? VocabularyRefreshOutcome.Applied : VocabularyRefreshOutcome.NotApplied,
                     current));
                 _waiting.RemoveAt(i);
             }
@@ -350,12 +482,32 @@ public sealed class VocabularyPublisher : IDisposable
     private void CompleteAllLocked(VocabularyRefreshOutcome outcome)
     {
         var answer = new VocabularyRefresh(outcome, Current);
-        foreach (var (_, done) in _waiting)
+        foreach (var waiter in _waiting)
         {
-            done.TrySetResult(answer);
+            waiter.Answer(answer);
         }
 
         _waiting.Clear();
+    }
+
+    // One request: its ticket, whether it is the first generation's, its answer, and the timer that answers it at its
+    // deadline if no build has by then.
+    private sealed class Waiter(long ticket, bool first, TaskCompletionSource<VocabularyRefresh> done)
+    {
+        public long Ticket { get; } = ticket;
+
+        public bool First { get; } = first;
+
+        // Set under _sync right after the waiter is listed, before anything can answer it.
+        public ITimer? Deadline { get; set; }
+
+        // Must be called under _sync, once, as the waiter leaves the list. Stops the deadline (a tick already running then
+        // finds the waiter gone), and completes the answer, whose continuations never run under the lock.
+        public void Answer(VocabularyRefresh answer)
+        {
+            Deadline?.Dispose();
+            done.TrySetResult(answer);
+        }
     }
 
     // Logging must never be why a generation is lost or a request left waiting.

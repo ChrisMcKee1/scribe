@@ -570,9 +570,10 @@ public sealed class VocabularyPublisherTests
     {
         var notice = VocabularyNotice.SavedButNotApplied("Settings saved");
 
+        // True whichever way the build fell short: it could not read the dictionary, or it had not returned by its
+        // deadline, when it may still load the change (round 3, A5), so it names no event the change waits for.
         Assert.Equal(
-            "Settings saved, but dictation couldn't load the change yet and keeps its previous vocabulary until the next " +
-            "change or a restart.",
+            "Settings saved, but dictation isn't using the change yet and keeps its previous vocabulary until it can load it.",
             notice);
         Assert.StartsWith("Added \"Quillmoor\" to your dictionary, but", VocabularyNotice.SavedButNotApplied("Added \"Quillmoor\" to your dictionary"), StringComparison.Ordinal);
         Assert.DoesNotContain("will now", notice, StringComparison.OrdinalIgnoreCase);

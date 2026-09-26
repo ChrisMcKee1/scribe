@@ -199,8 +199,10 @@ internal sealed class DictationController : IDisposable
     /// Loads the persisted settings and builds the first vocabulary generation off the dispatcher (the library source's
     /// first read can load a cold catalog), completing once it is published. The app awaits this before <see cref="Start"/>
     /// installs the hotkey, so the first dictation after startup never runs without its vocabulary, and nothing waits on
-    /// the build synchronously. A first build that cannot read the dictionary leaves dictation without vocabulary until
-    /// the next change builds one, as before; the publisher logs it.
+    /// the build synchronously. Throws <see cref="TimeoutException"/> when the first generation is not built within
+    /// <see cref="VocabularyPublisher.StartupDeadline"/>, which ends startup with its failure notice. A first build that
+    /// cannot read the dictionary throws nothing and leaves dictation without vocabulary until the next change builds one,
+    /// as before; the publisher logs it.
     /// </summary>
     public async Task PrepareAsync()
     {

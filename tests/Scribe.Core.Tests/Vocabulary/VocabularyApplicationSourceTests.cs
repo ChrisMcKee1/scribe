@@ -111,14 +111,56 @@ public sealed class VocabularyApplicationSourceTests
         Assert.Single(Regex.Matches(controller, Regex.Escape("_hotkeys.Start();")));
 
         // The publisher builds the first generation the way it builds every other, through its scheduler, which is the
-        // thread pool in production, never on the caller's thread.
+        // thread pool in production, never on the caller's thread, and bounds the wait for it by the startup deadline.
         Assert.Contains("static work => _ = Task.Run(work)", publisher, StringComparison.Ordinal);
         var startAsync = Body(publisher, "public Task<VocabularyRefresh> StartAsync()");
-        Assert.Contains("return RefreshAsync();", startAsync, StringComparison.Ordinal);
+        Assert.Contains("return FirstGenerationAsync(Request(StartupDeadline, first: true));", startAsync, StringComparison.Ordinal);
         Assert.DoesNotContain("BuildAndPublish(", startAsync, StringComparison.Ordinal);
         Assert.DoesNotContain("public VocabularyGeneration Start()", publisher, StringComparison.Ordinal);
 
         AssertNothingWaitsSynchronously(controller, app, Read("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+    }
+
+    [Fact]
+    public void A_start_that_gives_up_on_the_first_generation_ends_through_AbandonStartup_with_the_failure_notice()
+    {
+        // Round 3, A5: the first generation's wait is bounded (VocabularyPublisher.StartupDeadline), and what the publisher
+        // throws then reaches the startup guard AGENTS.md describes: logged by shape and stack, the startup failure notice
+        // naming the log file, and Shutdown, which releases the single-instance mutex in OnExit.
+        var app = Read("src", "Scribe.App", "App.xaml.cs");
+        var controller = Read("src", "Scribe.App", "Dictation", "DictationController.cs");
+
+        // Nothing between the publisher and the guard catches it: PrepareAsync awaits the start with no handler, and
+        // StartAsync awaits PrepareAsync with none either.
+        var prepare = Body(controller, "public async Task PrepareAsync()");
+        Assert.Contains("await _vocabulary.StartAsync();", prepare, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"\bcatch\b", prepare);
+        var start = Body(app, "private async Task<bool> StartAsync()");
+        var constructed = start.IndexOf("_controller = new DictationController(", StringComparison.Ordinal);
+        var prepared = start.IndexOf("await _controller.PrepareAsync();", StringComparison.Ordinal);
+        Assert.True(constructed > 0 && prepared > constructed);
+        Assert.DoesNotMatch(@"\btry\b", start[constructed..prepared]);
+        Assert.DoesNotContain("catch (TimeoutException", app, StringComparison.Ordinal);
+
+        // OnStartup hands anything StartAsync throws to AbandonStartup, which tells the user and shuts down.
+        var onStartup = Body(app, "protected override async void OnStartup(StartupEventArgs e)");
+        var awaited = onStartup.IndexOf("started = await StartAsync();", StringComparison.Ordinal);
+        var abandoned = onStartup.IndexOf("AbandonStartup(ex);", StringComparison.Ordinal);
+        Assert.True(awaited > 0 && abandoned > awaited, "A failed start does not reach AbandonStartup.");
+        Assert.Contains("catch (Exception ex)", onStartup[awaited..abandoned], StringComparison.Ordinal);
+        var abandon = Body(app, "private void AbandonStartup(Exception failure)");
+        Assert.Contains("FailureShape.DescribeWithStack(failure)", abandon, StringComparison.Ordinal);
+        Assert.Contains("ShowStartupFailureNotice();", abandon, StringComparison.Ordinal);
+        Assert.Contains("Shutdown();", abandon, StringComparison.Ordinal);
+        Assert.Contains(
+            "Scribe.Core.Lifecycle.StartupFailureNotice.Compose(log is { } status && status.Healthy ? status.Path : null)",
+            Body(app, "private static void ShowStartupFailureNotice()"),
+            StringComparison.Ordinal);
+
+        // The comment over the await says exactly what ends startup there and what does not (Grok's round 2 wording point).
+        Assert.DoesNotContain("A failure here is a startup failure like any other", app, StringComparison.Ordinal);
+        Assert.Contains("within VocabularyPublisher.StartupDeadline", start[constructed..prepared], StringComparison.Ordinal);
+        Assert.Contains("A first build that cannot read its", start[constructed..prepared], StringComparison.Ordinal);
     }
 
     // No vocabulary task is waited on synchronously, which on the dispatcher would stall the UI and could deadlock a build

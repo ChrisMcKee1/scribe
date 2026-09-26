@@ -316,7 +316,12 @@ public partial class App : Application
         // Before anything that takes input exists (the tray, and at Start the hotkey): the persisted settings load, and the
         // first vocabulary generation is built on a worker and awaited here, never waited on, so the library source's first
         // read, which can load a cold catalog, stays off this thread and the first dictation never runs without its
-        // vocabulary. A failure here is a startup failure like any other (AbandonStartup).
+        // vocabulary. Whatever PrepareAsync throws ends startup through AbandonStartup, with the startup failure notice: an
+        // exception from loading the settings or the snippets, or a TimeoutException when the first generation is not
+        // built within VocabularyPublisher.StartupDeadline (a read that never returns). A first build that cannot read its
+        // inputs throws nothing: unreadable libraries count as none, so dictation starts on the personal dictionary alone,
+        // and an unreadable dictionary leaves dictation without vocabulary until a later build reads it. The publisher logs
+        // both.
         await _controller.PrepareAsync();
         if (Dispatcher.HasShutdownStarted || _controller.IsClosing)
         {
