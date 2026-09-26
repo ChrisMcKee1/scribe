@@ -573,7 +573,7 @@ public sealed class MouseButtonHotkeyTests
         Assert.Empty(h.TakeTransitions());
     }
 
-    // In the collection that runs alone (stream TR, item 1): nothing else in the process runs while it measures.
+    // In the collection that runs alone (stream TR, item 1): no other test runs while it measures.
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
     {

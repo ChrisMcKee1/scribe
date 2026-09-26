@@ -189,7 +189,7 @@ public sealed class MouseButtonRound6Tests
 
     // The decision in the callback allocates nothing, for a release still owed and for one a gap dropped, with a view that
     // allocates nothing itself (the production one, cold, is measured in MouseButtonRound7Tests).
-    // In the collection that runs alone (stream TR, item 1): nothing else in the process runs while it measures.
+    // In the collection that runs alone (stream TR, item 1): no other test runs while it measures.
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
     {

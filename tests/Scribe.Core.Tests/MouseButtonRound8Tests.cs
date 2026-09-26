@@ -150,18 +150,15 @@ public sealed class MouseButtonRound8Tests
     // work for the P/Invokes, so the in-process measurement stayed green with either cost restored. Here the scenario runs
     // in a load context of its own, with fresh copies of this assembly and Scribe.Core from the output folder (everything
     // else, xunit included, comes from the default context), so what it measures is cold in every run, alone or not.
-    // In the collection that runs alone (stream TR, item 1): nothing else in the process runs while it measures.
+    // In the collection that runs alone (stream TR, item 1): no other test runs while it measures.
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
     {
         [Fact]
         public void The_cold_hook_callback_path_allocates_nothing_in_a_fresh_load()
         {
-            var (result, context) = ColdPathMeasurement.RunFresh("mouse-cold-path", typeof(MouseColdPathScenario));
+            var (result, _) = ColdPathMeasurement.RunFresh("mouse-cold-path", typeof(MouseColdPathScenario));
 
-            // Both copies are this context's own, loaded apart from the ones the rest of the run uses.
-            var core = context.Assemblies.Single(assembly => assembly.GetName().Name == "Scribe.Core");
-            Assert.NotSame(typeof(HotkeyService).Assembly, core);
             ColdPathMeasurement.AssertAsExpected(
                 [0, 0, 0, 0, 1, 1, 1, 1, 0, 0],
                 result,

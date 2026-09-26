@@ -12,8 +12,9 @@ namespace Scribe.Core.Tests;
 /// <summary>
 /// Every test that measures <see cref="GC.GetAllocatedBytesForCurrentThread"/> belongs to this collection, which xUnit runs
 /// alone, after every parallel collection has finished (stream TR, item 1): no other test runs in the process while one of
-/// these measures. Their zero assertions are exactly as strict as before; a failure says what the runtime did on the
-/// measuring thread (<see cref="AllocationMeasurement"/>).
+/// these measures. Work an earlier test left on the thread pool can still run then, but it cannot add to the measuring
+/// thread's count. Their zero assertions are exactly as strict as before, each measured once and asserted as measured; a
+/// failure says what the runtime did on the measuring thread (<see cref="AllocationMeasurement"/>).
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class AllocationMeasurementCollection
@@ -205,7 +206,8 @@ internal static class ColdPathMeasurement
     /// loaded <c>EqualityComparer&lt;RegisteredWaitHandle&gt;</c> and three more framework generics over framework types,
     /// and after this run none), which otherwise land in whichever test runs first. It cannot warm Scribe's own first calls
     /// in the fresh copy: its types, statics, type initializers and the framework generics over its types are the fresh
-    /// context's own, so they stay cold and measured.
+    /// context's own, so they stay cold and measured. Both assemblies the measured run used, the tests and Scribe.Core, are
+    /// asserted to be the fresh context's own copies.
     /// </summary>
     public static (long[][] Result, AssemblyLoadContext Context) RunFresh(string context, Type scenario)
     {
@@ -216,7 +218,14 @@ internal static class ColdPathMeasurement
         var tests = fresh.LoadFromAssemblyName(typeof(ColdPathMeasurement).Assembly.GetName());
         Assert.NotSame(typeof(ColdPathMeasurement).Assembly, tests);
         var type = tests.GetType(scenario.FullName!, throwOnError: true)!;
-        return ((long[][])type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)!, fresh);
+        var result = (long[][])type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)!;
+
+        // The scenario ran against this context's own Scribe.Core, not the one the rest of the run uses.
+        var core = fresh.Assemblies.SingleOrDefault(assembly => assembly.GetName().Name == "Scribe.Core");
+        Assert.True(
+            core is not null && !ReferenceEquals(core, typeof(HotkeyService).Assembly),
+            "The scenario ran against the default context's Scribe.Core, not a fresh copy.");
+        return (result, fresh);
     }
 
     /// <summary>

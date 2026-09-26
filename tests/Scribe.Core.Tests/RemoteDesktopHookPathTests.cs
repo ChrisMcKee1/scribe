@@ -98,8 +98,8 @@ public sealed class RemoteDesktopHookPathTests
     }
 
     /// <summary>
-    /// The measurements of this class, in the collection that runs alone (stream TR, item 1): nothing else in the process runs
-    /// while they measure.
+    /// The measurements of this class, in the collection that runs alone (stream TR, item 1): no other test runs while they
+    /// measure.
     /// </summary>
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
