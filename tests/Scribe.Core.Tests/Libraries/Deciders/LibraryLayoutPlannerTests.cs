@@ -12,12 +12,14 @@ public sealed class LibraryLayoutPlannerTests
     // Every window size the planner is checked at: the minimum window and the three short work areas.
     private static readonly (double Width, double Height)[] Targets = [(940, 660), (1097, 569), (1092, 566), (960, 492)];
 
+    private static double Content(double windowWidth, double railWidth = 232) => windowWidth - railWidth - 36;
+
     [Fact]
     public void D9_the_minimum_window_is_side_by_side_with_157_dips_per_text_column_and_short_under_the_tab_strip()
     {
         // Without the strip the normal composition had six rows here; the strip leaves it five, so the short one is used,
         // which shows seven.
-        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 660));
+        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 660));
 
         Assert.Equal(LibraryLayoutComposition.SideBySide | LibraryLayoutComposition.Short, layout.Composition);
         Assert.Equal(157, layout.SpokenColumnWidth);
@@ -35,7 +37,7 @@ public sealed class LibraryLayoutPlannerTests
     public void D9_each_short_work_area_stays_side_by_side_in_the_short_composition_with_at_least_four_rows(
         double width, double height, bool sideBySide, int rows)
     {
-        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(width, height));
+        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(width), height));
 
         Assert.Equal(sideBySide, layout.SideBySide);
         Assert.True(layout.Short);
@@ -56,7 +58,7 @@ public sealed class LibraryLayoutPlannerTests
     public void D9_larger_text_keeps_the_columns_their_minimum_and_stacks_when_it_cannot(
         double width, double height, double scale, bool sideBySide)
     {
-        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(width, height, scale));
+        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(width), height, scale));
 
         Assert.Equal(sideBySide, layout.SideBySide);
         Assert.Equal(!sideBySide, layout.Composition.HasFlag(LibraryLayoutComposition.Stacked));
@@ -71,24 +73,33 @@ public sealed class LibraryLayoutPlannerTests
     }
 
     [Fact]
+    public void D9_uses_the_measured_content_width_when_the_rail_grows_at_large_text()
+    {
+        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(1536, railWidth: 522), 900, 2.25));
+
+        Assert.False(layout.SideBySide);
+        Assert.True(layout.SpokenColumnWidth >= LibraryLayoutPlanner.MinimumTextColumn * 2.25);
+    }
+
+    [Fact]
     public void D9_the_widest_text_at_the_minimum_window_overflows_sideways_rather_than_squeezing_the_columns()
     {
-        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 660, 2.25));
+        var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 660, 2.25));
 
         Assert.Equal(LibraryLayoutComposition.Stacked | LibraryLayoutComposition.Short, layout.Composition);
         Assert.True(layout.HorizontalOverflow);
         Assert.Equal(LibraryLayoutPlanner.MinimumTextColumn * 2.25, layout.SpokenColumnWidth);
-        Assert.Equal(940 - 232 - 36, layout.ListWidth);
+        Assert.Equal(Content(940), layout.ListWidth);
     }
 
     [Fact]
     public void D9_a_notice_or_open_term_details_that_leave_too_few_rows_switch_to_the_short_composition()
     {
         // 940 x 700 leaves the card what 940 x 660 left it before the tab strip: six rows, just not short.
-        var plain = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 700));
-        var notice = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 700, NoticeVisible: true));
-        var details = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 700, TermDetailsOpen: true));
-        var tall = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(1240, 900, TermDetailsOpen: true));
+        var plain = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 700));
+        var notice = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 700, NoticeVisible: true));
+        var details = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 700, TermDetailsOpen: true));
+        var tall = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(1240), 900, TermDetailsOpen: true));
 
         Assert.False(plain.Short);
         Assert.Equal(LibraryLayoutPlanner.MinimumNormalRows, plain.VisibleTermRows);
@@ -113,7 +124,7 @@ public sealed class LibraryLayoutPlannerTests
         {
             foreach (var isShort in new[] { false, true })
             {
-                var input = new LibraryLayoutInput(width, height, scale);
+                var input = new LibraryLayoutInput(Content(width), height, scale);
                 Assert.Equal(
                     40 * scale,
                     LibraryLayoutPlanner.CardHeight(input, isShort, tabStrip: 0) - LibraryLayoutPlanner.CardHeight(input, isShort));
@@ -122,9 +133,9 @@ public sealed class LibraryLayoutPlannerTests
 
         // Anchored to the window: at 940 x 660 the page above and below the card takes 232 DIPs at 100% text (192 in the
         // short composition, which has no subtitle) and 364 at 200%, and the strip 40 and 80 more.
-        Assert.Equal(660 - 232 - 40, LibraryLayoutPlanner.CardHeight(new LibraryLayoutInput(940, 660), isShort: false));
-        Assert.Equal(660 - 192 - 40, LibraryLayoutPlanner.CardHeight(new LibraryLayoutInput(940, 660), isShort: true));
-        Assert.Equal(660 - 364 - 80, LibraryLayoutPlanner.CardHeight(new LibraryLayoutInput(940, 660, 2.0), isShort: false));
+        Assert.Equal(660 - 232 - 40, LibraryLayoutPlanner.CardHeight(new LibraryLayoutInput(Content(940), 660), isShort: false));
+        Assert.Equal(660 - 192 - 40, LibraryLayoutPlanner.CardHeight(new LibraryLayoutInput(Content(940), 660), isShort: true));
+        Assert.Equal(660 - 364 - 80, LibraryLayoutPlanner.CardHeight(new LibraryLayoutInput(Content(940), 660, 2.0), isShort: false));
     }
 
     [Fact]
@@ -142,7 +153,7 @@ public sealed class LibraryLayoutPlannerTests
             {
                 foreach (var (notice, details) in new[] { (false, false), (true, false), (false, true), (true, true) })
                 {
-                    var input = new LibraryLayoutInput(width, height, scale, notice, details);
+                    var input = new LibraryLayoutInput(Content(width), height, scale, notice, details);
                     var layout = LibraryLayoutPlanner.Plan(input);
                     Assert.Equal(LibraryLayoutPlanner.Plan(input with { Height = height - 40 * scale }, tabStrip: 0), layout);
 
@@ -163,10 +174,10 @@ public sealed class LibraryLayoutPlannerTests
         // The strip does make decisions: at the target sizes it takes the minimum window into the short composition and a
         // row from each of the two larger work areas.
         Assert.True(changed > 0);
-        Assert.Equal(LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 620), tabStrip: 0), LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 660)));
-        Assert.False(LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 660), tabStrip: 0).Short);
-        Assert.Equal(5, LibraryLayoutPlanner.Plan(new LibraryLayoutInput(1097, 569), tabStrip: 0).VisibleTermRows);
-        Assert.Equal(940 - 232 - 36, LibraryLayoutPlanner.Plan(new LibraryLayoutInput(940, 660, 2.25)).ListWidth);
+        Assert.Equal(LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 620), tabStrip: 0), LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 660)));
+        Assert.False(LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 660), tabStrip: 0).Short);
+        Assert.Equal(5, LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(1097), 569), tabStrip: 0).VisibleTermRows);
+        Assert.Equal(Content(940), LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(940), 660, 2.25)).ListWidth);
     }
 
     [Fact]
@@ -176,9 +187,9 @@ public sealed class LibraryLayoutPlannerTests
         {
             for (var height = 480; height <= 1000; height += 40)
             {
-                var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(width, height));
-                var wider = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(width + 50, height));
-                var taller = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(width, height + 40));
+                var layout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(width), height));
+                var wider = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(width + 50), height));
+                var taller = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(Content(width), height + 40));
                 Assert.True(taller.VisibleTermRows >= layout.VisibleTermRows || (layout.Short && !taller.Short));
                 Assert.True(!layout.SideBySide || wider.SideBySide);
                 Assert.True(wider.SpokenColumnWidth >= layout.SpokenColumnWidth || (layout.Stacked() && wider.SideBySide));

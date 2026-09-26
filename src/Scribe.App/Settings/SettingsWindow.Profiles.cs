@@ -5,6 +5,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
 
@@ -359,7 +360,8 @@ public partial class SettingsWindow
     {
         var hasSelection = SelectedProfile is not null;
         ProfileEditor.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
-        ProfileEmptyState.Visibility = hasSelection ? Visibility.Collapsed : Visibility.Visible;
+        ProfileEmptyState.Visibility = hasSelection || _profileCompact ? Visibility.Collapsed : Visibility.Visible;
+        ProfileCompactEmptyHint.Visibility = !hasSelection && _profileCompact ? Visibility.Visible : Visibility.Collapsed;
         if (hasSelection)
         {
             return;
@@ -368,6 +370,7 @@ public partial class SettingsWindow
         ProfileEmptyHint.Text = _profileRows.Count == 0
             ? "No app profiles yet. Add one to change how Scribe writes in a specific app."
             : "Select a profile to edit it.";
+        ProfileCompactEmptyHint.Text = ProfileEmptyHint.Text;
     }
 
     private void RefreshProfileCommands()
@@ -385,10 +388,42 @@ public partial class SettingsWindow
         ProfileAiCleanupInfoBar.Message = state.NoticeText ?? string.Empty;
         ProfileAiCleanupActionButton.Content = state.ActionText ?? ProfileRules.AiCleanupAction;
         ProfileOrderHint.Visibility = state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+        ProfileCompactAiCleanupInfoBar.Message = state.NoticeText ?? string.Empty;
+        ProfileCompactAiCleanupActionButton.Content = state.ActionText ?? ProfileRules.AiCleanupAction;
         RefreshProfileCommands();
+        UpdateProfileLayout();
     }
 
     private void ProfileAiCleanupButton_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage.AiCleanup);
+
+    // Whether the compact layout (notice and hint inside the editor's scroller) is in use; UpdateProfileLayout decides it.
+    private bool _profileCompact;
+
+    private void UpdateProfileLayout()
+    {
+        if (ProfileBodyGrid.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        var state = ProfileRules.Describe(AiCleanupCheck.IsChecked == true, _profileRows.Count);
+        var compact = ProfileLayoutPlanner.UseCompact(new ProfileLayoutInput(
+            ProfileBodyGrid.ActualHeight,
+            TextScaleService.CurrentFactor,
+            state.ShowAiCleanupNotice ? Math.Max(ProfileAiCleanupNotice.ActualHeight, ProfileCompactAiCleanupNotice.ActualHeight) : 0,
+            state.ShowFirstMatchHint ? Math.Max(ProfileOrderHint.ActualHeight, ProfileCompactOrderHint.ActualHeight) : 0,
+            Math.Max(ProfileToolbar.ActualHeight, 48)));
+
+        ProfileAiCleanupNotice.Visibility = !compact && state.ShowAiCleanupNotice ? Visibility.Visible : Visibility.Collapsed;
+        ProfileOrderHint.Visibility = !compact && state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+        ProfileCompactAiCleanupNotice.Visibility = compact && state.ShowAiCleanupNotice ? Visibility.Visible : Visibility.Collapsed;
+        ProfileCompactOrderHint.Visibility = compact && state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+        if (_profileCompact != compact)
+        {
+            _profileCompact = compact;
+            RefreshProfileEmptyState();
+        }
+    }
 
     /// <summary>Builds the profile list to persist. The order is the ListBox order: first match wins.</summary>
     private List<AppProfile> BuildProfiles() =>

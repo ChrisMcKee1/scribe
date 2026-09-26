@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Extensions.Logging;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
@@ -27,6 +28,28 @@ public partial class SettingsWindow
 
     private void UsageRefreshButton_Click(object sender, RoutedEventArgs e) => LoadUsage();
     private void UsageRetryButton_Click(object sender, RoutedEventArgs e) => LoadUsage();
+
+    private void UpdateUsageMetricLayout()
+    {
+        var width = UsageMetricsCard.ActualWidth;
+        if (width <= 0)
+        {
+            return;
+        }
+
+        var factor = TextScaleService.CurrentFactor;
+        if (factor <= 1)
+        {
+            if (UsageMetricsGrid.Columns != 6)
+            {
+                UsageMetricsGrid.Columns = 6;
+            }
+
+            return;
+        }
+
+        UsageMetricsGrid.Columns = UsageMetricLayout.Columns(width, factor);
+    }
 
     /// <summary>
     /// Recomputes the usage page for the selected period.
@@ -434,5 +457,4 @@ public partial class SettingsWindow
 
         public override string ToString() => Name;
     }
-
 }

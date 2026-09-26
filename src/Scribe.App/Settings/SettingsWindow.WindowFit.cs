@@ -20,9 +20,27 @@ public partial class SettingsWindow
             _lastFitMonitor = MonitorFromWindow(new WindowInteropHelper(this).Handle, MonitorDefaultToNearest);
         };
         DpiChanged += (_, _) => ApplyWindowFit(GetWindowMonitor(), center: false);
+        if (_textScale is not null)
+        {
+            _textScale.Changed += TextScale_Changed;
+        }
+
         LocationChanged += (_, _) => ScheduleMonitorFit();
         SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
+    }
+
+    private void TextScale_Changed(object? sender, EventArgs e)
+    {
+        ApplyWindowFit(GetWindowMonitor(), center: false);
+        if (Content is FrameworkElement rootContent)
+        {
+            ApplyRailWidth(rootContent.ActualWidth);
+        }
+
+        UpdateProfileLayout();
+        UpdateTextSizeAdaptiveLayouts();
+        ApplyWordPackLayout();
     }
 
     private void ScheduleMonitorFit()
@@ -75,6 +93,11 @@ public partial class SettingsWindow
     private void CleanupWindowFit()
     {
         _windowFitTimer?.Stop();
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= TextScale_Changed;
+        }
+
         SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
     }
@@ -92,7 +115,15 @@ public partial class SettingsWindow
             workArea = new WorkArea(fallback.Left, fallback.Top, fallback.Width, fallback.Height);
         }
 
-        var result = WindowFit.Compute(WindowFit.DesiredWidth, WindowFit.DesiredHeight, WindowFit.MinimumWidth, WindowFit.MinimumHeight, workArea, center ? null : Left, center ? null : Top);
+        var result = WindowFit.Compute(
+            WindowFit.DesiredWidth,
+            WindowFit.DesiredHeight,
+            WindowFit.MinimumWidth,
+            WindowFit.MinimumHeight,
+            workArea,
+            center ? null : Left,
+            center ? null : Top,
+            _textScale?.Factor ?? 1);
         MinWidth = result.MinWidth;
         MinHeight = result.MinHeight;
         Width = result.Width;

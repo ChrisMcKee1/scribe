@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Settings;
 using Wpf.Ui.Controls;
 
@@ -86,7 +87,13 @@ public partial class SettingsStatusRow : UserControl
 
     private void UpdateLayoutMode()
     {
-        var narrow = ActualWidth > 0 && ActualWidth < 480;
+        var narrow = ActualWidth > 0 && SettingRowLayout.StackControl(
+            new SettingRowLayoutInput(
+                ActualWidth,
+                TextScaleService.CurrentFactor,
+                ControlMinimumWidth: 204,
+                TextMinimumWidth: 240,
+                Gap: 12));
         Grid.SetColumn(ActionPanel, narrow ? 1 : 2);
         Grid.SetRow(ActionPanel, narrow ? 1 : 0);
         ActionPanel.Margin = narrow ? new Thickness(0, 8, 0, 0) : new Thickness(12, 0, 0, 0);

@@ -20,14 +20,14 @@ public enum LibraryLayoutComposition
     Short = 4,
 }
 
-/// <summary>What the Word packs tab measures: the Settings window it is shown in, and the text size.</summary>
-/// <param name="Width">The window's width in DIPs.</param>
+/// <summary>What the Word packs tab measures: the content column it is shown in, the Settings window height and text size.</summary>
+/// <param name="ContentWidth">The measured content width in DIPs, after the navigation rail.</param>
 /// <param name="Height">The window's height in DIPs.</param>
 /// <param name="TextScale">Windows' text size setting as a factor, 1 to 2.25 (values below 1 count as 1).</param>
 /// <param name="NoticeVisible">An InfoBar notice is shown below the card header.</param>
 /// <param name="TermDetailsOpen">Term details is open under the grid.</param>
 public sealed record LibraryLayoutInput(
-    double Width, double Height, double TextScale = 1, bool NoticeVisible = false, bool TermDetailsOpen = false);
+    double ContentWidth, double Height, double TextScale = 1, bool NoticeVisible = false, bool TermDetailsOpen = false);
 
 /// <summary>The Word packs tab's layout for one <see cref="LibraryLayoutInput"/>.</summary>
 /// <param name="Composition">How the tab is composed.</param>
@@ -63,17 +63,17 @@ public sealed record LibraryLayout(
 }
 
 /// <summary>
-/// Decides the Word packs tab's composition from the measured window and text size (plan 3.11, disagreement 2): side by
-/// side while both text columns keep 150 DIPs at the current text size, stacked below that; short when the normal
+/// Decides the Word packs tab's composition from the measured content width and text size (plan 3.11, disagreement 2):
+/// side by side while both text columns keep 150 DIPs at the current text size, stacked below that; short when the normal
 /// composition would show fewer than six term rows, keeping at least four.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The fixed geometry is the Settings window's (the 232 DIP navigation rail, the content margins of 12 and 24 DIPs, the
-/// 32 DIP title bar and the footer) and the tab's planned one (a 220 DIP list pane, 12 DIPs between panes, 16 inside the
-/// card, a 54 DIP Use column and a 40 DIP action column). Word packs is the second tab of the Dictionary page (Your words, Word packs),
-/// so a 40 DIP tab strip sits above the card, under the page title, subtitle and commands, at every window size and text
-/// size. Everything that holds text grows with the text size, the tab strip included; the minimum a text column must
+/// The shell measures the content width after the navigation rail and margins; this planner only subtracts the tab's own
+/// pane and card geometry. The fixed vertical geometry is the Settings title bar and footer, plus the tab's planned one
+/// (a 220 DIP list pane, 12 DIPs between panes, 16 inside the card, a 54 DIP Use column and a 40 DIP action column). Word
+/// packs is the second tab of the Dictionary page (Your words, Word packs), so a 40 DIP tab strip sits above the card,
+/// under the page title, subtitle and commands, at every window size and text size. Everything that holds text grows with the text size, the tab strip included; the minimum a text column must
 /// keep does too, so large text gets the stacked fallback. At 940 x 660 and 100% text each text column gets 157 DIPs, so
 /// the minimum window stays side by side, and the tab strip leaves the normal composition five rows there, so it takes
 /// the short one, which shows seven. The window clamps its minimum size of 940 x 660 to the monitor's work area, which is
@@ -96,8 +96,6 @@ public static class LibraryLayoutPlanner
     /// <summary>The fewest term rows the grid ever shows.</summary>
     public const int MinimumRows = 4;
 
-    private const double RailWidth = 232;
-    private const double ContentHorizontalMargin = 12 + 24;
     private const double ListPaneWidth = 220;
     private const double MaxListPaneWidth = 320;
     private const double PaneGap = 12;
@@ -136,11 +134,11 @@ public static class LibraryLayoutPlanner
     internal static LibraryLayout Plan(LibraryLayoutInput input, double tabStrip)
     {
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(input.Width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(input.ContentWidth);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(input.Height);
         var scale = Scale(input);
 
-        var content = Math.Max(0, input.Width - RailWidth - ContentHorizontalMargin);
+        var content = input.ContentWidth;
         var use = UseColumn * scale;
         var action = ActionColumn * scale;
         var minimumText = MinimumTextColumn * scale;

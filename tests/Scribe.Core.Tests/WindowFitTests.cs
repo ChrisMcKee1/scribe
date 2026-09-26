@@ -48,6 +48,17 @@ public sealed class WindowFitTests
         Assert.Equal(48, fit.Top, precision: 2);
     }
 
+    [Fact]
+    public void Compute_scales_the_desired_and_minimum_size_for_windows_text_size()
+    {
+        var fit = WindowFit.Compute(new WorkArea(0, 0, 1920, 1032), textScale: 1.5);
+
+        Assert.Equal(1728, fit.Width, precision: 2);
+        Assert.Equal(990, fit.Height, precision: 2);
+        Assert.Equal(1410, fit.MinWidth, precision: 2);
+        Assert.Equal(990, fit.MinHeight, precision: 2);
+    }
+
     [Theory]
     [InlineData(double.NaN, 600)]
     [InlineData(double.PositiveInfinity, 600)]

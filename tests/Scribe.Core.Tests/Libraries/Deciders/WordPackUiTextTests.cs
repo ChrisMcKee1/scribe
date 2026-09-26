@@ -74,12 +74,12 @@ public sealed class WordPackUiTextTests
     }
 
     [Fact]
-    public void Word_pack_layout_uses_the_root_content_size_not_the_tab_section_size()
+    public void Word_pack_layout_uses_the_measured_tab_content_width_and_root_height()
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.WordPacks.cs"));
         var layout = Body(source, "private void ApplyWordPackLayout()");
         Assert.Contains("WordPackLayoutRoot()", layout, StringComparison.Ordinal);
-        Assert.DoesNotContain("SectionWordPacks.ActualWidth", layout, StringComparison.Ordinal);
+        Assert.Contains("SectionWordPacks.ActualWidth", layout, StringComparison.Ordinal);
         Assert.DoesNotContain("SectionWordPacks.ActualHeight", layout, StringComparison.Ordinal);
     }
 

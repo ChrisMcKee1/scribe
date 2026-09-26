@@ -19,8 +19,8 @@ public static class WindowFit
     public const double WidthFraction = 0.90;
     public const double HeightFraction = 0.92;
 
-    public static WindowFitResult Compute(WorkArea workArea) =>
-        Compute(DesiredWidth, DesiredHeight, MinimumWidth, MinimumHeight, workArea);
+    public static WindowFitResult Compute(WorkArea workArea, double textScale = 1) =>
+        Compute(DesiredWidth, DesiredHeight, MinimumWidth, MinimumHeight, workArea, textScale: textScale);
 
     public static WindowFitResult Compute(
         double desiredWidth,
@@ -29,7 +29,8 @@ public static class WindowFit
         double minimumHeight,
         WorkArea workArea,
         double? requestedLeft = null,
-        double? requestedTop = null)
+        double? requestedTop = null,
+        double textScale = 1)
     {
         if (!double.IsFinite(workArea.Width) || workArea.Width <= 0)
         {
@@ -41,10 +42,11 @@ public static class WindowFit
             throw new ArgumentOutOfRangeException(nameof(workArea), workArea.Height, "Work area height must be finite and positive.");
         }
 
-        var effectiveMinWidth = Math.Min(minimumWidth, workArea.Width);
-        var effectiveMinHeight = Math.Min(minimumHeight, workArea.Height);
-        var width = FitDimension(desiredWidth, effectiveMinWidth, workArea.Width, WidthFraction);
-        var height = FitDimension(desiredHeight, effectiveMinHeight, workArea.Height, HeightFraction);
+        var scale = TextScale.NormalizeFactor(textScale);
+        var effectiveMinWidth = Math.Min(minimumWidth * scale, workArea.Width);
+        var effectiveMinHeight = Math.Min(minimumHeight * scale, workArea.Height);
+        var width = FitDimension(desiredWidth * scale, effectiveMinWidth, workArea.Width, WidthFraction);
+        var height = FitDimension(desiredHeight * scale, effectiveMinHeight, workArea.Height, HeightFraction);
         var left = requestedLeft ?? workArea.Left + (workArea.Width - width) / 2;
         var top = requestedTop ?? workArea.Top + (workArea.Height - height) / 2;
 

@@ -85,7 +85,7 @@ public sealed class YourWordsReviewTests
     public void Scribe_writes_edits_the_replacement_not_the_placeholder()
     {
         var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
-        var column = xaml[xaml.IndexOf("<DataGridTextColumn Header=\"Scribe writes\"", StringComparison.Ordinal)..];
+        var column = xaml[xaml.IndexOf("<DataGridTextColumn x:Name=\"DictionaryWrittenColumn\" Header=\"Scribe writes\"", StringComparison.Ordinal)..];
         column = column[..column.IndexOf("Binding=\"{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}\"", StringComparison.Ordinal)];
 
         Assert.Contains("Binding=\"{Binding Replacement, UpdateSourceTrigger=PropertyChanged}\"", column, StringComparison.Ordinal);

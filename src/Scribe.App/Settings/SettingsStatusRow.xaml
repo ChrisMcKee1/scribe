@@ -14,10 +14,10 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ui:SymbolIcon x:Name="StatusIcon" Grid.Column="0" FontSize="16" Width="16" Height="16" Margin="0,2,8,0"/>
+        <ui:SymbolIcon x:Name="StatusIcon" Grid.Column="0" FontSize="{DynamicResource ScribeFontBodyLarge}" Width="16" Height="16" Margin="0,2,8,0"/>
         <ui:ProgressRing x:Name="BusyRing" Grid.Column="0" Width="16" Height="16" Margin="0,2,8,0"
                          IsIndeterminate="True" Visibility="Collapsed"/>
-        <TextBlock x:Name="StatusTextBlock" Grid.Column="1" FontSize="12" TextWrapping="Wrap"
+        <TextBlock x:Name="StatusTextBlock" Grid.Column="1" FontSize="{DynamicResource ScribeFontCaption}" TextWrapping="Wrap"
                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                    AutomationProperties.LiveSetting="Polite"/>
         <StackPanel x:Name="ActionPanel" Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0">

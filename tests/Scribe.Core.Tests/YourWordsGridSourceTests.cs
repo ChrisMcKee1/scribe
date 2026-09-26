@@ -14,7 +14,7 @@ public sealed class YourWordsGridSourceTests
         // overrides, so a removal rule showed an empty cell; before that, a two-way ReplacementDisplay binding let the
         // placeholder be stored as the replacement.
         var xaml = File.ReadAllText(Path.Combine(Root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
-        var column = xaml.IndexOf("<DataGridTextColumn Header=\"Scribe writes\" Binding=\"{Binding Replacement, UpdateSourceTrigger=PropertyChanged}\"", StringComparison.Ordinal);
+        var column = xaml.IndexOf("<DataGridTextColumn x:Name=\"DictionaryWrittenColumn\" Header=\"Scribe writes\" Binding=\"{Binding Replacement, UpdateSourceTrigger=PropertyChanged}\"", StringComparison.Ordinal);
         Assert.True(column >= 0, "Scribe writes binds two-way to Replacement.");
         var end = xaml.IndexOf("</DataGridTextColumn>", column, StringComparison.Ordinal);
         var body = xaml[column..end];

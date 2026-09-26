@@ -1581,21 +1581,25 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             return;
         }
 
+        // The tab's own width once it has been laid out; before that, the window less the rail and the content margins.
+        var contentWidth = SectionWordPacks.ActualWidth > 0
+            ? SectionWordPacks.ActualWidth
+            : Math.Max(1, root.ActualWidth - RailColumn.ActualWidth - 36);
         _wordPackLayout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(
-            root.ActualWidth,
+            contentWidth,
             root.ActualHeight,
-            Math.Max(1, SystemFonts.MessageFontSize / 12.0),
+            TextScaleService.CurrentFactor,
             WordPackNoticeBar.IsOpen,
             WordDetailsPanel.Visibility == Visibility.Visible));
         WordPacksListColumn.Width = new GridLength(_wordPackLayout.ListWidth);
         LibraryTermUseColumn.Width = new DataGridLength(_wordPackLayout.UseColumnWidth);
-        LibraryTermSpokenColumn.MinWidth = LibraryLayoutPlanner.MinimumTextColumn * Math.Max(1, SystemFonts.MessageFontSize / 12.0);
+        LibraryTermSpokenColumn.MinWidth = LibraryLayoutPlanner.MinimumTextColumn * TextScaleService.CurrentFactor;
         LibraryTermWrittenColumn.MinWidth = LibraryTermSpokenColumn.MinWidth;
         LibraryTermSpokenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermWrittenColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
         LibraryTermActionColumn.Width = new DataGridLength(_wordPackLayout.ActionColumnWidth);
-        var rowHeight = (20 * Math.Max(1, SystemFonts.MessageFontSize / 12.0)) + 8;
-        LibraryTermsGrid.MinHeight = (32 * Math.Max(1, SystemFonts.MessageFontSize / 12.0)) + rowHeight * LibraryLayoutPlanner.MinimumRows;
+        var rowHeight = (20 * TextScaleService.CurrentFactor) + 8;
+        LibraryTermsGrid.MinHeight = (32 * TextScaleService.CurrentFactor) + rowHeight * LibraryLayoutPlanner.MinimumRows;
         WordPacksIntroText.Visibility = _wordPackLayout.Short ? Visibility.Collapsed : Visibility.Visible;
         WordPacksIntroInfoButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
         WordDetailsBackButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;

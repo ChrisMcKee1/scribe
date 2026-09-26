@@ -83,6 +83,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // window's own library switches (after a failed Save _settings holds unsaved ones), and never a fresh read of the
     // stored document, which may have turned unreadable.
     private readonly ILibraryVocabularySource _libraryVocabulary;
+    private readonly TextScaleService? _textScale;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private readonly Func<Func<Task>, Task>? _runUpdateRestartGuard;
@@ -265,6 +266,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> applySettings,
         Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> reloadVocabulary,
         ILibraryVocabularySource libraryVocabulary,
+        TextScaleService? textScale = null,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         Func<Func<Task>, Task>? runUpdateRestartGuard = null,
@@ -293,6 +295,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
         _libraryVocabulary = libraryVocabulary;
+        _textScale = textScale;
         _libraryVocabulary.Changed += OnLibraryVocabularyChanged;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
@@ -322,7 +325,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         InitializeNavigation();
         if (Content is FrameworkElement rootContent)
         {
-            rootContent.SizeChanged += (_, _) => ApplyWordPackLayout();
+            rootContent.SizeChanged += (_, _) =>
+            {
+                ApplyRailWidth(rootContent.ActualWidth);
+                ApplyWordPackLayout();
+                UpdateTextSizeAdaptiveLayouts();
+            };
         }
 
         InitializeFooterAndClose();
@@ -370,7 +378,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         Closed += OnClosed;
         Loaded += RefreshStartupStatus;
+        Loaded += (_, _) =>
+        {
+            UpdateProfileLayout();
+            UpdateTextSizeAdaptiveLayouts();
+        };
         Activated += RefreshStartupStatus;
+        SectionAppProfiles.SizeChanged += (_, _) => UpdateProfileLayout();
+        ProfileBodyGrid.SizeChanged += (_, _) => UpdateProfileLayout();
+        SectionVoiceSnippets.SizeChanged += (_, _) => ApplyListPaneWidths();
+        ProfileMainGrid.SizeChanged += (_, _) => ApplyListPaneWidths();
 
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>
@@ -436,6 +453,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 $"{stranded}. Your settings and history have been carried across to the paths below.";
             AboutDataPathWarning.Visibility = Visibility.Visible;
         }
+    }
+
+    private void ApplyRailWidth(double windowWidth)
+    {
+        if (windowWidth <= 0)
+        {
+            return;
+        }
+
+        const double baseWidth = 232;
+        const double minimumContent = 708;
+        var scaled = baseWidth * TextScaleService.CurrentFactor;
+        var max = Math.Max(baseWidth, windowWidth - minimumContent);
+        RailColumn.Width = new GridLength(Math.Min(scaled, max));
     }
 
     // --- Updates card (General) --------------------------------------------------------------
@@ -963,6 +994,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         selected.BringIntoView();
+        UpdateTextSizeAdaptiveLayouts();
         if (page == SettingsPage.History)
         {
             LoadHistory();
