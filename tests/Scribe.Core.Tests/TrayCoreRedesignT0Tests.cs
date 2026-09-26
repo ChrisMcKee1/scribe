@@ -92,7 +92,7 @@ public sealed class TrayCoreRedesignT0Tests
     [Fact]
     public void Prompts_and_launch_decisions_use_redesign_texts()
     {
-        var settingsPrompt = SettingsClosePrompt.For(CloseTrigger.RestartToUpdate);
+        var settingsPrompt = SettingsClosePrompt.For(CloseTrigger.UpdateRestart);
         var quickAddPrompt = QuickAddClosePrompt.ForUnsavedWord();
 
         Assert.Equal("Save changes before restarting?", settingsPrompt.Title);

@@ -2,15 +2,17 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
+using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests.Libraries.Storage;
 
 /// <summary>
 /// The tested wrappers (J-12: <c>Import</c> and <c>Remove</c> through the journal, with the same refusals as a Save), the
-/// interim parts that keep this branch running exactly as release 0.4.4 (J-15), and the id rules J copies from
-/// <c>LibraryNaming</c> until the integration commit (contract 3.5.4, G9).
+/// release 0.4.4 library seam over the real parts at the upgrade (J-15, as the integration commit leaves it), and the id
+/// rules J takes from <c>LibraryNaming</c> (contract 3.5.4, G9).
 /// </summary>
 public sealed class LibraryWrapperTests : IDisposable
 {
@@ -93,98 +95,139 @@ public sealed class LibraryWrapperTests : IDisposable
     }
 
     [Fact]
-    public void With_the_interim_parts_the_library_seam_selects_exactly_as_0_4_3_including_a_hand_placed_twin()
+    public void At_the_upgrade_the_library_seam_and_the_committed_vocabulary_write_what_0_4_3_wrote_including_a_hand_placed_twin()
     {
-        // J-15: the public constructor, the interim parts, and 0.4.3's oracle over the same folder.
-        var paths = new AppPaths(_fixture.Root);
-        _fixture.Write("team-terms.csv", "# name: Team\npattern,replacement\nkube,K8s\nget hub,GitHub Enterprise\n");
-        _fixture.Write("team-terms-2.csv", "pattern,replacement\nkube,Kubernetes\n");
-        _fixture.Write("github.csv", "pattern,replacement\nprivate codename,Nightjar\nget hub,Twin GitHub\n");
-        _fixture.Write("empty.csv", "pattern,replacement\n");
+        // J-15 with the real parts, through the public constructor: for each enabled list 0.4.3 could have stored, a first
+        // start over the same folder. Release 0.4.4's seam (the ids overload, which dictation calls until the vocabulary
+        // source replaces it) composes exactly 0.4.3's entries; the committed vocabulary, composed in tiers with the legacy
+        // markers the first start adds, gives 0.4.3's winner for every spoken form (decision 1's upgrade guarantee).
         string[][] sets = [["team-terms", "team-terms-2", "github"], ["github"], ["TEAM-TERMS"], ["github", "ai-terminology"], []];
         foreach (var enabled in sets)
         {
-            _fixture.SaveEnabled(enabled);
-            var service = new DictionaryLibraryService(paths, _fixture.Settings, NullLogger<DictionaryLibraryService>.Instance);
+            using var upgrade = new LibraryStorageFixture();
+            SeedUpgradeFolder(upgrade);
+            upgrade.SaveEnabled(enabled);
+            var service = new DictionaryLibraryService(upgrade.Paths, upgrade.Settings, NullLogger<DictionaryLibraryService>.Instance);
+            var legacy = Legacy043LibrarySelection.EnabledEntries(enabled, upgrade.LibrariesDir);
 
-            Assert.Equal(Legacy043LibrarySelection.EnabledEntries(enabled, _fixture.LibrariesDir), service.GetEnabledLibraryEntries());
-            Assert.Equal(Legacy043LibrarySelection.EnabledEntries(enabled, _fixture.LibrariesDir), service.GetEnabledLibraryEntries(enabled));
+            Assert.Equal(legacy, service.GetEnabledLibraryEntries(enabled));
+            Assert.Equal(Winners(legacy), Winners(service.GetEnabledLibraryEntries()));
+            Assert.Equal(Winners(legacy), Winners(service.Current.Entries));
+
+            // The first start recorded the upgrade: a state row now carries the enabled state, and the list it projects for
+            // older builds is the one 0.4.3 had.
+            Assert.NotNull(upgrade.Row(LibrarySettingKeys.State));
+            Assert.Equal(
+                enabled.ToHashSet(StringComparer.OrdinalIgnoreCase),
+                upgrade.StoredEnabledList().ToHashSet(StringComparer.OrdinalIgnoreCase));
         }
 
         // The legacy view lists the twin under the id 0.4.3 loads it as, beside the built-in, and the empty file too.
-        var libraries = new DictionaryLibraryService(paths, _fixture.Settings, NullLogger<DictionaryLibraryService>.Instance).GetLibraries();
+        SeedUpgradeFolder(_fixture);
+        var libraries = new DictionaryLibraryService(_fixture.Paths, _fixture.Settings, NullLogger<DictionaryLibraryService>.Instance).GetLibraries();
         Assert.Contains(libraries, library => library is { Id: "github", BuiltIn: false, FileName: "github.csv" });
         Assert.Contains(libraries, library => library is { Id: "github", BuiltIn: true });
         Assert.Contains(libraries, library => library is { Id: "empty", BuiltIn: false } && library.Entries.Count == 0);
-
-        // The interim composer writes no state row, so nothing reads the enabled list any other way yet.
-        Assert.Null(_fixture.Row(LibrarySettingKeys.State));
     }
 
     [Fact]
-    public void With_the_interim_parts_a_wrapper_commit_writes_the_generation_and_leaves_the_state_row_and_list_alone()
+    public void A_wrapper_import_records_the_library_off_and_kept_from_AI_cleanup_and_leaves_the_list_alone()
     {
-        var paths = new AppPaths(_fixture.Root);
         _fixture.SaveEnabled("github", "gone-library");
-        var service = new DictionaryLibraryService(paths, _fixture.Settings, NullLogger<DictionaryLibraryService>.Instance);
+        var service = new DictionaryLibraryService(_fixture.Paths, _fixture.Settings, NullLogger<DictionaryLibraryService>.Instance);
+        service.LoadCatalog();
+        var adopted = _fixture.StoredGeneration;
 
         var imported = service.Import(LibraryStorageFixture.Csv("Imported", ("i", "I")), null);
 
-        Assert.Equal(1, _fixture.StoredGeneration);
-        Assert.Null(_fixture.Row(LibrarySettingKeys.State));
+        // One more generation, the state row recording the library's content, and the list older builds read unchanged:
+        // an imported library starts off and kept from AI cleanup (Decision 2), so it is not in the projection.
+        Assert.Equal(adopted + 1, _fixture.StoredGeneration);
+        var catalog = service.LoadCatalog();
+        Assert.Equal(_fixture.HashOf(imported.Id + ".csv"), catalog.LocalState.AcceptedContent[imported.Id]);
+        Assert.DoesNotContain(imported.Id, catalog.LocalState.EnabledIds);
+        Assert.False(AiVocabularyPolicy.IsPermitted(catalog.LocalState, imported.Id, false, catalog.Find(imported.Id)!.ContentHash));
         Assert.Equal(["github", "gone-library"], _fixture.StoredEnabledList());
         Assert.DoesNotContain(service.GetEnabledLibraryEntries(), entry => entry.Replacement == "I");
         Assert.True(_fixture.Exists("journal/state.witness"));
-        _ = imported;
-    }
 
-    [Theory]
-    [InlineData("Team terms", "team-terms")]
-    [InlineData("  Team   Terms  ", "team-terms")]
-    [InlineData("C# & .NET", "c-net")]
-    [InlineData("Zulu Notes 2", "zulu-notes-2")]
-    [InlineData("Crème brûlée", "crème-brûlée")]
-    [InlineData("---", "library")]
-    [InlineData("", "library")]
-    [InlineData("İstanbul", "İstanbul")]
-    [InlineData("Team terms (changed outside Scribe)", "team-terms-changed-outside-scribe")]
-    public void The_slug_rule_is_release_0_4_4s_Slugify(string name, string slug)
-    {
-        // Contract 3.5.4's vectors, which D's fixture holds too; each answer is also checked against the rule itself.
-        Assert.Equal(slug, InterimLibraryNaming.Slug(name));
-        Assert.Equal(slug, Reference(name));
+        // The file is a managed library of this version, written by the library CSV codec: it carries the format marker.
+        Assert.Contains("# scribe-format: 2", _fixture.Read(imported.Id + ".csv"), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void The_slug_fixture_agrees_when_it_is_present()
+    public void An_import_takes_release_0_4_4s_ids_through_LibraryNaming_for_every_slug_vector()
     {
-        // tests/fixtures/libraries/slugs.json is the deciders' file; once it lands, J's copy of the rule reads it too.
-        var path = Path.Combine(RepositoryRoot(), "tests", "fixtures", "libraries", "slugs.json");
-        if (!File.Exists(path))
+        // tests/fixtures/libraries/slugs.json is the deciders' file; the Import wrapper derives its id from the name by
+        // LibraryNaming's slug and suffix rules, unprefixed as release 0.4.4 did (review finding G9), and each answer is
+        // also checked against the rule contract 3.5.4 pastes.
+        var checkedVectors = 0;
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(RepositoryRoot(), "tests", "fixtures", "libraries", "slugs.json")));
+        foreach (var vector in document.RootElement.GetProperty("slugs").EnumerateArray())
         {
-            return;
-        }
-
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        foreach (var vector in document.RootElement.EnumerateArray())
-        {
-            if (vector.TryGetProperty("name", out var name) && vector.TryGetProperty("slug", out var slug))
+            var name = vector.GetProperty("name").GetString()!;
+            var slug = vector.GetProperty("slug").GetString()!;
+            Assert.Equal(slug, Reference(name));
+            if (name.Trim().Length == 0)
             {
-                Assert.Equal(slug.GetString(), InterimLibraryNaming.Slug(name.GetString()!));
+                continue;
             }
+
+            using var fresh = new LibraryStorageFixture();
+            var service = fresh.Service();
+            var imported = service.Import("# name: " + name + "\npattern,replacement\nkube,Kubernetes\n", null);
+            Assert.Equal(slug, imported.Id);
+            Assert.Equal(slug + "-2", service.Import("# name: " + name + "\npattern,replacement\nkube,K8s\n", null).Id);
+            checkedVectors++;
         }
+
+        Assert.True(checkedVectors >= 8, $"only {checkedVectors} slug vectors were imported");
     }
 
     [Fact]
-    public void New_and_remapped_ids_take_the_next_free_suffix_without_case()
+    public void An_import_with_no_name_is_an_imported_word_pack_and_never_takes_a_built_in_id()
     {
-        var taken = new HashSet<string>(["custom-team", "CUSTOM-TEAM-2"], StringComparer.OrdinalIgnoreCase);
+        var service = _fixture.Service();
 
-        Assert.Equal("custom-team-3", InterimLibraryNaming.NewCustomId("Team", taken.Contains));
-        Assert.Equal("custom-github", CustomLibraryStore.RemapId("github", new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
-        Assert.Equal("custom-GitHub-2", CustomLibraryStore.RemapId("GitHub", new HashSet<string>(["custom-github"], StringComparer.OrdinalIgnoreCase)));
-        Assert.Equal("Team terms (changed outside Scribe)", InterimLibraryNaming.ChangedOutsideName("Team terms"));
+        var unnamed = service.Import("pattern,replacement\nkube,Kubernetes\n", "   ");
+        var azure = service.Import("# name: Microsoft Azure\npattern,replacement\nx,Y\n", null);
+
+        Assert.Equal(LibraryNaming.ImportedLibraryBaseName, unnamed.Name);
+        Assert.Equal("imported-word-pack", unnamed.Id);
+        Assert.Equal("microsoft-azure-2", azure.Id);
     }
+
+    [Fact]
+    public void Hand_placed_files_and_kept_versions_take_their_ids_from_LibraryNaming()
+    {
+        // The remap of a stem that is a built-in id, a newcomer beside a recorded id, and a kept outside version's id are
+        // LibraryNaming's rules (contract 3.5.4, 6.3), each compared without case.
+        var ids = CustomLibraryStore.AssignIds(["GitHub.csv", "custom-github.csv"], LibraryFileIds.Parse(null), []);
+        Assert.Equal("custom-GitHub-2", ids["GitHub.csv"]);
+        Assert.Equal(LibraryNaming.RemapId("GitHub", ["custom-github"]), ids["GitHub.csv"]);
+        Assert.Equal("custom-github", ids["custom-github.csv"]);
+
+        var recorded = LibraryFileIds.Parse("{\"version\":1,\"files\":{\"github.csv\":\"custom-github\"}}");
+        var later = CustomLibraryStore.AssignIds(["github.csv", "custom-github.csv"], recorded, []);
+        Assert.Equal("custom-github", later["github.csv"]);
+        Assert.Equal(LibraryNaming.Unique("custom-github", id => id.Equals("custom-github", StringComparison.OrdinalIgnoreCase)), later["custom-github.csv"]);
+        Assert.Equal("custom-github-2", later["custom-github.csv"]);
+
+        Assert.Equal("Team terms (changed outside Scribe)", LibraryNaming.ChangedOutsideName("Team terms"));
+    }
+
+    private static void SeedUpgradeFolder(LibraryStorageFixture fixture)
+    {
+        fixture.Write("team-terms.csv", "# name: Team\npattern,replacement\nkube,K8s\nget hub,GitHub Enterprise\n");
+        fixture.Write("team-terms-2.csv", "pattern,replacement\nkube,Kubernetes\n");
+        fixture.Write("github.csv", "pattern,replacement\nprivate codename,Nightjar\nget hub,Twin GitHub\n");
+        fixture.Write("empty.csv", "pattern,replacement\n");
+    }
+
+    // What dictation writes for each spoken form: the winners, by key, whatever order a composition lists them in.
+    private static IReadOnlyList<string> Winners(IEnumerable<DictionaryEntry> entries) =>
+        [.. entries.Select(entry => $"{LibraryTermKey.From(entry.Pattern).Value.ToUpperInvariant()} => {entry.Replacement} ({entry.WholeWord})")
+            .Order(StringComparer.Ordinal)];
 
     // Contract 3.5.4's Slugify, as pasted there.
     private static string Reference(string value)
