@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Tests;
 
@@ -23,6 +24,7 @@ public sealed class HistoryDeletionNotifierTests
         WaitUntil(() => seen.Count == 1);
         Assert.Equal(HistoryDeletionKind.Entry, seen.Single().Kind);
         Assert.Equal("one", seen.Single().Entry!.Text);
+        Assert.Equal(1, seen.Single().Revision);
 
         repo.Delete(999999);
         Assert.Single(seen);
@@ -39,6 +41,35 @@ public sealed class HistoryDeletionNotifierTests
         Assert.Equal(HistoryDeletionKind.Clear, seen[2].Kind);
         Assert.Equal(3, seen.Count);
         _ = old;
+    }
+
+    [Fact]
+    public void Delayed_clear_notice_keeps_later_dictations()
+    {
+        using var folder = new TempDirectory();
+        using var database = new ScribeDatabase(new AppPaths(folder.Path), NullLogger<ScribeDatabase>.Instance);
+        var notifier = new HistoryDeletionNotifier();
+        var repo = new HistoryRepository(database, notifier);
+        var store = new LastTranscriptStore(notifier);
+        store.SeedHistory([repo.Add(Entry("before", DateTimeOffset.UtcNow))], notifier.Revision, () => notifier.Revision);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var delivered = new ManualResetEventSlim();
+        notifier.Deleted += deletion =>
+        {
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            store.ApplyDeletion(deletion);
+            delivered.Set();
+        };
+
+        repo.Clear();
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        store.Set("after");
+        release.Set();
+        Assert.True(delivered.Wait(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(["after"], store.GetRecent());
     }
 
     [Fact]

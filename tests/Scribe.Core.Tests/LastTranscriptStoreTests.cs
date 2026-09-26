@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Xunit;
 
@@ -306,7 +307,7 @@ public sealed class LastTranscriptStoreTests
         store.SeedHistory([
             new HistoryEntry(1, DateTimeOffset.UtcNow.AddMinutes(-1), "live", 1, 1),
             new HistoryEntry(2, DateTimeOffset.UtcNow.AddMinutes(-2), "older", 1, 1),
-        ]);
+        ], 0, () => 0);
 
         Assert.Equal(["live", "older"], store.GetRecent());
     }
@@ -363,11 +364,60 @@ public sealed class LastTranscriptStoreTests
         store.SeedHistory([
             new HistoryEntry(1, cutoff.AddMinutes(-1), "old", 1, 1),
             new HistoryEntry(2, cutoff.AddMinutes(1), "new", 1, 1),
-        ]);
+        ], 0, () => 0);
 
         Assert.NotEmpty(store.ForgetOlderThan(cutoff));
 
         Assert.Equal(["live", "new"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Entry_deletion_removes_only_copies_added_before_the_notice_revision()
+    {
+        var revision = 1L;
+        var store = new LastTranscriptStore(() => revision);
+        store.Set("same");
+        revision = 2;
+        store.Set("other");
+        store.Set("same");
+
+        var deletion = new HistoryDeletion(
+            HistoryDeletionKind.Entry,
+            new HistoryEntry(1, DateTimeOffset.UtcNow, "same", 1, 1),
+            Revision: 2);
+
+        Assert.Single(store.ApplyDeletion(deletion));
+
+        Assert.Equal(["same", "other"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Clear_deletion_keeps_dictations_added_after_the_clear_committed()
+    {
+        var revision = 0L;
+        var store = new LastTranscriptStore(() => revision);
+        store.Set("before");
+        revision = 1;
+        store.Set("after");
+
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.Clear, Revision: 1));
+
+        Assert.Equal(["after"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Retention_deletion_removes_by_history_time()
+    {
+        var cutoff = DateTimeOffset.UtcNow;
+        var store = new LastTranscriptStore();
+        store.SeedHistory([
+            new HistoryEntry(1, cutoff.AddMinutes(-1), "old", 1, 1),
+            new HistoryEntry(2, cutoff.AddMinutes(1), "new", 1, 1),
+        ], 0, () => 0);
+
+        store.ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoff, Revision: 1));
+
+        Assert.Equal(["new"], store.GetRecent());
     }
 
     [Fact]

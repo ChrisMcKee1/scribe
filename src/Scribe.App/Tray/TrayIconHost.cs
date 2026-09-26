@@ -199,7 +199,7 @@ internal sealed class TrayIconHost : IDisposable
         }
 
         return ReadRecentDictations()
-            .Select(text => new LastTranscriptStore.RetainedTranscript(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow))
+            .Select(text => new LastTranscriptStore.RetainedTranscript(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, 0))
             .ToArray();
     }
 

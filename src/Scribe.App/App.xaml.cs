@@ -491,7 +491,7 @@ public partial class App : Application
         // pushed here before the warmup can arm it, and again with every state change.
         _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes);
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
-        SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
+        _ = SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
         UpdateTrayShortcut(_controller.CurrentSettings);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
         // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
@@ -1309,39 +1309,36 @@ public partial class App : Application
         _tray?.SetShortcutSentence(HotkeyText.SentenceName(settings.Hotkey), settings.Hotkey.Mode);
     }
 
-    private void SeedRecentDictationsAsync(IServiceProvider services, HistoryDeletionNotifier deletions, int attempt = 1)
+    private async Task SeedRecentDictationsAsync(IServiceProvider services, HistoryDeletionNotifier deletions)
     {
-        var revision = deletions.Revision;
-        _ = Task.Run(() =>
+        for (var attempt = 1; attempt <= 3; attempt++)
         {
+            var revision = deletions.Revision;
             try
             {
-                var recent = services.GetRequiredService<IHistoryRepository>()
+                var recent = await Task.Run(() => services.GetRequiredService<IHistoryRepository>()
                     .GetRecent(LastTranscriptStore.Capacity)
                     .Where(h => !string.IsNullOrWhiteSpace(h.Text))
-                    .ToList();
+                    .ToList());
 
-                if (Dispatcher.HasShutdownStarted)
+                if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
                 {
                     return;
                 }
 
-                Dispatcher.BeginInvoke(() =>
+                var seeded = await Dispatcher.InvokeAsync(() =>
+                    services.GetRequiredService<LastTranscriptStore>().SeedHistory(recent, revision, () => deletions.Revision));
+                if (seeded)
                 {
-                    if (_controller?.IsClosing == false)
-                    {
-                        if (!services.GetRequiredService<LastTranscriptStore>().SeedHistory(recent, revision, () => deletions.Revision) && attempt < 3)
-                        {
-                            SeedRecentDictationsAsync(services, deletions, attempt + 1);
-                        }
-                    }
-                });
+                    return;
+                }
             }
             catch (Exception ex)
             {
                 _appLog?.LogDebug("Could not seed recent dictations from history ({Failure}).", FailureShape.Describe(ex));
+                return;
             }
-        });
+        }
     }
 
     private void ShowDictationProblem(string legacyMessage, long recordingRevision, string? pillText, bool controllerError)
@@ -1494,25 +1491,9 @@ public partial class App : Application
         }
 
         var store = _host.Services.GetRequiredService<LastTranscriptStore>();
-        QuickAdd.QuickAddWindow? quickAdd = null;
-        switch (deletion.Kind)
-        {
-            case HistoryDeletionKind.Entry when deletion.Entry is { } entry:
-                var removed = store.Forget(entry.Text);
-                quickAdd = _quickAddWindow;
-                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ForgetTranscriptIds(removed));
-                break;
-            case HistoryDeletionKind.Clear:
-                store.Clear();
-                quickAdd = _quickAddWindow;
-                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ClearTranscripts());
-                break;
-            case HistoryDeletionKind.OlderThan when deletion.CutoffUtc is { } cutoff:
-                var removedOlder = store.ForgetOlderThan(cutoff);
-                quickAdd = _quickAddWindow;
-                quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ForgetTranscriptIds(removedOlder));
-                break;
-        }
+        store.ApplyDeletion(deletion);
+        var quickAdd = _quickAddWindow;
+        quickAdd?.Dispatcher.BeginInvoke(() => quickAdd.ApplyHistoryDeletion(deletion));
     }
 
     /// <summary>
@@ -1913,8 +1894,18 @@ public partial class App : Application
     /// deletes stored rows the open grid does not know about, so a write that ignored the grid
     /// would be silently undone by the user's next Save in that window.
     /// </summary>
-    private void ShowQuickAdd() => Dispatcher.Invoke(() =>
+    private void ShowQuickAdd()
     {
+        _ = ShowQuickAddAsync();
+    }
+
+    private async Task ShowQuickAddAsync()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(new Action(ShowQuickAdd));
+            return;
+        }
         if (_host is null || _tray is null)
         {
             return;
@@ -1941,20 +1932,15 @@ public partial class App : Application
             {
                 // Same idea as CopyLastDictation: the in-memory ring is empty on a fresh start, but
                 // history still holds what was dictated before the last restart.
-                var history = services.GetRequiredService<IHistoryRepository>()
-                    .GetRecent(LastTranscriptStore.Capacity)
-                    .Where(h => !string.IsNullOrWhiteSpace(h.Text))
-                    .ToList();
-
                 // Seed rather than just display. A correction saved against a transcript that only
                 // exists in history would otherwise find nothing to repair in the ring, so the fix
                 // would look like it worked while "copy last dictation" still returned the mistake.
-                store.SeedHistory(history);
+                await SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
                 recent = store.GetRecentEntries();
             }
 
             var window = new QuickAdd.QuickAddWindow(
-                recent.Select(source => new QuickAdd.QuickAddWindow.QuickAddSource(source.Id, source.HistoryText, source.Text)).ToList(),
+                recent.Select(source => new QuickAdd.QuickAddWindow.QuickAddSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision)).ToList(),
                 loadExisting: () =>
                 {
                     var baseEntries = _settingsWindow is { } settings
@@ -2023,7 +2009,7 @@ public partial class App : Application
                 .LogError("Failed to open the quick dictionary add window: {Failure}", FailureShape.DescribeWithStack(ex));
             ShowTrayNotice(TrayNotices.QuickAddOpenFailed());
         }
-    });
+    }
 
     /// <summary>
     /// Activates a freshly quick-added rule. Without the reload the entry sits in the database and

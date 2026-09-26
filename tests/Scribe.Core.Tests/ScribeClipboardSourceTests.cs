@@ -37,6 +37,7 @@ public sealed class ScribeClipboardSourceTests
     [InlineData("Clipboard.SetText\r\n(\"x\");")]
     [InlineData("Clipboard.SetDataObject (data);")]
     [InlineData("using Clip = System.Windows.Clipboard; class C { void M() { Clip.SetImage(image); } }")]
+    [InlineData("using/**/Clip = System.Windows.Clipboard; class C { void M() { Clip.SetText(\"x\"); } }")]
     [InlineData("var url = \"https://example.test/Clipboard.SetText(\"; System.Windows.Clipboard.SetFileDropList(files);")]
     [InlineData("using static System.Windows.Clipboard; class C { void M() { SetText(\"x\"); } }")]
     [InlineData("var c = '\"'; Clipboard.SetAudio(stream);")]
@@ -104,10 +105,16 @@ public sealed class ScribeClipboardSourceTests
         {
             if (source[i] == '/' && i + 1 < source.Length && source[i + 1] == '/')
             {
+                result.Append(' ');
                 i += 2;
                 while (i < source.Length && source[i] != '\r' && source[i] != '\n')
                 {
                     i++;
+                }
+
+                if (i < source.Length)
+                {
+                    result.Append(source[i]);
                 }
 
                 continue;
@@ -115,13 +122,20 @@ public sealed class ScribeClipboardSourceTests
 
             if (source[i] == '/' && i + 1 < source.Length && source[i + 1] == '*')
             {
+                result.Append(' ');
                 i += 2;
                 while (i + 1 < source.Length && (source[i] != '*' || source[i + 1] != '/'))
                 {
+                    if (source[i] == '\r' || source[i] == '\n')
+                    {
+                        result.Append(source[i]);
+                    }
+
                     i++;
                 }
 
                 i++;
+                result.Append(' ');
                 continue;
             }
 

@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 
 namespace Scribe.Core.PostProcessing;
 
@@ -16,10 +17,26 @@ public sealed class LastTranscriptStore
     public const int PreviewLength = 42;
 
     private readonly object _gate = new();
+    private readonly Func<long> _currentRevision;
 
-    public sealed record RetainedTranscript(Guid Id, string HistoryText, string Text, DateTimeOffset TimestampUtc);
+    public LastTranscriptStore()
+        : this(() => 0)
+    {
+    }
 
-    private sealed record Slot(Guid Id, string HistoryText, string Current, DateTimeOffset TimestampUtc);
+    public LastTranscriptStore(HistoryDeletionNotifier deletionNotifier)
+        : this(() => deletionNotifier.Revision)
+    {
+    }
+
+    internal LastTranscriptStore(Func<long> currentRevision)
+    {
+        _currentRevision = currentRevision;
+    }
+
+    public sealed record RetainedTranscript(Guid Id, string HistoryText, string Text, DateTimeOffset TimestampUtc, long AddedAtRevision);
+
+    private sealed record Slot(Guid Id, string HistoryText, string Current, DateTimeOffset TimestampUtc, long AddedAtRevision);
 
     // Most recent first. A plain list is fine at this size: inserts shift at most Capacity items.
     private readonly List<Slot> _entries = new(Capacity);
@@ -41,7 +58,7 @@ public sealed class LastTranscriptStore
                 return;
             }
 
-            _entries.Insert(0, new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow));
+            _entries.Insert(0, new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, _currentRevision()));
             if (_entries.Count > Capacity)
             {
                 _entries.RemoveAt(_entries.Count - 1);
@@ -123,12 +140,12 @@ public sealed class LastTranscriptStore
                     continue;
                 }
 
-                _entries.Add(new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow));
+                _entries.Add(new Slot(Guid.NewGuid(), text, text, DateTimeOffset.UtcNow, _currentRevision()));
             }
         }
     }
 
-    public bool SeedHistory(IEnumerable<HistoryEntry>? entries, long capturedRevision = 0, Func<long>? currentRevision = null)
+    public bool SeedHistory(IEnumerable<HistoryEntry>? entries, long capturedRevision, Func<long> currentRevision)
     {
         if (entries is null)
         {
@@ -137,7 +154,7 @@ public sealed class LastTranscriptStore
 
         lock (_gate)
         {
-            if (currentRevision is not null && currentRevision() != capturedRevision)
+            if (currentRevision() != capturedRevision)
             {
                 return false;
             }
@@ -155,7 +172,7 @@ public sealed class LastTranscriptStore
                     continue;
                 }
 
-                _entries.Add(new Slot(Guid.NewGuid(), history.Text, history.Text, history.TimestampUtc));
+                _entries.Add(new Slot(Guid.NewGuid(), history.Text, history.Text, history.TimestampUtc, capturedRevision));
             }
 
             return true;
@@ -194,6 +211,19 @@ public sealed class LastTranscriptStore
     }
 
 
+    public IReadOnlyList<Guid> ApplyDeletion(HistoryDeletion deletion)
+    {
+        lock (_gate)
+        {
+            var removed = _entries
+                .Where(entry => HistoryDeletionNotifier.Covers(deletion, entry.HistoryText, entry.TimestampUtc, entry.AddedAtRevision))
+                .Select(entry => entry.Id)
+                .ToArray();
+            _entries.RemoveAll(entry => removed.Contains(entry.Id));
+            return removed;
+        }
+    }
+
     /// <summary>Removes every retained transcript.</summary>
     public void Clear()
     {
@@ -211,29 +241,11 @@ public sealed class LastTranscriptStore
             return [];
         }
 
-        lock (_gate)
-        {
-            var removed = _entries
-                .Where(entry => string.Equals(entry.Current, text, StringComparison.Ordinal) || string.Equals(entry.HistoryText, text, StringComparison.Ordinal))
-                .Select(entry => entry.Id)
-                .ToArray();
-            _entries.RemoveAll(entry => removed.Contains(entry.Id));
-            return removed;
-        }
+        return ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.Entry, new HistoryEntry(0, DateTimeOffset.UtcNow, text, 0, 0), Revision: long.MaxValue));
     }
 
-    public IReadOnlyList<Guid> ForgetOlderThan(DateTimeOffset cutoffUtc)
-    {
-        lock (_gate)
-        {
-            var removed = _entries
-                .Where(entry => entry.TimestampUtc < cutoffUtc)
-                .Select(entry => entry.Id)
-                .ToArray();
-            _entries.RemoveAll(entry => removed.Contains(entry.Id));
-            return removed;
-        }
-    }
+    public IReadOnlyList<Guid> ForgetOlderThan(DateTimeOffset cutoffUtc) =>
+        ApplyDeletion(new HistoryDeletion(HistoryDeletionKind.OlderThan, CutoffUtc: cutoffUtc));
 
     /// <summary>
     /// Returns an immutable snapshot of the retained transcripts, most recent first.
@@ -251,7 +263,7 @@ public sealed class LastTranscriptStore
     {
         lock (_gate)
         {
-            return _entries.Select(entry => new RetainedTranscript(entry.Id, entry.HistoryText, entry.Current, entry.TimestampUtc)).ToArray();
+            return _entries.Select(entry => new RetainedTranscript(entry.Id, entry.HistoryText, entry.Current, entry.TimestampUtc, entry.AddedAtRevision)).ToArray();
         }
     }
 

@@ -13,7 +13,7 @@ public enum HistoryDeletionKind
     OlderThan,
 }
 
-public sealed record HistoryDeletion(HistoryDeletionKind Kind, HistoryEntry? Entry = null, DateTimeOffset? CutoffUtc = null);
+public sealed record HistoryDeletion(HistoryDeletionKind Kind, HistoryEntry? Entry = null, DateTimeOffset? CutoffUtc = null, long Revision = 0);
 
 public sealed class HistoryDeletionNotifier
 {
@@ -39,10 +39,20 @@ public sealed class HistoryDeletionNotifier
 
     internal void Notify(HistoryDeletion deletion)
     {
-        Interlocked.Increment(ref _revision);
-        _queue.Enqueue(deletion);
+        var revision = Interlocked.Increment(ref _revision);
+        _queue.Enqueue(deletion with { Revision = revision });
         _signal.Release();
     }
+
+    public static bool Covers(HistoryDeletion deletion, string? historyText, DateTimeOffset timestampUtc, long addedAtRevision) =>
+        deletion.Kind switch
+        {
+            HistoryDeletionKind.Entry when deletion.Entry is { } entry =>
+                addedAtRevision < deletion.Revision && string.Equals(historyText, entry.Text, StringComparison.Ordinal),
+            HistoryDeletionKind.Clear => addedAtRevision < deletion.Revision,
+            HistoryDeletionKind.OlderThan when deletion.CutoffUtc is { } cutoff => timestampUtc < cutoff,
+            _ => false,
+        };
 
     private async Task DrainAsync()
     {

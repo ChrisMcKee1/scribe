@@ -1,3 +1,5 @@
+using Scribe.Core.Persistence;
+
 namespace Scribe.Core.Settings;
 
 public sealed record QuickAddSourceState(
@@ -28,9 +30,39 @@ public static class QuickAddSources
             currentRemoved && hasSavableCorrection ? RemovedMessage : null);
     }
 
+
+    public static QuickAddSourceState<TSource> ApplyDeletion<TSource>(
+        IEnumerable<TSource> sources,
+        TSource? currentSource,
+        HistoryDeletion deletion,
+        Func<TSource, string> historyText,
+        Func<TSource, DateTimeOffset> timestampUtc,
+        Func<TSource, long> addedAtRevision,
+        bool hasSavableCorrection)
+        where TSource : class
+    {
+        var sourceList = sources.ToList();
+        var remaining = sourceList
+            .Where(source => !HistoryDeletionNotifier.Covers(deletion, historyText(source), timestampUtc(source), addedAtRevision(source)))
+            .ToList();
+        var currentRemoved = currentSource is not null &&
+            HistoryDeletionNotifier.Covers(deletion, historyText(currentSource), timestampUtc(currentSource), addedAtRevision(currentSource));
+        return new QuickAddSourceState<TSource>(
+            remaining,
+            currentRemoved,
+            currentRemoved && hasSavableCorrection,
+            currentRemoved && hasSavableCorrection ? RemovedMessage : null);
+    }
+
     public static QuickAddSourceState Clear(bool hasSavableCorrection) =>
         new([], CurrentRemoved: true, KeepCorrection: hasSavableCorrection, hasSavableCorrection ? RemovedMessage : null);
 
     public static QuickAddSourceState ClearCurrent(bool hasSavableCorrection) =>
         new([], CurrentRemoved: true, KeepCorrection: hasSavableCorrection, hasSavableCorrection ? RemovedMessage : null);
 }
+
+public sealed record QuickAddSourceState<TSource>(
+    IReadOnlyList<TSource> Sources,
+    bool CurrentRemoved,
+    bool KeepCorrection,
+    string? Message);

@@ -71,7 +71,13 @@ public partial class QuickAddWindow : FluentWindow
         string? CorrectedTranscript,
         bool CloseAfterSaving);
 
-    public sealed record QuickAddSource(Guid? Id, string HistoryText, string Text);
+    public sealed record QuickAddSource(Guid? Id, string HistoryText, string Text, DateTimeOffset TimestampUtc, long AddedAtRevision)
+    {
+        public QuickAddSource(Guid? id, string historyText, string text)
+            : this(id, historyText, text, DateTimeOffset.UtcNow, 0)
+        {
+        }
+    }
 
     public event Action<QuickAddResult>? Saved;
 
@@ -131,7 +137,7 @@ public partial class QuickAddWindow : FluentWindow
 
         _sources = recentTranscripts
             .Where(source => !string.IsNullOrWhiteSpace(source.Text))
-            .Select(source => new TranscriptSource(source.Id, source.HistoryText, source.Text))
+            .Select(source => new TranscriptSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision))
             .ToList();
 
         if (_sources.Count == 0)
@@ -234,6 +240,26 @@ public partial class QuickAddWindow : FluentWindow
 
         var state = QuickAddSources.ClearCurrent(HasUnsavedSavableCorrection());
         ClearDeletedTranscript(keepCorrection: state.KeepCorrection, state.Message);
+    }
+
+    public void ApplyHistoryDeletion(HistoryDeletion deletion)
+    {
+        var current = RecentPicker.SelectedItem as TranscriptSource;
+        var state = QuickAddSources.ApplyDeletion(
+            _sources,
+            current,
+            deletion,
+            source => source.Original,
+            source => source.TimestampUtc,
+            source => source.AddedAtRevision,
+            HasUnsavedSavableCorrection());
+        _sources.Clear();
+        _sources.AddRange(state.Sources);
+        RecentPicker.Items.Refresh();
+        if (state.CurrentRemoved)
+        {
+            ClearDeletedTranscript(state.KeepCorrection, state.Message);
+        }
     }
 
     public void ClearTranscripts()
@@ -1099,11 +1125,13 @@ public partial class QuickAddWindow : FluentWindow
         }
     }
 
-    private sealed class TranscriptSource(Guid? id, string historyText, string text) : INotifyPropertyChanged
+    private sealed class TranscriptSource(Guid? id, string historyText, string text, DateTimeOffset timestampUtc, long addedAtRevision) : INotifyPropertyChanged
     {
         public Guid? Id { get; } = id;
         public string Original { get; } = historyText;
         public string Text { get; private set; } = text;
+        public DateTimeOffset TimestampUtc { get; } = timestampUtc;
+        public long AddedAtRevision { get; } = addedAtRevision;
         public string Preview => LastTranscriptStore.FormatPreview(Text, maxLength: 64);
 
         public void Update(string text)
