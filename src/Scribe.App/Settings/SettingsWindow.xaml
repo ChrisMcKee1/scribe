@@ -2682,7 +2682,11 @@
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock Text="How long each step takes" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock x:Name="StatsSummaryText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="No dictations in the last 7 days."/>
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="StatsSummaryText" Grid.Column="0" Style="{StaticResource CardDescription}" Text="No dictations in the last 7 days."/>
+                                            <ui:Button x:Name="StatsRetryButton" Grid.Column="1" Content="Try again" Margin="12,0,0,0" MinWidth="96" Visibility="Collapsed" Click="StatsRetryButton_Click"/>
+                                        </Grid>
                                         <Grid x:Name="StatsGrid" Margin="0,12,0,0" Visibility="Collapsed">
                                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="1.4*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -2703,12 +2707,9 @@
                                 <ui:CardExpander x:Name="SpeedDetailsExpander" IsExpanded="False" AutomationProperties.Name="Speed details">
                                     <ui:CardExpander.Header><StackPanel><TextBlock Text="Speed details" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Average, fastest and slowest runs by step."/></StackPanel></ui:CardExpander.Header>
                                     <StackPanel Margin="0,8,0,0">
-                                        <UniformGrid Columns="4" Margin="0,0,0,12">
-                                            <StackPanel><TextBlock x:Name="StatWeekDictations" Style="{StaticResource MetricValue}"/><TextBlock Text="dictations" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                            <StackPanel><TextBlock x:Name="StatWeekSpeech" Style="{StaticResource MetricValue}"/><TextBlock Text="speech captured" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                            <StackPanel><TextBlock x:Name="StatLongestDictation" Style="{StaticResource MetricValue}"/><TextBlock Text="longest dictation" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                            <StackPanel><TextBlock x:Name="StatBestPace" Style="{StaticResource MetricValue}"/><TextBlock Text="best pace" Style="{StaticResource MetricLabel}"/></StackPanel>
-                                        </UniformGrid>
+                                        <TextBlock x:Name="SpeedDetailsCountText" Style="{StaticResource CardDescription}" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="SpeedDetailsCapText" Style="{StaticResource CardDescription}" Margin="0,0,0,4" Visibility="Collapsed" Text="Only your latest 1,000 dictations are counted."/>
+                                        <TextBlock x:Name="SpeedDetailsBestText" Style="{StaticResource CardDescription}" Margin="0,0,0,12"/>
                                         <TextBlock x:Name="DecodeSpeedTitle" Text="Speech recognition" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="DecodeSummaryHint" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Speech recognition time only. AI cleanup isn't counted here."/>
                                         <UniformGrid x:Name="DecodeMetricsGrid" Columns="3" Margin="0,8,0,12" Visibility="Collapsed"><StackPanel><TextBlock x:Name="StatDecodeAverage" Style="{StaticResource MetricValue}"/><TextBlock Text="average" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatDecodeMin" Style="{StaticResource MetricValue}"/><TextBlock Text="fastest" Style="{StaticResource MetricLabel}"/></StackPanel><StackPanel><TextBlock x:Name="StatDecodeMax" Style="{StaticResource MetricValue}"/><TextBlock Text="slowest" Style="{StaticResource MetricLabel}"/></StackPanel></UniformGrid>
