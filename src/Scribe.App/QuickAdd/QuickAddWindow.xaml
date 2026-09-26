@@ -37,7 +37,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">
-                        <Grid Background="Transparent" SnapsToDevicePixels="True">
+                        <Border Background="Transparent" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="18"/>
                                 <ColumnDefinition Width="*"/>
@@ -63,6 +64,7 @@
                                               VerticalAlignment="Center"
                                               RecognizesAccessKey="True"/>
                         </Grid>
+                        </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Box" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/>
@@ -145,7 +147,7 @@
                    IsHitTestVisible="False"
                    AutomationProperties.LiveSetting="Polite"/>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="BodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="24,8,24,16">
                 <TextBlock x:Name="IntroText"
                            Style="{StaticResource CardDescription}"
@@ -314,5 +316,7 @@
         </Border>
     </Grid>
 </ui:FluentWindow>
+
+
 
 

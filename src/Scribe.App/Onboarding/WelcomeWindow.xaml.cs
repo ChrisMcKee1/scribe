@@ -41,8 +41,8 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 
     private void ApplyWindowFit()
     {
-        var area = SystemParameters.WorkArea;
-        var fit = WindowFit.Compute(560, 640, 440, 460, new WorkArea(area.Left, area.Top, area.Width, area.Height), Left, Top);
+        var area = WindowPlacement.WorkAreaFor(this);
+        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top);
         MinWidth = fit.MinWidth;
         MinHeight = fit.MinHeight;
         Width = fit.Width;

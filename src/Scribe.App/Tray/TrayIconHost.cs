@@ -263,6 +263,7 @@ internal sealed class TrayIconHost : IDisposable
     private MenuItem BuildMicrophoneMenu(TrayMenuItem item)
     {
         var parent = new MenuItem { Header = HeaderWithAccessKey(item.Label, item.AccessKey), IsEnabled = item.Enabled };
+        ApplyTrayTemplate(parent, hasSubmenu: true);
         MicrophoneMenu? picker;
         try
         {

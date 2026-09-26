@@ -317,8 +317,6 @@ public partial class QuickAddWindow : FluentWindow
         if (!WordsList.IsKeyboardFocusWithin)
         {
             _keyboardFocusInWords = false;
-            _focusIndex = -1;
-            UpdateFocusedChip();
             UpdateHint();
         }
     }
@@ -355,8 +353,6 @@ public partial class QuickAddWindow : FluentWindow
         if (!WordsList.IsKeyboardFocusWithin)
         {
             _keyboardFocusInWords = false;
-            _focusIndex = -1;
-            UpdateFocusedChip();
             UpdateHint();
         }
     }
@@ -686,7 +682,7 @@ public partial class QuickAddWindow : FluentWindow
         }
         else if (_announcementTimer.IsEnabled)
         {
-            ScheduleStatusAnnouncement(_pendingAnnouncementText ?? plan.Message);
+            ScheduleStatusAnnouncement(plan.Message);
         }
     }
 
@@ -780,8 +776,9 @@ public partial class QuickAddWindow : FluentWindow
     }
 
 
-    private static bool IsOpenDropDown(object originalSource) =>
-        FindAncestor<ComboBox>(originalSource as DependencyObject) is { IsDropDownOpen: true };
+    private bool IsOpenDropDown(object originalSource) =>
+        RecentPicker.IsDropDownOpen
+        || FindAncestor<ComboBox>(originalSource as DependencyObject) is { IsDropDownOpen: true };
 
     private bool IsSaveButtonSource(object originalSource)
     {
@@ -814,6 +811,13 @@ public partial class QuickAddWindow : FluentWindow
         }
 
         primary.IsDefault = false;
+        primary.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+            }
+        };
         close.IsDefault = true;
         close.IsCancel = true;
         close.Focus();
@@ -866,7 +870,8 @@ public partial class QuickAddWindow : FluentWindow
         }
 
         _vocabulary = ReadVocabulary();
-        var scrollOffset = TranscriptScroll.VerticalOffset;
+        var transcriptScrollOffset = TranscriptScroll.VerticalOffset;
+        var bodyScrollOffset = BodyScroll.VerticalOffset;
         LoadTranscript(corrected);
         RunWithoutFieldChanged(() =>
         {
@@ -877,13 +882,20 @@ public partial class QuickAddWindow : FluentWindow
         _dirtySinceSave = false;
         SavedDetailText.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
         CopyFixedButton.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
-        TranscriptScroll.ScrollToVerticalOffset(scrollOffset);
+        TranscriptScroll.ScrollToVerticalOffset(transcriptScrollOffset);
         ShowResult(QuickDictionaryAdd.Saved(savedRequest));
         FocusWordsAtInitialWord();
+        Dispatcher.BeginInvoke(() =>
+        {
+            BodyScroll.ScrollToVerticalOffset(bodyScrollOffset);
+            TranscriptScroll.ScrollToVerticalOffset(transcriptScrollOffset);
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void ShowResult(QuickDictionaryAdd.Plan result)
     {
+        _announcementTimer.Stop();
+        _pendingAnnouncementText = null;
         _currentPlan = result;
         _lastPlan = result;
         StatusText.Text = result.Message;
