@@ -145,6 +145,38 @@ public static class RemoteActivityPolicy
         return savedSettings.EnableAiCleanup &&
             draft.EnableAiCleanup &&
             savedSettings.AiCleanupProvider == draft.AiCleanupProvider &&
-            RemoteActivityFingerprint.From(savedSettings).Equals(RemoteActivityFingerprint.From(draft));
+            SameProviderConfiguration(savedSettings, draft, savedSettings.AiCleanupProvider);
     }
+
+    private static bool SameProviderConfiguration(AppSettings saved, AppSettings draft, CleanupProvider provider) => provider switch
+    {
+        CleanupProvider.FoundryLocal =>
+            Same(EmptyToNull(saved.AiCleanupModel), EmptyToNull(draft.AiCleanupModel)),
+        CleanupProvider.AzureFoundry =>
+            Same(EmptyToNull(saved.AiCleanupAzureEndpoint), EmptyToNull(draft.AiCleanupAzureEndpoint)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureDeployment), EmptyToNull(draft.AiCleanupAzureDeployment)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureSubscriptionId), EmptyToNull(draft.AiCleanupAzureSubscriptionId)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureSubscriptionTenantId), EmptyToNull(draft.AiCleanupAzureSubscriptionTenantId)) &&
+            saved.AiCleanupAzureAuthMode == draft.AiCleanupAzureAuthMode &&
+            Same(EmptyToNull(saved.AiCleanupAzureTenantId), EmptyToNull(draft.AiCleanupAzureTenantId)) &&
+            Same(EmptyToNull(saved.AiCleanupAzureClientId), EmptyToNull(draft.AiCleanupAzureClientId)) &&
+            Same(RawEmptyToNull(saved.AiCleanupAzureClientSecret), RawEmptyToNull(draft.AiCleanupAzureClientSecret)) &&
+            Same(RawEmptyToNull(saved.AiCleanupAzureApiKey), RawEmptyToNull(draft.AiCleanupAzureApiKey)),
+        CleanupProvider.OpenAiCompatible =>
+            Same(EmptyToNull(saved.AiCleanupCustomEndpoint), EmptyToNull(draft.AiCleanupCustomEndpoint)) &&
+            Same(EmptyToNull(saved.AiCleanupCustomModel), EmptyToNull(draft.AiCleanupCustomModel)) &&
+            Same(RawEmptyToNull(saved.AiCleanupCustomApiKey), RawEmptyToNull(draft.AiCleanupCustomApiKey)),
+        CleanupProvider.GitHubCopilot =>
+            Same(EmptyToNull(saved.AiCleanupCopilotModel), EmptyToNull(draft.AiCleanupCopilotModel)),
+        _ => false,
+    };
+
+    private static string? EmptyToNull(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? RawEmptyToNull(string? value) =>
+        string.IsNullOrEmpty(value) ? null : value;
+
+    private static bool Same(string? left, string? right) =>
+        string.Equals(left, right, StringComparison.Ordinal);
 }

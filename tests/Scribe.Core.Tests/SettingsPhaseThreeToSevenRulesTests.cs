@@ -136,6 +136,9 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(CleanupStatus.Disabled, true, false, false, FoundryLocalSetupStage.RuntimeReady)]
     [InlineData(CleanupStatus.Disabled, true, true, false, FoundryLocalSetupStage.CachedUnloaded)]
     [InlineData(CleanupStatus.Disabled, true, true, null, FoundryLocalSetupStage.Checking)]
+    [InlineData(CleanupStatus.Disabled, true, true, true, FoundryLocalSetupStage.Loaded)]
+    [InlineData(CleanupStatus.Unavailable, true, true, false, FoundryLocalSetupStage.CachedUnloaded)]
+    [InlineData(CleanupStatus.Unavailable, true, false, null, FoundryLocalSetupStage.Failed)]
     [InlineData(CleanupStatus.Disabled, false, false, false, FoundryLocalSetupStage.NotSetUp)]
     public void Foundry_setup_distinguishes_cached_and_unknown_residency(
         CleanupStatus status,
@@ -342,9 +345,35 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal("Not tested yet.", state.StatusRow!.Text);
     }
 
+    [Fact]
+    public void Ai_cleanup_switch_away_edit_other_provider_and_switch_back_stays_saved_active()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        saved.AiCleanupAzureEndpoint = "https://example.test";
+        saved.AiCleanupAzureDeployment = "cleanup";
+        saved.AiCleanupModel = "qwen3-1.7b";
+
+        var draft = saved.Clone();
+        draft.AiCleanupProvider = CleanupProvider.FoundryLocal;
+        draft.AiCleanupModel = "phi-4";
+        draft.AiCleanupProvider = CleanupProvider.AzureFoundry;
+
+        var state = AiCleanupPageState.Describe(
+            saved,
+            draft,
+            CleanupStatus.Ready,
+            azureSetup: new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true));
+
+        Assert.Equal("On. AI cleanup is ready.", state.StatusLine);
+        Assert.NotEqual("Save to start AI cleanup.", state.StatusLine);
+    }
+
     public static TheoryData<AzureSetupResult, AiCleanupStatusKind, string, string?, bool, string?> AzureRows => new()
     {
         { AzureSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Check sign-in", true, null },
+        { AzureSetupResult.CheckingSignIn, AiCleanupStatusKind.Busy, "Checking your Azure sign-in...", null, false, null },
         { AzureSetupResult.CliMissing, AiCleanupStatusKind.Warning, "Azure CLI isn't installed.", "Install Azure CLI", true, "Use an API key instead" },
         { AzureSetupResult.NotSignedIn, AiCleanupStatusKind.Info, "Not signed in to Azure.", "Sign in", true, "Use an API key instead" },
         { AzureSetupResult.SigningIn, AiCleanupStatusKind.Busy, "Finish signing in in your browser.", null, false, null },
@@ -354,9 +383,13 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
         { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },
+        { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Verify", true, null },
+        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Verify again.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
         { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
         { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Verified.", "Verify", true, null },
+        { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Verify", true, null },
+        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Verify again.", "Verify", true, null },
     };
 
     [Theory]
@@ -369,7 +402,13 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         bool actionEnabled,
         string? secondary)
     {
-        var state = ActiveAzure(new AzureAiSetupState(result, SafeReason: "no access"));
+        var reason = result switch
+        {
+            AzureSetupResult.ApiKeyVerificationFailed => "Azure denied access. Check the resource key and its access settings. (403)",
+            AzureSetupResult.ServicePrincipalVerificationFailed => "Azure denied access. Check the app registration and resource role. (403)",
+            _ => "no access",
+        };
+        var state = ActiveAzure(new AzureAiSetupState(result, SafeReason: reason));
 
         Assert.Equal(kind, state.StatusRow!.Kind);
         Assert.Equal(text, state.StatusRow.Text);
@@ -423,7 +462,42 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(action, state.StatusRow.ActionText);
     }
 
-    private static AiCleanupPageDescription ActiveAzure(AzureAiSetupState setup)
+    public static TheoryData<CleanupProvider, CleanupStatus, string?, string> RemoteStatusLines => new()
+    {
+        { CleanupProvider.AzureFoundry, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Initializing, null, "On. Getting ready..." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, null, "On, but not ready. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "Not signed in", "On, but not ready: Not signed in. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.GitHubCopilot, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
+        { CleanupProvider.GitHubCopilot, CleanupStatus.Initializing, null, "On. Getting ready..." },
+        { CleanupProvider.GitHubCopilot, CleanupStatus.Unavailable, null, "On, but not ready. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Initializing, null, "On. Getting ready..." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Connection refused", "On, but not ready: Connection refused. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
+    };
+
+    [Theory]
+    [MemberData(nameof(RemoteStatusLines))]
+    public void Saved_active_remote_status_lines_follow_live_status(
+        CleanupProvider provider,
+        CleanupStatus status,
+        string? reason,
+        string expected)
+    {
+        var state = provider switch
+        {
+            CleanupProvider.AzureFoundry => ActiveAzure(new AzureAiSetupState(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true), status, reason),
+            CleanupProvider.GitHubCopilot => ActiveCopilot(new CopilotSetupState(CopilotSetupResult.Installing), status, reason),
+            CleanupProvider.OpenAiCompatible => ActiveCustom(new CustomEndpointSetupState(CustomEndpointTestResult.Connected, "qwen"), status, reason),
+            _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, null),
+        };
+
+        Assert.Equal(expected, state.StatusLine);
+    }
+
+    private static AiCleanupPageDescription ActiveAzure(AzureAiSetupState setup, CleanupStatus status = CleanupStatus.Ready, string? safeReason = null)
     {
         var saved = AppSettings.CreateDefault();
         saved.EnableAiCleanup = true;
@@ -431,19 +505,19 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         saved.AiCleanupAzureEndpoint = "https://example.test";
         saved.AiCleanupAzureDeployment = "cleanup";
         var draft = saved.Clone();
-        return AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, azureSetup: setup);
+        return AiCleanupPageState.Describe(saved, draft, status, azureSetup: setup, safeReason: safeReason);
     }
 
-    private static AiCleanupPageDescription ActiveCopilot(CopilotSetupState setup)
+    private static AiCleanupPageDescription ActiveCopilot(CopilotSetupState setup, CleanupStatus status = CleanupStatus.Ready, string? safeReason = null)
     {
         var saved = AppSettings.CreateDefault();
         saved.EnableAiCleanup = true;
         saved.AiCleanupProvider = CleanupProvider.GitHubCopilot;
         var draft = saved.Clone();
-        return AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, copilotSetup: setup);
+        return AiCleanupPageState.Describe(saved, draft, status, copilotSetup: setup, safeReason: safeReason);
     }
 
-    private static AiCleanupPageDescription ActiveCustom(CustomEndpointSetupState setup)
+    private static AiCleanupPageDescription ActiveCustom(CustomEndpointSetupState setup, CleanupStatus status = CleanupStatus.Ready, string? safeReason = null)
     {
         var saved = AppSettings.CreateDefault();
         saved.EnableAiCleanup = true;
@@ -451,6 +525,6 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         saved.AiCleanupCustomEndpoint = "http://localhost:11434/v1";
         saved.AiCleanupCustomModel = "qwen";
         var draft = saved.Clone();
-        return AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, customSetup: setup);
+        return AiCleanupPageState.Describe(saved, draft, status, customSetup: setup, safeReason: safeReason);
     }
 }

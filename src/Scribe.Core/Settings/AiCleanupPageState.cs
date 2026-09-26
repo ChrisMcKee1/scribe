@@ -42,6 +42,7 @@ public sealed record AiCleanupStatusRow2(
 public enum AzureSetupResult
 {
     NotChecked,
+    CheckingSignIn,
     CliMissing,
     NotSignedIn,
     SigningIn,
@@ -51,9 +52,13 @@ public enum AzureSetupResult
     ApiKeyIncomplete,
     ApiKeyComplete,
     ApiKeyVerified,
+    ApiKeyVerificationFailed,
+    ApiKeyVerifyAgain,
     ServicePrincipalIncomplete,
     ServicePrincipalComplete,
     ServicePrincipalVerified,
+    ServicePrincipalVerificationFailed,
+    ServicePrincipalVerifyAgain,
 }
 
 public sealed record AzureAiSetupState(
@@ -272,24 +277,32 @@ public static class AiCleanupPageState
     private static AiCleanupPageDescription DescribeAzure(CleanupStatus liveStatus, AzureAiSetupState setup, string? safeReason)
     {
         var row = AzureRow(setup);
-        var line = setup.Result switch
+        var line = liveStatus switch
         {
-            AzureSetupResult.CliMissing => "On, but not ready: Azure CLI isn't installed.",
-            AzureSetupResult.NotSignedIn => "On, but not ready: you're not signed in to Azure.",
-            AzureSetupResult.SigningIn => "On, but not ready: you're not signed in to Azure.",
-            AzureSetupResult.ServicePrincipalIncomplete => "On, but not ready: the app details aren't complete.",
-            AzureSetupResult.ApiKeyIncomplete => "On, but not ready: enter the endpoint, deployment name and key.",
-            AzureSetupResult.ListingFailed => "On, but not ready. Until it's ready, Scribe types what it hears.",
-            AzureSetupResult.NotChecked when liveStatus != CleanupStatus.Ready => "On. Choose Check sign-in to continue.",
-            _ when liveStatus is CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
-            _ when liveStatus == CleanupStatus.Unavailable && !string.IsNullOrWhiteSpace(safeReason) => $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
-            _ => "On. AI cleanup is ready.",
+            CleanupStatus.Ready => setup.Result switch
+            {
+                AzureSetupResult.CliMissing => "On, but not ready: Azure CLI isn't installed.",
+                AzureSetupResult.NotSignedIn or AzureSetupResult.SigningIn => "On, but not ready: you're not signed in to Azure.",
+                AzureSetupResult.ServicePrincipalIncomplete => "On, but not ready: the app details aren't complete.",
+                AzureSetupResult.ApiKeyIncomplete => "On, but not ready: enter the endpoint, deployment name and key.",
+                AzureSetupResult.ListingFailed or AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed =>
+                    "On, but not ready. Until it's ready, Scribe types what it hears.",
+                AzureSetupResult.NotChecked => "On. Choose Check sign-in to continue.",
+                _ => "On. AI cleanup is ready.",
+            },
+            CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
+            CleanupStatus.Unavailable => string.IsNullOrWhiteSpace(safeReason)
+                ? "On, but not ready. Until it's ready, Scribe types what it hears."
+                : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
+            CleanupStatus.Disabled => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
+            _ => "On. Choose Check sign-in to continue.",
         };
         return new(true, line, null, row);
     }
 
     private static AiCleanupStatusRow2 AzureRow(AzureAiSetupState setup) => setup.Result switch
     {
+        AzureSetupResult.CheckingSignIn => new(AiCleanupStatusKind.Busy, "Checking your Azure sign-in..."),
         AzureSetupResult.CliMissing => new(AiCleanupStatusKind.Warning, "Azure CLI isn't installed.", new("Install Azure CLI"), new("Use an API key instead")),
         AzureSetupResult.NotSignedIn => new(AiCleanupStatusKind.Info, "Not signed in to Azure.", new("Sign in"), new("Use an API key instead")),
         AzureSetupResult.SigningIn => new(AiCleanupStatusKind.Busy, "Finish signing in in your browser."),
@@ -300,19 +313,28 @@ public static class AiCleanupPageState
         AzureSetupResult.ApiKeyComplete or AzureSetupResult.ServicePrincipalComplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", new("Verify")),
         AzureSetupResult.ApiKeyVerified => new(AiCleanupStatusKind.Success, "Azure accepted the key.", new("Verify")),
         AzureSetupResult.ServicePrincipalVerified => new(AiCleanupStatusKind.Success, "Verified.", new("Verify")),
+        AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed => new(AiCleanupStatusKind.Error, setup.SafeReason ?? "Couldn't verify the details.", new("Verify")),
+        AzureSetupResult.ApiKeyVerifyAgain or AzureSetupResult.ServicePrincipalVerifyAgain => new(AiCleanupStatusKind.Info, "Verify again.", new("Verify")),
         _ => new(AiCleanupStatusKind.Info, "Not checked yet.", new("Check sign-in")),
     };
 
     private static AiCleanupPageDescription DescribeCopilot(CleanupStatus liveStatus, CopilotSetupState setup, string? safeReason)
     {
         var row = CopilotRow(setup);
-        var line = setup.Result switch
+        var line = liveStatus switch
         {
-            CopilotSetupResult.ToolNotFound => "On, but not ready: GitHub Copilot isn't installed.",
-            CopilotSetupResult.NotChecked => "On. Choose Get models to see what your subscription includes.",
-            _ when liveStatus is CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
-            _ when liveStatus == CleanupStatus.Unavailable && !string.IsNullOrWhiteSpace(safeReason) => $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
-            _ => "On. AI cleanup is ready.",
+            CleanupStatus.Ready => setup.Result switch
+            {
+                CopilotSetupResult.ToolNotFound => "On, but not ready: GitHub Copilot isn't installed.",
+                CopilotSetupResult.NotChecked => "On. Choose Get models to see what your subscription includes.",
+                _ => "On. AI cleanup is ready.",
+            },
+            CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
+            CleanupStatus.Unavailable => string.IsNullOrWhiteSpace(safeReason)
+                ? "On, but not ready. Until it's ready, Scribe types what it hears."
+                : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
+            CleanupStatus.Disabled => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
+            _ => "On. Choose Get models to see what your subscription includes.",
         };
         return new(true, line, null, row);
     }
@@ -330,9 +352,16 @@ public static class AiCleanupPageState
     private static AiCleanupPageDescription DescribeCustom(CleanupStatus liveStatus, CustomEndpointSetupState setup, string? safeReason)
     {
         var row = CustomRow(setup);
-        var line = liveStatus == CleanupStatus.Unavailable && !string.IsNullOrWhiteSpace(safeReason)
-            ? $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears."
-            : "On. Set up the AI service, then test the connection.";
+        var line = liveStatus switch
+        {
+            CleanupStatus.Ready => "On. AI cleanup is ready.",
+            CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
+            CleanupStatus.Unavailable => string.IsNullOrWhiteSpace(safeReason)
+                ? "On, but not ready. Until it's ready, Scribe types what it hears."
+                : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
+            CleanupStatus.Disabled => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
+            _ => "On. Set up the AI service, then test the connection.",
+        };
         return new(true, line, null, row);
     }
 

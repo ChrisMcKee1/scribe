@@ -55,15 +55,30 @@ public static class FoundryLocalSetup
     public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached) =>
         FromCleanupStatus(status, runtimeReady, modelCached, modelLoaded: null);
 
-    public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached, bool? modelLoaded) => status switch
+    public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached, bool? modelLoaded)
     {
-        CleanupStatus.Ready => FoundryLocalSetupStage.Loaded,
-        CleanupStatus.Initializing => FoundryLocalSetupStage.SettingUp,
-        CleanupStatus.Downloading => FoundryLocalSetupStage.DownloadingOrLoading,
-        CleanupStatus.Unavailable => FoundryLocalSetupStage.Failed,
-        _ => modelLoaded is null && modelCached ? FoundryLocalSetupStage.Checking :
-            modelLoaded == false && modelCached ? FoundryLocalSetupStage.CachedUnloaded :
-            runtimeReady && !modelCached ? FoundryLocalSetupStage.RuntimeReady :
-            FoundryLocalSetupStage.NotSetUp,
-    };
+        if (modelLoaded == true)
+        {
+            return FoundryLocalSetupStage.Loaded;
+        }
+
+        if (modelLoaded == false && modelCached)
+        {
+            return FoundryLocalSetupStage.CachedUnloaded;
+        }
+
+        if (modelLoaded is null && modelCached)
+        {
+            return FoundryLocalSetupStage.Checking;
+        }
+
+        return status switch
+        {
+            CleanupStatus.Ready => FoundryLocalSetupStage.Loaded,
+            CleanupStatus.Initializing => FoundryLocalSetupStage.SettingUp,
+            CleanupStatus.Downloading => FoundryLocalSetupStage.DownloadingOrLoading,
+            CleanupStatus.Unavailable => FoundryLocalSetupStage.Failed,
+            _ => runtimeReady ? FoundryLocalSetupStage.RuntimeReady : FoundryLocalSetupStage.NotSetUp,
+        };
+    }
 }
