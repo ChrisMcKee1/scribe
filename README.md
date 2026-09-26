@@ -76,8 +76,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   apps, a trend chart and recurring terminology, and add uncovered terms to your dictionary with
   one click. AI insight is a separate explicit action and sends only aggregate totals and
   dictionary term labels to the provider you configured.
-- **🪶 Stays out of the way.** A tray app with a small glass recording pill you can place on any
-  corner or edge of your screen, and a Windows 11-style settings app when you want to tune it.
+- **🪶 Stays out of the way.** A tray app with a small recording pill you can place on any corner
+  or edge of your screen, and a Windows 11-style settings app when you want to tune it.
 
 ## 📸 A quick look
 
@@ -224,11 +224,11 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
 
 ## 🎛️ How it works
 
-1. **Hold** your push-to-talk key. The glass pill shows it's listening, with a live level meter.
+1. **Hold** your push-to-talk key. The pill shows it's listening, with live level bars.
 2. **Speak** naturally. Voice-activity detection trims the silence around your words.
 3. **Release.** Scribe transcribes on your CPU, optionally polishes with AI (using the profile for
    the app you're in), applies your dictionary and snippets, and types the result into the focused
-   app.
+   app. The pill then briefly says what happened: "Typed", or why not, and what to do next.
 
 Everything is configurable from the tray: microphone, hotkey (hold or toggle), silence auto-stop,
 the pill and where it appears, voice-activity detection, line-break handling, per-app profiles,
@@ -269,7 +269,7 @@ carry the real key codes remote clients forward.
 | Microphone choice | Follows the Windows default input device (the one Windows Settings shows under Sound, Input) from your next dictation, with no restart; or pick any microphone in Settings or from the tray's Microphone menu. A chosen microphone that is unplugged falls back to the Windows default, and Scribe tells you once |
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
-| Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
+| Recording pill | A WinUI 3 overlay with live level bars that says what each dictation did ("Typed", "Typed without AI cleanup" with the reason, or "Nothing typed" with the next step), follows your contrast theme and your Windows animation setting, and sits on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, terminal-aware line-break flattening so newlines never fire Enter, and paced typing, never a paste, into Remote Desktop and virtual machine sessions |
 | Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
 | Hotkey self-healing | Detects and repairs stuck modifiers, restores the keyboard and mouse hooks Windows removes silently, and moves its keyboard hook ahead of a Remote Desktop client's while the client is in front, so push-to-talk keeps working across long sessions |
