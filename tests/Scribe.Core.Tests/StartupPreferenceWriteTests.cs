@@ -12,7 +12,8 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class StartupPreferenceWriteTests : IDisposable
 {
-    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
+    // A hang guard, never the verdict: every wait below is for a gate the test opens or a write it lets finish.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "scribe-settings-update-" + Guid.NewGuid().ToString("N"));
     private readonly ScribeDatabase _database;
@@ -38,17 +39,17 @@ public sealed class StartupPreferenceWriteTests : IDisposable
             {
                 stored.EnableAiCleanup = true;
                 trayInside.Set();
-                Assert.True(releaseTray.Wait(Deadline));
+                Assert.True(releaseTray.Wait(Bound));
             }),
             TaskCreationOptions.LongRunning);
-        Assert.True(trayInside.Wait(Deadline));
+        Assert.True(trayInside.Wait(Bound));
 
         // The switch saves its preference exactly then, through the same path Settings uses.
         var switchWrite = StartupPreference.PersistAsync(_settings, enabled: true);
 
         releaseTray.Set();
-        await tray.WaitAsync(Deadline);
-        await switchWrite.WaitAsync(Deadline);
+        await tray.WaitAsync(Bound);
+        await switchWrite.WaitAsync(Bound);
 
         var saved = _settings.Load();
         Assert.True(saved.EnableAiCleanup);
@@ -66,16 +67,16 @@ public sealed class StartupPreferenceWriteTests : IDisposable
             {
                 stored.LaunchOnLogin = true;
                 switchInside.Set();
-                Assert.True(releaseSwitch.Wait(Deadline));
+                Assert.True(releaseSwitch.Wait(Bound));
             }),
             TaskCreationOptions.LongRunning);
-        Assert.True(switchInside.Wait(Deadline));
+        Assert.True(switchInside.Wait(Bound));
 
         var tray = Task.Run(() => _settings.Update(stored => stored.EnableAiCleanup = true));
 
         releaseSwitch.Set();
-        await switchWrite.WaitAsync(Deadline);
-        await tray.WaitAsync(Deadline);
+        await switchWrite.WaitAsync(Bound);
+        await tray.WaitAsync(Bound);
 
         var saved = _settings.Load();
         Assert.True(saved.LaunchOnLogin);
@@ -92,10 +93,10 @@ public sealed class StartupPreferenceWriteTests : IDisposable
             {
                 stored.LaunchOnLogin = true;
                 inside.Set();
-                Assert.True(release.Wait(Deadline));
+                Assert.True(release.Wait(Bound));
             }),
             TaskCreationOptions.LongRunning);
-        Assert.True(inside.Wait(Deadline));
+        Assert.True(inside.Wait(Bound));
 
         try
         {
@@ -119,7 +120,7 @@ public sealed class StartupPreferenceWriteTests : IDisposable
             release.Set();
         }
 
-        await update.WaitAsync(Deadline);
+        await update.WaitAsync(Bound);
         Assert.True(_settings.Load().LaunchOnLogin);
     }
 

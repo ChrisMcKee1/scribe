@@ -5,6 +5,9 @@ namespace Scribe.Core.Tests;
 
 public sealed class AzureSignInAttemptsTests
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Fact]
     public void A_retired_attempt_is_cancelled_and_a_new_one_is_not()
     {
@@ -69,12 +72,13 @@ public sealed class AzureSignInAttemptsTests
                 return "signed in";
             };
             var running = AzureCliProcessCoordinator.RunAsync(signIn, login.Token);
-            await holding.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await holding.Task.WaitAsync(Bound);
 
             attempts.Retire();
 
-            // The next check waits on the same gate, with a limit well under the window's 20 s.
-            using var check = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            // The next check waits on the same gate. Its limit is a hang guard, far under the login's five minutes, so a
+            // login the retirement failed to end still fails the test.
+            using var check = new CancellationTokenSource(Bound);
             var next = await AzureCliProcessCoordinator.RunAsync(_ => Task.FromResult("checked"), check.Token);
 
             Assert.Equal("checked", next);

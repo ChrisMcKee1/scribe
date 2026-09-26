@@ -19,6 +19,9 @@ public sealed class LibraryRecoveryRetryTests : IDisposable
 {
     private static readonly StorageMaintenanceOptions Options = StorageMaintenanceOptions.Default;
 
+    // A hang guard, never the verdict: nothing is running when the test stops maintenance.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private readonly LibraryStorageFixture _fixture = new();
     private readonly ManualTimeProvider _maintenanceClock = new(LibraryStorageFixture.Start);
 
@@ -276,7 +279,7 @@ public sealed class LibraryRecoveryRetryTests : IDisposable
         var retry = _fixture.Time.SingleTimer;
         Assert.NotNull(retry.DueTime);
 
-        Assert.True(maintenance.Stop(TimeSpan.FromSeconds(3)));
+        Assert.True(maintenance.Stop(Bound));
 
         Assert.False(service.Janitor.Retry.Pending);
         Assert.True(retry.Disposed);

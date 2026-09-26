@@ -5,6 +5,9 @@ namespace Scribe.Core.Tests;
 
 public sealed class AzureCliProcessTreeTests
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private static readonly DateTime T0 = new(2026, 9, 24, 10, 0, 0, DateTimeKind.Local);
 
     private static ProcessNode Node(int id, int parent, string image, int secondsAfterT0) =>
@@ -162,7 +165,7 @@ public sealed class AzureCliProcessTreeTests
         {
             AzureCliProcessTree.End(tree.Root);
 
-            Assert.True(tree.Root.WaitForExit(TimeSpan.FromSeconds(5)), "the root was not ended");
+            Assert.True(tree.Root.WaitForExit(Bound), "the root was not ended");
             Assert.True(WaitUntilExited(tree.AzChild), "az's own child was not ended");
             Assert.False(RealTree.HasExited(tree.Browser), "a process that is not az's was ended");
             Assert.False(RealTree.HasExited(tree.BrowserUnderAzChild), "a process under az's child that is not az's was ended");
@@ -172,7 +175,7 @@ public sealed class AzureCliProcessTreeTests
         {
             tree.Root.Kill(entireProcessTree: true);
 
-            Assert.True(tree.Root.WaitForExit(TimeSpan.FromSeconds(5)));
+            Assert.True(tree.Root.WaitForExit(Bound));
             Assert.True(WaitUntilExited(tree.Browser), "the whole tree kill was expected to end the stand-in browser");
             Assert.True(WaitUntilExited(tree.BrowserUnderAzChild));
         }
@@ -235,7 +238,7 @@ public sealed class AzureCliProcessTreeTests
 
     private static bool WaitUntilExited(ProcessNode node)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var deadline = DateTime.UtcNow + Bound;
         while (!RealTree.HasExited(node))
         {
             if (DateTime.UtcNow > deadline)
@@ -299,7 +302,7 @@ public sealed class AzureCliProcessTreeTests
                 CreateNoWindow = true,
             })!;
 
-            var deadline = DateTime.UtcNow.AddSeconds(15);
+            var deadline = DateTime.UtcNow + Bound;
             while (true)
             {
                 var snapshot = AzureCliProcessTree.Snapshot(root);

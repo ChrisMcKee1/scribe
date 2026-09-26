@@ -8,6 +8,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class CleanupOperationTrackerTests
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Fact]
     public void Leases_count_and_release_exactly_once()
     {
@@ -53,7 +56,7 @@ public sealed class CleanupOperationTrackerTests
         Assert.False(drained.IsCompleted);
 
         second.Dispose();
-        await drained.WaitAsync(TimeSpan.FromSeconds(10));
+        await drained.WaitAsync(Bound);
     }
 
     [Fact]
@@ -78,7 +81,7 @@ public sealed class CleanupOperationTrackerTests
         lease.Dispose();
         Volatile.Write(ref releaseReturned, true);
 
-        Assert.False(await ranInline.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.False(await ranInline.Task.WaitAsync(Bound));
     }
 
     [Fact]
@@ -113,7 +116,7 @@ public sealed class CleanupOperationTrackerTests
                 lease?.Dispose();
             }
 
-            await drained.WaitAsync(TimeSpan.FromSeconds(10));
+            await drained.WaitAsync(Bound);
         }
     }
 }

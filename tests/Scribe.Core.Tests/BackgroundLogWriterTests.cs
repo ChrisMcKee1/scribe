@@ -400,11 +400,13 @@ public class BackgroundLogWriterTests
             }
         };
 
-        writer = new BackgroundLogWriter(sink, new BackgroundLogWriterOptions { PromptWriteTimeout = Patience });
+        // A write that waited on itself would wait out its prompt bound, so that bound is made far longer than the hang
+        // guard: a correct write returns at once, and one that waits on itself cannot return within Patience.
+        writer = new BackgroundLogWriter(sink, new BackgroundLogWriterOptions { PromptWriteTimeout = TimeSpan.FromMinutes(10) });
         try
         {
             writer.Write(Record("outer"));
-            Assert.True(innerReturned.Wait(TimeSpan.FromSeconds(10)), "a write from inside the sink waited on itself");
+            Assert.True(innerReturned.Wait(Patience), "a write from inside the sink waited on itself");
             Assert.True(writer.Flush(Patience));
             Assert.Equal(["outer", "inner"], sink.Texts);
         }
