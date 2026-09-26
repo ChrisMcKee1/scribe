@@ -1,97 +1,75 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Scribe.App.Dictation;
 using Scribe.Core.Lifecycle;
+using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Scribe.Core.Tray;
 using Wpf.Ui.Appearance;
 
 namespace Scribe.App.Tray;
 
 /// <summary>
-/// Owns the system-tray icon and its context menu, and reflects the current
-/// <see cref="DictationState"/> through the icon and tooltip. UI mutations requested from a background
-/// thread are posted to the WPF dispatcher, never invoked synchronously: dictation state, errors and
-/// warnings arrive on the audio capture thread and dictation processing, and the UI thread waits for
-/// both at shutdown, so a caller parked on the UI thread there would never be released.
+/// Owns the system-tray icon and its context menu, and reflects the current <see cref="DictationState"/> through the
+/// icon and tooltip. UI mutations requested from a background thread are posted to the WPF dispatcher, never invoked
+/// synchronously: dictation state, errors and warnings arrive on the audio capture thread and dictation processing,
+/// and the UI thread waits for both at shutdown, so a caller parked on the UI thread there would never be released.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
     private readonly ContextMenu _menu;
     private readonly TaskbarIcon _icon;
-    private readonly MenuItem _pauseItem;
-    private readonly MenuItem _aiItem;
     private readonly UiThreadDispatch _ui;
+    private readonly ICommand _settingsCommand;
+    private readonly ControlTemplate _menuItemTemplate;
+    private readonly ControlTemplate _submenuHeaderTemplate;
 
-    // Set on the UI thread by Dispose; posted work runs there too and drops itself once this is set.
     private bool _disposed;
-
-    // The icon currently assigned to the tray. Held so its handle can be released once it has been
-    // replaced; H.NotifyIcon owns nothing beyond the instance it is showing.
     private System.Drawing.Icon? _currentIcon;
     private System.Drawing.Icon? _retiredIcon;
+    private DictationState _state = DictationState.Idle;
+    private bool _aiCleanupEnabled;
+    private bool _updateReady;
+    private string? _updateVersion;
+    private string? _shortcutSentence;
+    private HotkeyMode _hotkeyMode = HotkeyMode.Hold;
+    private TrayCondition _condition;
 
-    /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
-
-    /// <summary>Raised when the user picks "Settings" from the tray menu.</summary>
     public event Action? SettingsRequested;
-
-    /// <summary>Raised when the user picks "Learn from history" from the tray menu.</summary>
+#pragma warning disable CS0067
     public event Action? LearnFromHistoryRequested;
-
-    /// <summary>Raised when the user picks "Add to dictionary" from the tray menu.</summary>
     public event Action? AddToDictionaryRequested;
-
-    /// <summary>Raised when the user explicitly asks to copy the last finalized dictation.</summary>
     public event Action? CopyLastDictationRequested;
-
-    /// <summary>
-    /// Raised when the user picks a specific entry from the "Copy recent dictation" submenu.
-    /// Carries the full transcript to copy, not the truncated preview shown in the menu.
-    /// </summary>
     public event Action<string>? CopyRecentDictationRequested;
-
-    /// <summary>
-    /// Supplies the current recoverable transcripts, most recent first, each time the tray menu
-    /// opens. Injected by the app shell so this class stays free of Core persistence wiring.
-    /// </summary>
     public Func<IReadOnlyList<string>>? RecentDictationsProvider { get; set; }
-
-    /// <summary>Raised when the user picks "Show welcome" to reopen the first-run intro.</summary>
     public event Action? WelcomeRequested;
-
-    /// <summary>Raised when the user picks "Open in Microsoft Store".</summary>
     public event Action? OpenStoreRequested;
-
-    /// <summary>Raised when the user picks "Share app" to copy the Store link.</summary>
     public event Action? ShareAppRequested;
-
-    /// <summary>Raised when the user toggles pause; the argument is the requested paused state.</summary>
+#pragma warning restore CS0067
     public event Action<bool>? PauseToggled;
-
-    /// <summary>Raised when the user toggles AI cleanup; the argument is the requested enabled state.</summary>
     public event Action<bool>? AiCleanupToggled;
-
-    /// <summary>
-    /// Supplies the microphone picker (the devices Windows offers now, and the current choice) each time the tray menu
-    /// opens. Injected by the app shell so this class stays free of Core audio wiring.
-    /// </summary>
     public Func<MicrophoneMenu>? MicrophoneMenuProvider { get; set; }
-
-    /// <summary>Raised when the user picks an entry from the "Microphone" submenu.</summary>
     public event Action<MicrophoneSelection>? MicrophoneChosen;
-
-    /// <summary>Raised when the user picks "Sound settings" from the "Microphone" submenu.</summary>
     public event Action? SoundSettingsRequested;
 
-    /// <param name="onUpdateFailure">
-    /// Told about a tray update that threw. Updates are best effort and many run posted, where nobody else could see the
-    /// failure.
-    /// </param>
+    public event Action? RestartToUpdateRequested;
+    public event Action? OpenHistoryRequested;
+    public event Action? SetUpAiCleanupRequested;
+
+    public Func<TrayAiCleanupItem>? AiCleanupItemProvider { get; set; }
+    public Func<bool>? UpdateReadyProvider { get; set; }
+    public Func<string?>? UpdateVersionProvider { get; set; }
+    public Func<TrayCondition>? ConditionProvider { get; set; }
+    public Func<bool>? CopyLastAvailableProvider { get; set; }
+
     public TrayIconHost(Action<Exception>? onUpdateFailure = null)
     {
         _ui = new UiThreadDispatch(
@@ -100,110 +78,33 @@ internal sealed class TrayIconHost : IDisposable
             isClosed: () => _disposed,
             onFailure: onUpdateFailure);
 
+        _settingsCommand = new RelayCommand(() => SettingsRequested?.Invoke());
+        _menuItemTemplate = CreateMenuItemTemplate(hasSubmenu: false);
+        _submenuHeaderTemplate = CreateMenuItemTemplate(hasSubmenu: true);
         _menu = new ContextMenu();
-        var menu = _menu;
         ApplyMenuTheme();
         ApplicationThemeManager.Changed += OnApplicationThemeChanged;
-
-        // Header: the app name + version, bold and clickable (opens settings); a live entry
-        // point rather than a greyed-out label that looks like a broken button.
-        var version = typeof(TrayIconHost).Assembly.GetName().Version;
-        var header = new MenuItem
-        {
-            Header = $"Scribe {version?.ToString(3) ?? string.Empty}".TrimEnd(),
-            FontWeight = FontWeights.SemiBold,
-        };
-        header.Click += (_, _) => SettingsRequested?.Invoke();
-        menu.Items.Add(header);
-        menu.Items.Add(new Separator());
-
-        var settings = new MenuItem { Header = "Settings" };
-        settings.Click += (_, _) => SettingsRequested?.Invoke();
-        menu.Items.Add(settings);
-
-        var addToDictionary = new MenuItem { Header = "Add to dictionary" };
-        addToDictionary.Click += (_, _) => AddToDictionaryRequested?.Invoke();
-        menu.Items.Add(addToDictionary);
-
-        var learnFromHistory = new MenuItem { Header = "Learn from history" };
-        learnFromHistory.Click += (_, _) => LearnFromHistoryRequested?.Invoke();
-        menu.Items.Add(learnFromHistory);
-
-        var copyLastDictation = new MenuItem { Header = "Copy last dictation" };
-        copyLastDictation.Click += (_, _) => CopyLastDictationRequested?.Invoke();
-        menu.Items.Add(copyLastDictation);
-
-        // Rebuilt on every menu open (not once at startup) so the submenu always mirrors the
-        // transcripts that are actually recoverable right now.
-        var copyRecentDictation = new MenuItem { Header = "Copy recent dictation" };
-        menu.Items.Add(copyRecentDictation);
-
-        // Rebuilt on every open as well, so it lists the microphones Windows offers right now and names the device the
-        // Windows default means at that moment.
-        var microphone = new MenuItem { Header = "Microphone" };
-        menu.Opened += (_, _) =>
-        {
-            ApplyMenuTheme();
-            PopulateRecentDictations(copyRecentDictation);
-            PopulateMicrophones(microphone);
-        };
-
-        // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
-        var welcome = new MenuItem { Header = "Show welcome" };
-        welcome.Click += (_, _) => WelcomeRequested?.Invoke();
-        menu.Items.Add(welcome);
-        menu.Items.Add(new Separator());
-
-        var openStore = new MenuItem { Header = "Open in Microsoft Store" };
-        openStore.Click += (_, _) => OpenStoreRequested?.Invoke();
-        menu.Items.Add(openStore);
-
-        var shareApp = new MenuItem { Header = "Share app" };
-        shareApp.Click += (_, _) => ShareAppRequested?.Invoke();
-        menu.Items.Add(shareApp);
-        menu.Items.Add(new Separator());
-
-        // The quick toggles, led by the microphone submenu built above.
-        menu.Items.Add(microphone);
-
-        // Checkable items: WPF flips IsChecked before Click fires, so it already reflects the
-        // requested state by the time the handler runs. Programmatic IsChecked updates
-        // do not raise Click, so there is no feedback loop.
-        _aiItem = new MenuItem { Header = "AI cleanup", IsCheckable = true };
-        _aiItem.Click += (_, _) => AiCleanupToggled?.Invoke(_aiItem.IsChecked);
-        menu.Items.Add(_aiItem);
-
-        _pauseItem = new MenuItem { Header = "Pause dictation", IsCheckable = true };
-        _pauseItem.Click += (_, _) => PauseToggled?.Invoke(_pauseItem.IsChecked);
-        menu.Items.Add(_pauseItem);
-        menu.Items.Add(new Separator());
-
-        var quit = new MenuItem { Header = "Quit Scribe" };
-        quit.Click += (_, _) => QuitRequested?.Invoke();
-        menu.Items.Add(quit);
+        _menu.Opened += (_, _) => RebuildMenu();
 
         _currentIcon = TrayIcons.CreateIdle();
         _icon = new TaskbarIcon
         {
-            ToolTipText = "Scribe: ready",
+            ToolTipText = ComposeToolTip(),
             Icon = _currentIcon,
-            ContextMenu = menu,
+            ContextMenu = _menu,
             MenuActivation = PopupActivationMode.RightClick,
+            NoLeftClickDelay = true,
+            LeftClickCommand = _settingsCommand,
+            DoubleClickCommand = _settingsCommand,
         };
 
-        // H.NotifyIcon 2.4.1 opens the menu and only then activates the popup that holds it
-        // (TaskbarIcon.ShowContextMenu), so the menu never had keyboard focus: the arrow keys, Enter and Escape did
-        // nothing until the pointer rested on an item, whether a right-click, Shift+F10 or the menu key opened it.
-        // This event is raised once the popup is active.
         _icon.TrayContextMenuOpen += (_, _) => FocusMenu();
         _icon.ForceCreate(false);
+        RebuildMenu();
     }
 
     private void FocusMenu()
     {
-        // The event follows two synchronous steps (opening the menu, then activating its popup, with a fallback
-        // to the icon's message window), so the menu is checked to still be open, and the host still alive,
-        // before it takes focus.
         if (_disposed || !_menu.IsOpen)
         {
             return;
@@ -215,14 +116,16 @@ internal sealed class TrayIconHost : IDisposable
         }
         catch
         {
-            // A menu that cannot take focus still works with the pointer; keyboard access is not worth breaking
-            // right-click access over.
+            // A menu that cannot take focus still works with the pointer; keyboard access must not break right-click.
         }
     }
 
-
     private void OnApplicationThemeChanged(Wpf.Ui.Appearance.ApplicationTheme currentApplicationTheme, Color systemAccent) =>
-        Dispatch(ApplyMenuTheme);
+        Dispatch(() =>
+        {
+            ApplyMenuTheme();
+            RebuildMenu();
+        });
 
     private void ApplyMenuTheme()
     {
@@ -236,97 +139,131 @@ internal sealed class TrayIconHost : IDisposable
         }
     }
 
-    /// <summary>Updates the tray icon and tooltip to match the current dictation state.</summary>
-    public void SetState(DictationState state) => Dispatch(() =>
+    private void RebuildMenu()
     {
-        var (icon, tooltip) = state switch
+        if (_disposed)
         {
-            DictationState.Recording => (TrayIcons.CreateRecording(), "Scribe: recording…"),
-            DictationState.Processing => (TrayIcons.CreateProcessing(), "Scribe: transcribing…"),
-            DictationState.Paused => (TrayIcons.CreatePaused(), "Scribe: paused"),
-            _ => (TrayIcons.CreateIdle(), "Scribe: ready"),
-        };
-
-        var previous = _currentIcon;
-        _currentIcon = icon;
-        _icon.Icon = icon;
-        _icon.ToolTipText = tooltip;
-
-        RetireIcon(previous);
-
-        _pauseItem.IsChecked = state == DictationState.Paused;
-    });
-
-    /// <summary>Reflects the persisted AI-cleanup setting in the quick-toggle check mark.</summary>
-    public void SetAiCleanupChecked(bool enabled) => Dispatch(() => _aiItem.IsChecked = enabled);
-
-    /// <summary>Surfaces a transient error to the user via the tray tooltip.</summary>
-    public void ShowError(string message) => Dispatch(() =>
-        _icon.ToolTipText = $"Scribe: {message}");
-
-    /// <summary>Surfaces a transient, non-error status (e.g. an update is ready) via the tooltip.</summary>
-    public void ShowInfo(string message) => Dispatch(() =>
-        _icon.ToolTipText = $"Scribe: {message}");
-
-    /// <summary>Shows a transient Windows notification for a completed user action.</summary>
-    public void ShowNotification(string message, bool isError = false) => Dispatch(() =>
-        _icon.ShowNotification(
-            "Scribe",
-            message,
-            isError ? NotificationIcon.Error : NotificationIcon.Info,
-            timeout: TimeSpan.FromSeconds(6)));
-
-    /// <summary>
-    /// Fills the "Copy recent dictation" submenu from the current ring snapshot. Runs on the UI
-    /// thread (the menu's Opened event), so no dispatching is needed here.
-    /// </summary>
-    private void PopulateRecentDictations(MenuItem parent)
-    {
-        parent.Items.Clear();
-
-        IReadOnlyList<string> recent;
-        try
-        {
-            recent = RecentDictationsProvider?.Invoke() ?? [];
-        }
-        catch
-        {
-            // The submenu is a convenience view; a provider hiccup must never break opening the
-            // tray menu, so degrade to the empty placeholder instead.
-            recent = [];
-        }
-
-        if (recent.Count == 0)
-        {
-            parent.Items.Add(new MenuItem { Header = "No recent dictations", IsEnabled = false });
             return;
         }
 
-        foreach (var transcript in recent)
+        ApplyMenuTheme();
+        _menu.Items.Clear();
+        var recent = ReadRecentDictations();
+        _updateReady = UpdateReadyProvider?.Invoke() ?? _updateReady;
+        _updateVersion = UpdateVersionProvider?.Invoke() ?? _updateVersion;
+        _condition = ConditionProvider?.Invoke() ?? _condition;
+        var state = new TrayMenuState(
+            _updateReady,
+            CopyLastAvailableProvider?.Invoke() ?? true,
+            CurrentAiCleanupItem(),
+            _state == DictationState.Paused,
+            recent.Take(5).Select(text => LastTranscriptStore.FormatPreview(text, maxLength: 42)).ToArray());
+
+        foreach (var item in TrayMenu.Build(state).Items)
         {
-            // WPF treats "_" in a header as an access-key marker, so double it to render
-            // dictated underscores literally. The click carries the full transcript; the
-            // header is only the truncated single-line preview.
-            var item = new MenuItem
-            {
-                Header = LastTranscriptStore.FormatPreview(transcript).Replace("_", "__"),
-            };
-            var fullText = transcript;
-            item.Click += (_, _) => CopyRecentDictationRequested?.Invoke(fullText);
-            parent.Items.Add(item);
+            AddMenuItem(_menu.Items, item, recent);
         }
     }
 
-    /// <summary>
-    /// Fills the "Microphone" submenu: the Windows default first, naming the device it means now, then every microphone
-    /// Windows offers, a check mark on the current choice, and a way into the Windows sound settings. Runs on the UI
-    /// thread (the menu's Opened event). The entries are checkable so a screen reader announces which one is chosen;
-    /// choosing the one already chosen changes nothing, and the menu is rebuilt on the next open either way.
-    /// </summary>
-    private void PopulateMicrophones(MenuItem parent)
+    private IReadOnlyList<string> ReadRecentDictations()
     {
-        parent.Items.Clear();
+        try
+        {
+            return RecentDictationsProvider?.Invoke() ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
+    private TrayAiCleanupItem CurrentAiCleanupItem()
+    {
+        if (AiCleanupItemProvider is { } provider)
+        {
+            try
+            {
+                return provider();
+            }
+            catch
+            {
+                return new TrayAiCleanupItem(TrayAiCleanupKind.Toggle, "AI cleanup", _aiCleanupEnabled, true);
+            }
+        }
+
+        return new TrayAiCleanupItem(TrayAiCleanupKind.Toggle, "AI cleanup", _aiCleanupEnabled, true);
+    }
+
+    private void AddMenuItem(ItemCollection target, TrayMenuItem item, IReadOnlyList<string> recent)
+    {
+        if (item.Kind == TrayItemKind.Separator)
+        {
+            target.Add(new Separator());
+            return;
+        }
+
+        if (item.Command == TrayCommand.Microphone)
+        {
+            target.Add(BuildMicrophoneMenu(item));
+            return;
+        }
+
+        var menuItem = new MenuItem
+        {
+            Header = HeaderWithAccessKey(item.Label, item.AccessKey),
+            IsEnabled = item.Enabled,
+            FontWeight = item.IsDefault ? FontWeights.SemiBold : FontWeights.Normal,
+            IsCheckable = item.Kind == TrayItemKind.Check,
+            IsChecked = item.Kind == TrayItemKind.Check && item.IsChecked,
+        };
+        ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
+
+        if (item.Kind == TrayItemKind.Submenu && item.Children is { Count: > 0 })
+        {
+            for (var i = 0; i < item.Children.Count; i++)
+            {
+                AddRecentMenuChild(menuItem.Items, item.Children[i], i, recent);
+            }
+        }
+        else if (item.Command is { } command)
+        {
+            menuItem.Click += (_, _) => RunCommand(command, menuItem, null);
+        }
+
+        target.Add(menuItem);
+    }
+
+    private void AddRecentMenuChild(ItemCollection target, TrayMenuItem item, int index, IReadOnlyList<string> recent)
+    {
+        if (item.Kind == TrayItemKind.Separator)
+        {
+            target.Add(new Separator());
+            return;
+        }
+
+        var menuItem = new MenuItem
+        {
+            Header = EscapeHeader(item.Label),
+            IsEnabled = item.Enabled,
+        };
+        ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
+        if (item.Command == TrayCommand.CopyRecentDictation && index < recent.Count)
+        {
+            var text = recent[index];
+            menuItem.Click += (_, _) => RunCommand(TrayCommand.CopyRecentDictation, menuItem, text);
+        }
+        else if (item.Command is { } command)
+        {
+            menuItem.Click += (_, _) => RunCommand(command, menuItem, null);
+        }
+
+        target.Add(menuItem);
+    }
+
+    private MenuItem BuildMicrophoneMenu(TrayMenuItem item)
+    {
+        var parent = new MenuItem { Header = HeaderWithAccessKey(item.Label, item.AccessKey), IsEnabled = item.Enabled };
+        ApplyTrayTemplate(parent, hasSubmenu: true);
         MicrophoneMenu? picker;
         try
         {
@@ -334,35 +271,29 @@ internal sealed class TrayIconHost : IDisposable
         }
         catch
         {
-            // Listing the devices can fail while the audio service restarts; the tray menu must still open, and the
-            // Windows sound settings stay one click away.
             picker = null;
         }
 
         if (picker is null)
         {
-            parent.Items.Add(new MenuItem { Header = "Microphones unavailable", IsEnabled = false });
+            parent.Items.Add(new MenuItem { Header = "Couldn't list microphones", IsEnabled = false });
         }
         else
         {
             for (var i = 0; i < picker.Choices.Count; i++)
             {
                 var choice = picker.Choices[i];
-                var item = new MenuItem
+                var child = new MenuItem
                 {
-                    // WPF reads "_" in a header as an access key, so a device name keeps its underscores doubled.
-                    Header = choice.Label.Replace("_", "__"),
+                    Header = EscapeHeader(TrayMicrophoneLabel(choice.Label)),
                     IsCheckable = true,
                     IsChecked = i == picker.SelectedIndex,
-
-                    // Listed, and checked, so the saved choice stays visible while its device is away; there is nothing
-                    // to choose about it until it comes back.
                     IsEnabled = choice.Kind != MicrophoneChoiceKind.Unavailable,
                 };
+                ApplyTrayTemplate(child, hasSubmenu: false);
                 var selection = choice.Selection;
-                item.Click += (_, _) => MicrophoneChosen?.Invoke(selection);
-                parent.Items.Add(item);
-
+                child.Click += (_, _) => MicrophoneChosen?.Invoke(selection);
+                parent.Items.Add(child);
                 if (choice.Kind == MicrophoneChoiceKind.WindowsDefault && picker.Choices.Count > 1)
                 {
                     parent.Items.Add(new Separator());
@@ -371,33 +302,263 @@ internal sealed class TrayIconHost : IDisposable
         }
 
         parent.Items.Add(new Separator());
-        var soundSettings = new MenuItem { Header = "Sound settings" };
+        var soundSettings = new MenuItem { Header = "Windows _sound settings" };
+        ApplyTrayTemplate(soundSettings, hasSubmenu: false);
         soundSettings.Click += (_, _) => SoundSettingsRequested?.Invoke();
         parent.Items.Add(soundSettings);
+        return parent;
     }
 
-    /// <summary>
-    /// Releases the icon replaced one update ago, rather than the one replaced just now.
-    ///
-    /// Assigning <see cref="TaskbarIcon.Icon"/> ends in a Shell_NotifyIcon call that pumps
-    /// messages, so a state change dispatched from a background thread can run re-entrantly while
-    /// the outer assignment is still reading the icon handle it was given. Disposing inline
-    /// therefore raced the tray and threw ObjectDisposedException out of the state notification.
-    /// Deferring by one generation guarantees the icon being freed is no longer the one any
-    /// in-flight update is reading, and still frees every handle.
-    /// </summary>
+    private static string TrayMicrophoneLabel(string label) => label.Replace(" (default)", string.Empty, StringComparison.Ordinal);
+
+    private void RunCommand(TrayCommand command, MenuItem item, string? payload)
+    {
+        switch (command)
+        {
+            case TrayCommand.RestartToUpdate:
+                RestartToUpdateRequested?.Invoke();
+                break;
+            case TrayCommand.Settings:
+                SettingsRequested?.Invoke();
+                break;
+            case TrayCommand.AddToDictionary:
+                AddToDictionaryRequested?.Invoke();
+                break;
+            case TrayCommand.CopyLastDictation:
+                CopyLastDictationRequested?.Invoke();
+                break;
+            case TrayCommand.CopyRecentDictation:
+                if (payload is not null) CopyRecentDictationRequested?.Invoke(payload);
+                break;
+            case TrayCommand.OpenHistory:
+                OpenHistoryRequested?.Invoke();
+                break;
+            case TrayCommand.AiCleanup:
+                _aiCleanupEnabled = item.IsChecked;
+                AiCleanupToggled?.Invoke(item.IsChecked);
+                break;
+            case TrayCommand.SetUpAiCleanup:
+                SetUpAiCleanupRequested?.Invoke();
+                break;
+            case TrayCommand.PauseDictation:
+                PauseToggled?.Invoke(item.IsChecked);
+                break;
+            case TrayCommand.Quit:
+                QuitRequested?.Invoke();
+                break;
+        }
+    }
+
+    private static string HeaderWithAccessKey(string label, char? accessKey)
+    {
+        var escaped = EscapeHeader(label);
+        if (accessKey is null)
+        {
+            return escaped;
+        }
+
+        var target = char.ToUpperInvariant(accessKey.Value);
+        for (var i = 0; i < escaped.Length; i++)
+        {
+            if (char.ToUpperInvariant(escaped[i]) == target)
+            {
+                return escaped[..i] + "_" + escaped[i..];
+            }
+        }
+
+        return escaped;
+    }
+
+    private static string EscapeHeader(string label) => label.Replace("_", "__", StringComparison.Ordinal);
+
+    private void ApplyTrayTemplate(MenuItem item, bool hasSubmenu)
+    {
+        item.Template = hasSubmenu ? _submenuHeaderTemplate : _menuItemTemplate;
+    }
+
+    // Adapted from WPF-UI 4.3.0's SubmenuItemTemplateKey and SubmenuHeaderTemplateKey (Controls/Menu/MenuItem.xaml): the
+    // same margins, highlight, pressed and disabled resources, flyout and passive scroll viewer, with ONE change: WPF-UI
+    // gives a checkable item a check box in its own leading column and every other item no column at all, so labels
+    // started at two different x positions. Here every item and header reserves one leading column, which shows a
+    // check mark only while the item is checked. IsCheckable stays on the item, so UI Automation still reports it.
+    private static ControlTemplate CreateMenuItemTemplate(bool hasSubmenu)
+    {
+        var chevronColumn = hasSubmenu ? "<ColumnDefinition Width=\"Auto\"/>" : string.Empty;
+        var chevron = hasSubmenu
+            ? """
+                            <ui:SymbolIcon x:Name="Chevron" Grid.Column="2" Margin="0,3,0,0" VerticalAlignment="Center"
+                                           FontSize="{TemplateBinding FontSize}" Symbol="ChevronRight20"/>
+"""
+            : string.Empty;
+        var popup = hasSubmenu
+            ? """
+                <Popup x:Name="Popup" Grid.Row="1" AllowsTransparency="True" Focusable="False"
+                       IsOpen="{TemplateBinding IsSubmenuOpen}" Placement="Right"
+                       PlacementTarget="{Binding ElementName=MenuItemContent}" PopupAnimation="None" VerticalOffset="-20">
+                    <Grid>
+                        <Border x:Name="SubmenuBorder" Margin="12,10,12,30" Padding="0,3,0,3"
+                                Background="{DynamicResource FlyoutBackground}" BorderBrush="{DynamicResource FlyoutBorderBrush}"
+                                BorderThickness="1" CornerRadius="8" SnapsToDevicePixels="True">
+                            <ui:PassiveScrollViewer CanContentScroll="True" Style="{DynamicResource UiMenuItemScrollViewer}">
+                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                            </ui:PassiveScrollViewer>
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="20" Direction="270" Opacity="0.135" ShadowDepth="10" Color="#202020"/>
+                            </Border.Effect>
+                        </Border>
+                    </Grid>
+                </Popup>
+"""
+            : string.Empty;
+        var disabledChevron = hasSubmenu
+            ? """
+                        <Setter TargetName="Chevron" Property="Foreground">
+                            <Setter.Value>
+                                <SolidColorBrush Color="{DynamicResource TextFillColorDisabled}"/>
+                            </Setter.Value>
+                        </Setter>
+"""
+            : string.Empty;
+        var xaml = $$"""
+            <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                             TargetType="{x:Type MenuItem}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Border x:Name="Border" Grid.Row="1" Margin="4,1,4,1" Background="Transparent" CornerRadius="4">
+                        <Grid x:Name="MenuItemContent" Margin="8,6,8,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="26"/>
+                                <ColumnDefinition Width="*"/>{{chevronColumn}}
+                            </Grid.ColumnDefinitions>
+                            <ui:SymbolIcon x:Name="CheckGlyph" Grid.Column="0" Symbol="Checkmark20" FontSize="16"
+                                           HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed"/>
+                            <ContentPresenter x:Name="Header" Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True"
+                                              Margin="0,0,16,0" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>{{chevron}}
+                        </Grid>
+                    </Border>{{popup}}
+                </Grid>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsHighlighted" Value="True">
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
+                    </Trigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="IsMouseOver" Value="True"/>
+                            <Condition Property="IsPressed" Value="False"/>
+                        </MultiTrigger.Conditions>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
+                    </MultiTrigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="IsMouseOver" Value="True"/>
+                            <Condition Property="IsPressed" Value="True"/>
+                        </MultiTrigger.Conditions>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundPressed}"/>
+                        <Setter TargetName="Header" Property="TextElement.Foreground" Value="{DynamicResource MenuBarItemTextForegroundPressed}"/>
+                    </MultiTrigger>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible"/>
+                    </Trigger>
+                    <Trigger Property="IsEnabled" Value="False">
+                        <Setter Property="Foreground">
+                            <Setter.Value>
+                                <SolidColorBrush Color="{DynamicResource TextFillColorDisabled}"/>
+                            </Setter.Value>
+                        </Setter>{{disabledChevron}}
+                    </Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate>
+""";
+        return (ControlTemplate)XamlReader.Parse(xaml);
+    }
+    public void SetState(DictationState state) => Dispatch(() =>
+    {
+        _state = state;
+        var icon = state switch
+        {
+            DictationState.Recording => TrayIcons.CreateRecording(),
+            DictationState.Processing => TrayIcons.CreateProcessing(),
+            DictationState.Paused => TrayIcons.CreatePaused(),
+            _ => TrayIcons.CreateIdle(),
+        };
+
+        var previous = _currentIcon;
+        _currentIcon = icon;
+        _icon.Icon = icon;
+        _icon.ToolTipText = ComposeToolTip();
+        RetireIcon(previous);
+        if (_menu.IsOpen)
+        {
+            RebuildMenu();
+        }
+    });
+
+    public void SetShortcutSentence(string? shortcutSentence, HotkeyMode mode) => Dispatch(() =>
+    {
+        _shortcutSentence = shortcutSentence;
+        _hotkeyMode = mode;
+        _icon.ToolTipText = ComposeToolTip();
+    });
+
+    public void SetCondition(TrayCondition condition, string? version = null) => Dispatch(() =>
+    {
+        _condition = condition;
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            _updateVersion = version;
+        }
+
+        _icon.ToolTipText = ComposeToolTip();
+    });
+
+    public void SetUpdateReady(bool ready, string? version = null) => Dispatch(() =>
+    {
+        _updateReady = ready;
+        _updateVersion = version ?? _updateVersion;
+        _condition = ready ? TrayCondition.UpdateReady : _condition == TrayCondition.UpdateReady ? TrayCondition.None : _condition;
+        _icon.ToolTipText = ComposeToolTip();
+        if (_menu.IsOpen) RebuildMenu();
+    });
+
+    private string ComposeToolTip() => TrayToolTip.Compose(ToTrayState(_state), _shortcutSentence, _hotkeyMode, _condition, _updateVersion);
+
+    private static TrayState ToTrayState(DictationState state) => state switch
+    {
+        DictationState.Recording => TrayState.Recording,
+        DictationState.Processing => TrayState.Processing,
+        DictationState.Paused => TrayState.Paused,
+        _ => TrayState.Ready,
+    };
+
+    public void SetAiCleanupChecked(bool enabled) => Dispatch(() =>
+    {
+        _aiCleanupEnabled = enabled;
+        if (_menu.IsOpen) RebuildMenu();
+    });
+
+    public void ShowError(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
+
+    public void ShowInfo(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
+
+    public void ShowNotification(string message, bool isError = false) => Dispatch(() =>
+        _icon.ShowNotification("Scribe", message, isError ? NotificationIcon.Error : NotificationIcon.Info, timeout: TimeSpan.FromSeconds(6)));
+
     private void RetireIcon(System.Drawing.Icon? replaced)
     {
         var due = _retiredIcon;
         _retiredIcon = replaced;
-
         if (!ReferenceEquals(due, _currentIcon))
         {
             due?.Dispose();
         }
     }
 
-    // Inline on the UI thread, posted from anywhere else (see UiThreadDispatch). Never Dispatcher.Invoke.
     private void Dispatch(Action action) => _ui.Run(action);
 
     public void Dispose()
@@ -410,4 +571,14 @@ internal sealed class TrayIconHost : IDisposable
         _currentIcon?.Dispose();
         _currentIcon = null;
     }
+
+    private sealed class RelayCommand(Action execute) : ICommand
+    {
+        public event EventHandler? CanExecuteChanged;
+        public bool CanExecute(object? parameter) => true;
+        public void Execute(object? parameter) => execute();
+        public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    }
 }
+
+
