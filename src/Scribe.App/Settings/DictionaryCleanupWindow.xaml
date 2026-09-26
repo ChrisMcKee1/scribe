@@ -63,7 +63,7 @@
 
         <ui:TitleBar Grid.Row="0" Title="Clean up unused terms">
             <ui:TitleBar.Icon>
-                <ui:SymbolIcon Symbol="Broom24"/>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 

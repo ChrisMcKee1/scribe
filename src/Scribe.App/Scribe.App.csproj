@@ -15,6 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="Assets\scribe-mark-nobars.png" />
+    <Resource Include="..\..\docs\icon.png" Link="Assets\scribe-mark.png" />
+    <Resource Include="Assets\scribe-mark-nobars.png" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Keep the brand and state variants inside Scribe.exe. Velopack replaces the executable as
          one unit, so upgrades cannot leave an old tray-icon file beside the new application. -->
     <EmbeddedResource Include="Assets\scribe.ico" LogicalName="Scribe.App.Assets.scribe.ico" />

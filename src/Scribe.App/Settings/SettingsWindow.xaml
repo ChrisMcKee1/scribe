@@ -404,40 +404,72 @@
             </Style.Resources>
         </Style>
 
-        <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
-             ghost pill on hover and an accent-coloured pill when selected. A zone has no text of its own, and a
-             ToolTip is only help text to UI Automation (FrameworkElementAutomationPeer), so each zone takes its
-             name from its ToolTip. The selected zone reports itself through the radio button's selection
-             pattern. -->
+        <!-- One clickable zone of the overlay-position picker. The radio button keeps the existing focus and
+             selection behaviour while the visual reads as a miniature recording indicator. Brand fills are
+             used only while AccentContrastResources is active; contrast themes fall back to system colours. -->
         <Style TargetType="RadioButton" x:Key="OverlayZone">
             <Setter Property="Margin" Value="3"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Focusable" Value="True"/>
             <Setter Property="AutomationProperties.Name" Value="{Binding ToolTip, RelativeSource={RelativeSource Self}}"/>
+            <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Cell" CornerRadius="6" Background="Transparent">
+                        <Grid x:Name="Cell" Background="Transparent">
                             <Border x:Name="Pill" Width="48" Height="16" CornerRadius="8"
                                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                    Opacity="0.28">
-                                <Ellipse Width="5" Height="5" Fill="{DynamicResource SystemFillColorCriticalBrush}"
-                                         HorizontalAlignment="Left" VerticalAlignment="Center"
-                                         Margin="8,0,0,0"/>
+                                    Background="Transparent"
+                                    BorderBrush="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+                                    BorderThickness="1">
+                                <StackPanel x:Name="LevelBars" Orientation="Horizontal"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Visibility="Collapsed">
+                                    <Rectangle x:Name="LevelBar1" Width="2" Height="6" RadiusX="1" RadiusY="1"
+                                               Margin="0,0,3,0" Fill="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                    <Rectangle x:Name="LevelBar2" Width="2" Height="10" RadiusX="1" RadiusY="1"
+                                               Margin="0,0,3,0" Fill="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                    <Rectangle x:Name="LevelBar3" Width="2" Height="6" RadiusX="1" RadiusY="1"
+                                               Fill="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                </StackPanel>
                             </Border>
-                        </Border>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Cell" Property="Background"
-                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
-                                <Setter TargetName="Pill" Property="Opacity" Value="0.65"/>
+                                <Setter TargetName="Pill" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                                <Setter TargetName="Pill" Property="BorderThickness" Value="1.5"/>
                             </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Pill" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </MultiTrigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                                    <Condition Property="IsChecked" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Pill" Property="BorderBrush" Value="{DynamicResource ControlStrongStrokeColorDefaultBrush}"/>
+                            </MultiTrigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Pill" Property="Opacity" Value="1"/>
-                                <Setter TargetName="Pill" Property="Background"
-                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="Pill" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                                <Setter TargetName="Pill" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                <Setter TargetName="Pill" Property="BorderThickness" Value="1.5"/>
+                                <Setter TargetName="LevelBars" Property="Visibility" Value="Visible"/>
                             </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                                    <Condition Property="IsChecked" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Pill" Property="Background" Value="{DynamicResource ScribePillFaceBrush}"/>
+                                <Setter TargetName="Pill" Property="BorderBrush" Value="{DynamicResource ScribePillListeningEdgeBrush}"/>
+                                <Setter TargetName="LevelBar1" Property="Fill" Value="{DynamicResource ScribeLevelTipBrush}"/>
+                                <Setter TargetName="LevelBar2" Property="Fill" Value="{DynamicResource ScribeLevelTipBrush}"/>
+                                <Setter TargetName="LevelBar3" Property="Fill" Value="{DynamicResource ScribeLevelTipBrush}"/>
+                            </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -453,7 +485,7 @@
 
         <ui:TitleBar Grid.Row="0" Title="Scribe Settings">
             <ui:TitleBar.Icon>
-                <ui:SymbolIcon Symbol="Mic24"/>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
@@ -471,6 +503,23 @@
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      AutomationProperties.Name="Settings pages"
                      SelectedIndex="0" SelectionChanged="NavList_SelectionChanged">
+                <ListBox.Resources>
+                    <Style TargetType="ui:SymbolIcon">
+                        <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                <Setter Property="Filled" Value="True"/>
+                            </DataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
+                                    <Condition Binding="{Binding Path=(infra:AccentContrastFlag.Applies), RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemIndicator}}"/>
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ListBox.Resources>
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                         <Setter Property="Padding" Value="12,10"/>
@@ -2524,13 +2573,10 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <Border Grid.Column="0" Width="72" Height="72" CornerRadius="18"
-                                                Margin="0,0,18,0"
-                                                Background="{DynamicResource AccentFillColorSecondaryBrush}">
-                                            <ui:SymbolIcon Symbol="Mic24" FontSize="34"
-                                                           Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}"
-                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        </Border>
+                                        <Image Grid.Column="0" Source="pack://application:,,,/Assets/scribe-mark.png" Width="72" Height="72"
+                                               Margin="0,0,18,0"
+                                               RenderOptions.BitmapScalingMode="HighQuality"
+                                               AutomationProperties.Name="Scribe"/>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="Scribe AI" Style="{StaticResource PageTitle}"/>
                                             <TextBlock x:Name="AboutVersionText" Text="Version"
