@@ -26,7 +26,7 @@ public static class CleanupDisclosure
         "Foundry Local runs cleanup on this PC, so your text stays on it. Microsoft Foundry, " +
         "an OpenAI-compatible endpoint and GitHub Copilot receive, with every cleanup request, the text " +
         "Scribe recognized for that dictation, the cleanup instructions with your writing style (or the " +
-        "matching app profile's), and your enabled dictionary and library terms as vocabulary: up to " +
+        "matching app profile's), and your dictionary plus the word packs you let AI cleanup use as vocabulary: up to " +
         $"{Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {Count(CleanupPrompt.MaxGlossaryChars)} " +
         $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms with the Local prompt style, " +
         "whether or not the dictation mentions them. An entry whose written form spans more than one line or " +

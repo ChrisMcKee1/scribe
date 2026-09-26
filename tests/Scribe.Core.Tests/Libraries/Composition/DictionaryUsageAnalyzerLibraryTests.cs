@@ -33,8 +33,8 @@ public sealed class DictionaryUsageAnalyzerLibraryTests
         Assert.False(permitted.AiExcluded);
         Assert.Equal(permitted.KeepTerms, permitted.CopyTerms);
         Assert.EndsWith(
-            "1 library is kept from AI cleanup, so the terms it still uses are not copied into your dictionary, which AI " +
-            "cleanup always receives. Switching it off stops applying those terms.",
+            "1 word pack is kept from AI cleanup, so the words it still uses are not copied into your dictionary, which AI " +
+            "cleanup always receives. Turning it off stops applying those words.",
             report.Summary, StringComparison.Ordinal);
 
         // Without the set, nothing changes from before.

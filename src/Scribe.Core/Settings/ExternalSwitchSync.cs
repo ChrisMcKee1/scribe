@@ -71,6 +71,12 @@ public sealed class ExternalSwitchSync
     /// </summary>
     public void Saved() => _choice.Saved();
 
+    /// <summary>
+    /// The window saved changes up to <paramref name="revision"/>. A newer change made while the save waited stays as
+    /// this window's intent and must not be replaced by the older stored value the save just wrote.
+    /// </summary>
+    public void SavedThrough(long revision) => _choice.SavedThrough(revision);
+
     /// <summary>What a save writes: an outside change still waiting to be shown, otherwise what the switch shows.</summary>
     public bool ForSave(bool shown) => _choice.ForSave(shown);
 }

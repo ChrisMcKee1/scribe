@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -86,6 +86,13 @@ public partial class SettingsWindow
     private void RefreshTextChangesNotice()
     {
         var state = TextChangesNotice.Describe(PostCheck?.IsChecked == true, AiCleanupCheck?.IsChecked == true);
+        if (DictionaryTextChangesNotice is not null)
+        {
+            DictionaryTextChangesNotice.Visibility = state.Show ? Visibility.Visible : Visibility.Collapsed;
+            DictionaryTextChangesInfoBar.Message = state.Message;
+            DictionaryTextChangesActionButton.Content = state.ActionText;
+        }
+
         if (SnippetTextChangesNotice is not null)
         {
             SnippetTextChangesNotice.Visibility = state.Show ? Visibility.Visible : Visibility.Collapsed;
@@ -94,6 +101,10 @@ public partial class SettingsWindow
         }
     }
 
-    private void TextChangesNoticeButton_Click(object sender, RoutedEventArgs e) =>
-        ShowPage(SettingsPage.Advanced, nameof(PostCheck));
+    private void TextChangesNoticeButton_Click(object sender, RoutedEventArgs e)
+    {
+        PostCheck.IsChecked = true;
+        RefreshTextChangesNotice();
+        UpdateDictionaryGlossaryHint();
+    }
 }

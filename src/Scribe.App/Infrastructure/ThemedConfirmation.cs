@@ -1,4 +1,4 @@
-namespace Scribe.App.Infrastructure;
+﻿namespace Scribe.App.Infrastructure;
 
 /// <summary>
 /// The two-button Fluent confirmation ("do it" or Cancel) that Scribe asks with before acting.
@@ -22,14 +22,14 @@ internal static class ThemedConfirmation
     /// <param name="cancelIsDefault">
     /// The action is risky: it deletes data or sends dictation text off this PC, and cannot be taken back.
     /// </param>
-    public static Wpf.Ui.Controls.MessageBox Create(string title, string content, string confirmText, bool cancelIsDefault)
+    public static Wpf.Ui.Controls.MessageBox Create(string title, string content, string confirmText, bool cancelIsDefault, string cancelText = "Cancel")
     {
         var dialog = new Wpf.Ui.Controls.MessageBox
         {
             Title = title,
             Content = content,
             PrimaryButtonText = confirmText,
-            CloseButtonText = "Cancel",
+            CloseButtonText = cancelText,
         };
 
         if (cancelIsDefault)

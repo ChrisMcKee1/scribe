@@ -19,10 +19,11 @@ public sealed class HistoryUsageSourceTests
 
         // Every later write of the saved and running settings (a Save, an adopted tray change) refreshes what History and
         // Usage say about them. The constructor's first snapshot comes before either page has loaded.
-        var window = string.Concat(Directory.EnumerateFiles(SettingsFolder(), "SettingsWindow*.cs").Select(File.ReadAllText));
-        var writes = Regex.Matches(window, @"_committedSettings = [^;]+;\s*(?<next>[^;]+;)")
-            .Where(write => !write.Groups["next"].Value.Contains("_savedAiProvider = _settings.AiCleanupProvider", StringComparison.Ordinal))
-            .ToList();
+        var files = Directory.EnumerateFiles(SettingsFolder(), "SettingsWindow*.cs").Select(File.ReadAllText).ToList();
+        var main = File.ReadAllText(Path.Combine(SettingsFolder(), "SettingsWindow.xaml.cs"));
+        var constructor = Body(main, "public SettingsWindow(");
+        var window = string.Concat(files).Replace(constructor, string.Empty, StringComparison.Ordinal);
+        var writes = Regex.Matches(window, @"_committedSettings = [^;]+;\s*(?<next>[^;]+;)").ToList();
         Assert.True(writes.Count >= 2, $"Only {writes.Count} later writes of the committed settings were found.");
         Assert.All(writes, write => Assert.Equal("OnCommittedSettingsChanged();", write.Groups["next"].Value.Trim()));
 

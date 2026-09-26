@@ -19,6 +19,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Win32;
@@ -60,6 +61,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ISnippetRepository _snippets;
     private readonly IHistoryRepository _history;
     private readonly ITextCleanupService _cleanup;
+    private readonly ILibraryCatalogStore _libraryStore;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly AzureCliInstaller _azureCliInstaller;
     private readonly ICleanupFailureLog _failureLog;
@@ -94,21 +96,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly AppSettings _settings;
     private AppSettings _committedSettings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
+    private ICollectionView? _dictionaryView;
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
-    // This build stores no library switch from this page (LegacyLibraryPageContainment): the rows are read-only, the
-    // Dictionary page's badges and glossary count are judged against the committed selection this holds (the stored list
-    // its catalog load leaves, then each Save's), never the rows, no entry is removed because a library covers it, and a
-    // Save that stored the document resets the rows from the list it hands back.
-    private readonly LegacyLibraryPageContainment _libraryContainment;
-    // Set by a Save that stored the document when a row had shown a library other than as stored, so the Save says so.
-    private bool _libraryRowsReset;
-    // Cached snapshot of the loaded libraries (built-in + custom) so the preview panel resolves a
-    // selected row without re-reading files on every click. Kept in sync on import/remove. It starts
-    // in the precedence order GetLibraries returns and an import is appended, but nothing reads its
-    // order: the rows above show it A to Z, placed with the ordering captured when they loaded, and
-    // everything that picks a winner from it applies LibraryPrecedence itself.
-    private readonly List<DictionaryLibrary> _loadedLibraries = new();
+    private LibraryWorkspace? _wordPackWorkspace;
+    private LibraryCatalog? _wordPackCatalog;
+    private bool _updatingLibraryRows;
+    private bool _updatingLibraryTerms;
     private LibraryOrdering? _libraryOrdering;
+    private readonly LibrarySearch _librarySearch = LibrarySearch.ForCurrentCulture();
+    private readonly LibraryTermSort _libraryTermSort = LibraryTermSort.ForCurrentCulture();
+    private readonly ObservableCollection<LibraryTermRow> _libraryTermRows = new();
+    private DispatcherTimer? _librarySearchTimer;
+    private LibrarySearchResult? _librarySearchResult;
+    private LibraryTermSortOrder _libraryTermSortOrder = LibraryTermSortOrder.SavedOrder;
+    private string? _selectedLibraryId;
+    private readonly WordPackSaveProtocol _wordPackSaveProtocol;
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
@@ -152,6 +154,61 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // cleared with the snapshot: the usage insight is handed over only under it, so its library labels never go once
     // their library's AI permission narrowed or its content changed after the report was built (contract 3.3.6).
     private AiVocabularyScope _usageLibraryScope = AiVocabularyScope.None;
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        base.OnPreviewKeyDown(e);
+        if (e.Handled)
+        {
+            return;
+        }
+
+        var accelerator =
+            Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F ? SettingsAccelerator.Find :
+            Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.N ? SettingsAccelerator.AddTerm :
+            Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N ? SettingsAccelerator.NewLibrary :
+            (SettingsAccelerator?)null;
+        if (accelerator is null)
+        {
+            return;
+        }
+
+        var onWordPacks = DictionaryTabs.SelectedItem == WordPacksTab;
+        if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, ImeComposing: false, onWordPacks)))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        switch (accelerator.Value)
+        {
+            case SettingsAccelerator.Find:
+                if (onWordPacks)
+                {
+                    LibrarySearchBox.Focus();
+                    LibrarySearchBox.SelectAll();
+                }
+                else
+                {
+                    DictionarySearchBox.Focus();
+                    DictionarySearchBox.SelectAll();
+                }
+                break;
+            case SettingsAccelerator.AddTerm:
+                if (onWordPacks)
+                {
+                    AddWordPackTerm();
+                }
+                else
+                {
+                    DictionaryAddButton_Click(this, new RoutedEventArgs());
+                }
+                break;
+            case SettingsAccelerator.NewLibrary:
+                LibraryNewButton_Click(this, new RoutedEventArgs());
+                break;
+        }
+    }
     private bool _usageInsightRunning;
     private readonly LatestRequestCoalescer<UsagePeriodChoice> _usageLoads = new();
     private int _azureDeploymentLoadVersion;
@@ -239,6 +296,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _audio = audio;
         _dictionary = dictionary;
         _libraries = libraries;
+        _libraryStore = libraries as ILibraryCatalogStore
+            ?? throw new InvalidOperationException("The word pack editor needs the library catalog store.");
         _snippets = snippets;
         _history = history;
         _historyDeletionNotifier = historyDeletionNotifier;
@@ -254,6 +313,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
         _libraryVocabulary = libraryVocabulary;
+        _libraryVocabulary.Changed += OnLibraryVocabularyChanged;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -261,9 +321,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         _settings = settingsRepository.Load();
         _committedSettings = _settings.Clone();
+        _wordPackSaveProtocol = new WordPackSaveProtocol(new WordPackSaveStore(
+            _libraryStore,
+            payload => _settingsRepository.CommitLibraryState(payload)));
         _savedAiProvider = _settings.AiCleanupProvider;
         _settingsRecovered = settingsRepository.LastLoadFailed;
-        _libraryContainment = new LegacyLibraryPageContainment(_settings.EnabledDictionaryLibraryIds);
         _startupToggle = new StartupToggle(
             startup, enabled => StartupPreference.PersistAsync(settingsRepository, enabled), log);
         _pendingBinding = _settings.Hotkey;
@@ -679,6 +741,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     internal void AddDictionaryDraft(string spoken)
     {
         ShowPage(SettingsPage.Dictionary, nameof(DictionaryGrid));
+        if (!string.IsNullOrWhiteSpace(DictionarySearchBox.Text))
+        {
+            DictionarySearchBox.Text = string.Empty;
+            _dictionaryView?.Refresh();
+        }
+
         if (string.IsNullOrWhiteSpace(spoken))
         {
             return;
@@ -1420,252 +1488,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void InitializeDictionaryGrid()
-    {
-        DictionaryGrid.ItemsSource = _rows;
-        DataGridCheckBoxClick.Attach(DictionaryGrid);
-        DataGridTypingTab.Attach(DictionaryGrid);
-        _rows.CollectionChanged += DictionaryRows_CollectionChanged;
-        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
-        SetDictionaryEditable(false);
-        RefreshDictionaryStatus();
-    }
-
-    // Until the rows arrive there is nothing to edit, and an edit on an empty grid would be saved as
-    // if the user had deleted every entry.
-    private void SetDictionaryEditable(bool editable)
-    {
-        DictionaryGrid.IsEnabled = editable;
-        DictionaryAddButton.IsEnabled = editable;
-        DictionarySuggestButton.IsEnabled = editable;
-        DictionaryCleanupButton.IsEnabled = editable;
-        DictionaryImportButton.IsEnabled = editable;
-        DictionaryExportButton.IsEnabled = editable;
-    }
-
-    private async void LoadDictionaryAsync()
-    {
-        if (!_dictionaryLoad.TryBegin(DictionarySignature(), out var ticket))
-        {
-            return;
-        }
-
-        IReadOnlyList<DictionaryEntry> entries;
-        try
-        {
-            entries = await Task.Run(() => _dictionary.GetAll());
-        }
-        catch (Exception ex)
-        {
-            if (_dictionaryLoad.Fail(ticket))
-            {
-                TryLog(ex, "Could not load the dictionary for Settings.");
-                RefreshDictionaryStatus();
-            }
-
-            return;
-        }
-
-        if (!_dictionaryLoad.CanPublish(ticket))
-        {
-            return;
-        }
-
-        // Rows go in before the grid is bound and with the collection handler detached, as the old
-        // synchronous load did, so a large dictionary does not queue one full status refresh per row.
-        DictionaryGrid.ItemsSource = null;
-        _rows.CollectionChanged -= DictionaryRows_CollectionChanged;
-        try
-        {
-            foreach (var stale in _rows)
-            {
-                stale.PropertyChanged -= DictionaryRow_PropertyChanged;
-            }
-
-            _rows.Clear();
-            foreach (var entry in entries)
-            {
-                var row = new DictionaryRow
-                {
-                    Id = entry.Id,
-                    Pattern = entry.Pattern,
-                    Replacement = entry.Replacement,
-                    WholeWord = entry.WholeWord,
-                    Enabled = entry.Enabled,
-                };
-                row.PropertyChanged += DictionaryRow_PropertyChanged;
-                _rows.Add(row);
-            }
-        }
-        finally
-        {
-            _rows.CollectionChanged += DictionaryRows_CollectionChanged;
-            DictionaryGrid.ItemsSource = _rows;
-        }
-
-        _dictionaryLoad.Publish(ticket, DictionarySignature());
-        SetDictionaryEditable(true);
-        RefreshDictionaryStatus();
-    }
-
-    // Rows are watched individually as well as collectively: a checkbox click commits without
-    // necessarily raising CellEditEnding, so relying on that alone left the Library badge stale.
-    private void DictionaryRows_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        foreach (var row in e.OldItems?.OfType<DictionaryRow>() ?? [])
-        {
-            row.PropertyChanged -= DictionaryRow_PropertyChanged;
-        }
-
-        foreach (var row in e.NewItems?.OfType<DictionaryRow>() ?? [])
-        {
-            row.PropertyChanged += DictionaryRow_PropertyChanged;
-        }
-
-        RefreshDictionaryStatus();
-    }
-
-    private void DictionaryRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        // Ignore everything UpdateDictionaryCoverage itself writes. The Coverage setter also raises
-        // CoverageLabel, CoverageAppearance and CoverageVisibility, so filtering only Coverage left
-        // three unfiltered notifications per row queuing a full recompute each: not an infinite loop
-        // (the second pass is a no-op) but a Dispatcher flood proportional to dictionary size.
-        if (e.PropertyName is null || e.PropertyName.StartsWith("Coverage", StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        Dispatcher.BeginInvoke(RefreshDictionaryStatus);
-    }
-
-    /// <summary>Recomputes the glossary hint and the per-row library coverage badges together.</summary>
-    private void RefreshDictionaryStatus()
-    {
-        UpdateDictionaryGlossaryHint();
-        UpdateDictionaryCoverage();
-    }
-
-    /// <summary>
-    /// Tags each row with how it relates to the libraries that are switched on, so the user can see
-    /// which entries are redundant and which are deliberate overrides without saving first.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately tolerant: a failure here costs a badge, never an edit. It runs against the
-    /// committed selection (<see cref="LegacyLibraryPageContainment"/>: the stored list as the window
-    /// last read it), never against the Libraries page's rows, which this build cannot store.
-    /// </remarks>
-    private void UpdateDictionaryCoverage()
-    {
-        try
-        {
-            if (_rows.Count == 0)
-            {
-                return;
-            }
-
-            // Precedence, not the list's A to Z order: the badge must name the library dictation uses.
-            var covering = DictionaryLibraryOverlapAnalyzer.Coverage(_loadedLibraries, _libraryContainment.CommittedIds);
-
-            foreach (var row in _rows)
-            {
-                var pattern = (row.Pattern ?? string.Empty).Trim();
-                if (pattern.Length == 0 || !covering.TryGetValue(pattern, out var hit))
-                {
-                    row.Coverage = DictionaryRowCoverage.None;
-                    row.CoverageTooltip = string.Empty;
-                    continue;
-                }
-
-                var mine = (row.Replacement ?? string.Empty).Trim();
-                var theirs = (hit.Entry.Replacement ?? string.Empty).Trim();
-                var same = string.Equals(mine, theirs, StringComparison.Ordinal)
-                           && row.WholeWord == hit.Entry.WholeWord;
-
-                row.Coverage = same ? DictionaryRowCoverage.Duplicate : DictionaryRowCoverage.Override;
-                row.CoverageTooltip = same
-                    ? $"\"{hit.LibraryName}\" already writes this as \"{theirs}\". Removing this entry " +
-                      "changes nothing and frees room in the AI cleanup glossary."
-                    : $"\"{hit.LibraryName}\" writes this as \"{theirs}\". Your entry wins. " +
-                      "Clear Enabled to fall back to the library.";
-            }
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning("Could not compute dictionary library coverage: {Failure}", FailureShape.DescribeWithStack(ex));
-        }
-    }
-
-    /// <summary>
-    /// Adds a blank row and puts the cursor in it. The grid's own placeholder row was the only way
-    /// to add an entry, which is invisible unless you already know it exists.
-    /// </summary>
-    private void DictionaryAddButton_Click(object sender, RoutedEventArgs e)
-    {
-        var row = new DictionaryRow();
-        _rows.Add(row);
-
-        DictionaryGrid.ScrollIntoView(row);
-
-        // The row container is generated lazily, and BeginEdit silently does nothing when it does
-        // not exist yet. Forcing layout first is what makes the new row actually land in edit mode
-        // rather than appearing blank and unfocused.
-        DictionaryGrid.UpdateLayout();
-
-        DictionaryGrid.SelectedItem = row;
-        DictionaryGrid.CurrentCell = new DataGridCellInfo(row, DictionaryGrid.Columns[0]);
-        DictionaryGrid.BeginEdit();
-    }
-
-    /// <summary>Removes the row whose delete button was pressed.</summary>
-    private void DictionaryDeleteRow_Click(object sender, RoutedEventArgs e)
-    {
-        // Committing first avoids removing a row the grid still believes it is editing.
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-        if (sender is FrameworkElement { DataContext: DictionaryRow row })
-        {
-            _rows.Remove(row);
-        }
-    }
-
-    // What the dictionary gives AI cleanup, counted by Core the way dictation builds it (GlossaryHint):
-    // this page's rows as typed, the libraries of the committed selection, and the provider, prompt style and
-    // switches on screen, so every control it reads refreshes it. Local find-and-replace is never capped. This is a
-    // status line rather than an input limit, because blocking the 81st entry would break a feature that
-    // still works.
-    private void UpdateDictionaryGlossaryHint()
-    {
-        // Also reached from the AI page's handlers, which can run while InitializeComponent is still
-        // creating the controls this reads.
-        if (DictionaryGlossaryHint is null || AiPromptStyleCombo is null ||
-            AiCleanupCheck is null || PostCheck is null)
-        {
-            return;
-        }
-
-        if (!_dictionaryLoad.IsLoaded)
-        {
-            DictionaryGlossaryHint.Text = _dictionaryLoad.State == SettingsSectionState.Failed
-                ? "Couldn't load your dictionary, so it can't be edited right now. Close Settings and open it again to retry."
-                : "Loading your dictionary...";
-            return;
-        }
-
-        // The entries the committed selection's libraries compose to, as the library service hands them to dictation's
-        // glossary: precedence, not the list's A to Z order, decides which library's row survives a shared spoken form, and
-        // so what the count below includes. The hint counts them as given and never reorders them.
-        var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, _libraryContainment.CommittedIds));
-
-        DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
-            _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
-            libraryEntries,
-            AiCleanupOn: AiCleanupCheck.IsChecked == true,
-            PostProcessingOn: PostCheck.IsChecked == true,
-            SelectedProvider,
-            SelectedPromptStyle));
-    }
-
     private void PostCheck_Toggled(object sender, RoutedEventArgs e)
     {
         UpdateDictionaryGlossaryHint();
@@ -1678,56 +1500,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         LibraryGrid.ItemsSource = _libraryRows;
         DataGridCheckBoxClick.Attach(LibraryGrid);
-        ContainLibrarySwitches();
 
-        // The catalog load and every Save that stored the document set the rows from the stored list
-        // (LegacyLibraryPageContainment), and the dictionary page's badges and glossary count follow the committed
-        // selection that goes with it. The rows say when they change, so the check boxes show it.
+        // The Word packs tab stages switches in the workspace. Save commits the workspace's change set with the
+        // settings document, then marks exactly that change set saved after the library journal publishes it.
         _libraryRows.CollectionChanged += LibraryRows_CollectionChanged;
 
         _libraryDetailEmptyText = LibraryDetailEmpty.Text;
-        LibraryDetailEmpty.Text = "Loading libraries...";
+        LibraryDetailEmpty.Text = "Loading word packs...";
+        LibraryTermsGrid.ItemsSource = _libraryTermRows;
         SetLibrariesEditable(false);
         UpdateLibraryDetail(null);
-    }
-
-    // Once the library state is stored, a settings-only save keeps the stored library list, so this page can't store a
-    // switch (LegacyLibraryPageContainment). The On column only shows the committed selection: read-only, so neither a
-    // click nor Space starts its edit, and its box disabled, so UI Automation can't toggle it either. The subtitle stops
-    // asking for a switch and a Save, a notice under it says why, and the tip and the Remove button's tooltip stop
-    // advising a switch.
-    private void ContainLibrarySwitches()
-    {
-        var on = LibraryGrid.Columns.OfType<DataGridCheckBoxColumn>().Single();
-        on.IsReadOnly = true;
-        var shown = new Style(typeof(CheckBox), on.ElementStyle);
-        shown.Setters.Add(new Setter(UIElement.IsEnabledProperty, false));
-        on.ElementStyle = shown;
-
-        if (LibrariesPageTitle.Parent is Panel header)
-        {
-            // The subtitle has no name of its own: it is the title's next sibling in the page's header.
-            var title = header.Children.IndexOf(LibrariesPageTitle);
-            if (title + 1 < header.Children.Count && header.Children[title + 1] is TextBlock subtitle)
-            {
-                subtitle.Text = LegacyLibraryPageContainment.PageSubtitle;
-            }
-
-            header.Children.Add(new TextBlock
-            {
-                Text = LegacyLibraryPageContainment.PageNotice,
-                Style = (Style)FindResource("CardDescription"),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 8, 0, 0),
-            });
-        }
-
-        foreach (var tip in SectionLibraries.Children.OfType<TextBlock>().Where(block => Grid.GetRow(block) == 3))
-        {
-            tip.Text = LegacyLibraryPageContainment.PageTip;
-        }
-
-        LibraryRemoveButton.ToolTip = LegacyLibraryPageContainment.RemoveToolTip;
     }
 
     private void LibraryRows_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -1745,8 +1527,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LibraryRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (_updatingLibraryRows || sender is not LibraryRow row)
+        {
+            return;
+        }
+
         if (e.PropertyName == nameof(LibraryRow.Enabled))
         {
+            _wordPackWorkspace?.SetEnabled(row.Id, row.Enabled);
+            Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        }
+        else if (e.PropertyName == nameof(LibraryRow.AiCleanup))
+        {
+            _wordPackWorkspace?.SetAiPermission(row.Id, row.AiCleanup);
             Dispatcher.BeginInvoke(RefreshDictionaryStatus);
         }
     }
@@ -1768,17 +1561,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        IReadOnlyList<DictionaryLibrary> libraries;
-        IReadOnlyList<string>? storedLibraryIds;
+        LibraryCatalog catalog;
         try
         {
-            // The catalog load runs the adoption, which can turn a pack changed outside Scribe off and patch the stored
-            // library list, so the list is read after it, on the same worker (LegacyLibraryPageContainment.CatalogLoaded).
-            (libraries, storedLibraryIds) = await Task.Run(() =>
-            {
-                var loaded = _libraries.GetLibraries();
-                return (loaded, LegacyLibraryPageContainment.StoredIds(_settingsRepository));
-            });
+            catalog = await Task.Run(_libraryStore.LoadCatalog);
         }
         catch (Exception ex)
         {
@@ -1786,7 +1572,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 TryLog(ex, "Could not load dictionary libraries for Settings.");
                 LibraryDetailEmpty.Text =
-                    "Couldn't load libraries, so they can't be changed right now. Close Settings and open it again to retry.";
+                    "Couldn't load word packs.";
             }
 
             return;
@@ -1797,11 +1583,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // The rows, the badges and the glossary count describe what is stored after that load, not the list the window
-        // opened with.
-        _libraryContainment.CatalogLoaded(storedLibraryIds);
-        _loadedLibraries.Clear();
-        _loadedLibraries.AddRange(libraries);
+        _wordPackCatalog = catalog;
+        _wordPackWorkspace = new LibraryWorkspace(catalog, BuiltInLibraryOverlay.Instance, LibraryDecisions.DefaultAiPermission);
 
         // Clear raises a reset that names no removed rows, so their handlers are dropped here.
         foreach (var stale in _libraryRows)
@@ -1812,11 +1595,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // One A to Z list of built-in and custom libraries, each shown as the committed selection has it. The ordering is
         // captured now, so a library imported later is placed by the same rules as the rows already shown.
         _libraryOrdering = LibraryOrdering.ForCurrentCulture();
+        _updatingLibraryRows = true;
         _libraryRows.Clear();
-        foreach (var library in _libraryOrdering.Sort(_loadedLibraries, l => l.Name, l => l.Id))
+        foreach (var library in _libraryOrdering.Sort(catalog.Libraries.Select(l => l.Content), l => l.Name, l => l.Id))
         {
-            _libraryRows.Add(NewLibraryRow(library, _libraryContainment.IsCommitted(library.Id)));
+            _libraryRows.Add(NewLibraryRow(library));
         }
+        _updatingLibraryRows = false;
 
         _libraryLoad.Publish(ticket, LibrarySignature());
         LibraryDetailEmpty.Text = _libraryDetailEmptyText;
@@ -1839,59 +1624,437 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void LibraryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
 
+    private void LibrarySearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _librarySearchTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _librarySearchTimer.Stop();
+        _librarySearchTimer.Tick -= LibrarySearchTimer_Tick;
+        _librarySearchTimer.Tick += LibrarySearchTimer_Tick;
+        _librarySearchTimer.Start();
+    }
+
+    private void LibrarySearchTimer_Tick(object? sender, EventArgs e)
+    {
+        _librarySearchTimer?.Stop();
+        ApplyLibrarySearch();
+    }
+
+    private void ApplyLibrarySearch()
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var sources = _wordPackWorkspace.Draft.Libraries
+            .Where(library => !library.PendingDelete)
+            .Select(library => new LibrarySearchSource(library.Content.Id, _wordPackWorkspace.RowsOf(library.Content.Id)))
+            .ToList();
+        _librarySearchResult = _librarySearch.Search(sources, LibrarySearchBox.Text);
+        foreach (var row in _libraryRows)
+        {
+            ApplySearchState(row);
+        }
+
+        if (_selectedLibraryId is not null)
+        {
+            RefreshTermRows(_selectedLibraryId);
+        }
+    }
+
+    private void ApplySearchState(LibraryRow row)
+    {
+        row.MatchCount = _librarySearchResult?.IsActive == true ? _librarySearchResult.CountIn(row.Id) : null;
+    }
+
+    private void LibraryNewButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var id = _wordPackWorkspace.CreateLibrary();
+        RefreshWordPackList(id);
+        RefreshDictionaryStatus();
+    }
+
+    private void LibraryMoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var menu = new ContextMenu();
+        var duplicate = new MenuItem { Header = "Duplicate" };
+        duplicate.IsEnabled = LibraryGrid.SelectedItem is LibraryRow;
+        duplicate.Click += (_, _) =>
+        {
+            if (LibraryGrid.SelectedItem is LibraryRow row)
+            {
+                var id = _wordPackWorkspace.Duplicate(row.Id);
+                RefreshWordPackList(id);
+            }
+        };
+        menu.Items.Add(duplicate);
+
+        var deleted = new MenuItem { Header = $"Recently deleted ({_wordPackWorkspace.Draft.RecentlyDeleted.Count})" };
+        deleted.Click += (_, _) => ShowRecentlyDeletedDialog();
+        menu.Items.Add(deleted);
+
+        menu.PlacementTarget = LibraryMoreButton;
+        menu.IsOpen = true;
+    }
+
+    private void LibraryTermDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedLibraryId is null || _wordPackWorkspace is null ||
+            sender is not FrameworkElement { DataContext: LibraryTermRow row })
+        {
+            return;
+        }
+
+        if (!_wordPackWorkspace.CanEditContent(_selectedLibraryId))
+        {
+            ShowInfo("This word pack can't be edited right now.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        try
+        {
+            _wordPackWorkspace.DeleteTerm(_selectedLibraryId, row.RowId);
+            RefreshTermRows(_selectedLibraryId);
+            RefreshWordPackList(_selectedLibraryId);
+            RefreshDictionaryStatus();
+        }
+        catch (InvalidOperationException)
+        {
+            ShowInfo("This term can be turned off or restored, but not deleted.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+    }
+
+    private void AddWordPackTerm()
+    {
+        if (_selectedLibraryId is null || _wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        if (!_wordPackWorkspace.CanEditContent(_selectedLibraryId))
+        {
+            ShowInfo("This word pack can't be edited right now.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        var result = _wordPackWorkspace.AddTerm(_selectedLibraryId, new TermValues(string.Empty, string.Empty), removalIntent: false);
+        if (!result.Applied)
+        {
+            ShowInfo(result.Issue is null ? "Couldn't add a term." : LibraryEditor.Message(result.Issue), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        RefreshTermRows(_selectedLibraryId);
+        RefreshWordPackList(_selectedLibraryId);
+        if (_libraryTermRows.LastOrDefault() is { } row)
+        {
+            LibraryTermsGrid.SelectedItem = row;
+            LibraryTermsGrid.ScrollIntoView(row);
+        }
+    }
+
+    private void ShowRecentlyDeletedDialog()
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var list = new ListBox
+        {
+            MinWidth = 420,
+            MinHeight = 180,
+            ItemsSource = _wordPackWorkspace.Draft.RecentlyDeleted.Select(entry =>
+                new RecentlyDeletedRow(entry)).ToList(),
+            DisplayMemberPath = nameof(RecentlyDeletedRow.Display),
+        };
+        var restore = new Button { Content = "Restore word pack", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0) };
+        var purge = new Button { Content = "Delete permanently", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0) };
+        var close = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
+        var dialog = new Window
+        {
+            Title = $"Recently deleted ({_wordPackWorkspace.Draft.RecentlyDeleted.Count})",
+            Owner = this,
+            Width = 560,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        restore.Click += async (_, _) =>
+        {
+            if (list.SelectedItem is RecentlyDeletedRow row)
+            {
+                var content = await Task.Run(() => _libraryStore.ReadRecentlyDeleted(row.Entry));
+                if (content is not null)
+                {
+                    var id = _wordPackWorkspace.RestoreDeleted(content);
+                    RefreshWordPackList(id);
+                    dialog.DialogResult = true;
+                }
+            }
+        };
+        purge.Click += (_, _) =>
+        {
+            if (list.SelectedItem is RecentlyDeletedRow row)
+            {
+                _wordPackWorkspace.DeletePermanently(row.Entry);
+                dialog.DialogResult = true;
+            }
+        };
+        dialog.Content = new StackPanel
+        {
+            Margin = new Thickness(16),
+            Children =
+            {
+                list,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Margin = new Thickness(0, 16, 0, 0),
+                    Children = { restore, purge, close },
+                },
+            },
+        };
+        dialog.ShowDialog();
+        RefreshWordPackList();
+        RefreshDictionaryStatus();
+    }
+
     // Drives the right-hand preview panel from the selected library row: header plus a read-only grid
     // of its spoken-to-written terms. Resolving from the cached snapshot keeps clicking through
     // libraries instant (no per-click file reads).
     private void UpdateLibraryDetail(LibraryRow? row)
     {
-        var library = row is null
+        var library = row is null || _wordPackWorkspace is null
             ? null
-            : _loadedLibraries.FirstOrDefault(l => string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
+            : _wordPackWorkspace.Draft.Find(row.Id);
 
         if (library is null)
         {
-            LibraryTermsGrid.ItemsSource = null;
+            _selectedLibraryId = null;
+            _libraryTermRows.Clear();
             LibraryTermsGrid.Visibility = Visibility.Collapsed;
             LibraryDetailEmpty.Visibility = Visibility.Visible;
             LibraryDetailName.Text = string.Empty;
             LibraryDetailMeta.Text = string.Empty;
             LibraryDetailDesc.Text = string.Empty;
             LibraryDetailDesc.Visibility = Visibility.Collapsed;
+            LibraryExportButton.IsEnabled = false;
+            LibraryRemoveButton.Visibility = Visibility.Collapsed;
             return;
         }
 
-        var count = library.Entries.Count;
-        LibraryDetailName.Text = library.Name;
+        _selectedLibraryId = library.Content.Id;
+        var content = library.Content;
+        var count = content.Rows.Count;
+        LibraryDetailName.Text = content.Name;
         LibraryDetailMeta.Text =
-            $"{library.Category} \u00b7 {count} {(count == 1 ? "term" : "terms")} \u00b7 {LibrarySource(library.BuiltIn)}";
-        LibraryDetailDesc.Text = library.Description ?? string.Empty;
+            $"{LibrarySource(content.BuiltIn)}, {content.Category}, {count} {(count == 1 ? "word" : "words")}";
+        LibraryDetailDesc.Text = content.Description ?? string.Empty;
         LibraryDetailDesc.Visibility =
-            string.IsNullOrWhiteSpace(library.Description) ? Visibility.Collapsed : Visibility.Visible;
+            string.IsNullOrWhiteSpace(content.Description) ? Visibility.Collapsed : Visibility.Visible;
 
-        LibraryTermsGrid.ItemsSource = library.Entries.Select(entry => new LibraryTermRow(entry)).ToList();
+        RefreshTermRows(library.Content.Id);
         LibraryTermsGrid.Visibility = Visibility.Visible;
         LibraryDetailEmpty.Visibility = Visibility.Collapsed;
+        LibraryExportButton.IsEnabled = true;
+        LibraryRemoveButton.Visibility = content.BuiltIn ? Visibility.Collapsed : Visibility.Visible;
     }
 
     // The enabled-set persisted in settings: the ids of every ticked library still in the list, in precedence order, so
     // what Save writes never depends on the order the rows are shown in (after a fresh load it is the list 0.4.3 wrote).
     // The rows are read-only in this build, and once the library state is stored the save keeps the stored list anyway.
     private List<string> CollectEnabledLibraryIds() =>
-        LibraryPrecedence.Order(_libraryRows.Where(r => r.Enabled), r => r.Id, r => r.BuiltIn).Select(r => r.Id).ToList();
+        _wordPackWorkspace?.Draft.LocalState.EnabledIds.ToList()
+        ?? LibraryPrecedence.Order(_libraryRows.Where(r => r.Enabled), r => r.Id, r => r.BuiltIn).Select(r => r.Id).ToList();
 
-    // Where a library comes from, shown under its name in the list and at the end of the preview's meta line.
-    private static string LibrarySource(bool builtIn) => builtIn ? "Built-in" : "Your library";
+    // Where a word pack comes from, shown under its name in the list and in the preview's meta line.
+    private static string LibrarySource(bool builtIn) => builtIn ? "Built-in" : "Imported";
 
-    private static LibraryRow NewLibraryRow(DictionaryLibrary library, bool enabled) => new()
+    private IReadOnlyList<DictionaryLibrary> CurrentWordPackLibraries()
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return _libraryRows
+                .Select(row => new DictionaryLibrary(
+                    row.Id,
+                    row.Name,
+                    row.Category,
+                    null,
+                    row.BuiltIn,
+                    []))
+                .ToList();
+        }
+
+        return _wordPackWorkspace.Draft.Libraries
+            .Where(library => !library.PendingDelete)
+            .Select(library => new DictionaryLibrary(
+                library.Content.Id,
+                library.Content.Name,
+                library.Content.Category,
+                library.Content.Description,
+                library.Content.BuiltIn,
+                library.Content.Rows.Select(row => row.Values.ToEntry()).ToList())
+            {
+                FileName = library.FileName,
+            })
+            .ToList();
+    }
+
+    private void RefreshTermRows(string libraryId)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        foreach (var row in _libraryTermRows)
+        {
+            row.PropertyChanged -= LibraryTermRow_PropertyChanged;
+        }
+
+        var rows = _wordPackWorkspace.RowsOf(libraryId);
+        if (_librarySearchResult?.IsActive == true)
+        {
+            var matches = _librarySearchResult.MatchesIn(libraryId).ToHashSet();
+            rows = rows.Where(row => matches.Contains(row.RowId)).ToList();
+        }
+
+        rows = _libraryTermSort.Sort(rows, _libraryTermSortOrder);
+        _updatingLibraryTerms = true;
+        _libraryTermRows.Clear();
+        foreach (var row in rows)
+        {
+            var view = new LibraryTermRow(row.RowId, row.Row.Values);
+            view.PropertyChanged += LibraryTermRow_PropertyChanged;
+            _libraryTermRows.Add(view);
+        }
+
+        _updatingLibraryTerms = false;
+        LibraryDetailEmpty.Visibility = _libraryTermRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        LibraryDetailEmpty.Text = SearchNoMatchesText(libraryId);
+    }
+
+    private string SearchNoMatchesText(string libraryId)
+    {
+        if (_librarySearchResult?.IsActive != true || _librarySearchResult.CountIn(libraryId) > 0 || _wordPackWorkspace is null)
+        {
+            return _libraryDetailEmptyText;
+        }
+
+        var selected = _wordPackWorkspace.Draft.Find(libraryId)?.Content.Name ?? "this word pack";
+        var elsewhere = _librarySearchResult.FoundElsewhere(libraryId)
+            .Select(match => _wordPackWorkspace.Draft.Find(match.LibraryId) is { } pack
+                ? $"{pack.Content.Name} ({match.Count})"
+                : null)
+            .Where(text => text is not null)
+            .ToList();
+        return elsewhere.Count == 0
+            ? $"No matches in {selected}."
+            : $"No matches in {selected}. Found in: {string.Join(", ", elsewhere)}";
+    }
+
+    private void LibraryTermRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_updatingLibraryTerms || sender is not LibraryTermRow row || _selectedLibraryId is null || _wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        if (!_wordPackWorkspace.CanEditContent(_selectedLibraryId))
+        {
+            ShowInfo("This word pack can't be edited right now.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        var result = _wordPackWorkspace.EditTerm(
+            _selectedLibraryId,
+            row.RowId,
+            new TermValues(row.Pattern, row.Replacement, row.WholeWord, row.Enabled),
+            removalIntent: false);
+        if (!result.Applied && result.Issue is { } issue)
+        {
+            ShowInfo(LibraryEditor.Message(issue, row.Pattern), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+
+        RefreshWordPackList(_selectedLibraryId);
+        RefreshDictionaryStatus();
+    }
+
+    private void LibraryTermsGrid_Sorting(object sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;
+        var header = e.Column.Header?.ToString();
+        _libraryTermSortOrder = header switch
+        {
+            "Scribe hears" => _libraryTermSortOrder == LibraryTermSortOrder.SpokenAscending
+                ? LibraryTermSortOrder.SpokenDescending
+                : LibraryTermSortOrder.SpokenAscending,
+            "Scribe writes" => _libraryTermSortOrder == LibraryTermSortOrder.WrittenAscending
+                ? LibraryTermSortOrder.WrittenDescending
+                : LibraryTermSortOrder.WrittenAscending,
+            _ => LibraryTermSortOrder.SavedOrder,
+        };
+        if (_selectedLibraryId is not null)
+        {
+            RefreshTermRows(_selectedLibraryId);
+        }
+    }
+
+    private LibraryRow NewLibraryRow(LibraryContent library) => new()
     {
         Id = library.Id,
         Name = library.Name,
         Category = library.Category,
-        Terms = library.EnabledEntryCount,
+        Terms = library.Rows.Count,
         Source = LibrarySource(library.BuiltIn),
         BuiltIn = library.BuiltIn,
-        Enabled = enabled,
+        Enabled = _wordPackWorkspace?.Draft.LocalState.EnabledIds.Contains(library.Id) == true,
+        AiCleanup = _wordPackWorkspace?.ShowsAiPermission(library.Id) == true,
     };
+
+    private void RefreshWordPackList(string? selectId = null)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        selectId ??= (LibraryGrid.SelectedItem as LibraryRow)?.Id;
+        foreach (var row in _libraryRows)
+        {
+            row.PropertyChanged -= LibraryRow_PropertyChanged;
+        }
+
+        _updatingLibraryRows = true;
+        _libraryRows.Clear();
+        var ordering = _libraryOrdering ??= LibraryOrdering.ForCurrentCulture();
+        foreach (var library in ordering.Sort(
+                     _wordPackWorkspace.Draft.Libraries.Where(l => !l.PendingDelete).Select(l => l.Content),
+                     l => l.Name,
+                     l => l.Id))
+        {
+            var row = NewLibraryRow(library);
+            ApplySearchState(row);
+            _libraryRows.Add(row);
+        }
+
+        _updatingLibraryRows = false;
+        if (selectId is not null)
+        {
+            LibraryGrid.SelectedItem = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, selectId, StringComparison.OrdinalIgnoreCase));
+        }
+    }
 
     private void LibraryImportButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1905,34 +2068,97 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        DictionaryLibrary imported;
         try
         {
-            var csv = File.ReadAllText(dialog.FileName);
-            var suggestedName = Path.GetFileNameWithoutExtension(dialog.FileName);
-            imported = _libraries.Import(csv, suggestedName);
+            if (_wordPackWorkspace is null)
+            {
+                return;
+            }
+
+            var bytes = File.ReadAllBytes(dialog.FileName);
+            var document = LibraryCsvCodec.Instance.ReadImport(bytes);
+            var plan = LibraryImportPlanner.Plan(
+                document,
+                new LibraryImportTarget.NewLibrary(Path.GetFileName(dialog.FileName)),
+                _wordPackWorkspace.Draft);
+            if (ShowImportWordPackDialog(plan) is not { } accepted)
+            {
+                return;
+            }
+
+            var before = _wordPackWorkspace.Draft.Libraries.Select(l => l.Content.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var result = _wordPackWorkspace.ApplyImport(accepted, ImportConflictChoice.KeepMine);
+            if (!result.Applied)
+            {
+                ShowThemedMessage("Couldn't import the word pack", result.Issue is null
+                    ? "Couldn't import the word pack. Your edits are still here."
+                    : LibraryEditor.Message(result.Issue));
+                return;
+            }
+
+            var importedId = _wordPackWorkspace.Draft.Libraries.FirstOrDefault(l => !before.Contains(l.Content.Id))?.Content.Id;
+            RefreshWordPackList(importedId);
+            RefreshDictionaryStatus();
+            ShowInfo("Imported the word pack. Save to apply it.");
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not import that library:\n{ex.Message}");
+            TryLog(ex, "Could not import a word pack from Settings.");
+            ShowThemedMessage("Couldn't import the word pack", "Couldn't import the word pack. Check the file and try again.");
             return;
         }
-
-        AddImportedLibrary(imported);
-        ShowInfo(LegacyLibraryPageContainment.Imported(imported.Name, imported.EnabledEntryCount));
     }
 
-    // Newly imported libraries start switched off, like the built-in ones, so an import never silently changes how
-    // dictation is spelled until the user turns it on. The row takes its place in the A to Z list once, now, and is
-    // selected and scrolled into view so the preview shows it.
-    private void AddImportedLibrary(DictionaryLibrary imported)
+    private LibraryImportPlan? ShowImportWordPackDialog(LibraryImportPlan plan)
     {
-        _loadedLibraries.Add(imported);
-        var newRow = NewLibraryRow(imported, enabled: false);
-        var ordering = _libraryOrdering ??= LibraryOrdering.ForCurrentCulture();
-        _libraryRows.Insert(ordering.InsertionIndex(_libraryRows, newRow, r => r.Name, r => r.Id), newRow);
-        LibraryGrid.SelectedItem = newRow;
-        LibraryGrid.ScrollIntoView(newRow);
+        var nameBox = new TextBox { Text = plan.SuggestedName, MinWidth = 320, Margin = new Thickness(0, 8, 0, 8) };
+        var summary = new TextBlock
+        {
+            Text = $"{plan.Adds:N0} added, {plan.WrittenDifferently:N0} written differently, {plan.AlreadyHere:N0} already here, {plan.Skipped:N0} couldn't be read.",
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var errors = new TextBlock
+        {
+            Text = plan.SkippedRows.Count == 0
+                ? "No row errors."
+                : string.Join(Environment.NewLine, plan.SkippedRows.Take(6).Select(row => $"Row {row.Line}: {row.Kind}")),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock { Text = "Replacement name" });
+        panel.Children.Add(nameBox);
+        panel.Children.Add(summary);
+        panel.Children.Add(errors);
+        var dialog = new Window
+        {
+            Title = "Import a word pack",
+            Owner = this,
+            Width = 520,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(16),
+                Children =
+                {
+                    panel,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Margin = new Thickness(0, 16, 0, 0),
+                        Children =
+                        {
+                            new Button { Content = "Cancel", IsCancel = true, MinWidth = 90, Margin = new Thickness(0, 0, 8, 0) },
+                            new Button { Content = $"Import {plan.Operations.Count:N0} valid terms", IsDefault = true, MinWidth = 150 },
+                        },
+                    },
+                },
+            },
+        };
+        ((Button)((StackPanel)((StackPanel)dialog.Content).Children[1]).Children[1]).Click += (_, _) => dialog.DialogResult = true;
+        return dialog.ShowDialog() == true ? plan with { SuggestedName = nameBox.Text } : null;
     }
 
     private void LibraryExportButton_Click(object sender, RoutedEventArgs e)
@@ -1945,6 +2171,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var dialog = new SaveFileDialog
         {
             FileName = library.Id + ".csv",
+            Title = "Export word pack",
             Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
             DefaultExt = ".csv",
         };
@@ -1955,11 +2182,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            File.WriteAllText(dialog.FileName, DictionaryLibraryCsv.Export(library), CsvEncoding);
+            var content = _wordPackWorkspace?.Draft.Find(library.Id)?.Content;
+            if (content is null)
+            {
+                return;
+            }
+
+            File.WriteAllBytes(dialog.FileName, LibraryCsvCodec.Instance.WriteExport(content));
+            ShowInfo("Exported the word pack.");
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not export the library:\n{ex.Message}");
+            TryLog(ex, "Could not export a word pack from Settings.");
+            ShowThemedMessage("Couldn't export the word pack", "Couldn't export the word pack. Choose another location or try again.");
         }
     }
 
@@ -1967,42 +2202,40 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (LibraryGrid.SelectedItem is not LibraryRow row)
         {
-            ShowInfo("Select a library to remove.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            ShowInfo("Select a word pack to remove.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
             return;
         }
 
         if (row.BuiltIn)
         {
-            ShowThemedMessage("Built-in library", LegacyLibraryPageContainment.BuiltInRemoveRefused(row.Name));
+            ShowThemedMessage("Built-in word pack", "Built-in word packs can be turned off, but not removed.");
             return;
         }
 
         if (!await ConfirmRiskyAsync(
-                "Remove library",
-                $"Remove the imported library \"{row.Name}\"? This deletes it from Scribe. " +
-                "You can import it again later from the original file.",
-                "Remove"))
+                "Delete word pack",
+                $"Delete \"{row.Name}\" and its {row.Terms:N0} {(row.Terms == 1 ? "word" : "words")}? You can restore it from Recently deleted for 30 days. Your dictionary is unchanged.",
+                "Delete word pack"))
         {
             return;
         }
 
         try
         {
-            _libraries.Remove(row.Id);
+            _wordPackWorkspace?.DeleteLibrary(row.Id);
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not remove that library:\n{ex.Message}");
+            TryLog(ex, "Could not stage a word pack deletion from Settings.");
+            ShowThemedMessage("Couldn't delete the word pack", "Couldn't delete the word pack. Try again.");
             return;
         }
 
-        _loadedLibraries.RemoveAll(l => string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
-        _libraryRows.Remove(row);
+        RefreshWordPackList();
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
 
-        // A removed library supplies nothing any more, so the dictionary page's badges and glossary count drop it now.
         RefreshDictionaryStatus();
-        ShowInfo($"Removed \"{row.Name}\".");
+        ShowInfo("Deleted the word pack. Save to apply it.");
     }
 
     // Resolves the grid's selected row back to its loaded library from the cached snapshot,
@@ -2011,18 +2244,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (LibraryGrid.SelectedItem is not LibraryRow row)
         {
-            ShowInfo("Select a library first.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            ShowInfo("Select a word pack first.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
             return null;
         }
 
-        var library = _loadedLibraries.FirstOrDefault(l =>
-            string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
-        if (library is null)
+        var draft = _wordPackWorkspace?.Draft.Find(row.Id);
+        if (draft is null)
         {
-            ShowInfo("That library is no longer available.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            ShowInfo("That word pack is no longer available.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return null;
         }
 
-        return library;
+        return new DictionaryLibrary(
+            draft.Content.Id,
+            draft.Content.Name,
+            draft.Content.Category,
+            draft.Content.Description,
+            draft.Content.BuiltIn,
+            draft.Content.Rows.Select(row => row.Values.ToEntry()).ToList())
+        {
+            FileName = draft.FileName,
+        };
     }
 
     // Save skips sections the user never touched, so a pre-existing data problem in one section
@@ -5046,6 +5288,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _historySearchDelay?.Cancel();
         _historySearchDelay?.Dispose();
         _historySearchDelay = null;
+        _libraryVocabulary.Changed -= OnLibraryVocabularyChanged;
         if (_updates is not null)
         {
             _updates.UpdateReady -= OnUpdateReady;
@@ -5319,15 +5562,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
-                // A row that showed a library other than as stored is said, never passed off as saved.
-                if (_libraryRowsReset)
-                {
-                    ShowInfo(LegacyLibraryPageContainment.SavedWithStoredSwitches, Wpf.Ui.Controls.InfoBarSeverity.Warning);
-                }
-                else
-                {
-                    ShowInfo("Settings saved.");
-                }
+                ShowInfo("Settings saved.");
             }
         }
         finally
@@ -5348,15 +5583,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
-                // The window stays open to say a row showed a library other than as stored, rather than close over it.
-                if (_libraryRowsReset)
-                {
-                    ShowInfo(LegacyLibraryPageContainment.SavedWithStoredSwitches, Wpf.Ui.Controls.InfoBarSeverity.Warning);
-                }
-                else
-                {
-                    Close();
-                }
+                Close();
             }
         }
         finally
@@ -5365,97 +5592,160 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    /// <summary>
-    /// Offers to drop dictionary entries that an enabled library already covers identically. Returns
-    /// false only when the user backs out of saving entirely. While the old Libraries page is
-    /// contained it offers nothing and removes nothing (<see cref="LegacyLibraryPageContainment.RemovesCoveredEntries"/>).
-    /// </summary>
-    /// <remarks>
-    /// A personal dictionary quietly accumulates entries that a library later started covering, and
-    /// nothing looks wrong because both layers produce the same text. It still costs: personal
-    /// entries merge ahead of library entries and consume the AI glossary budget first, so redundant
-    /// ones displace terms a model genuinely cannot guess.
-    /// <para>
-    /// Entries that write the same spoken form <i>differently</i> are never offered for removal.
-    /// Those are deliberate overrides ("v s" meaning versus, not Visual Studio) and deleting one
-    /// would silently change what the user's dictation says. They are reported, not touched.
-    /// </para>
-    /// </remarks>
+    /// <summary>The overlap review is now an explicit command, never a surprise inside Save.</summary>
     private async Task<bool> ConfirmDictionaryOverlapAsync()
     {
-        // The library that covers an entry can be switched off behind this window, by the adoption its catalog load runs or
-        // by one while it is open, and a Save that removed the entry would leave neither writing the term (Astra's A2). The
-        // Dictionary page's badges still show the overlap; the prompt below is what the page did before the containment,
-        // kept for when it goes.
-        if (!LegacyLibraryPageContainment.RemovesCoveredEntries)
+        await Task.CompletedTask;
+        return true;
+    }
+
+    private void OnLibraryVocabularyChanged(long generation) =>
+        Dispatcher.BeginInvoke(new Action(async () => await TrySettlePendingWordPackSaveAsync()));
+
+    private async Task TrySettlePendingWordPackSaveAsync()
+    {
+        if (!_wordPackSaveProtocol.HasPendingSave || _closed)
         {
-            return true;
+            return;
         }
 
-        try
+        var result = await _wordPackSaveProtocol.TrySettlePendingAsync(BuildWordPackSaveRequest(null, null, null, null, null, useVocabularyReload: true));
+        ShowWordPackSaveResult(result);
+    }
+
+    private void RefreshWordPackRowsFromWorkspace()
+    {
+        if (_wordPackWorkspace is null)
         {
-            DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-            if (!_dictionaryLoad.HasChanges(DictionarySignature()))
-            {
-                return true; // nothing changed, so nothing new to warn about
-            }
-
-            var entries = BuildDictionaryEntries(out var duplicate);
-            if (duplicate is not null)
-            {
-                return true; // TrySaveAsync reports the duplicate; don't stack two dialogs
-            }
-
-            // Precedence, not the list's A to Z order: the prompt must name the library dictation uses.
-            var report = DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(entries, _loadedLibraries, _libraryContainment.CommittedIds);
-            if (report.RedundantCount == 0)
-            {
-                return true; // overrides alone are legitimate; warning about them every save is noise
-            }
-
-            var sample = string.Join('\n', report.Redundant
-                .Take(6)
-                .Select(o => $"    {o.Pattern}  ->  {o.Replacement}" +
-                             (string.IsNullOrEmpty(o.LibraryId) ? string.Empty : $"   ({o.LibraryId})")));
-            var more = report.RedundantCount > 6 ? $"\n    and {report.RedundantCount - 6:N0} more" : string.Empty;
-
-            var overrideNote = report.OverrideCount == 0
-                ? string.Empty
-                : $"\n\n{report.OverrideCount:N0} other {(report.OverrideCount == 1 ? "entry writes" : "entries write")} " +
-                  "a term differently from the library. Those are kept: your version wins, which is " +
-                  "probably why you added them.";
-
-            var count = report.RedundantCount;
-            var noun = count == 1 ? "entry is" : "entries are";
-            var confirmed = await ConfirmRiskyAsync(
-                "Some entries are already covered",
-                $"{count:N0} dictionary {noun} already handled identically by a library you have " +
-                $"turned on:\n\n{sample}{more}\n\n" +
-                "Removing them changes nothing about your dictation, and frees room in the glossary " +
-                "sent to AI cleanup for terms it cannot guess." + overrideNote,
-                count == 1 ? "Remove it" : $"Remove {count:N0}");
-
-            if (confirmed)
-            {
-                var drop = new HashSet<string>(
-                    report.Redundant.Select(o => o.Pattern), StringComparer.OrdinalIgnoreCase);
-
-                foreach (var row in _rows.Where(r =>
-                    !string.IsNullOrWhiteSpace(r.Pattern) && drop.Contains(r.Pattern.Trim())).ToList())
-                {
-                    _rows.Remove(row);
-                }
-            }
-
-            return true; // "Cancel" declines the cleanup, not the save
+            return;
         }
-        catch (Exception ex)
+
+        var enabled = _wordPackWorkspace.Draft.LocalState.EnabledIds;
+        _updatingLibraryRows = true;
+        foreach (var row in _libraryRows)
         {
-            // A hygiene prompt must never be the reason a save fails.
-            _log.LogWarning("Could not check the dictionary against enabled libraries: {Failure}", FailureShape.DescribeWithStack(ex));
-            return true;
+            row.Enabled = enabled.Contains(row.Id);
         }
+        _updatingLibraryRows = false;
+        _libraryLoad.MarkSaved(LibrarySignature());
+    }
+
+    private WordPackSaveProtocolRequest BuildWordPackSaveRequest(
+        IReadOnlyList<DictionaryEntry>? entries,
+        IReadOnlyList<Snippet>? snippets,
+        ExternalIntents? intents,
+        string? dictionarySignature,
+        string? snippetSignature,
+        StartupRegistrationStatus? observedStartup = null,
+        bool useVocabularyReload = false,
+        IReadOnlyList<SnippetSubmission>? snippetSubmission = null,
+        IReadOnlyList<ProfileSubmission>? profileSubmission = null)
+    {
+        var savedAiIntent = intents?.AiCleanup ?? 0;
+        var savedMicrophoneIntent = intents?.Microphone ?? 0;
+        SaveDraftSections.Capture? savedSections = null;
+        return new WordPackSaveProtocolRequest(
+            _wordPackWorkspace,
+            payload => _settingsRepository.SaveBundle(
+                _settings,
+                entries,
+                snippets,
+                intents ?? new ExternalIntents(0, 0),
+                payload),
+            useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings),
+            () =>
+            {
+                var sections = BuildSaveDraftSections();
+                savedSections = sections.CaptureNow();
+                return SaveDraftSignature(sections, savedSections);
+            },
+            () => SaveDraftSignature(BuildSaveDraftSections(), savedSections),
+            Validate: null,
+            OnSettingsCommitted,
+            OnWordPacksChanged);
+
+        void OnSettingsCommitted()
+        {
+            // The saved and running settings, which the page's notices compare against (Try dictation): refreshed only
+            // once SaveBundle has stored the document.
+            _committedSettings = _settings.Clone();
+            OnCommittedSettingsChanged();
+
+            // A Save that makes Foundry Local serve the model an earlier Set up or Load was for starts a new setup, and the
+            // row shows that setup's own progress and result from now on.
+            if (_foundryOperationStatus is { } foundryOutcome &&
+                _foundryOperationAlias is { } foundryOutcomeAlias &&
+                SavedActiveFoundryModelMatches(foundryOutcomeAlias) &&
+                FoundryLocalSetup.RetiredBySaveThatServesIt(foundryOutcome))
+            {
+                _foundryOperationStatus = null;
+                _foundryOperationAlias = null;
+            }
+
+            _settingsRecovered = false;
+            _savedBinding = _settings.Hotkey;
+            _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
+
+            // Only now, once the document is stored: _settings already holds the picked provider, and a
+            // Save that fails keeps it there while cleanup goes on serving the saved one.
+            _savedAiProvider = _settings.AiCleanupProvider;
+            _externalAiCleanup.SavedThrough(savedAiIntent);
+            _externalMicrophone.SavedThrough(savedMicrophoneIntent);
+            if (_externalAiCleanup.NewestRevision == 0 && (AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
+            {
+                ShowExternalAiCleanup(_settings.EnableAiCleanup);
+            }
+
+            if (_externalMicrophone.NewestRevision == 0 && ShownMicrophone != MicrophoneSelection.From(_settings))
+            {
+                ShowMicrophones(MicrophoneSelection.From(_settings));
+            }
+
+            if (dictionarySignature is not null && entries is not null)
+            {
+                _dictionaryLoad.MarkSaved(dictionarySignature);
+            }
+
+            if (snippetSignature is not null && snippets is not null)
+            {
+                _snippetLoad.MarkSaved(snippetSignature);
+                MarkSnippetRowsSaved(snippetSubmission ?? []);
+            }
+
+            MarkProfileRowsSaved(profileSubmission ?? []);
+
+            if (observedStartup is not null)
+            {
+                _startupSwitch.Show(observedStartup);
+                ShowStartupStatus(observedStartup);
+            }
+
+            UpdateAiEnabledState();
+        }
+
+        void OnWordPacksChanged(LibraryCatalog catalog)
+        {
+            _wordPackCatalog = catalog;
+            RefreshWordPackList();
+            RefreshWordPackRowsFromWorkspace();
+            RefreshDictionaryStatus();
+        }
+    }
+
+    private void ShowWordPackSaveResult(WordPackSaveProtocolResult result)
+    {
+        if (result.Message is null)
+        {
+            return;
+        }
+
+        var severity = result.Severity switch
+        {
+            WordPackSaveProtocolSeverity.Error => Wpf.Ui.Controls.InfoBarSeverity.Error,
+            WordPackSaveProtocolSeverity.Warning => Wpf.Ui.Controls.InfoBarSeverity.Warning,
+            _ => Wpf.Ui.Controls.InfoBarSeverity.Success,
+        };
+        ShowInfo(result.Message, severity);
     }
 
     // Validates, persists and applies the settings. Returns true on success; on a validation problem, a save error, a save
@@ -5486,6 +5776,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (_closed)
         {
             return false;
+        }
+
+        if (_wordPackSaveProtocol.HasPendingSave)
+        {
+            var settlement = await _wordPackSaveProtocol.TrySettlePendingAsync(BuildWordPackSaveRequest(null, null, null, null, null, useVocabularyReload: true));
+            ShowWordPackSaveResult(settlement);
+            if (_wordPackSaveProtocol.HasPendingSave)
+            {
+                return false;
+            }
         }
 
         // Commit any in-progress grid edit first so validation sees the latest input.
@@ -5635,13 +5935,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.Profiles = BuildProfiles();
-            // The enabled set is written from the library rows, so until they load it stays as
-            // stored; an unloaded list would otherwise switch every library off.
-            if (_libraryLoad.IsLoaded)
-            {
-                _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
-            }
-
+            var profileSubmission = CaptureProfileSubmission();
             _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
                 ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
@@ -5708,111 +6002,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // Once the save commits, a tray change up to the intent for its own setting is superseded. With no intent for
             // one, its stored value is kept and _settings takes it, so the window shows what is stored rather than a value
             // the settings no longer hold.
-            _settingsRepository.SaveBundle(
-                _settings,
-                entries,
-                snippets,
-                new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
-            _committedSettings = _settings.Clone();
-            OnCommittedSettingsChanged();
-
-            // A Save that makes Foundry Local serve the model an earlier Set up or Load was for starts a new setup, and the
-            // row shows that setup's own progress and result from now on.
-            if (_foundryOperationStatus is { } foundryOutcome &&
-                _foundryOperationAlias is { } foundryOutcomeAlias &&
-                SavedActiveFoundryModelMatches(foundryOutcomeAlias) &&
-                FoundryLocalSetup.RetiredBySaveThatServesIt(foundryOutcome))
-            {
-                _foundryOperationStatus = null;
-                _foundryOperationAlias = null;
-            }
-
-            _settingsRecovered = false;
-            _savedBinding = _settings.Hotkey;
-            _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
-
-            // Only now, once the document is stored: _settings already holds the picked provider, and a
-            // Save that fails keeps it there while cleanup goes on serving the saved one.
-            _savedAiProvider = _settings.AiCleanupProvider;
-            _externalAiCleanup.Saved();
-            _externalMicrophone.Saved();
-            if ((AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
-            {
-                ShowExternalAiCleanup(_settings.EnableAiCleanup);
-            }
-
-            if (ShownMicrophone != MicrophoneSelection.From(_settings))
-            {
-                ShowMicrophones(MicrophoneSelection.From(_settings));
-            }
-
-            _startupSwitch.Show(observedStartup);
-            ShowStartupStatus(observedStartup);
-
-            // The one place this window applies its own document, which SaveBundle has just stored. Anything else here
-            // that has to put settings into effect uses the stored ones (StoredSettingsReapply).
-            var applying = _applySettings(_settings);
-
-            // This page stores no library switch (LegacyLibraryPageContainment): once the library state is stored the save
-            // keeps the stored list and hands it back in _settings. The rows and every library figure on the page follow
-            // it, and a row that showed otherwise is said instead of "Settings saved.".
-            _libraryRowsReset = _libraryContainment.AfterSave(
-                _libraryRows.Select(r => new KeyValuePair<string, bool>(r.Id, r.Enabled)).ToList(), _settings.EnabledDictionaryLibraryIds);
-            foreach (var row in _libraryRows)
-            {
-                row.Enabled = _libraryContainment.IsCommitted(row.Id);
-            }
-
-            RefreshDictionaryStatus();
-
-            // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
-            // no-op; important now that Save keeps the window open for page-by-page editing. Only
-            // what was actually written counts: a section passed as null did not change storage.
-            if (entries is not null)
-            {
-                _dictionaryLoad.MarkSaved(dictionarySignature);
-            }
-
-            if (snippets is not null)
-            {
-                _snippetLoad.MarkSaved(snippetSignature);
-                MarkSnippetRowsSaved(snippetSubmission ?? []);
-            }
-
-            MarkProfileRowsSaved();
-
-            // Reported as saved only once dictation can use what was stored: the dictionary and libraries reach it in the
-            // next vocabulary generation, built off this thread and awaited here, never waited on. A build that could not
-            // read the dictionary, or was not built by its deadline, leaves the settings saved and dictation on its
-            // previous vocabulary, which the window says, staying open. The window stays editable meanwhile, so its draft
-            // is taken now, when nothing since the controls were read could have taken an edit, and compared once the
-            // answer is in: an edit made while waiting is not in what was stored, so the Save is not reported complete and
-            // Save and close does not close over it. That edit stays in the window, unsaved, for the next Save.
-            var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);
-            var outcome = await acknowledgement.CompleteAsync();
+            var intents = new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision);
+            var result = await _wordPackSaveProtocol.SaveAsync(
+                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission));
             if (_closed)
             {
                 return false;
             }
 
-            if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.NotInUseYet)
-            {
-                ShowInfo(
-                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied("Settings saved"),
-                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
-                return false;
-            }
-
-            if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.ChangedWhileSaving)
-            {
-                ShowInfo(
-                    Scribe.Core.Vocabulary.VocabularyNotice.SettingsChangedWhileSaving,
-                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
-                return false;
-            }
-
-            UpdateAiEnabledState();
-            return true;
+            ShowWordPackSaveResult(result);
+            return result.Success;
         }
         catch (Exception ex) when (_closed)
         {
@@ -5841,20 +6040,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // What a Save stores, read the way the Save reads it, for the Save's check that nothing it stores changed while it
     // waited for its vocabulary generation. Values stored straight from an editor come from walking the parts of the window
     // whose controls a Save reads (the Dictation, AI cleanup and Advanced pages, and History's settings card, never the rest
-    // of History, whose search box is not stored), each editor as typed (an editable combo box by its text, a number box by its text as well as
-    // its committed value), so an edit that would apply only when its editor loses focus, like a deployment typed into the
-    // Azure model picker, still counts. The rest are taken as the Save computes them: the hotkeys with their modes (a
-    // capture in progress, which applies only when its keys are released, shows in the hotkey boxes the walk reads, and
-    // in the capture flag), the AI cleanup switch and the microphone with any tray change still waiting, the Azure
-    // subscription the deployment resolves to, the profiles and the set of enabled libraries it writes, and whether the
-    // dictionary or the snippets differ from what storage holds (a read that finishes during the wait publishes what storage
-    // holds, so it is no change) or a grid row edit is in progress. The walk leaves out the controls one of those already
-    // carries, and the Start with Windows switch, which applies on its own when flipped: a Save stores the Windows
-    // observation it read before the wait, never the switch. Every value is framed by DraftSnapshot, and so are the row
-    // signatures behind the dictionary and snippet flags (DictionarySignature, SnippetSignature), so no text typed or
-    // pasted can make two different drafts alike, and the draft is hashed, so the copy the check keeps holds no key or
-    // secret; never logged.
-    private string SaveDraftSignature()
+    // of History, whose search box is not stored), each editor as typed. The rest are taken as the Save computes them: the
+    // hotkeys with their modes, the AI cleanup switch and the microphone with any tray change still waiting, the Azure
+    // subscription the deployment resolves to, the profiles, the saved dictionary and snippet row signatures, and the
+    // word-pack draft content itself. No dirty flag or revision stands in for content, because Save moves those flags while
+    // storing. Every value is framed by DraftSnapshot and hashed, so the copy the check keeps holds no key or secret; never
+    // logged.
+    private SaveDraftSections BuildSaveDraftSections()
+    {
+        var dictionarySignature = DictionarySignature();
+        var snippetSignature = SnippetSignature();
+        var wordPackDraft = new Scribe.Core.Vocabulary.DraftSnapshot();
+        var wordPackSignature = WordPackDraftSignature.Write(wordPackDraft, _wordPackWorkspace).Hash();
+        return new SaveDraftSections(
+            new SaveDraftSections.Section(_dictionaryLoad.IsLoaded, _dictionaryLoad.HasChanges(dictionarySignature), dictionarySignature),
+            new SaveDraftSections.Section(_snippetLoad.IsLoaded, _snippetLoad.HasChanges(snippetSignature), snippetSignature),
+            new SaveDraftSections.Section(_wordPackWorkspace is not null, _wordPackWorkspace?.EditRevision > 0, wordPackSignature));
+    }
+
+    private string SaveDraftSignature() => SaveDraftSignature(BuildSaveDraftSections(), capture: null);
+
+    private string SaveDraftSignature(SaveDraftSections sections, SaveDraftSections.Capture? capture)
     {
         HashSet<DependencyObject> carriedElsewhere =
         [
@@ -5880,10 +6086,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
         draft.Part("profiles").Profiles(BuildProfiles());
-        draft.Part("libraries").LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds);
+        sections.Write(draft.Part("async-sections"), capture);
         draft.Part("rows")
-            .Flag(_dictionaryLoad.HasChanges(DictionarySignature()))
-            .Flag(_snippetLoad.HasChanges(SnippetSignature()))
             .Flag(RowEditInProgress(DictionaryGrid))
             .Flag(RowEditInProgress(LibraryGrid));
         return draft.Hash();
@@ -5940,6 +6144,29 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private static bool RowEditInProgress(DataGrid grid) =>
         grid.Items is IEditableCollectionView rows && (rows.IsEditingItem || rows.IsAddingNew);
 
+    private sealed class WordPackSaveStore : IWordPackSaveProtocolStore
+    {
+        private readonly ILibraryCatalogStore _store;
+        private readonly Action<LibrarySavePayload> _commitRepair;
+
+        public WordPackSaveStore(ILibraryCatalogStore store, Action<LibrarySavePayload> commitRepair)
+        {
+            _store = store;
+            _commitRepair = commitRepair;
+        }
+
+        public Task<LibraryPrepareResult> PrepareAsync(LibraryChangeSet changes) =>
+            Task.Run(() => WordPackSaveSession.Prepare(_store, changes));
+
+        public Task<LibrarySaveOutcome> CompleteAsync(PreparedLibrarySave prepared) =>
+            Task.Run(() => WordPackSaveSession.Complete(_store, prepared));
+
+        public Task<LibraryCatalog> LoadCatalogAsync() =>
+            Task.Run(() => WordPackSaveSession.LoadCatalog(_store));
+
+        public void CommitRepair(LibrarySavePayload payload) => _commitRepair(payload);
+    }
+
     /// <summary>
     /// Builds the desired dictionary state from the grid rows, skipping blank placeholder rows.
     /// Reports the first row whose spoken form duplicates an earlier row (case-insensitive, to
@@ -5991,514 +6218,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void OverlayPreviewButton_Click(object sender, RoutedEventArgs e) =>
         _previewOverlay(SelectedOverlayPosition);
 
-    // --- Dictionary suggestions from history -----------------------------------------------
-
-    private async void DictionarySuggestButton_Click(object sender, RoutedEventArgs e)
-    {
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-        // The grid is the live source of truth for "already covered", so terms added but not yet
-        // saved are excluded from new suggestions too.
-        var current = _rows
-            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
-            .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim()))
-            .ToList();
-
-        // Prefer the user's configured AI model: it can work out how a term is spoken versus how it is
-        // written (acronyms, phonetic mishears, casing), not just spot repeated words. Fall back to the
-        // offline pattern miner when no model is ready, so the button still helps with no AI configured.
-        if (_cleanup.Recipient is { } recipient)
-        {
-            // The recipient is captured before the question and handed to CompleteAsync, which sends only
-            // while cleanup still serves it, so the history goes where the dialog said or nowhere. Asked
-            // unless both it and the saved provider run on this PC (AiRequestConsent says why both).
-            if (AiRequestConsent.IsNeeded(recipient, _savedAiProvider) &&
-                !await ConfirmRiskyAsync(
-                    CleanupDisclosure.SuggestionConsentTitle,
-                    CleanupDisclosure.SuggestionConsentFor(recipient.Provider),
-                    "Send and continue"))
-            {
-                return;
-            }
-
-            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current, recipient));
-        }
-        else
-        {
-            await RunDictionarySuggestionAsync(() => SuggestWithMinerAsync(current));
-        }
-    }
-
-    // The history read now runs off the UI thread, so the button has to stay off for the whole run
-    // or a second click would add every suggestion twice.
-    private async Task RunDictionarySuggestionAsync(Func<Task> suggest)
-    {
-        DictionarySuggestButton.ToolTip = null;
-        DictionarySuggestButton.IsEnabled = false;
-        DictionarySuggestBusy.Visibility = Visibility.Visible;
-        try
-        {
-            await suggest();
-        }
-        finally
-        {
-            if (!_closed)
-            {
-                DictionarySuggestBusy.Visibility = Visibility.Collapsed;
-                DictionarySuggestButton.IsEnabled = true;
-                DictionarySuggestButton.ToolTip =
-                    "Learn vocabulary from recent dictations. A configured remote AI provider receives " +
-                    "a bounded text sample only after you confirm; otherwise Scribe scans locally.";
-            }
-        }
-    }
-
-    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current, CleanupRecipient recipient)
-    {
-        List<HistoryEntry> history;
-        try
-        {
-            history = await Task.Run(() => _history.GetRecent(1000).ToList());
-        }
-        catch (Exception ex)
-        {
-            if (!_closed)
-            {
-                ShowThemedMessage("Scribe", $"Could not read your history:\n{ex.Message}");
-            }
-
-            return;
-        }
-
-        // A dialog owned by a closed window throws, and this runs under an async void handler.
-        if (_closed)
-        {
-            return;
-        }
-
-        var sample = AiDictionarySuggester.BuildHistorySample(history);
-        if (string.IsNullOrWhiteSpace(sample))
-        {
-            ShowThemedMessage(
-                "Nothing to suggest",
-                "There are no recent dictations to learn from yet. Keep dictating and try again later.");
-            return;
-        }
-
-        try
-        {
-            // The recipient the user agreed to, checked again where the request is built: a Save during the
-            // history read above cannot turn this into a request to another provider.
-            var completion = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);
-            if (_closed)
-            {
-                return;
-            }
-
-            if (completion.Outcome == CompletionOutcome.RecipientChanged)
-            {
-                ShowThemedMessage(
-                    "Nothing was sent",
-                    "Your AI cleanup provider changed after you agreed to send your dictations, so Scribe sent " +
-                    "nothing. Press the button again to decide about the provider now in use.");
-                return;
-            }
-
-            var response = completion.Text;
-            if (string.IsNullOrWhiteSpace(response))
-            {
-                // The model was unavailable or returned nothing: fall back to the deterministic miner.
-                await SuggestWithMinerAsync(current, aiRanFirst: true);
-                return;
-            }
-
-            var suggestions = AiDictionarySuggester.ParseSuggestions(response, current);
-            if (suggestions.Count == 0)
-            {
-                await SuggestWithMinerAsync(current, aiRanFirst: true);
-                return;
-            }
-
-            AddSuggestionRows(suggestions.Select(s => (s.Pattern, s.Replacement)));
-            ShowInfo(
-                $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
-                "your AI model inferred from recent dictations. Review them in the grid, delete any you " +
-                "don't want, then save.");
-        }
-        catch (Exception ex)
-        {
-            if (!_closed)
-            {
-                ShowThemedMessage("Scribe", $"Could not get AI suggestions:\n{ex.Message}");
-            }
-        }
-    }
-
-    private async Task SuggestWithMinerAsync(IReadOnlyList<DictionaryEntry> current, bool aiRanFirst = false)
-    {
-        IReadOnlyList<DictionaryEntry> suggestions;
-        try
-        {
-            suggestions = await Task.Run(() => DictionaryHistoryLearner.BuildEntries(_history.GetRecent(1000), current));
-        }
-        catch (Exception ex)
-        {
-            if (!_closed)
-            {
-                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
-            }
-
-            return;
-        }
-
-        if (_closed)
-        {
-            return;
-        }
-
-        if (suggestions.Count == 0)
-        {
-            ShowThemedMessage(
-                "Nothing to suggest",
-                aiRanFirst
-                    ? "Your AI model and the history scan didn't find any new terms to add. Keep " +
-                      "dictating and try again later."
-                    : "No recurring technical terms found in your recent dictations yet.\n\n" +
-                      "Suggestions appear once a term shows up in three or more dictations, so keep " +
-                      "dictating and try again later.");
-            return;
-        }
-
-        AddSuggestionRows(suggestions.Select(s => (s.Pattern, s.Replacement)));
-        ShowInfo(
-            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
-            "from your recent dictations. Review them in the grid, delete any you don't want, then save.");
-    }
-
-    private void AddSuggestionRows(IEnumerable<(string Pattern, string Replacement)> entries)
-    {
-        DictionaryRow? first = null;
-        foreach (var (pattern, replacement) in entries)
-        {
-            var row = new DictionaryRow { Pattern = pattern, Replacement = replacement };
-            _rows.Add(row);
-            first ??= row;
-        }
-
-        if (first is not null)
-        {
-            DictionaryGrid.SelectedItem = first;
-            DictionaryGrid.ScrollIntoView(first);
-        }
-    }
-
-    // --- Dictionary cleanup ---------------------------------------------------------------
-
-    /// <summary>
-    /// Scans dictation history for terms that have never earned their place and offers to retire
-    /// them. Dead terms are not free: the enabled dictionary is rendered into the AI cleanup prompt
-    /// on every dictation, capped at <see cref="CleanupPrompt.MaxGlossaryTermsLocal"/> terms for
-    /// on-device models, so entries the user never says displace the ones they do.
-    /// </summary>
-    private async void DictionaryCleanupButton_Click(object sender, RoutedEventArgs e)
-    {
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-        LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-        // The grid is the live truth, as it is for "Learn from history". Judging the saved rows
-        // instead would offer to delete an entry the user added thirty seconds ago.
-        var current = _rows
-            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
-            .Select(r => new DictionaryEntry(
-                r.Id,
-                r.Pattern.Trim(),
-                (r.Replacement ?? string.Empty).Trim(),
-                r.WholeWord,
-                r.Enabled))
-            .ToList();
-
-        // Libraries are left out: this build can't switch one off from here, or store the switch
-        // (LegacyLibraryPageContainment), so the review offers only the user's own entries.
-
-        // The scan is asynchronous and its findings name specific rows, so anything the user changes
-        // while it runs invalidates the result. Applying a stale verdict could turn off a rule they
-        // had just edited or re-enabled.
-        var dictionaryBefore = DictionarySignature();
-        var librariesBefore = LibrarySignature();
-
-        DictionaryCleanupButton.IsEnabled = false;
-        DictionaryCleanupBusy.Visibility = Visibility.Visible;
-        DictionaryUsageReport report;
-        try
-        {
-            // Off the UI thread: this reads up to a thousand transcripts and runs a regex per term
-            // across the lot, which is quick but not instant on a large dictionary.
-            var transcripts = await Task.Run(
-                () => _history.GetRecent(1000).Select(h => h.Text).ToList());
-            report = await Task.Run(
-                () => DictionaryUsageAnalyzer.Analyze(transcripts, current, []));
-        }
-        catch (Exception ex)
-        {
-            if (!_closed)
-            {
-                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
-            }
-
-            return;
-        }
-        finally
-        {
-            if (!_closed)
-            {
-                DictionaryCleanupButton.IsEnabled = true;
-                DictionaryCleanupBusy.Visibility = Visibility.Collapsed;
-            }
-        }
-
-        // Showing a dialog owned by a closed window throws, and this handler is async void, so the
-        // exception would take the process down rather than surfacing anywhere useful.
-        if (_closed)
-        {
-            return;
-        }
-
-        if (DictionarySignature() != dictionaryBefore || LibrarySignature() != librariesBefore)
-        {
-            ShowInfo(
-                "Your dictionary changed while the scan was running, so the results are out of date. "
-                + "Run the cleanup again.",
-                Wpf.Ui.Controls.InfoBarSeverity.Warning);
-            return;
-        }
-
-        if (!report.HasEnoughEvidence || !report.HasFindings)
-        {
-            ShowThemedMessage("Clean up unused terms", LegacyLibraryPageContainment.CleanupMessage(report.Summary));
-            return;
-        }
-
-        var choice = DictionaryCleanupWindow.Show(this, report);
-        if (choice is null)
-        {
-            return;
-        }
-
-        await ApplyCleanupAsync(choice);
-    }
-
-    private async Task ApplyCleanupAsync(DictionaryCleanupChoice choice)
-    {
-        // Match back by spoken form rather than id: the grid can hold a row that has never been
-        // saved (id 0), and two of those would be indistinguishable by id.
-        var patterns = new HashSet<string>(
-            choice.Entries.Select(en => en.Pattern.Trim()),
-            StringComparer.OrdinalIgnoreCase);
-
-        var targets = _rows
-            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern) && patterns.Contains(r.Pattern.Trim()))
-            .ToList();
-
-        // This build never switches a library off from here or copies a library's terms into the dictionary
-        // (LegacyLibraryPageContainment): the review offers none, and a choice that named one would leave it as it is.
-        if (targets.Count == 0 && choice.Libraries.Count == 0)
-        {
-            return;
-        }
-
-        if (choice.Delete && targets.Count > 0 && !await ConfirmRiskyAsync(
-                "Delete these entries?",
-                $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} will be removed from your "
-                + "dictionary when you save. This cannot be undone once saved. Turning them off instead "
-                + "keeps them in the list so you can switch them back on later.",
-                "Delete"))
-        {
-            return;
-        }
-
-        if (choice.Delete)
-        {
-            foreach (var row in targets)
-            {
-                _rows.Remove(row);
-            }
-        }
-        else
-        {
-            foreach (var row in targets)
-            {
-                row.Enabled = false;
-            }
-        }
-
-        RefreshDictionaryStatus();
-        ShowInfo(LegacyLibraryPageContainment.CleanupResult(targets.Count, choice.Delete));
-    }
-
-    // --- Dictionary CSV import / export ---------------------------------------------------
-
-    // UTF-8 with BOM so Excel opens accented terms correctly instead of guessing the codepage.
-    private static readonly UTF8Encoding CsvEncoding = new(encoderShouldEmitUTF8Identifier: true);
-
-    private void DictionaryTemplateButton_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new SaveFileDialog
-        {
-            FileName = "scribe-dictionary-template.csv",
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            DefaultExt = ".csv",
-        };
-        if (dialog.ShowDialog(this) != true)
-        {
-            return;
-        }
-
-        try
-        {
-            File.WriteAllText(dialog.FileName, DictionaryCsv.Template, CsvEncoding);
-
-            // Open it straight away so the user can start filling it in.
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            ShowThemedMessage("Scribe", $"Could not save the template:\n{ex.Message}");
-        }
-    }
-
-    private void DictionaryExportButton_Click(object sender, RoutedEventArgs e)
-    {
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-        var dialog = new SaveFileDialog
-        {
-            FileName = "scribe-dictionary.csv",
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            DefaultExt = ".csv",
-        };
-        if (dialog.ShowDialog(this) != true)
-        {
-            return;
-        }
-
-        try
-        {
-            var entries = _rows
-                .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
-                .Select(r => new DictionaryEntry(
-                    r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim(), r.WholeWord, r.Enabled));
-            File.WriteAllText(dialog.FileName, DictionaryCsv.Export(entries), CsvEncoding);
-        }
-        catch (Exception ex)
-        {
-            ShowThemedMessage("Scribe", $"Could not export the dictionary:\n{ex.Message}");
-        }
-    }
-
-    private void DictionaryImportButton_Click(object sender, RoutedEventArgs e)
-    {
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-        var dialog = new OpenFileDialog
-        {
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            DefaultExt = ".csv",
-        };
-        if (dialog.ShowDialog(this) != true)
-        {
-            return;
-        }
-
-        DictionaryCsvResult parsed;
-        try
-        {
-            parsed = DictionaryCsv.Parse(File.ReadAllText(dialog.FileName));
-        }
-        catch (Exception ex)
-        {
-            ShowThemedMessage("Scribe", $"Could not read that file:\n{ex.Message}");
-            return;
-        }
-
-        var (added, updated, unchanged) = MergeImportedEntries(parsed.Entries);
-        var summary = new StringBuilder();
-        summary.Append($"Imported {added} new {(added == 1 ? "entry" : "entries")}");
-        if (updated > 0)
-        {
-            summary.Append($", updated {updated}");
-        }
-
-        if (unchanged > 0)
-        {
-            summary.Append($", {unchanged} already up to date");
-        }
-
-        summary.Append('.');
-        if (added + updated > 0)
-        {
-            summary.Append(" The changes apply when you save.");
-        }
-
-        if (parsed.Errors.Count > 0)
-        {
-            summary.Append("\n\nSome rows couldn't be read:\n")
-                   .Append(string.Join('\n', parsed.Errors.Take(8)));
-            if (parsed.Errors.Count > 8)
-            {
-                summary.Append($"\n…and {parsed.Errors.Count - 8} more.");
-            }
-        }
-
-        ShowInfo(
-            summary.ToString(),
-            parsed.Errors.Count > 0
-                ? Wpf.Ui.Controls.InfoBarSeverity.Warning
-                : Wpf.Ui.Controls.InfoBarSeverity.Success);
-    }
-
-    /// <summary>
-    /// Merges imported entries into the grid (not the database; the save button owns persistence,
-    /// so an import can still be cancelled). Matching is by spoken form, case-insensitive, mirroring
-    /// the duplicate rule the save validation enforces.
-    /// </summary>
-    private (int Added, int Updated, int Unchanged) MergeImportedEntries(IReadOnlyList<DictionaryEntry> imported)
-    {
-        // The pure merge/counting lives in Core; here we apply its plan to the observable grid rows.
-        var existing = _rows
-            .Select((r, i) => new DictionaryImportMerger.ExistingRow(
-                i, r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled))
-            .ToList();
-
-        var plan = DictionaryImportMerger.Merge(existing, imported);
-
-        foreach (var op in plan.Operations)
-        {
-            var entry = op.Entry;
-            // Replace/append the row object (rather than mutate it) so the grid, which has no property
-            // change notifications on DictionaryRow, refreshes the visible values.
-            var row = new DictionaryRow
-            {
-                Id = entry.Id,
-                Pattern = entry.Pattern,
-                Replacement = entry.Replacement,
-                WholeWord = entry.WholeWord,
-                Enabled = entry.Enabled,
-            };
-
-            if (op.Kind == DictionaryImportMerger.OperationKind.Update)
-            {
-                _rows[op.Index] = row;
-            }
-            else
-            {
-                _rows.Add(row);
-            }
-        }
-
-        return (plan.Added, plan.Updated, plan.Unchanged);
-    }
-
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -6537,14 +6256,54 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public override string ToString() => Label;
     }
 
-    /// <summary>One read-only row of a library's term preview, copied from Core's <see cref="DictionaryEntry"/>.</summary>
-    private sealed class LibraryTermRow(DictionaryEntry entry)
+    /// <summary>One editable row of the selected word pack.</summary>
+    private sealed class LibraryTermRow(long rowId, TermValues values) : INotifyPropertyChanged
     {
-        public string Pattern { get; } = entry.Pattern;
+        private string _pattern = values.Spoken;
+        private string _replacement = values.Written;
+        private bool _wholeWord = values.WholeWord;
+        private bool _enabled = values.Enabled;
 
-        public string Replacement { get; } = entry.Replacement;
+        public long RowId { get; } = rowId;
+
+        public string Pattern
+        {
+            get => _pattern;
+            set => Set(ref _pattern, value ?? string.Empty);
+        }
+
+        public string Replacement
+        {
+            get => _replacement;
+            set => Set(ref _replacement, value ?? string.Empty);
+        }
+
+        public bool WholeWord
+        {
+            get => _wholeWord;
+            set => Set(ref _wholeWord, value);
+        }
+
+        public bool Enabled
+        {
+            get => _enabled;
+            set => Set(ref _enabled, value);
+        }
 
         public override string ToString() => $"Spoken {Pattern}, written {Replacement}";
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value))
+            {
+                return;
+            }
+
+            field = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
     }
 
     private sealed record UsageTermRow(string Text, int Dictations)
@@ -6553,6 +6312,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             $"({Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")})";
 
         public override string ToString() => Text;
+    }
+
+    private sealed record RecentlyDeletedRow(RecentlyDeletedLibrary Entry)
+    {
+        public string Display =>
+            $"{Entry.Name}, Imported, {Entry.TermCount:N0} {(Entry.TermCount == 1 ? "word" : "words")}, deleted {Entry.DeletedUtc.LocalDateTime:g}";
     }
 
     /// <summary>
@@ -6569,6 +6334,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         private bool _enabled = true;
         private DictionaryRowCoverage _coverage;
         private string _coverageTooltip = string.Empty;
+        private string _coverageLibraryName = string.Empty;
+        private string _coverageLibraryReplacement = string.Empty;
 
         public long Id { get; set; }
 
@@ -6605,7 +6372,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 if (Set(ref _coverage, value))
                 {
                     OnPropertyChanged(nameof(CoverageLabel));
-                    OnPropertyChanged(nameof(CoverageAppearance));
                     OnPropertyChanged(nameof(CoverageVisibility));
                 }
             }
@@ -6617,18 +6383,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             set => Set(ref _coverageTooltip, value);
         }
 
+        public string CoverageLibraryName
+        {
+            get => _coverageLibraryName;
+            set => Set(ref _coverageLibraryName, value);
+        }
+
+        public string CoverageLibraryReplacement
+        {
+            get => _coverageLibraryReplacement;
+            set => Set(ref _coverageLibraryReplacement, value);
+        }
+
+        public string ReplacementDisplay
+
+        {
+            get => string.IsNullOrEmpty(Replacement) ? "(removes these words)" : Replacement;
+
+            set => Replacement = value == "(removes these words)" ? string.Empty : value ?? string.Empty;
+        }
+
+        public bool ReplacementIsPlaceholder => string.IsNullOrEmpty(Replacement);
+
+        public string DeleteName => $"Delete {(string.IsNullOrWhiteSpace(Pattern) ? "this word" : Pattern.Trim())}";
+
         public string CoverageLabel => Coverage switch
         {
-            DictionaryRowCoverage.Duplicate => "Same as library",
-            DictionaryRowCoverage.Override => "Overrides library",
+            DictionaryRowCoverage.Duplicate => "Same as word pack",
+            DictionaryRowCoverage.Override => "Overrides word pack",
             _ => string.Empty,
-        };
-
-        // Caution reads as "you can probably delete this"; Info reads as "this is doing something".
-        public Wpf.Ui.Controls.ControlAppearance CoverageAppearance => Coverage switch
-        {
-            DictionaryRowCoverage.Duplicate => Wpf.Ui.Controls.ControlAppearance.Caution,
-            _ => Wpf.Ui.Controls.ControlAppearance.Info,
         };
 
         public Visibility CoverageVisibility =>
@@ -6650,6 +6433,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             field = value;
             OnPropertyChanged(name);
+            if (name == nameof(Pattern))
+            {
+                OnPropertyChanged(nameof(DeleteName));
+            }
+            else if (name == nameof(Replacement))
+            {
+                OnPropertyChanged(nameof(ReplacementDisplay));
+                OnPropertyChanged(nameof(ReplacementIsPlaceholder));
+            }
             return true;
         }
 
@@ -6657,36 +6449,38 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
-    /// <summary>How a dictionary row relates to the enabled libraries.</summary>
-    public enum DictionaryRowCoverage
-    {
-        /// <summary>No enabled library covers this spoken form. The entry is doing its own work.</summary>
-        None = 0,
-
-        /// <summary>A library produces exactly this, so the entry is clutter.</summary>
-        Duplicate,
-
-        /// <summary>A library writes this spoken form differently; this entry wins.</summary>
-        Override,
-    }
-
     /// <summary>
-    /// Library row backing the libraries grid. Nothing on the page edits <see cref="Enabled"/> in this build
-    /// (<see cref="LegacyLibraryPageContainment"/>): it shows the committed selection, and a Save that stored the document
-    /// resets it from the stored list. It notifies so the grid's check box follows that reset.
+    /// Library row backing the word packs grid. It notifies so staged changes update the workspace and the grid follows
+    /// a Save's committed state.
     /// </summary>
     public sealed class LibraryRow : INotifyPropertyChanged
     {
         private bool _enabled;
+        private bool _aiCleanup;
+        private int? _matchCount;
 
         public string Id { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public int Terms { get; set; }
 
-        /// <summary>Where the library comes from, "Built-in" or "Your library": the secondary line under its name.</summary>
+        /// <summary>Where the word pack comes from, "Built-in" or "Imported": the secondary line under its name.</summary>
         public string Source { get; set; } = string.Empty;
         public bool BuiltIn { get; set; }
+        public string DisplaySource => MatchCount is { } count ? $"{Source}, {count:N0} {(count == 1 ? "match" : "matches")}" : Source;
+        public int? MatchCount
+        {
+            get => _matchCount;
+            set
+            {
+                if (_matchCount != value)
+                {
+                    _matchCount = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MatchCount)));
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplaySource)));
+                }
+            }
+        }
 
         /// <summary>What UI Automation reads for the name cell, which shows both lines.</summary>
         public string AccessibleName => $"{Name}, {Source}";
@@ -6700,6 +6494,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 {
                     _enabled = value;
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Enabled)));
+                }
+            }
+        }
+
+        public bool AiCleanup
+        {
+            get => _aiCleanup;
+            set
+            {
+                if (_aiCleanup != value)
+                {
+                    _aiCleanup = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AiCleanup)));
                 }
             }
         }

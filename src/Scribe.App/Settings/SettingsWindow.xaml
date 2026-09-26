@@ -1433,132 +1433,185 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="DictionaryPageTitle" Text="Dictionary" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Replace spoken words or phrases with the spelling you actually want. 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
+                                       Text="Teach Scribe how to write the words it hears, like &quot;dot net&quot; as .NET."/>
                         </StackPanel>
                         <TabControl x:Name="DictionaryTabs" Grid.Row="1">
                             <TabItem x:Name="YourWordsTab" Header="Your words">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                        <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-                            <ui:Button x:Name="DictionaryAddButton" Content="Add word"
-                                       Icon="{ui:SymbolIcon Add24}" Appearance="Primary"
-                                       Margin="0,0,8,0" Click="DictionaryAddButton_Click"
-                                       ToolTip="Add a blank entry and start editing it."/>
-                            <ui:Button x:Name="DictionarySuggestButton" Content="Learn from history"
-                                       Icon="{ui:SymbolIcon Lightbulb24}"
-                                       Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
-                                       ToolTip="Learn vocabulary from recent dictations. A configured remote AI provider receives a bounded text sample only after you confirm; otherwise Scribe scans locally."/>
-                            <ui:Button x:Name="DictionaryCleanupButton" Content="Clean up unused words..."
-                                       Icon="{ui:SymbolIcon Broom24}"
-                                       Margin="0,0,8,0" Click="DictionaryCleanupButton_Click"
-                                       ToolTip="Scan your dictation history for entries and libraries whose wording has not come up in anything you have dictated, so they stop crowding out the vocabulary you do use. Nothing is removed without your review."/>
-                            <ui:Button x:Name="DictionaryImportButton" Content="Import CSV"
-                                       Icon="{ui:SymbolIcon ArrowDownload24}"
-                                       Margin="0,0,8,0" Click="DictionaryImportButton_Click"
-                                       ToolTip="Merge entries from a CSV file into this dictionary."/>
-                            <ui:Button x:Name="DictionaryExportButton" Content="Export CSV"
-                                       Icon="{ui:SymbolIcon ArrowUpload24}"
-                                       Margin="0,0,8,0" Click="DictionaryExportButton_Click"
-                                       ToolTip="Save this dictionary as a CSV file to back up or share."/>
-                            <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
-                                       Icon="{ui:SymbolIcon DocumentAdd24}"
-                                       Click="DictionaryTemplateButton_Click"
-                                       ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
-                            <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
-                                        Margin="12,0,0,0" VerticalAlignment="Center"
-                                        Visibility="Collapsed">
-                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
-                                             VerticalAlignment="Center"/>
-                                <TextBlock Text="Learning from history…"
-                                           Style="{StaticResource CardDescription}"
-                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                            <StackPanel x:Name="DictionaryCleanupBusy" Orientation="Horizontal"
-                                        Margin="12,0,0,0" VerticalAlignment="Center"
-                                        Visibility="Collapsed">
-                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
-                                             VerticalAlignment="Center"/>
-                                <TextBlock Text="Checking your history…"
-                                           Style="{StaticResource CardDescription}"
-                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </WrapPanel>
-                        <ui:Card Grid.Row="1" Padding="0" Style="{StaticResource PanelCard}">
-                            <DataGrid x:Name="DictionaryGrid"
-                                      AutoGenerateColumns="False"
-                                      CanUserAddRows="False" CanUserDeleteRows="True"
-                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                      Background="Transparent" BorderThickness="0"
-                                      AutomationProperties.LabeledBy="{Binding ElementName=DictionaryPageTitle}">
-                                <DataGrid.Columns>
-                                    <!-- While a cell edits, its text box would otherwise be named by the text it holds
-                                         (TextBox.GetPlainText); the columns name it after their header instead. The
-                                         style keeps WPF's own editing style, the column's default. -->
-                                    <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*">
-                                        <DataGridTextColumn.EditingElementStyle>
-                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
-                                                <Setter Property="AutomationProperties.Name" Value="Spoken"/>
-                                            </Style>
-                                        </DataGridTextColumn.EditingElementStyle>
-                                    </DataGridTextColumn>
-                                    <DataGridTextColumn Header="Replacement" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*">
-                                        <DataGridTextColumn.EditingElementStyle>
-                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
-                                                <Setter Property="AutomationProperties.Name" Value="Replacement"/>
-                                            </Style>
-                                        </DataGridTextColumn.EditingElementStyle>
-                                    </DataGridTextColumn>
-                                    <!-- Live comparison against the libraries that are switched on, so a user can
-                                         see at a glance which entries are doing real work and which are clutter. -->
-                                    <DataGridTemplateColumn Header="Word pack" Width="150" CanUserSort="True"
-                                                            SortMemberPath="Coverage">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <ui:Badge Appearance="{Binding CoverageAppearance}"
-                                                          Margin="4,2" VerticalAlignment="Center"
-                                                          HorizontalAlignment="Left"
-                                                          Visibility="{Binding CoverageVisibility}"
-                                                          ToolTip="{Binding CoverageTooltip}">
-                                                    <TextBlock Text="{Binding CoverageLabel}" FontSize="12"/>
-                                                </ui:Badge>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
-                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}"/>
-                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                            ElementStyle="{StaticResource EntryEnabledCheckBox}"
-                                                            EditingElementStyle="{StaticResource EntryEnabledCheckBoxEditing}"/>
-                                    <DataGridTemplateColumn Header="" Width="44">
-                                        <DataGridTemplateColumn.CellTemplate>
-                                            <DataTemplate>
-                                                <ui:Button Icon="{ui:SymbolIcon Delete24}" Appearance="Transparent"
-                                                           Padding="6,2" Margin="0" ToolTip="Remove this entry"
-                                                           Style="{StaticResource DictionaryRemoveButton}"
-                                                           Click="DictionaryDeleteRow_Click"/>
-                                            </DataTemplate>
-                                        </DataGridTemplateColumn.CellTemplate>
-                                    </DataGridTemplateColumn>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </ui:Card>
-                        <StackPanel Grid.Row="2" Margin="2,8,2,0">
-                            <TextBlock x:Name="DictionaryGlossaryHint" Style="{StaticResource CardDescription}"
-                                       TextWrapping="Wrap"/>
-                        </StackPanel>
+                                    <Grid x:Name="DictionaryTextChangesNotice" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:InfoBar x:Name="DictionaryTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
+                                        <ui:Button x:Name="DictionaryTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
+                                    </Grid>
+                                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <WrapPanel Grid.Column="0" Orientation="Horizontal">
+                                            <ui:Button x:Name="DictionaryAddButton" Padding="8,5" Content="Add word"
+                                                       Icon="{ui:SymbolIcon Add24}"
+                                                       Margin="0,0,4,0" Click="DictionaryAddButton_Click"
+                                                       ToolTip="Add a blank word and start editing it."/>
+                                            <ui:Button x:Name="DictionarySuggestButton" Padding="8,5" Content="Learn from history"
+                                                       Icon="{ui:SymbolIcon Lightbulb24}"
+                                                       Margin="0,0,4,0" Click="DictionarySuggestButton_Click"
+                                                       ToolTip="Suggests words from your recent dictations. If AI cleanup uses an online service, Scribe asks before sending anything."/>
+                                            <ui:Button x:Name="DictionaryCleanupButton" Padding="8,5" Content="Clean up unused words..."
+                                                       Icon="{ui:SymbolIcon Broom24}"
+                                                       Margin="0,0,4,0" Click="DictionaryCleanupButton_Click"
+                                                       ToolTip="Finds words and word packs you haven't used, so you can turn them off. You review every change."/>
+                                            <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
+                                                        Margin="12,0,0,0" VerticalAlignment="Center"
+                                                        Visibility="Collapsed">
+                                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
+                                                             VerticalAlignment="Center"/>
+                                                <TextBlock Text="Learning from your history..."
+                                                           Style="{StaticResource CardDescription}"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <StackPanel x:Name="DictionaryCleanupBusy" Orientation="Horizontal"
+                                                        Margin="12,0,0,0" VerticalAlignment="Center"
+                                                        Visibility="Collapsed">
+                                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
+                                                             VerticalAlignment="Center"/>
+                                                <TextBlock Text="Checking your history..."
+                                                           Style="{StaticResource CardDescription}"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </WrapPanel>
+                                        <ui:Button x:Name="DictionaryMoreButton" Grid.Row="1" Padding="8,5" Content="More"
+                                                   Icon="{ui:SymbolIcon MoreHorizontal24}"
+                                                   Margin="0,4,0,0" HorizontalAlignment="Left"
+                                                   Click="DictionaryMoreButton_Click"
+                                                   ToolTip="More dictionary actions"/>
+                                        <ui:TextBox x:Name="DictionarySearchBox" Grid.Column="1" Grid.RowSpan="2"
+                                                    MinWidth="180" Width="180" MaxWidth="260"
+                                                    HorizontalAlignment="Right"
+                                                    PlaceholderText="Find a word"
+                                                    AutomationProperties.Name="Find a word"
+                                                    TextChanged="DictionarySearchBox_TextChanged"/>
+                                    </Grid>
+                                    <Grid Grid.Row="2">
+                                        <ui:Card x:Name="DictionaryGridCard" Padding="0" Style="{StaticResource PanelCard}">
+                                            <DataGrid x:Name="DictionaryGrid"
+                                                      AutoGenerateColumns="False"
+                                                      CanUserAddRows="False" CanUserDeleteRows="True"
+                                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                                      Background="Transparent" BorderThickness="0"
+                                                      SelectionChanged="DictionaryGrid_SelectionChanged"
+                                                      AutomationProperties.LabeledBy="{Binding ElementName=DictionaryPageTitle}">
+                                                <DataGrid.Columns>
+                                                    <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                                            ElementStyle="{StaticResource EntryEnabledCheckBox}"
+                                                                            EditingElementStyle="{StaticResource EntryEnabledCheckBoxEditing}"/>
+                                                    <DataGridTextColumn Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*">
+                                                        <DataGridTextColumn.EditingElementStyle>
+                                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
+                                                                <Setter Property="AutomationProperties.Name" Value="Scribe hears"/>
+                                                            </Style>
+                                                        </DataGridTextColumn.EditingElementStyle>
+                                                    </DataGridTextColumn>
+                                                    <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" SortMemberPath="Replacement">
+                                                        <DataGridTextColumn.ElementStyle>
+                                                            <Style TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
+                                                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding ReplacementIsPlaceholder}" Value="True">
+                                                                        <Setter Property="Text" Value="(removes these words)"/>
+                                                                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </DataGridTextColumn.ElementStyle>
+                                                        <DataGridTextColumn.EditingElementStyle>
+                                                            <Style TargetType="TextBox" BasedOn="{x:Static DataGridTextColumn.DefaultEditingElementStyle}">
+                                                                <Setter Property="AutomationProperties.Name" Value="Scribe writes"/>
+                                                            </Style>
+                                                        </DataGridTextColumn.EditingElementStyle>
+                                                    </DataGridTextColumn>
+                                                    <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
 
+                                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
+
+                                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}">
+
+                                                        <DataGridCheckBoxColumn.HeaderStyle>
+
+                                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+
+                                                                <Setter Property="ToolTip" Value="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
+
+                                                            </Style>
+
+                                                        </DataGridCheckBoxColumn.HeaderStyle>
+
+                                                    </DataGridCheckBoxColumn>
+
+                                                    <DataGridTemplateColumn Header="Word pack" Width="160" CanUserSort="True"
+                                                                            SortMemberPath="Coverage">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Border Margin="4,2" Padding="8,2" CornerRadius="10"
+                                                                        BorderThickness="1" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                                                                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                                        Visibility="{Binding CoverageVisibility}">
+                                                                    <TextBlock Text="{Binding CoverageLabel}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTemplateColumn Header="" Width="44">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <ui:Button Icon="{ui:SymbolIcon Delete24}" Appearance="Transparent"
+                                                                           Padding="6,2" Margin="0" ToolTip="Delete this word"
+                                                                           AutomationProperties.Name="{Binding DeleteName}"
+                                                                           Style="{StaticResource DictionaryRemoveButton}"
+                                                                           Click="DictionaryDeleteRow_Click"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </ui:Card>
+                                        <ui:Card x:Name="DictionaryStateCard" Style="{StaticResource PanelCard}" Padding="24" Visibility="Collapsed">
+                                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440">
+                                                <TextBlock x:Name="DictionaryStateText" Style="{StaticResource CardTitle}" TextAlignment="Center" TextWrapping="Wrap"/>
+                                                <StackPanel x:Name="DictionaryStateActions" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+                                                    <ui:Button x:Name="DictionaryEmptyAddButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,4,0" Click="DictionaryAddButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryEmptyLearnButton" Content="Learn from history" Icon="{ui:SymbolIcon Lightbulb24}" Click="DictionarySuggestButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryRetryButton" Content="Try again" Visibility="Collapsed" Click="DictionaryRetryButton_Click"/>
+                                                    <ui:Button x:Name="DictionaryClearSearchButton" Content="Clear search" Visibility="Collapsed" Click="DictionaryClearSearchButton_Click"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </ui:Card>
+                                    </Grid>
+                                    <StackPanel Grid.Row="3" Margin="2,8,2,0">
+                                        <TextBlock x:Name="DictionaryOnCountText" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="DictionaryCoverageStatus" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>
+                                        <TextBlock x:Name="DictionaryAiVocabularyText" Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.AddToDictionaryVocabularyLine}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        <ui:CardExpander x:Name="DictionaryGlossaryDetails" Header="Details" Margin="0,6,0,0" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+                                            <TextBlock x:Name="DictionaryGlossaryHint" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/>
+                                        </ui:CardExpander>
+                                    </StackPanel>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Word packs">
-                                <!-- Interim until Phase 3b's Word packs editor replaces this tab: LegacyLibraryPageContainment
-                                     finds the subtitle as the title's next sibling and the tip in row 3, as it did on the old
-                                     Libraries page, and 3b deletes the containment with this markup (release gate 3). -->
-                                <Grid x:Name="SectionLibraries">
+                            <TabItem x:Name="WordPacksTab" Header="Word packs">
+                                <Grid x:Name="SectionWordPacks">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
@@ -1566,23 +1619,33 @@
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock x:Name="LibrariesPageTitle" Text="Word packs" Style="{StaticResource CardTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}" Text=""/>
+                            <TextBlock Text="Word packs" Style="{StaticResource CardTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win."/>
                         </StackPanel>
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                        <Grid Grid.Row="1" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="260"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
                             <ui:Button x:Name="LibraryImportButton" Content="Import a word pack..."
                                        Icon="{ui:SymbolIcon ArrowDownload24}"
                                        Margin="0,0,8,0" Click="LibraryImportButton_Click"
-                                       ToolTip="Add a dictionary word pack from a CSV file."/>
-                            <ui:Button x:Name="LibraryExportButton" Content="Export CSV"
-                                       Icon="{ui:SymbolIcon ArrowUpload24}"
-                                       Margin="0,0,8,0" Click="LibraryExportButton_Click"
-                                       ToolTip="Save the selected word pack as a CSV file to back up or share."/>
-                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove"
-                                       Icon="{ui:SymbolIcon Delete24}"
-                                       Click="LibraryRemoveButton_Click"
-                                       ToolTip="Remove the selected imported word pack. Built-in libraries can only be turned off."/>
-                        </StackPanel>
+                                       ToolTip="Add a word pack from a CSV file."/>
+                            <ui:Button x:Name="LibraryNewButton" Content="New word pack"
+                                       Icon="{ui:SymbolIcon Add24}"
+                                       Margin="0,0,8,0" Click="LibraryNewButton_Click"/>
+                            <ui:Button x:Name="LibraryMoreButton" Content="More"
+                                       Icon="{ui:SymbolIcon MoreHorizontal24}"
+                                       Click="LibraryMoreButton_Click"/>
+                            </StackPanel>
+                            <ui:TextBox x:Name="LibrarySearchBox" Grid.Column="2"
+                                        PlaceholderText="Search all word packs (Ctrl+F)"
+                                        AutomationProperties.Name="Search all word packs (Ctrl+F)"
+                                        TextChanged="LibrarySearchBox_TextChanged"/>
+                        </Grid>
                         <Grid Grid.Row="2">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="3*"/>
@@ -1596,6 +1659,7 @@
                                 <DataGrid x:Name="LibraryGrid"
                                           AutoGenerateColumns="False"
                                           CanUserAddRows="False" CanUserDeleteRows="False"
+                                          Sorting="LibraryTermsGrid_Sorting"
                                           CanUserSortColumns="False"
                                           SelectionMode="Single"
                                           SelectionChanged="LibraryGrid_SelectionChanged"
@@ -1605,6 +1669,9 @@
                                           AutomationProperties.Name="Word packs">
                                     <DataGrid.Columns>
                                         <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                                ElementStyle="{StaticResource LibraryOnCheckBox}"
+                                                                EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
+                                        <DataGridCheckBoxColumn Header="AI" Binding="{Binding AiCleanup, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
                                                                 ElementStyle="{StaticResource LibraryOnCheckBox}"
                                                                 EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
                                         <!-- The 2 px side margin is the one WPF gives a text column's text, so the name lines
@@ -1621,14 +1688,13 @@
                                                 <DataTemplate>
                                                     <StackPanel Margin="2,1" VerticalAlignment="Center">
                                                         <TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}"/>
-                                                        <TextBlock Text="{Binding Source}" FontSize="12"
+                                                        <TextBlock Text="{Binding DisplaySource}" FontSize="12"
                                                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                                                     </StackPanel>
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellTemplate>
                                         </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
-                                        <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Words" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </ui:Card>
@@ -1638,20 +1704,45 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
-                                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
-                                        <TextBlock x:Name="LibraryDetailName" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
-                                        <TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                    </StackPanel>
+                                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock x:Name="LibraryDetailName" Style="{StaticResource DetailTitle}" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
+                                            <TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                                            <ui:Button x:Name="LibraryExportButton" Content="Export..."
+                                                       Margin="0,0,8,0" Click="LibraryExportButton_Click"
+                                                       ToolTip="Save the selected word pack as a CSV file."/>
+                                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove..."
+                                                       Click="LibraryRemoveButton_Click"
+                                                       ToolTip="Remove the selected imported word pack. Built-in word packs can only be turned off."/>
+                                        </StackPanel>
+                                    </Grid>
                                     <DataGrid x:Name="LibraryTermsGrid" Grid.Row="1"
-                                              AutoGenerateColumns="False" IsReadOnly="True"
+                                              AutoGenerateColumns="False"
                                               CanUserAddRows="False" CanUserDeleteRows="False"
                                               HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                               Background="Transparent" BorderThickness="0"
                                               AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}">
                                         <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern}" Width="*"/>
-                                            <DataGridTextColumn Header="Written" Binding="{Binding Replacement}" Width="*"/>
+                                            <DataGridCheckBoxColumn Header="Use" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                            <DataGridTextColumn Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                            <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                            <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                            <DataGridTemplateColumn Header="" Width="44">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <ui:Button Content="Delete" Appearance="Transparent"
+                                                                   Padding="6,2" Margin="0"
+                                                                   Click="LibraryTermDeleteButton_Click"/>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
                                         </DataGrid.Columns>
                                     </DataGrid>
                                     <TextBlock x:Name="LibraryDetailEmpty" Grid.Row="1"
@@ -1661,8 +1752,6 @@
                                 </Grid>
                             </ui:Card>
                         </Grid>
-                        <TextBlock Grid.Row="3" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
-
                                 </Grid>
                             </TabItem>
                         </TabControl>

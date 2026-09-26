@@ -12,8 +12,8 @@ speak, release: punctuated text is typed into whatever app has focus. Audio is c
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
-text, the cleanup instructions and the vocabulary glossary (every enabled dictionary and library term,
-within its budget), whether or not the dictation mentions them; see
+text, the cleanup instructions and the vocabulary glossary (your dictionary and the word packs you let
+AI cleanup use, within its budget), whether or not the dictation mentions them; see
 [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
@@ -383,8 +383,7 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     built-in overlay and its edits documents (BuiltInLibraryOverlay), composition
                                     and policy (LibraryComposition, AiVocabularyPolicy, LibraryComposer,
                                     LibraryDecisions), and storage (LibraryJournal, LibraryInstaller, the custom
-                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry), and until
-                                    W2 LegacyLibraryPageContainment (the old Libraries page); see Word packs
+                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry); see Word packs
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -1563,26 +1562,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `libraries.state` by logical id. `EnabledDictionaryLibraryIds` is only the downgrade-safe list older builds read (a
   library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
   only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it.
-- **The old Settings window's Libraries page is contained until W2's Word packs page replaces it.** It cannot store a
-  switch, since its settings-only Save keeps the stored list, so it must not look as if it can, nor act on a selection a
-  Save may not keep (review findings A1 and G1: it said "Settings saved.", kept the ticks, and its Save prompt removed a
-  personal correction as covered by a pack ticked on but stored off, leaving neither writing it; and A2: the window's own
-  catalog load, whose adoption turns a pack changed outside Scribe off, left the prompt judging the list the window
-  opened with). `LegacyLibraryPageContainment` holds the decision and the window uses it
-  (`LegacyLibraryPageContainmentTests` runs both scenarios over the real parts and pins the window's source): the On
-  column is read-only, its box disabled so UI Automation cannot toggle it either, with the subtitle set from the type and
-  a notice under it; the Save prompt removes nothing a library covers, and asks nothing (the badges still show the
-  overlap); the Dictionary page's badges and the glossary count are judged against the committed selection, never the
-  rows: the stored list read when the page's catalog load finishes, then the one each Save hands back. That selection
-  only draws figures and is not what the next Save uses: an adoption later in the window's life (a file replaced,
-  removed or unreadable on disk) reaches it at that Save. It is also the document's list, the projection (word packs on
-  and sent to AI cleanup): since W-V, dictation applies on this PC a word pack that is on but kept from AI cleanup too
-  (for instance after a lost state, or a built-in whose edits changed outside Scribe), which the old page shows off and
-  badges nothing; that costs a figure, never a correction, since the page acts on none of it. The dictionary cleanup
-  reviews no library and never switches one off or copies its terms, and says so; an import says the pack is stored and
-  off; and after every Save the rows show the stored list again, with a notice in place of "Settings saved." (and the
-  window left open by Save and close) if a row showed otherwise. Import, export and remove work as before. Never make
-  the list write work here: that is W2's library payload.
+- **The Word packs page stages library state and saves it through the library payload.** Word pack On and AI permission
+  live in the library workspace, not in ad hoc settings rows. A Settings Save captures one `LibraryChangeSet`, prepares
+  the journal, commits its payload through `SaveBundle`, completes the journal, and calls `MarkSaved` only for a Save
+  that stands. A settings-only Save keeps the stored projection unchanged. The overlap review is never part of Save, and
+  dictionary cleanup does not switch word packs off or copy their terms into the dictionary.
 - **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
   packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
   the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything
@@ -1625,11 +1609,6 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   permission gate. Before any release from a line carrying the integration, check that a9e0b9e is an ancestor of the
   release head too. The Store build's journal (the redirected `LocalCache` folder, native and checked replace) is
   unverified until the desktop gate exercises it.
-- **Release gate: no release until the Settings redesign's Word packs page lands.** The containment of the old window
-  keeps it from reporting a switch it cannot store, but a build carrying it cannot switch any word pack on or off, and
-  its dictionary cleanup reviews no word pack. The Word packs page (W2) removes `LegacyLibraryPageContainment` with the
-  old page, so before any release from a line carrying the integration, check that the type is gone from the release
-  head (`git grep -q LegacyLibraryPageContainment <release head> -- src` finds nothing).
 - **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
   import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
   `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
@@ -2065,13 +2044,12 @@ packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
-- **The word pack library model ships only with W-V's vocabulary publication and W2's Word packs page.** Before cutting
+- **The word pack library model ships only with W-V's vocabulary publication.** Before cutting
   a release, check whether the W1b integration commit ("Integrate the library model's parts", first on
   `win/libraries-integration`) is an ancestor of the release head (`git merge-base --is-ancestor <integration commit>
   <release head>`); if it is, W-V's approved head (a9e0b9e, on `win/libraries-wv-r3`) must be an ancestor too, checked
-  the same way, and the old Settings window's containment must be gone (`git grep -q LegacyLibraryPageContainment
-  <release head> -- src` finds nothing, see Word packs), or the release is refused. Until the Store rows of the desktop
-  gate are observed, the release notes say the Store build's library journal is unverified (see Word packs).
+  the same way, or the release is refused. Until the Store rows of the desktop gate are observed, the release notes say
+  the Store build's library journal is unverified (see Word packs).
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
