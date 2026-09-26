@@ -1340,6 +1340,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   after real passes. `HistoryRepository.PruneOlderThan` counts no deletion either: production retention
   never calls it (maintenance deletes through `DeleteEntriesOlderThan` and counts that itself), only the
   soak harness does, so nothing PRIVACY.md describes may be routed through it without counting.
+- **Deleted history is announced after the commit, and nothing on the delete path waits for it.**
+  `HistoryRepository`'s `Delete`, `Clear`, `DeleteEntriesOlderThan` and `PruneOlderThan` publish a `HistoryDeletion`
+  through `HistoryDeletionNotifier` right after their SQL commit: a lock-free enqueue, still inside the write scope, so no
+  history write commits in between. The notifier delivers on its own task, in order and outside the write gate, and
+  logs by shape and swallows a subscriber that throws, so a slow or failing subscriber never reaches the delete path or
+  the history writer's thread. Subscribers (the tray's recent dictations, Add to dictionary) only update memory or post
+  to their window's dispatcher; none calls the repository or waits on the UI thread. Publishing is not
+  `StorageMaintenance.NoteDeletion`: the checkpoint accounting above is unchanged, and `PruneOlderThan` still counts no
+  deletion.
 - **The close only tries to empty the WAL.** `ScribeDatabase.Dispose` runs a final `TRUNCATE` checkpoint
   and, once the pool is cleared, logs its result row's shape (the outcome, SQLite's page counts, and
   whether the file outlived the close). It skips the checkpoint when the write gate cannot be had within
@@ -1393,6 +1402,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   callers that each loaded the document and then save the whole of it still write last-wins for every
   field, which is why read-modify-write callers go through `Update`, and why the AI switch has its own
   intent ordering below. Settings writes still never take the maintenance write gate.
+- **Library state has its own commit, which never writes the editing document.**
+  `ISettingsRepository.CommitLibraryState` runs whole under the same lock with BEGIN IMMEDIATE and never takes the
+  maintenance write gate. It checks the library generation, writes the library rows and, only when the payload changes
+  the enabled list, patches that one list in the stored document, refusing before it writes anything when that document
+  is missing, lost or unreadable. The library service's adoption and wrappers commit through it, and so do a word pack
+  Save's reference repairs (`WordPackSaveProtocol`), never `SaveBundle(_settings, ...)`: a settlement that runs after a
+  failed Save must never store that Save's unsaved fields.
 - **The AI switch invariant.** The newest intent for the AI cleanup switch wins, ordered by when the
   user made it, from the tray or in the Settings window, and a whole-document save never writes over a
   stored value its window neither showed nor changed. A tray change takes a revision
@@ -2050,6 +2066,10 @@ store, GitHub signing secrets, or a publisher trust bundle.
   <release head>`); if it is, W-V's approved head (a9e0b9e, on `win/libraries-wv-r3`) must be an ancestor too, checked
   the same way, or the release is refused. Until the Store rows of the desktop gate are observed, the release notes say
   the Store build's library journal is unverified (see Word packs).
+- **The old Libraries page's containment stays gone.** `LegacyLibraryPageContainment` held the 0.4.4 Libraries page's
+  switches read-only until the Word packs page replaced it. It must remain absent from release heads (`git grep
+  LegacyLibraryPageContainment -- src tests` returns no matches), and word pack switches are saved only through the
+  library payload, never by a settings-only write of `EnabledDictionaryLibraryIds`.
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from

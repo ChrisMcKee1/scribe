@@ -79,7 +79,7 @@ public sealed class WordPackSaveProtocol
                         request.OnWordPacksChanged?.Invoke(catalog);
                     }
 
-                    return WordPackSaveProtocolResult.Error(PrepareMessage(prepared));
+                    return FromNotice(WordPackNotices.FromPrepare(prepared), success: false);
                 }
 
                 session.PreparedBy(prepared);
@@ -203,7 +203,7 @@ public sealed class WordPackSaveProtocol
 
         ClearPending();
         request.OnWordPacksChanged?.Invoke(catalog);
-        return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+        return FromNotice(WordPackNotices.FromSettlement(WordPackSettlement.NotSaved));
     }
 
     private async Task<WordPackSaveProtocolResult> ApplyOutcomeAsync(
@@ -233,8 +233,7 @@ public sealed class WordPackSaveProtocol
 
                 if (outcome.Status == LibrarySaveStatus.AppliedAwaitingRelease)
                 {
-                    return WordPackSaveProtocolResult.SuccessResult(
-                        "Saved. Close the word pack file in the other app so Scribe can finish.");
+                    return WordPackSaveProtocolResult.SuccessResult(WordPackNotices.FromSaveStatus(outcome.Status).Text);
                 }
 
                 return WordPackSaveProtocolResult.SuccessResult();
@@ -242,19 +241,18 @@ public sealed class WordPackSaveProtocol
             case LibrarySaveStatus.CommitUnknown:
                 _pending = session;
                 _pendingGeneration = session.PreparedGeneration;
-                return WordPackSaveProtocolResult.Warning(
-                    "Scribe couldn't confirm that your word pack changes were saved. It will finish saving them, and your edits stay here until it has.");
+                return FromNotice(WordPackNotices.FromSaveStatus(outcome.Status), success: false);
 
             case LibrarySaveStatus.Superseded:
             {
                 var supersededCatalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
                 session.Rebase(supersededCatalog);
                 request.OnWordPacksChanged?.Invoke(supersededCatalog);
-                return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+                return FromNotice(WordPackNotices.FromSaveStatus(outcome.Status));
             }
 
             default:
-                return WordPackSaveProtocolResult.Error("Couldn't save your changes. Your edits are still here.");
+                return FromNotice(WordPackNotices.FromSaveStatus(LibrarySaveStatus.NotCommitted));
         }
     }
 
@@ -353,18 +351,14 @@ public sealed class WordPackSaveProtocol
         _pendingGeneration = 0;
     }
 
-    private static string PrepareMessage(LibraryPrepareResult? result) =>
-        result?.Status switch
+    private static WordPackSaveProtocolResult FromNotice(WordPackNotice notice, bool success = true) =>
+        notice.Severity switch
         {
-            LibraryPrepareStatus.PreviousSaveUnfinished when result.Failure == LibraryIoFailure.SharingViolation =>
-                "A word pack file is open in another app, so Scribe can't finish saving. Close it there and try again.",
-            LibraryPrepareStatus.PreviousSaveUnfinished =>
-                "Scribe is still finishing an earlier save. Try again in a moment.",
-            LibraryPrepareStatus.ReadOnly =>
-                "Word packs were changed by a newer version of Scribe. Update Scribe to change them here.",
-            LibraryPrepareStatus.OutsideEdit =>
-                "A word pack changed outside Scribe. Reload saved version, or save your draft as a new word pack.",
-            _ => "Couldn't save your changes. Your edits are still here.",
+            WordPackNoticeSeverity.Error => WordPackSaveProtocolResult.Error(notice.Text, notice.Actions),
+            WordPackNoticeSeverity.Warning => WordPackSaveProtocolResult.Warning(notice.Text, notice.Actions),
+            _ => success
+                ? WordPackSaveProtocolResult.SuccessResult(notice.Text, notice.Actions)
+                : new WordPackSaveProtocolResult(false, notice.Text, WordPackSaveProtocolSeverity.Info, notice.Actions),
         };
 
     private static WordPackSaveProtocolResult Unfinished() =>
@@ -392,16 +386,20 @@ public sealed record WordPackSaveProtocolRequest(
     Action? OnSettingsCommitted = null,
     Action<LibraryCatalog>? OnWordPacksChanged = null);
 
-public sealed record WordPackSaveProtocolResult(bool Success, string? Message, WordPackSaveProtocolSeverity Severity)
+public sealed record WordPackSaveProtocolResult(
+    bool Success,
+    string? Message,
+    WordPackSaveProtocolSeverity Severity,
+    IReadOnlyList<WordPackNoticeAction>? Actions = null)
 {
-    public static WordPackSaveProtocolResult SuccessResult(string? message = null) =>
-        new(true, message, WordPackSaveProtocolSeverity.Info);
+    public static WordPackSaveProtocolResult SuccessResult(string? message = null, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
+        new(true, message, WordPackSaveProtocolSeverity.Info, actions);
 
-    public static WordPackSaveProtocolResult Warning(string message) =>
-        new(false, message, WordPackSaveProtocolSeverity.Warning);
+    public static WordPackSaveProtocolResult Warning(string message, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
+        new(false, message, WordPackSaveProtocolSeverity.Warning, actions);
 
-    public static WordPackSaveProtocolResult Error(string message) =>
-        new(false, message, WordPackSaveProtocolSeverity.Error);
+    public static WordPackSaveProtocolResult Error(string message, IReadOnlyList<WordPackNoticeAction>? actions = null) =>
+        new(false, message, WordPackSaveProtocolSeverity.Error, actions);
 }
 
 public enum WordPackSaveProtocolSeverity

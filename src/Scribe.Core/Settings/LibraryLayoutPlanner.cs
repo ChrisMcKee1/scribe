@@ -119,12 +119,13 @@ public static class LibraryLayoutPlanner
     private const double CommandsGap = 10;
     private const double CardHeading = 28;
     private const double CardMeta = 16;
+    private const double HeaderControls = 26;
     private const double CardGaps = 8 + 8;
     private const double NoticeHeight = 48;
     private const double NoticeGap = 8;
     private const double ToolbarGap = 8;
     private const double GridHeader = 32;
-    private const double RowPadding = 12;
+    private const double RowPadding = 8;
     private const double TermDetailsHeight = 180;
 
     /// <summary>The layout for <paramref name="input"/>, with the Dictionary page's tab strip above the card.</summary>
@@ -204,7 +205,7 @@ public static class LibraryLayoutPlanner
     private static int Rows(LibraryLayoutInput input, double scale, double row, double tabStrip, bool isShort)
     {
         var inCard = 2 * CardPadding
-            + CardGaps + (CardHeading + CardMeta + ButtonHeight) * scale + (isShort ? 0 : TextLine * scale)
+            + CardGaps + (CardHeading + CardMeta + HeaderControls + ButtonHeight) * scale + (isShort ? 0 : TextLine * scale)
             + (input.NoticeVisible ? NoticeHeight * scale + NoticeGap : 0)
             + ButtonHeight * scale + ToolbarGap
             + GridHeader * scale

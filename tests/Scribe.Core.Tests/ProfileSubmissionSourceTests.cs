@@ -12,7 +12,9 @@ public sealed class ProfileSubmissionSourceTests
     public void The_save_marks_the_profile_rows_it_submitted_not_the_live_rows()
     {
         var settings = Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings");
-        var window = File.ReadAllText(Path.Combine(settings, "SettingsWindow.xaml.cs"));
+        var window = string.Join("\n", Directory.EnumerateFiles(settings, "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var profiles = File.ReadAllText(Path.Combine(settings, "SettingsWindow.Profiles.cs"));
 
         var save = Body(window, "private async Task<bool> TrySaveAsync()");

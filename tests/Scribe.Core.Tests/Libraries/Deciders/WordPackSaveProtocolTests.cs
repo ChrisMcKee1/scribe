@@ -132,7 +132,10 @@ public sealed class WordPackSaveProtocolTests
             root = Directory.GetParent(root)!.FullName;
         }
 
-        var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var settings = Path.Combine(root, "src", "Scribe.App", "Settings");
+        var window = string.Join("\n", Directory.EnumerateFiles(settings, "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var constructorStart = window.IndexOf("_wordPackSaveProtocol = new WordPackSaveProtocol", StringComparison.Ordinal);
         var constructorEnd = window.IndexOf("_savedAiProvider = _settings.AiCleanupProvider;", constructorStart, StringComparison.Ordinal);
         var constructor = window[constructorStart..constructorEnd];
@@ -338,7 +341,7 @@ public sealed class WordPackSaveProtocolTests
                 Assert.False(result.Success);
                 Assert.False(harness.Workspace.HasUnsavedChanges);
                 Assert.Single(harness.Trace, step => step == "apply");
-                Assert.Contains("Close the word pack file", result.Message, StringComparison.Ordinal);
+                Assert.Contains("Scribe will finish saving it after you close it there", result.Message, StringComparison.Ordinal);
             }
             else
             {
@@ -539,7 +542,10 @@ public sealed class WordPackSaveProtocolTests
             root = Directory.GetParent(root)!.FullName;
         }
 
-        var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var settings = Path.Combine(root, "src", "Scribe.App", "Settings");
+        var window = string.Join("\n", Directory.EnumerateFiles(settings, "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var wordPackStart = window.IndexOf("private void LibraryTermRow_PropertyChanged", StringComparison.Ordinal);
         var wordPackEnd = window.IndexOf("private void LibraryTermsGrid_Sorting", wordPackStart, StringComparison.Ordinal);
         var wordPackEditor = window[wordPackStart..wordPackEnd];

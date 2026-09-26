@@ -418,6 +418,35 @@
             <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
         </Style>
 
+        <Style x:Key="WordPackWrittenCell" TargetType="DataGridCell" BasedOn="{StaticResource KeyboardCell}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="4,0">
+                            <DockPanel LastChildFill="True">
+                                <TextBlock x:Name="Marker" DockPanel.Dock="Right"
+                                           Text="{Binding MarkerLabel}"
+                                           Style="{StaticResource CardDescription}"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center"
+                                           ToolTip="{Binding MarkerTooltip}"
+                                           Visibility="{Binding MarkerVisibility}"/>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditing" Value="True">
+                                <Setter TargetName="Marker" Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- The remove button in a Dictionary row is only an icon, so it is named after the entry it removes. -->
         <Style x:Key="DictionaryRemoveButton" TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
             <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Remove {0}'}"/>
@@ -1544,23 +1573,14 @@
                                                         </DataGridTextColumn.EditingElementStyle>
                                                     </DataGridTextColumn>
                                                     <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-
                                                                             ElementStyle="{StaticResource WholeWordCheckBox}"
-
                                                                             EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}">
-
                                                         <DataGridCheckBoxColumn.HeaderStyle>
-
                                                             <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-
                                                                 <Setter Property="ToolTip" Value="Off lets Scribe replace text inside longer words, for example &quot;net&quot; inside &quot;network&quot;."/>
-
                                                             </Style>
-
                                                         </DataGridCheckBoxColumn.HeaderStyle>
-
                                                     </DataGridCheckBoxColumn>
-
                                                     <DataGridTemplateColumn Header="Word pack" Width="160" CanUserSort="True"
                                                                             SortMemberPath="Coverage">
                                                         <DataGridTemplateColumn.CellTemplate>
@@ -1611,147 +1631,22 @@
                                 </Grid>
                             </TabItem>
                             <TabItem x:Name="WordPacksTab" Header="Word packs">
-                                <Grid x:Name="SectionWordPacks">
+                                <Grid x:Name="SectionWordPacks" SizeChanged="SectionWordPacks_SizeChanged">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
-                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock Text="Word packs" Style="{StaticResource CardTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win."/>
-                        </StackPanel>
-                        <Grid Grid.Row="1" Margin="0,0,0,10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="260"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Orientation="Horizontal">
-                            <ui:Button x:Name="LibraryImportButton" Content="Import a word pack..."
-                                       Icon="{ui:SymbolIcon ArrowDownload24}"
-                                       Margin="0,0,8,0" Click="LibraryImportButton_Click"
-                                       ToolTip="Add a word pack from a CSV file."/>
-                            <ui:Button x:Name="LibraryNewButton" Content="New word pack"
-                                       Icon="{ui:SymbolIcon Add24}"
-                                       Margin="0,0,8,0" Click="LibraryNewButton_Click"/>
-                            <ui:Button x:Name="LibraryMoreButton" Content="More"
-                                       Icon="{ui:SymbolIcon MoreHorizontal24}"
-                                       Click="LibraryMoreButton_Click"/>
-                            </StackPanel>
-                            <ui:TextBox x:Name="LibrarySearchBox" Grid.Column="2"
-                                        PlaceholderText="Search all word packs (Ctrl+F)"
-                                        AutomationProperties.Name="Search all word packs (Ctrl+F)"
-                                        TextChanged="LibrarySearchBox_TextChanged"/>
-                        </Grid>
-                        <Grid Grid.Row="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="10"/>
-                                <ColumnDefinition Width="2*" MinWidth="240"/>
-                            </Grid.ColumnDefinitions>
-                            <ui:Card Grid.Column="0" Padding="0" Style="{StaticResource PanelCard}">
-                                <!-- One A to Z list of built-in and custom libraries, placed by the window when the page
-                                     loads (LibraryOrdering). No column sorts: a header click would re-sort it, and a sorted
-                                     view moves a row the moment its box is ticked. -->
-                                <DataGrid x:Name="LibraryGrid"
-                                          AutoGenerateColumns="False"
-                                          CanUserAddRows="False" CanUserDeleteRows="False"
-                                          Sorting="LibraryTermsGrid_Sorting"
-                                          CanUserSortColumns="False"
-                                          SelectionMode="Single"
-                                          SelectionChanged="LibraryGrid_SelectionChanged"
-                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                          Background="Transparent" BorderThickness="0"
-                                          RowStyle="{StaticResource LibraryRow}"
-                                          AutomationProperties.Name="Word packs">
-                                    <DataGrid.Columns>
-                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                                ElementStyle="{StaticResource LibraryOnCheckBox}"
-                                                                EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
-                                        <DataGridCheckBoxColumn Header="AI" Binding="{Binding AiCleanup, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
-                                                                ElementStyle="{StaticResource LibraryOnCheckBox}"
-                                                                EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
-                                        <!-- The 2 px side margin is the one WPF gives a text column's text, so the name lines
-                                             up with the Category and Terms text beside it. The two lines carry their own
-                                             leading, so a 1 px top and bottom keeps a default window showing every
-                                             shipped word pack without scrolling, as the one-line rows did. A template column,
-                                             unlike a text column, has no binding to fall back on for Ctrl+C or for the cell's
-                                             UI Automation value, so ClipboardContentBinding supplies the name for both. The
-                                             name line, and only it, takes LibraryNameText's SemiBold cue for the selected row. -->
-                                        <DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True"
-                                                                ClipboardContentBinding="{Binding Name}"
-                                                                CellStyle="{StaticResource LibraryNameCell}">
-                                            <DataGridTemplateColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Margin="2,1" VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}"/>
-                                                        <TextBlock Text="{Binding DisplaySource}" FontSize="12"
-                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellTemplate>
-                                        </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="Words" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </ui:Card>
-                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource EditorPanelCard}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-                                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0">
-                                            <TextBlock x:Name="LibraryDetailName" Style="{StaticResource DetailTitle}" TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
-                                            <TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
-                                            <ui:Button x:Name="LibraryExportButton" Content="Export..."
-                                                       Margin="0,0,8,0" Click="LibraryExportButton_Click"
-                                                       ToolTip="Save the selected word pack as a CSV file."/>
-                                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove..."
-                                                       Click="LibraryRemoveButton_Click"
-                                                       ToolTip="Remove the selected imported word pack. Built-in word packs can only be turned off."/>
-                                        </StackPanel>
+                                    <Grid x:Name="WordPacksIntroPanel" Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="WordPacksIntroText" Style="{StaticResource PageSubtitle}" Text="Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win."/>
+
                                     </Grid>
-                                    <DataGrid x:Name="LibraryTermsGrid" Grid.Row="1"
-                                              AutoGenerateColumns="False"
-                                              CanUserAddRows="False" CanUserDeleteRows="False"
-                                              HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                              Background="Transparent" BorderThickness="0"
-                                              AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}">
-                                        <DataGrid.Columns>
-                                            <DataGridCheckBoxColumn Header="Use" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
-                                            <DataGridTextColumn Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
-                                            <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
-                                            <DataGridCheckBoxColumn Header="Whole words only" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
-                                            <DataGridTemplateColumn Header="" Width="44">
-                                                <DataGridTemplateColumn.CellTemplate>
-                                                    <DataTemplate>
-                                                        <ui:Button Content="Delete" Appearance="Transparent"
-                                                                   Padding="6,2" Margin="0"
-                                                                   Click="LibraryTermDeleteButton_Click"/>
-                                                    </DataTemplate>
-                                                </DataGridTemplateColumn.CellTemplate>
-                                            </DataGridTemplateColumn>
-                                        </DataGrid.Columns>
-                                    </DataGrid>
-                                    <TextBlock x:Name="LibraryDetailEmpty" Grid.Row="1"
-                                               VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
-                                               Style="{StaticResource CardDescription}" TextWrapping="Wrap"
-                                               Text="Select a word pack to see its words."/>
-                                </Grid>
-                            </ui:Card>
-                        </Grid>
+                                    <Grid Grid.Row="1" Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="320"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Orientation="Horizontal"><ui:Button x:Name="LibraryNewButton" Content="New word pack" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="LibraryNewButton_Click"/><ui:Button x:Name="LibraryImportButton" Content="Import a word pack..." Icon="{ui:SymbolIcon ArrowDownload24}" Margin="0,0,8,0" Click="LibraryImportButton_Click" ToolTip="Add a word pack from a CSV file."/><ui:Button x:Name="LibraryMoreButton" Content="More" Icon="{ui:SymbolIcon MoreHorizontal24}" Margin="0,0,8,0" Click="LibraryMoreButton_Click"/><ui:Button x:Name="WordPacksIntroInfoButton" Appearance="Transparent" Icon="{ui:SymbolIcon Info24}" Visibility="Collapsed" AutomationProperties.Name="About word packs" Click="WordPacksIntroInfoButton_Click"/></StackPanel><ui:TextBox x:Name="LibrarySearchBox" Grid.Column="2" PlaceholderText="Search all word packs (Ctrl+F)" AutomationProperties.Name="Search all word packs" ClearButtonEnabled="True" TextChanged="LibrarySearchBox_TextChanged"><ui:TextBox.Icon><ui:SymbolIcon Symbol="Search24"/></ui:TextBox.Icon></ui:TextBox></Grid>
+                                    <Grid x:Name="WordPacksMainGrid" Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition x:Name="WordPacksListColumn" Width="220" MinWidth="220"/><ColumnDefinition x:Name="WordPacksPaneGap" Width="12"/><ColumnDefinition x:Name="WordPacksCardColumn" Width="*" MinWidth="360"/></Grid.ColumnDefinitions>
+                                        <ui:Card x:Name="WordPacksListCard" Grid.Column="0" Padding="0" Style="{StaticResource PanelCard}"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><ui:Button x:Name="WordPacksBackButton" Grid.Row="0" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><DataGrid x:Name="LibraryGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionChanged="LibraryGrid_SelectionChanged" MouseDoubleClick="LibraryGrid_MouseDoubleClick" PreviewKeyDown="LibraryGrid_PreviewKeyDown" KeyDown="LibraryGrid_KeyDown" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" RowStyle="{StaticResource LibraryRow}" AutomationProperties.Name="Word packs"><DataGrid.Columns><DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True" ClipboardContentBinding="{Binding Name}" CellStyle="{StaticResource LibraryNameCell}"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="2,4" VerticalAlignment="Center"><DockPanel LastChildFill="True"><TextBlock Text="•" DockPanel.Dock="Left" Margin="0,0,4,0" Visibility="{Binding UnsavedVisibility}"/><TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40" ToolTip="{Binding Name}" Foreground="{Binding TextBrush}"/></DockPanel><TextBlock Text="{Binding DisplaySource}" FontSize="12" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Foreground="{Binding TextBrush}"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid></Grid></ui:Card>
+                                        <ui:Card x:Name="WordPacksCard" Grid.Column="2" Padding="16,12" Style="{StaticResource EditorPanelCard}"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid Grid.Row="0" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0"><ui:Button x:Name="WordPacksCardBackButton" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="0,0,0,8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><TextBlock x:Name="LibraryDetailName" Style="{StaticResource DetailTitle}" AutomationProperties.HeadingLevel="Level2"/><ui:TextBox x:Name="LibraryDetailRenameBox" Visibility="Collapsed" MinWidth="260" Margin="0,0,8,0" KeyDown="LibraryDetailRenameBox_KeyDown" LostKeyboardFocus="LibraryDetailRenameBox_LostKeyboardFocus" AutomationProperties.Name="Word pack name"/><TextBlock x:Name="LibraryRenameValidation" Style="{StaticResource CardDescription}" Visibility="Collapsed"/><TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/><StackPanel x:Name="LibraryDescriptionPanel" Orientation="Horizontal" Margin="0,4,0,0"><TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/><ui:Button x:Name="LibraryDetailsButton" Content="Details" Appearance="Transparent" Padding="6,0" Margin="4,0,0,0" Click="LibraryDetailsButton_Click"/></StackPanel><TextBlock x:Name="LibraryDetailDescFull" Style="{StaticResource CardDescription}" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,4,0,0"/><CheckBox x:Name="LibraryUseCheck" Content="Use this word pack" Style="{StaticResource SettingCheckBox}" Margin="0,8,0,0" Checked="LibraryUseCheck_Changed" Unchecked="LibraryUseCheck_Changed"/><CheckBox x:Name="LibraryAiCheck" Content="Use in AI cleanup" Style="{StaticResource SettingCheckBox}" Margin="0,2,0,0" Checked="LibraryAiCheck_Changed" Unchecked="LibraryAiCheck_Changed"/><TextBlock x:Name="LibraryAiHelpText" Style="{StaticResource CardDescription}" Margin="28,0,0,0"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0"><ui:Button x:Name="LibraryExportButton" Content="Export..." Margin="0,0,8,0" Click="LibraryExportButton_Click" ToolTip="Save the selected word pack as a CSV file."/><ui:Button x:Name="LibraryDetailMoreButton" Content="More" Icon="{ui:SymbolIcon MoreHorizontal24}" Click="LibraryDetailMoreButton_Click"/></StackPanel></Grid><Grid Grid.Row="1" Margin="0,0,0,8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ui:InfoBar x:Name="WordPackNoticeBar" IsOpen="False" IsClosable="True" Severity="Informational"/><StackPanel x:Name="WordPackNoticeActionsPanel" Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0" Visibility="Collapsed"/></Grid><Grid Grid.Row="2" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ui:Button x:Name="LibraryAddWordButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="LibraryAddWordButton_Click"/><ui:Button x:Name="LibrarySortButton" Grid.Column="1" Content="Sort" Icon="{ui:SymbolIcon ChevronDown24}" Margin="0,0,8,0" Click="LibrarySortButton_Click"/><TextBlock x:Name="LibraryTermCountText" Grid.Column="3" Style="{StaticResource CardDescription}" VerticalAlignment="Center" HorizontalAlignment="Right"/></Grid><Grid Grid.Row="3"><DataGrid x:Name="LibraryTermsGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" Sorting="LibraryTermsGrid_Sorting" PreviewKeyDown="LibraryTermsGrid_PreviewKeyDown" KeyDown="LibraryTermsGrid_KeyDown" MouseDoubleClick="LibraryTermsGrid_MouseDoubleClick" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" AutomationProperties.Name="Words in selected word pack" AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}"><DataGrid.Columns><DataGridCheckBoxColumn x:Name="LibraryTermUseColumn" Header="Use" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTextColumn x:Name="LibraryTermSpokenColumn" Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*"/><DataGridTextColumn x:Name="LibraryTermWrittenColumn" Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" CellStyle="{StaticResource WordPackWrittenCell}"/><DataGridTemplateColumn x:Name="LibraryTermActionColumn" Header="" Width="44"><DataGridTemplateColumn.CellTemplate><DataTemplate><ui:Button Appearance="Transparent" Icon="{ui:SymbolIcon MoreHorizontal24}" Padding="6,2" Margin="0" AutomationProperties.Name="{Binding MoreActionName}" Click="LibraryTermMoreButton_Click"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid><StackPanel x:Name="LibraryDetailEmptyPanel" VerticalAlignment="Center" HorizontalAlignment="Center"><TextBlock x:Name="LibraryDetailEmpty" TextAlignment="Center" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Text="Choose a word pack to edit, or create your own."/><StackPanel x:Name="LibrarySearchLinksPanel" Margin="0,8,0,0" HorizontalAlignment="Center"/><ui:Button x:Name="LibraryEmptyActionButton" Content="New word pack" Margin="0,12,0,0" HorizontalAlignment="Center" Click="LibraryEmptyActionButton_Click"/></StackPanel></Grid><Border x:Name="LibraryOffLine" Grid.Row="4" Style="{StaticResource CalloutBorder}" Visibility="Collapsed"><TextBlock Style="{StaticResource StatusText}" Text="This word pack is off. You can still edit its words."/></Border><ui:Card x:Name="WordDetailsPanel" Grid.Row="4" Style="{StaticResource EditorPanelCard}" Margin="0,8,0,0" Visibility="Collapsed"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid Grid.Row="0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Word details" Style="{StaticResource DetailTitle}"/><TextBlock x:Name="WordDetailsWordText" Style="{StaticResource CardDescription}"/></StackPanel><ui:Button x:Name="WordDetailsBackButton" Grid.Column="1" Content="Back to words" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Click="WordDetailsBackButton_Click"/></Grid><Grid Grid.Row="1" Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,8,0"><TextBlock x:Name="WordDetailsSpokenTitle" Text="Scribe hears" Style="{StaticResource CardTitle}"/><TextBox x:Name="WordDetailsSpokenBox" AutomationProperties.LabeledBy="{Binding ElementName=WordDetailsSpokenTitle}" MinHeight="64" AcceptsReturn="True" TextWrapping="Wrap" TextChanged="WordDetailsBox_TextChanged"/></StackPanel><StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock x:Name="WordDetailsWrittenTitle" Text="Scribe writes" Style="{StaticResource CardTitle}"/><TextBox x:Name="WordDetailsWrittenBox" AutomationProperties.LabeledBy="{Binding ElementName=WordDetailsWrittenTitle}" MinHeight="64" AcceptsReturn="True" TextWrapping="Wrap" TextChanged="WordDetailsBox_TextChanged"/></StackPanel></Grid><StackPanel Grid.Row="2" Margin="0,8,0,0"><CheckBox x:Name="WordDetailsWholeWordCheck" Content="Whole words only" Checked="WordDetailsWholeWordCheck_Changed" Unchecked="WordDetailsWholeWordCheck_Changed"/><TextBlock x:Name="WordDetailsSourceText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsStatusText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsGlossaryText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsHintsText" Style="{StaticResource CardDescription}"/><ui:Button x:Name="WordDetailsDictionaryButton" Content="Go to dictionary entry" Appearance="Transparent" HorizontalAlignment="Left" Margin="0,8,0,0" Visibility="Collapsed" Click="WordDetailsDictionaryButton_Click"/></StackPanel></Grid></ui:Card></Grid></ui:Card>
+                                    </Grid>
                                 </Grid>
                             </TabItem>
                         </TabControl>
