@@ -198,22 +198,26 @@ public partial class SettingsWindow
     /// Builds the desired snippet state from the editor rows, skipping rows with a blank phrase or
     /// template. Validation has already selected any typed-but-incomplete row before this runs.
     /// </summary>
-    private List<Snippet> BuildSnippets(out SnippetRow? duplicate)
+    // What Save stores for the snippets, and exactly which rows it stored. Validation has already blocked every changed
+    // incomplete row, so the incomplete rows left are untouched placeholders, which are dropped and stay new, and stored
+    // rows validation calls unchanged, which are kept exactly as stored so saving another snippet can't delete them.
+    private List<Snippet> BuildSnippets(out SnippetRow? duplicate, out IReadOnlyList<SnippetSubmission> submission)
     {
-        // Validation has already blocked every changed incomplete row, so the incomplete rows left are untouched new rows,
-        // which are dropped, and stored rows the user hasn't changed, which are kept as they are so saving another snippet
-        // doesn't delete them.
-        var result = SnippetBuilder.Build(
-            _snippetRows.Select(r => new SnippetBuilder.Row(
-                r.Id, r.Phrase, r.Template, r.Enabled,
-                KeepAsStored: r.Origin == DraftRowOrigin.Saved &&
-                    string.Equals(r.Phrase, r.LoadedPhrase, StringComparison.Ordinal) &&
-                    string.Equals(r.Template, r.LoadedTemplate, StringComparison.Ordinal) &&
-                    r.Enabled == r.LoadedEnabled)).ToList());
-
-        duplicate = result.HasDuplicate ? _snippetRows[result.DuplicateIndex] : null;
-        return result.Snippets.ToList();
+        var rows = _snippetRows.ToList();
+        var result = SnippetBuilder.Build([.. rows.Select(ToBuilderRow)]);
+        duplicate = result.HasDuplicate ? rows[result.DuplicateIndex] : null;
+        submission = [.. result.IncludedRows.Select((index, built) => new SnippetSubmission(
+            rows[index],
+            result.Snippets[built].Phrase,
+            result.Snippets[built].Template,
+            result.Snippets[built].Enabled))];
+        return [.. result.Snippets];
     }
+
+    private static SnippetBuilder.Row ToBuilderRow(SnippetRow row) =>
+        SettingsDraftValidator.IsUnchanged(ToDraftRow(row))
+            ? new SnippetBuilder.Row(row.Id, row.LoadedPhrase, row.LoadedTemplate, row.LoadedEnabled, KeepAsStored: true)
+            : new SnippetBuilder.Row(row.Id, row.Phrase, row.Template, row.Enabled);
 
     private void RefreshSnippetEmptyState()
     {
@@ -253,13 +257,10 @@ public partial class SettingsWindow
         HideValidation(SnippetTemplateValidation, SnippetTemplateValidationText, SnippetTemplateBox);
     }
 
-    // What a Save read from each snippet row, taken where it builds the list it stores, so the rows can adopt exactly that
-    // as their saved baseline once it is stored. An edit made after the Save read the rows isn't in what was stored, so it
-    // stays unsaved.
+    // What a Save stored for each row it stored, so those rows can adopt exactly that as their saved baseline once it is
+    // committed. A row it didn't store (an untouched placeholder) stays new, and an edit made after the Save read the rows
+    // isn't in what was stored, so it stays unsaved.
     private sealed record SnippetSubmission(SnippetRow Row, string Phrase, string Template, bool Enabled);
-
-    private IReadOnlyList<SnippetSubmission> CaptureSnippetSubmission() =>
-        [.. _snippetRows.Select(row => new SnippetSubmission(row, row.Phrase, row.Template, row.Enabled))];
 
     // The Save stored the submitted rows, so each one still in the list takes what was submitted as its saved baseline, in
     // memory, as the profile rows do. Nothing is read back from storage: a failed or slow read after a committed Save once
@@ -285,16 +286,16 @@ public partial class SettingsWindow
     }
 
     private IReadOnlyList<SnippetDraftRow> SnippetDraftRows() =>
-        _snippetLoad.IsLoaded
-            ? _snippetRows.Select(row => new SnippetDraftRow(
-                RowKey: row.RowKey,
-                Origin: row.Origin,
-                Touched: row.Touched,
-                Phrase: row.Phrase,
-                Template: row.Template,
-                LoadedPhrase: row.LoadedPhrase,
-                LoadedTemplate: row.LoadedTemplate,
-                Enabled: row.Enabled,
-                LoadedEnabled: row.LoadedEnabled)).ToList()
-            : [];
+        _snippetLoad.IsLoaded ? [.. _snippetRows.Select(ToDraftRow)] : [];
+
+    private static SnippetDraftRow ToDraftRow(SnippetRow row) => new(
+        RowKey: row.RowKey,
+        Origin: row.Origin,
+        Touched: row.Touched,
+        Phrase: row.Phrase,
+        Template: row.Template,
+        LoadedPhrase: row.LoadedPhrase,
+        LoadedTemplate: row.LoadedTemplate,
+        Enabled: row.Enabled,
+        LoadedEnabled: row.LoadedEnabled);
 }

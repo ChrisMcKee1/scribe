@@ -12,10 +12,11 @@ public sealed class SnippetSaveBaselineSourceTests
         var window = Read("SettingsWindow.xaml.cs");
         var snippets = Read("SettingsWindow.Snippets.cs");
 
-        // The submission is captured where the Save builds the list it stores, and adopted right after it is marked saved.
-        var built = window.IndexOf("snippets = BuildSnippets(out duplicateSnippet);", StringComparison.Ordinal);
-        var captured = window.IndexOf("snippetSubmission = CaptureSnippetSubmission();", StringComparison.Ordinal);
-        Assert.True(built >= 0 && captured > built, "The Save does not capture its snippet submission where it builds the list.");
+        // The submission is what the builder stored, taken where the Save builds the list, and adopted right after it is
+        // marked saved.
+        var built = window.IndexOf("snippets = BuildSnippets(out duplicateSnippet, out var submitted);", StringComparison.Ordinal);
+        var captured = window.IndexOf("snippetSubmission = submitted;", StringComparison.Ordinal);
+        Assert.True(built >= 0 && captured > built, "The Save does not take its snippet submission from the builder.");
         Assert.Contains(
             "_snippetLoad.MarkSaved(snippetSignature);\r\n                MarkSnippetRowsSaved(snippetSubmission ?? []);",
             window.ReplaceLineEndings("\r\n"),

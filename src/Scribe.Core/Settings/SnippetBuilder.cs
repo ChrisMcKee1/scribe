@@ -18,9 +18,11 @@ public static class SnippetBuilder
 
     /// <summary>
     /// The built snippets plus <see cref="DuplicateIndex"/>: the position in the input list of the
-    /// first row whose trimmed trigger phrase (case-insensitive) repeats an earlier row, or -1.
+    /// first new or changed row whose trimmed trigger phrase (case-insensitive) repeats another row, or -1; and
+    /// <see cref="IncludedRows"/>, the input position of each built snippet, in order, so a caller knows exactly which rows
+    /// were stored.
     /// </summary>
-    public readonly record struct Result(IReadOnlyList<Snippet> Snippets, int DuplicateIndex)
+    public readonly record struct Result(IReadOnlyList<Snippet> Snippets, int DuplicateIndex, IReadOnlyList<int> IncludedRows)
     {
         public bool HasDuplicate => DuplicateIndex >= 0;
     }
@@ -33,27 +35,48 @@ public static class SnippetBuilder
     {
         ArgumentNullException.ThrowIfNull(rows);
 
+        // A row kept as stored is written exactly as stored, untrimmed, and never counts as a duplicate of another kept
+        // row: storage already holds them side by side, and validation only warns about such a pair. A new or changed row
+        // is still checked against every phrase, kept ones included.
+        var keptPhrases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            if (row.KeepAsStored)
+            {
+                keptPhrases.Add((row.Phrase ?? string.Empty).Trim());
+            }
+        }
+
         var snippets = new List<Snippet>();
+        var included = new List<int>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var duplicateIndex = -1;
 
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            if (!row.KeepAsStored && (string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template)))
+            if (row.KeepAsStored)
+            {
+                snippets.Add(new Snippet(row.Id, row.Phrase ?? string.Empty, row.Template ?? string.Empty, row.Enabled));
+                included.Add(i);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template))
             {
                 continue;
             }
 
-            var phrase = (row.Phrase ?? string.Empty).Trim();
-            if (!seen.Add(phrase) && duplicateIndex < 0)
+            var phrase = row.Phrase.Trim();
+            if ((!seen.Add(phrase) || keptPhrases.Contains(phrase)) && duplicateIndex < 0)
             {
                 duplicateIndex = i;
             }
 
-            snippets.Add(new Snippet(row.Id, phrase, row.Template ?? string.Empty, row.Enabled));
+            snippets.Add(new Snippet(row.Id, phrase, row.Template, row.Enabled));
+            included.Add(i);
         }
 
-        return new Result(snippets, duplicateIndex);
+        return new Result(snippets, duplicateIndex, included);
     }
 }

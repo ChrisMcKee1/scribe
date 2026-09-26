@@ -5164,8 +5164,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         SnippetRow? duplicateSnippet = null;
         if (snippetsDirty)
         {
-            snippets = BuildSnippets(out duplicateSnippet);
-            snippetSubmission = CaptureSnippetSubmission();
+            snippets = BuildSnippets(out duplicateSnippet, out var submitted);
+            snippetSubmission = submitted;
         }
 
         if (duplicateSnippet is not null)
