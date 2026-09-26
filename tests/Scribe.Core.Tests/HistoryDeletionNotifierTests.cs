@@ -100,23 +100,37 @@ public sealed class HistoryDeletionNotifierTests
     }
 
     [Fact]
-    public void Subscriber_observes_write_gate_free_after_retention_delete()
+    public void Retention_delivery_runs_off_the_committing_thread_and_can_take_the_write_gate_once_the_delete_returns()
     {
         using var folder = new TempDirectory();
         using var database = new ScribeDatabase(new AppPaths(folder.Path), NullLogger<ScribeDatabase>.Instance);
         var notifier = new HistoryDeletionNotifier();
         var repo = new HistoryRepository(database, notifier);
         repo.Add(Entry("old", DateTimeOffset.UtcNow.AddDays(-10)));
-        var gateFree = false;
+        var committer = Environment.CurrentManagedThreadId;
+        using var deleteReturned = new ManualResetEventSlim();
+        int? deliveryThread = null;
+        bool? gateFree = null;
         notifier.Deleted += _ =>
         {
-            using var scope = database.TryEnterWriteScope();
-            gateFree = scope.Held;
+            deliveryThread = Environment.CurrentManagedThreadId;
+
+            // The deletion is published before the committing thread leaves its write scope, so the gate is only certain
+            // to be free once the delete has returned. A delivery run synchronously under the writer would never see that
+            // and leave gateFree unset.
+            if (deleteReturned.Wait(TimeSpan.FromSeconds(5)))
+            {
+                using var scope = database.TryEnterWriteScope();
+                gateFree = scope.Held;
+            }
         };
 
         Assert.Equal(1, repo.DeleteEntriesOlderThan(DateTimeOffset.UtcNow.AddDays(-5)));
+        deleteReturned.Set();
 
-        WaitUntil(() => gateFree);
+        WaitUntil(() => gateFree is not null);
+        Assert.NotEqual(committer, deliveryThread);
+        Assert.True(gateFree);
     }
 
     private static HistoryEntry Entry(string text, DateTimeOffset timestamp) =>
