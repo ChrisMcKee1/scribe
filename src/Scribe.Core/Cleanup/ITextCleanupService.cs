@@ -56,9 +56,19 @@ public interface ITextCleanupService : IAsyncDisposable
         string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null);
 
     /// <summary>
+    /// One dictation's cleanup with the vocabulary it was admitted with (a vocabulary generation's
+    /// <see cref="CleanupVocabulary"/>): its requests carry that vocabulary's glossary, whatever the service was
+    /// configured with or has been given since, and every attempt, each chunk and each retry on whichever surface serves
+    /// it, is handed over only while <see cref="CleanupVocabulary.Scope"/> is still permitted
+    /// (<see cref="Libraries.ILibraryVocabularySource.TryHandOff"/>). An attempt that is not handed over is not sent: its
+    /// text stays as dictated, and no failure is reported for it.
+    /// </summary>
+    AdmittedCleanup Admit(CleanupVocabulary vocabulary);
+
+    /// <summary>
     /// The configuration a one-off request would reach right now (see <see cref="CleanupRecipient"/>), or
     /// null when no model is ready. A caller that asks the user before sending captures this before it asks
-    /// and hands it to <see cref="CompleteAsync"/>, so the request goes where the user agreed or nowhere.
+    /// and hands it to <c>CompleteAsync</c>, so the request goes where the user agreed or nowhere.
     /// </summary>
     CleanupRecipient? Recipient { get; }
 
@@ -66,15 +76,38 @@ public interface ITextCleanupService : IAsyncDisposable
     /// Runs a one-off prompt against the currently configured cleanup model and returns its answer. Unlike
     /// <see cref="CleanAsync"/> this uses the caller's own system prompt (not the cleanup guardrails or the
     /// glossary), so opt-in helpers such as AI dictionary suggestions can reuse the user's configured model.
+    /// It carries no library vocabulary of its own, so its attempts are handed over under no library scope; a request
+    /// whose message carries library terms uses the overload that takes their scope.
     /// <para>
-    /// Fails closed: it sends nothing, and says <see cref="CompletionOutcome.RecipientChanged"/>, unless the
-    /// service is serving exactly <paramref name="recipient"/> at the moment it builds the request, so a
-    /// provider saved after the user agreed to send never receives what they agreed to send elsewhere. Never
-    /// throws for a failed call; <see cref="CompletionOutcome.Failed"/> says so.
+    /// Fails closed: every attempt, the first and each retry the client makes (for GitHub Copilot, the session's
+    /// creation and its send), is sent only while the service is serving exactly <paramref name="recipient"/> and is
+    /// ready, checked as that attempt is handed over, so a provider saved after the user agreed to send, or cleanup
+    /// turned off, never receives what they agreed to send. When that fails before anything was sent the result says
+    /// <see cref="CompletionOutcome.RecipientChanged"/> or <see cref="CompletionOutcome.NotReady"/>; when it stops a later
+    /// attempt after an earlier one went, <see cref="CompletionOutcome.Failed"/>. Never throws for a failed call;
+    /// <see cref="CompletionOutcome.Failed"/> says so.
     /// </para>
     /// </summary>
     Task<CompletionResult> CompleteAsync(
         string systemPrompt, string userMessage, CleanupRecipient recipient, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see cref="CompleteAsync(string, string, CleanupRecipient, CancellationToken)"/> for a request that carries
+    /// library vocabulary: the usage insight's labels, whose libraries <paramref name="libraryScope"/> names with the
+    /// content each was permitted for (a usage report's <c>LibraryScope</c>). Every attempt, the first and each retry (for
+    /// GitHub Copilot, the session's creation and its send), goes only while both hold, both checked as that attempt is
+    /// handed over: the service still serves <paramref name="recipient"/> and is ready, and the published library scope
+    /// still covers <paramref name="libraryScope"/>. When one no longer holds, that attempt is not sent and the result says
+    /// why (<see cref="ScopedCompletionOutcome.LibraryScopeNarrowed"/>, <see cref="ScopedCompletionOutcome.RecipientChanged"/>
+    /// or <see cref="ScopedCompletionOutcome.NotReady"/>), with how many requests had left before it. Never throws for a
+    /// failed call.
+    /// </summary>
+    Task<ScopedCompletionResult> CompleteAsync(
+        string systemPrompt,
+        string userMessage,
+        CleanupRecipient recipient,
+        Libraries.AiVocabularyScope libraryScope,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lightweight availability probe for the settings UI: initializes the Foundry Local runtime

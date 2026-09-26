@@ -149,11 +149,12 @@ public sealed class CleanupDisclosureTests
             "The window applies its own document outside the successful Save.");
 
         // Nor is the delegate handed on another way: besides its field, its assignment and that call, it only goes to
-        // StoredSettingsReapply, which applies the settings as stored.
+        // StoredSettingsReapply, which applies the settings as stored. Both calls keep the answer of the vocabulary
+        // generation they ask for, which the window awaits before it says the change is in effect.
         var uses = code.Split('\n').Select(line => line.Trim()).Where(line => Regex.IsMatch(line, @"\b_applySettings\b")).ToList();
         Assert.All(uses, line => Assert.True(
-            line is "private readonly Action<AppSettings> _applySettings;" or "_applySettings = applySettings;" or "_applySettings(_settings);" ||
-            line.StartsWith("StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
+            line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" or "var applying = _applySettings(_settings);" ||
+            line.StartsWith("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
             $"The window uses _applySettings in a way this test does not know: {line}"));
 
         // The Usage page's Add applies the stored settings, and the shell reloads only the vocabulary when there are none.
