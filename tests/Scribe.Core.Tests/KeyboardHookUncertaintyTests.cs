@@ -185,6 +185,12 @@ public sealed class KeyboardHookUncertaintyTests
         Assert.False(inside.Swallow);
         Assert.True(inside.TrackPass);
         Assert.True(ordinary.Swallow);
+
+        // A first press stamped past the window is ordinary: only the event's own time can say so.
+        using var later = Armed(HotkeyBinding.Legacy);
+        Assert.True(KeyboardHookFilter.Route(
+            later.Engine, new KeyEventPassOn(), throughCurrentRegistration: true,
+            new KeyEventIdentity(RightCtrl, 0x1D, 0x01, Moved + Window + 5), isDown: true, 0).Swallow);
     }
 
     [Theory]

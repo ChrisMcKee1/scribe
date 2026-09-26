@@ -378,6 +378,68 @@ public partial class HotkeyServiceTests
     private const nint ScriptedRemoteWindow = 0x1111;
     private const nint ScriptedLocalWindow = 0x2222;
 
+    [Fact]
+    public void Start_drops_a_move_when_another_window_came_to_the_front_before_its_notice_reached_the_hook_thread()
+    {
+        // The WinEvent for a foreground change reaches the hook thread only when it next takes its messages, and a move
+        // already in its queue can be judged first: the window check covers that. Here no notice is published at all.
+        var inFront = ScriptedRemoteWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var atMove = new ManualResetEventSlim(false);
+        using var proceed = new ManualResetEventSlim(false);
+        using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
+        service.BeforeKeyboardMoveForTests = () =>
+        {
+            atMove.Set();
+            proceed.Wait(HookTimeout);
+        };
+        service.Start();
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.MadeTimer?.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The remote client in front when the hook installed scheduled no move.");
+
+        clock.Timer.Fire();
+        var took = atMove.Wait(HookTimeout);
+        Volatile.Write(ref inFront, ScriptedLocalWindow);
+        proceed.Set();
+        Assert.True(took, "The hook thread never took the move.");
+        AwaitQuiet(service);
+
+        Assert.Equal(0, service.KeyboardHookMoves);
+        Assert.Equal(1, service.KeyboardHookMovesDropped);
+    }
+
+    [Fact]
+    public void Start_drops_a_move_whose_foreground_changed_under_it_even_with_the_same_window_back_in_front()
+    {
+        // The client left the front and came back before the hook thread took the move: it may register its hook again on
+        // its return, whose own sequence moves after it, so this move, judged on the older foreground, is not made.
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var atMove = new ManualResetEventSlim(false);
+        using var proceed = new ManualResetEventSlim(false);
+        using var service = ScriptedForegroundService(clock, () => ScriptedRemoteWindow);
+        service.BeforeKeyboardMoveForTests = () =>
+        {
+            atMove.Set();
+            proceed.Wait(HookTimeout);
+        };
+        service.Start();
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.MadeTimer?.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The remote client in front when the hook installed scheduled no move.");
+
+        clock.Timer.Fire();
+        var took = atMove.Wait(HookTimeout);
+        service.NoticeForegroundForTests(ScriptedLocalWindow);
+        service.NoticeForegroundForTests(ScriptedRemoteWindow);
+        proceed.Set();
+        Assert.True(took, "The hook thread never took the move.");
+        AwaitQuiet(service);
+
+        Assert.Equal(0, service.KeyboardHookMoves);
+        Assert.Equal(1, service.KeyboardHookMovesDropped);
+    }
+
     // A service over the legacy binding whose window in front, and the process of each window, the test scripts, on a clock
     // the test owns.
     private static HotkeyService ScriptedForegroundService(KeyboardHookPrecedenceTests.OneTimerClock clock, Func<nint> inFront) =>
