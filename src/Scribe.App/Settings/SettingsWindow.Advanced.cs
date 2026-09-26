@@ -31,6 +31,26 @@ public partial class SettingsWindow
         ShiftEnterCheck.IsChecked = source.ShiftEnterLineBreaks;
         PostCheck.IsChecked = source.ApplyPostProcessing;
         AccentSourceCheck.IsChecked = source.AccentSource == AccentSource.Windows;
+        ShowAccentSourceDescription();
+    }
+
+    // In a contrast theme Windows chooses every color, whatever the check box says, so the description says so while one
+    // is on, and follows the theme as it changes with the window open.
+    private void ShowAccentSourceDescription() =>
+        AccentSourceDescription.Text = AccentSourceText.Description(SystemParameters.HighContrast);
+
+    private void OnSystemParametersChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SystemParameters.HighContrast) && !_closed)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (!_closed)
+                {
+                    ShowAccentSourceDescription();
+                }
+            });
+        }
     }
 
     private async void RestoreAdvancedDefaultsButton_Click(object sender, RoutedEventArgs e)

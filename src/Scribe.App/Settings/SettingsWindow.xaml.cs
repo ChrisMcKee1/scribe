@@ -284,6 +284,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         InitializeSnippetList();
         LoadProfiles();
         InitializeReadOnlySections();
+        SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
 
         // Everything read from the database now arrives off the UI thread, so a large history or
         // dictionary no longer holds the window back from appearing.
@@ -5016,6 +5017,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
+        SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
         if (_updates is not null)
         {
             _updates.UpdateReady -= OnUpdateReady;

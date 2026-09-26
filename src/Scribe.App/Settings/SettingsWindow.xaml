@@ -971,7 +971,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="InjectionTitle" Text="Typing method" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="InjectionDescription" Style="{StaticResource CardDescription}"
-                                                   Text="Typing works in almost every app and doesn't use your clipboard. Pasting is faster for long text: Scribe uses the clipboard for a moment and puts back what you had copied when it can. Some apps block pasting."/>
+                                                   Text="Typing works in almost every app and doesn't use your clipboard. Pasting is faster for long text: Scribe uses the clipboard for a moment and puts back what you had copied when it can. Some apps block pasting. Remote Desktop and virtual machine windows are always typed into, even with Paste the text chosen: a remote session reads the clipboard only when it pastes, which can be after Scribe has put back what you had copied."/>
                                         <!-- Left under the description at a fixed width wide enough for its longest item, like the
                                              speech model's, rather than across the whole card. -->
                                         <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Left" Width="420"
@@ -1022,7 +1022,7 @@
                                             <TextBlock x:Name="AccentSourceTitle" Text="Use my Windows accent color" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
                                         <TextBlock Margin="28,2,0,0" x:Name="AccentSourceDescription" Style="{StaticResource CardDescription}"
-                                                   Text="Settings, Add to dictionary and the tray menu use your Windows accent color instead of Scribe blue. The recording indicator and the tray icon always use Scribe blue."/>
+                                                   Text="Scribe's windows and the tray menu use your Windows accent color instead of Scribe blue. The recording indicator and the tray icon keep Scribe's colors."/>
                                     </StackPanel>
                                 </ui:Card>
 
