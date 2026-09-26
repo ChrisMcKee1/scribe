@@ -18,18 +18,21 @@ AI cleanup use, within its budget), whether or not the dictation mentions them; 
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
-suggestions); **dictionary libraries** (eleven built-in packs plus imported CSVs, shown as one A to Z
-list; see the libraries section below); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
+suggestions); **word packs** (the dictionary libraries, renamed: eleven built-in packs plus your own and imported CSVs,
+edited on the Dictionary page's Word packs tab and shown as one A to Z list; see the word pack sections below); **voice
+snippets** (spoken trigger → saved template); **per‑app profiles**
 (writing style + newline mode by focused process); **AI cleanup** across four providers
-(Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, or
-any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
-**playground** for testing normal push-to-talk with raw recognition, dictionary/library/snippet
-replacement highlights, and per-step timings across the full pipeline;
-**diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
+(Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, GitHub Copilot, or
+any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter), with **Test connection** for the remote ones;
+**silence auto‑stop** for toggle mode;
+**Try dictation** (the Playground until 0.4.4) for testing normal push-to-talk with raw recognition,
+dictionary/library/snippet replacement highlights, and per-step timings across the full pipeline;
+**Find a setting** (a search box over every page); Settings and the recording indicator follow Windows text size;
+**diagnostics** panel (P50/P95 decode latency + RTF from local history, per speech model); **usage insights**
 (local totals/trend chart/top apps/recurring terms with one-click dictionary add; opt-in AI
 insight sends aggregate totals + dictionary-covered term labels ONLY, and withholds a label whose
 replacement is multi-line or over 100 characters as written; novel mined terms never
-leave the machine); **space after each dictation** (on by default, Settings > Dictation > Text insertion; only the
+leave the machine); **space after each dictation** (on by default, Settings > Dictation > Typing; only the
 target gets it, so history, the tray's recent dictations, the recovery copy and quick add keep the text as dictated;
 see [Text insertion](#text-insertion-the-space-after-a-dictation-read-before-touching-dictationinsertion));
 **dictation recovery** (last 5 transcripts in a tray submenu, injection
@@ -395,7 +398,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     when a new text scale applies; the overlay compiles both files itself)
     Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
                                     SrgbColor: the foreground on every accent and palette fill, and the lightness
-                                    of accent text, links and switch tracks (see Accent contrast); PillPalette,
+                                    of accent text, links and switch tracks (see Accent contrast); AccentResolver
+                                    (which accent to apply); ScribeBrand (every brand colour); PillPalette,
                                     the recording pill's colours over ScribeBrand
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
@@ -440,6 +444,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   tools/Scribe.InjectionLab/        times each injection path into a real focused Win32 control
   scripts/Download-Models.ps1       fetches ASR + VAD models
   scripts/New-ScenarioFixtures.ps1  regenerates the scenario WAVs (local only)
+  scripts/New-TrayIcons.ps1         generates the tray state icons from ScribeBrand (commit its output)
+  scripts/New-WelcomeMark.ps1       makes the Welcome window's brand mark without its bars
   scripts/Velopack-Cli.ps1          keeps vpk at the Velopack package version (used by pack.ps1)
   build/pack.ps1                    Velopack installer + GitHub-release publisher
   build/pack-msix.ps1               Microsoft Store MSIX package (Store path; no MSI is built)
@@ -602,7 +608,7 @@ matter are intermittent and hardware‑specific.
   names, `configured`/`unset`. Azure deployment, account and subscription names count as
   configuration: report presence, never the name. `SessionBannerTests.Banner_never_contains_a_secret`
   asserts it; keep it passing.
-- **Users export logs from Settings > About > "Save diagnostics…"** (`DiagnosticsBundle`), which
+- **Users export logs from Settings > Diagnostics > "Save diagnostics..."** (also offered on About) (`DiagnosticsBundle`), which
   writes the retained logs, redacted as described above, plus `report.txt` (what is inside, and the
   recognized formats with their version ranges and replacement counts) to a zip wherever they choose.
   Never add `scribe.db` to that bundle: it holds every dictation and the saved API keys.
@@ -1235,10 +1241,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   ends in white space (any `char.IsWhiteSpace`: a space, a tab, a line break, a no-break space and every other Unicode
   space), so a snippet ending in a line break gets nothing. It keeps the text for recovery first, as dictated, then
   checks cancellation, then types. The controller inserts through nothing else: it hands history, the `Dictated` event
-  and the playground's report `DictationInsertionResult.Recorded`, and the spaced text (`DictationInsertionResult.Typed`)
+  and Try dictation's report `DictationInsertionResult.Recorded`, and the spaced text (`DictationInsertionResult.Typed`)
   is internal to Core, so the shell cannot give it to anything that keeps text. History, the tray's recent dictations,
-  the recovery notice's copy, quick add, usage insights and learning from history never see the space; the playground's
-  Text insertion row says when one was typed. `DictationInsertionTests` drives every insertion path (typing, the
+  the recovery notice's copy, quick add, usage insights and learning from history never see the space; Try dictation's
+  typing step says when one was typed (`InjectionMethodLabel.Describe`). `DictationInsertionTests` drives every insertion path (typing, the
   clipboard paste, its typing fallback, a standard edit control) through the real `TextInjector` and pins the controller
   by source.
 - **The space comes after everything else.** AI cleanup and its guards, the dash normalizer, the dictionary and
@@ -1451,10 +1457,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 
 ## Dictionary libraries: order and precedence (read before touching library order)
 
-- **What the list shows and what wins are separate.** The Libraries page lists built-in and custom libraries in one
-  A to Z list (`LibraryOrdering`: `CompareInfo` of the current culture with `IgnoreCase | NumericOrdering`, then
-  ordinal name, then ordinal id), with the ordering captured when the page loads, the source ("Built-in" or "Your
-  library") under each name, no sortable column, and no row that moves when its box is ticked. Which library supplies
+- **What the list shows and what wins are separate.** The Word packs tab (the Libraries page until 0.4.4) lists built-in
+  and custom packs in one A to Z list (`LibraryOrdering`: `CompareInfo` of the current culture with
+  `IgnoreCase | NumericOrdering`, then ordinal name, then ordinal id), with the ordering captured when the tab loads, the
+  source ("Built-in" or "Imported", `WordPackUiText.Source`) under each name, no sortable column, and no row that moves
+  when its box is ticked. Which library supplies
   a spoken form is `LibraryPrecedence`: the built-ins in the frozen `BuiltInOrder`, then custom libraries by file
   name. Never derive a winner from the list's order.
 - **The frozen list.** `BuiltInOrder` is the order 0.4.3 composed the built-ins in (category, then name), frozen as
@@ -1647,7 +1654,7 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   kept as the write-once recovery copy, though: it holds nothing to recover and would shut out the next unreadable
   document that does, so a blank copy also gives way to the first one with content.
   `DefaultHotkeyTests` pins each case.
-- **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
+- **Restore default shortcuts** (Settings, Dictation, Shortcuts) stages `DefaultHotkeyRestore.Restore` like any other edit on the
   page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
   the result at once. Its notice compares the defaults with the page and with the saved settings, so a second press
   or a double click before Save still says Save applies them, and one that only undoes unsaved edits says so.
@@ -1929,6 +1936,51 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   fills from the user's accent with fixed HSV steps. With the maintainer's accent #0E0E70 the dark theme drew black on
   #42429B (2.48:1) and #59599B (3.33:1); a light accent such as Gold #FFB900 got white on #E6A700 (2.12:1) in the
   light theme. Windows' own palette does not rescue it: for #0E0E70 it is darker still (`AccentLight2` #14149D).
+- **Scribe blue is the accent for every install.** `AppSettings.AccentSource` is `Scribe` or `Windows`, with the property
+  initializer `Scribe`. It follows the `AddSpaceAfterDictation` pattern, not P-7: a document written before the key
+  existed reads as Scribe. It is a whole-document setting (Save applies it, Cancel discards it), shown on Advanced,
+  Appearance, as "Use my Windows accent color". Its property has its own converter (`AccentSource.cs`), which reads only
+  the exact names, case-insensitively, and reads anything else (a number, "1", "Scribe, Windows", null, an object) as
+  `Scribe`, so a cosmetic value can never make the document unreadable (`LastLoadFailed` stays false). The session
+  banner logs `accent=Scribe|Windows`, never a colour.
+- **One resolver chooses the accent, as the first step of every accent refresh.** `AccentResolver.Decide` gives the
+  four-colour Scribe set for Light and Dark with source Scribe (`ScribeBrand.LightAccent` and `DarkAccent`, applied with
+  WPF-UI's `ApplicationAccentColorManager.Apply(system, primary, secondary, tertiary)`). With source Windows it gives the
+  Windows accent through exactly the call 0.4.4 made, `ApplicationAccentColorManager.Apply(GetColorizationColor(), theme,
+  false)`, never `ApplySystemAccent()`, which reads Windows' own AccentLight and AccentDark palette and would change every
+  Windows-accent user's shades. In a contrast theme it gives that same 0.4.4 call whatever the source: WPF-UI's contrast
+  dictionaries do not define the app-level accent keys (`AccentFillColorDefaultBrush`, `SystemAccentColorPrimary`, the
+  accent text brushes), so applying nothing would strand Scribe blue there. With an unknown theme it gives nothing.
+  `AccentContrastResources.ResolveAccent` runs it before the planner reads any colour.
+- **WPF-UI never updates the accent itself.** Every `SystemThemeWatcher.Watch` passes `updateAccents: false` (Settings,
+  Add to dictionary, Welcome, the cleanup review), and so does `App.xaml.cs`'s theme application: a watched window's flag
+  is fixed when it registers, so a flag that depended on the source would go stale after a Save. `AccentSourceScanTests`
+  enforces this with a whitespace- and comment-blind detector over the whole `src\Scribe.App` tree, including multi-line
+  calls and named arguments. **Changing the source at run time goes through `AccentContrastResources.UseSource`**, which
+  re-resolves and re-plans on the dispatcher, because the four-colour overload raises no `Changed`; the app calls it after
+  the settings load and in `ApplySettings`. `Replanned` fires after every plan, so the tray menu, which holds a copy of the
+  application resources, copies them again (`TrayIconHost`). A refresh requested while one is running (for example by a
+  `Replanned` subscriber) only marks another pass, with at most two extra passes. `WindowsAccent` is a test seam for the
+  Windows accent.
+- **The resolver runs after the theme dictionary swaps**, so a theme dictionary resource that took an accent colour by
+  `StaticResource` would show the previous accent. In WPF-UI 4.3.0 the only one is `BadgeBackground`, and Scribe uses only
+  the Caution and Info badge appearances. A Primary-appearance badge needs a DynamicResource fill of Scribe's own.
+- **Links are the accent text shades.** WPF's `HotTrackColor` and its red hover are retired: the planner's `Hyperlink` and
+  `HyperlinkHover` shades come from `AccentTextPrimary` and `AccentTextSecondary`. In a contrast theme the flag is off and
+  WPF's own link colours draw.
+- **The measured surfaces include the Settings redesign's nested panels**: light `#EAEAEA` and `#E5E5E5`, dark `#383838`
+  and `#404040`, for every accent text, link, switch, check and chart bar; the selection indicator keeps its own set. With
+  Scribe blue the planner leaves every specified colour as drawn except the dark Tertiary accent text (`#72A0FF` is lifted
+  to `#81AAFF` on `#404040`), and the pressed accent button's label stays white in light. Acceptance is worded as "every
+  specified role pair passes and the brand fills draw as specified, with the existing repairs active", never "zero
+  corrections".
+- **Usage chart bars have their own keys**, `ScribeChartBarBrush` and `ScribeChartBarCurrentBrush`. They hold the planned
+  `ChartBar` shade (3:1 on every surface) and `ChartBarCurrent` (stepped in lightness to 1.5:1 against the bar, then held
+  at 3:1), and `SystemColors.HighlightBrush` in a contrast theme. With Scribe blue: `#0C48CF` and `#083391` light,
+  `#88B0FE` and `#C4D8FF` dark. The label, not the colour, says which bar is today.
+- **Scribe's brand brushes** (`ScribePillFaceBrush`, `ScribePillListeningEdgeBrush`, `ScribeLevelTipBrush`,
+  `ScribeSignalBrush`, in App.xaml) are literals checked against `ScribeBrand` by `ScribeBrandTests`. They draw only where
+  the flag is on, or in the brand mark, never in a contrast theme's own colours.
 - **Every pressed `ui:Button` label is `Control.Foreground`'s default, black.** WPF-UI's template sets a pressed
   button's Foreground to `{Binding PressedForeground, RelativeSource={RelativeSource TemplatedParent}}` on the button
   itself; a button in a window or a dialog has no templated parent, so the binding fails (the offscreen harness logs
@@ -1948,8 +2000,8 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   label, what shows today, then what the template means to draw), then black or white; text is held to 4.5:1 and a
   glyph (check, knob) to SC 1.4.11's 3:1. Where the theme's own reads, WPF-UI's brush is left in place.
 - **Colours that are themselves read are corrected in lightness only** (`ContrastShade`): the accent text brushes
-  (headings, the Welcome icons, the Diagnostics best pace), links (WPF-UI has no Hyperlink style, so a link draws in
-  WPF's `HotTrackColor`, 2.93:1 on the dark page whatever the accent, and red when hovered) and the on switch's track.
+  (headings, the Welcome icons, the Diagnostics best pace), links (the accent text shades, above) and the on switch's
+  track.
   A colour that reads on every surface it is drawn on (page, window, card, filled row, the Diagnostics panel) is kept
   exactly; otherwise its HSL lightness moves, hue and saturation kept, to the first shade that reads. WPF-UI's accent
   manager rewrites the accent text brushes in the application dictionary on every theme application, identical or
@@ -1974,6 +2026,42 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   dictionaries and templates, and whether the pressed-label binding is fixed (then `ButtonLabelContrast` can go): the
   adapter logs a warning when a key it overrides is missing from the loaded theme dictionary, because a renamed brush
   quietly brings the old colour back. It logs one line per distinct outcome (counts and ratios only, never a colour).
+
+## Settings window: WPF and WPF-UI gotchas (read before laying out a page)
+
+Each of these compiled warning-clean and showed only at run time or in a render, during the 0.5.0 Settings redesign.
+
+- **A DataGrid inside a vertical ScrollViewer realizes every row.** The ScrollViewer measures its content with unbounded
+  height, so the grid's own virtualization never engages: a 1,200-word pack built all 1,200 rows on the dispatcher (about
+  5 s). The Word packs card scrolls as a whole, so `FitLibraryTermsGridToCard` (`SettingsWindow.WordPacks.cs`) gives the
+  words grid an explicit Height, the viewport less the card's other rows and never below its minimum, recomputed from the
+  card ScrollViewer's `ScrollChanged` (its viewport and extent are stale in `SizeChanged`), with a Height in the XAML
+  bounding the first layout. Any grid or list put in a scrolling container needs the same.
+- **Never set a WPF-UI InfoBar's Visibility locally.** The InfoBar shows and hides itself from `IsOpen` with a template
+  trigger on its own Visibility; a local value overrides that for good and leaves an empty or closed bar on screen. Hide a
+  parent instead (`WordPackNoticeHost`). WPF-UI's close button clears `IsOpen` and raises no event, so anything that
+  belongs to a notice (its action buttons) watches `IsOpen` through a `DependencyPropertyDescriptor`, removed when the
+  window closes.
+- **`{x:Type DataGridColumnHeader}` is the system header style here.** WPF-UI keys its header style
+  `DefaultDataGridColumnHeaderStyle` and applies it through `DataGrid.ColumnHeaderStyle`, so a column `HeaderStyle` based
+  on the type key draws the grey Aero2 header. To add a tooltip, give the column a header element
+  (`<DataGridCheckBoxColumn.Header><TextBlock Text=... ToolTip=.../>`), which inherits the header's font.
+- **WPF-UI's CheckBox is 42 DIP wide with no content** (`CheckBoxPadding` 11,5,11,6 around a 20 DIP box), so a grid column
+  holding one needs 54 DIP with the cell's 6 + 6 padding. The Word packs planner's Use column is 54 for that reason; a
+  narrower column centres the box and clips it to a sliver.
+- **The window's Escape runs first.** `SettingsWindow.OnPreviewKeyDown` handles Escape before any control's own
+  PreviewKeyDown, so a control with its own Escape behaviour is asked from there (Find a setting's
+  `TryConsumeSettingsSearchEscape`: close the list, then clear the text), and that ask returns false while a hotkey capture
+  runs or an IME composes, so the capture is cancelled and the IME keeps its key. Only then do the Escape order and the
+  close guard run. Every keyboard command other than Save goes through `SettingsCloseGuard.CanRunAccelerator` with the page
+  it belongs to (Alt+Left is `BackToWordPacks`), so a Dictionary tab's command never runs while another page shows.
+- **WPF-UI's AutoSuggestBox throws when its template is applied without a window handle,** so an off-screen render of the
+  window has to hide Find a setting's box and render its list separately; and a render that detaches the window's content
+  must give layout code that measures `Content` (the Word packs planner's `WordPackLayoutRoot`) another root.
+- **No literal FontSize in Scribe's styles or pages.** Settings follows Windows text size through the text scale service,
+  so a literal size in a style setter or on an element stays at 100% while every WPF-UI control grows; a source test fails
+  on one. A merge once put the text styles and five fixed-width combo boxes back on literals without a conflict, so
+  re-render at 150% and 225% after any merge that touches the styles.
 
 ## Azure authentication (read before touching credentials)
 
@@ -2289,11 +2377,33 @@ at that same version will **not** auto-update; they need a manual installer run.
 The tray icon, window icon, installer, and Add/Remove Programs entry all resolve to one brand
 mark. Changing it means changing every one of these together:
 
-- `src/Scribe.App/Assets/scribe.ico` plus the `-recording`, `-processing`, and `-paused` state
-  variants, each carrying 16/24/32/48/64/128/256 px frames.
-- All four are **embedded resources** (`Scribe.App.Assets.*.ico`) loaded by `Tray/TrayIcons.cs`, so
-  an upgrade replaces them atomically with the executable and can never leave stale artwork beside
-  the new binary.
+- **Every brand colour lives in `Scribe.Core.Appearance.ScribeBrand`**: Ink `#07142F`, Paper `#FCFCFC`, Signal
+  `#1C83FE`, Slate `#6B7689`, the processing dots, both accent sets and the pill's colours. The overlay process and the
+  icon files cannot reference Core, so tests compare their literals with it (`ScribeBrandTests`, `TrayIconAssetTests`,
+  and the overlay's colour scan).
+- **Tray states:** idle is the brand icon; recording is the only state that lights the tile (a Signal tile, white
+  capsule, Ink waveform, and at 16 to 24 px a plain capsule); processing is an Ink tile with three large dots and no
+  microphone; paused is a Slate tile with two large Paper pause bars. Each file carries 16, 20, 24, 32, 40, 48, 64, 128
+  and 256 px frames: DIB below 256, PNG at 256, hand-tuned and left-right symmetric at 16 to 40 px.
+  `scripts/New-TrayIcons.ps1` generates them deterministically, so rerun it after changing `ScribeBrand` or the idle
+  icon, and commit its output. `src/Scribe.App/Assets/scribe.ico` keeps every frame it had byte for byte and gains 20 and
+  40 px frames; it is also the executable, installer and shortcut icon.
+- All four icons are **embedded resources** (`Scribe.App.Assets.*.ico`) loaded by `Tray/TrayIcons.cs`, so an upgrade
+  replaces them atomically with the executable and can never leave stale artwork beside the new binary.
+- **`TrayIcons` loads the frame for the notification area's real size**: `GetSystemMetricsForDpi(SM_CXSMICON, dpi)` at
+  the primary monitor's effective DPI, instead of handing the shell the 64 px frame to scale down. `TrayIconHost` sets
+  the icon again when that size changes (`SystemEvents.DisplaySettingsChanged` and `UserPreferenceChanged`). The
+  fresh-icon ownership rule in the class remarks still holds.
+- **The brand mark in windows** is `docs/icon.png`, linked into Scribe.App as the resource `Assets\scribe-mark.png`: the
+  title bars of Settings, Add to dictionary, Welcome and Clean up unused terms, the About header and the Welcome header.
+  On Welcome its five bars rise once over 600 ms when the window loads, only with Windows "Animation effects" on and
+  outside a contrast theme; they finish at once if the window is minimized, hidden or closed, and then the real bitmap
+  shows. `scripts/New-WelcomeMark.ps1` makes `Assets\scribe-mark-nobars.png`, the mark without its bars, for that
+  overlay. The bitmap stays as it is in a contrast theme, as Windows' own app icons do.
+- **The Settings rail's selected icon is drawn filled,** in the planned selection indicator colour while the flag is on.
+  **The recording indicator's position picker** is a miniature ink pill: outlines at rest, and the selected place shows
+  the face, the listening edge and three level bars; in a contrast theme it uses `Highlight`, `HighlightText` and
+  `WindowText`.
 - `<ApplicationIcon>` in `Scribe.App.csproj` sets the executable icon, which is what the uninstall
   entry's `DisplayIcon` and every shortcut resolve to.
 - `docs/icon.png` is the README mark and the source for the generated Store logos.
