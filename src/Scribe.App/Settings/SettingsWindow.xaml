@@ -64,6 +64,19 @@
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="StatusText" BasedOn="{StaticResource CardDescription}"/>
+        <Style TargetType="TextBlock" x:Key="TryDictationResultLabel">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,16,0,0"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="TryDictationResultText">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
         <Style TargetType="TextBlock" x:Key="MetricValue">
             <Setter Property="FontSize" Value="20"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -1818,7 +1831,9 @@
                     </Grid>
 
                     <!-- ============================ Try dictation ============================ -->
-                    <Grid x:Name="SectionTryDictation" Visibility="Collapsed">
+                    <Grid x:Name="SectionTryDictation" Visibility="Collapsed"
+                          Loaded="TryDictationSection_Loaded"
+                          IsVisibleChanged="TryDictationSection_IsVisibleChanged">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -1835,118 +1850,140 @@
                                     <ColumnDefinition Width="*" MaxWidth="1000"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock x:Name="PlaygroundInputTitle" Text="Dictation playground" Style="{StaticResource CardTitle}"/>
-                                        <ui:TextBox x:Name="PlaygroundInput" Margin="0,8,0,0"
-                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
-                                                    TextWrapping="Wrap" MinHeight="150" MaxHeight="280"
-                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                    SpellCheck.IsEnabled="True"
-                                                    AutomationProperties.LabeledBy="{Binding ElementName=PlaygroundInputTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="Final text is inserted here automatically. Save settings changes before testing them."/>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock x:Name="PlaygroundRecognizedTitle" Text="Recognized by the speech model" Style="{StaticResource CardTitle}"/>
-                                        <ui:TextBox x:Name="PlaygroundRecognizedText" Margin="0,8,0,14"
-                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
-                                                    TextWrapping="Wrap" MinHeight="70" MaxHeight="150"
-                                                    IsReadOnly="True" VerticalScrollBarVisibility="Auto"
-                                                    AutomationProperties.LabeledBy="{Binding ElementName=PlaygroundRecognizedTitle}"/>
-                                        <TextBlock x:Name="PlaygroundOutputTitle" Text="Final text" Style="{StaticResource CardTitle}"/>
-                                        <RichTextBox x:Name="PlaygroundOutput" Margin="0,8,0,0"
-                                                     MinHeight="150" MaxHeight="280"
-                                                     IsReadOnly="True" IsDocumentEnabled="True"
-                                                     VerticalScrollBarVisibility="Auto"
-                                                     Background="{DynamicResource ControlFillColorDefaultBrush}"
-                                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                                                     Padding="10" SpellCheck.IsEnabled="False"
-                                                     AutomationProperties.LabeledBy="{Binding ElementName=PlaygroundOutputTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="Underlined highlights came from a dictionary, word pack, or snippet. Hover one to see what matched."/>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="180"/>
-                                            <ColumnDefinition Width="110"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-
-                                        <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="Pipeline timing"
-                                                   Style="{StaticResource CardTitle}" Margin="0,0,0,8"/>
-
-                                        <TextBlock Grid.Row="1" Text="Audio capture" Style="{StaticResource CardDescription}"/>
-                                        <TextBlock x:Name="PlaygroundCaptureDuration" Grid.Row="1" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold"/>
-                                        <TextBlock x:Name="PlaygroundCaptureDetail" Grid.Row="1" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"/>
-
-                                        <TextBlock Grid.Row="2" Text="Trim silence"
-                                                   Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundVadDuration" Grid.Row="2" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundVadDetail" Grid.Row="2" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-
-                                        <TextBlock Grid.Row="3" Text="Speech recognition" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundDecodeDuration" Grid.Row="3" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundDecodeDetail" Grid.Row="3" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-
-                                        <TextBlock Grid.Row="4" Text="AI cleanup" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundAiDuration" Grid.Row="4" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundAiDetail" Grid.Row="4" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-
-                                        <TextBlock Grid.Row="5" Text="Dictionary and snippets"
-                                                   Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundPostDuration" Grid.Row="5" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundPostDetail" Grid.Row="5" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-
-                                        <TextBlock Grid.Row="6" Text="Text insertion" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundInjectionDuration" Grid.Row="6" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundInjectionDetail" Grid.Row="6" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-
-                                        <TextBlock Grid.Row="7" Text="Total" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundTotalDuration" Grid.Row="7" Grid.Column="1"
-                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                                        <TextBlock x:Name="PlaygroundTotalDetail" Grid.Row="7" Grid.Column="2"
-                                                   Text="Waiting for input" Style="{StaticResource CardDescription}"
-                                                   Margin="0,8,0,0"/>
+                                    <Grid x:Name="TryDictationUnsavedHost" Margin="0,0,0,12" Visibility="Collapsed">
+                                        <ui:InfoBar x:Name="TryDictationUnsavedBar"
+                                                    Severity="Informational" IsOpen="False" IsClosable="False"
+                                                    Message="You have unsaved changes. Try dictation uses the settings Scribe is running with."
+                                                    AutomationProperties.LiveSetting="Polite"/>
+                                        <ui:Button x:Name="TryDictationSaveNowButton" Content="Save now" MinWidth="96"
+                                                   Margin="0,8,12,8" HorizontalAlignment="Right"
+                                                   Click="TryDictationSaveNow_Click"/>
                                     </Grid>
-                                </ui:Card>
+
+                                    <ui:InfoBar x:Name="TryDictationRestartBar" Margin="0,0,0,12"
+                                                Severity="Informational" IsOpen="False" IsClosable="False"
+                                                Message="Restart Scribe before Try dictation uses these changes."
+                                                AutomationProperties.LiveSetting="Polite"/>
+
+                                    <TextBlock Text="Try it" Style="{StaticResource SectionHeader}" Margin="1,4,0,8"/>
+                                    <ui:Card Style="{StaticResource SettingsCard}">
+                                        <StackPanel>
+                                            <TextBlock x:Name="TryDictationPrimaryInstruction" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock x:Name="TryDictationSecondaryInstruction" Style="{StaticResource CardDescription}" Margin="0,6,0,0" Visibility="Collapsed"/>
+                                            <TextBlock x:Name="TryDictationSampleText" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
+                                            <TextBlock x:Name="TryDictationSecondSampleText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Visibility="Collapsed"/>
+                                            <ui:TextBox x:Name="PlaygroundInput" Margin="0,10,0,0"
+                                                        HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                        TextWrapping="Wrap" MinHeight="150" MaxHeight="280"
+                                                        VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                        SpellCheck.IsEnabled="True"
+                                                        AutomationProperties.Name="Try dictation box"
+                                                        AutomationProperties.HelpText="{Binding Text, ElementName=TryDictationPrimaryInstruction}"/>
+                                            <ui:Button Content="Clear" HorizontalAlignment="Right" MinWidth="84" Margin="0,8,0,0"
+                                                       Click="TryDictationClear_Click"/>
+                                        </StackPanel>
+                                    </ui:Card>
+
+                                    <TextBlock Text="Result" Style="{StaticResource SectionHeader}"/>
+                                    <ui:Card Style="{StaticResource SettingsCard}">
+                                        <StackPanel>
+                                            <TextBlock x:Name="TryDictationEmptyText"
+                                                       Style="{StaticResource CardDescription}"
+                                                       Text="Your result appears here after you dictate into the box."/>
+                                            <StackPanel x:Name="TryDictationResultPanel" Visibility="Collapsed">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <ui:SymbolIcon x:Name="TryDictationSummaryIcon" Grid.Column="0" Symbol="CheckmarkCircle24" FontSize="16" Margin="0,2,8,0"
+                                                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}"/>
+                                                    <TextBlock x:Name="TryDictationSummaryText" Grid.Column="1"
+                                                               Style="{StaticResource TryDictationResultText}"
+                                                               Margin="0" AutomationProperties.LiveSetting="Polite"/>
+                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0">
+                                                        <ui:Button x:Name="TryDictationSoundSettingsButton" Content="Open sound settings"
+                                                                   MinWidth="140" Visibility="Collapsed" Click="SoundSettings_Click"/>
+                                                        <ui:Button x:Name="TryDictationAiCleanupButton" Content="Open AI cleanup"
+                                                                   MinWidth="130" Visibility="Collapsed" Click="TryDictationOpenAiCleanup_Click"/>
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <StackPanel x:Name="TryDictationHeardSection">
+                                                    <TextBlock Text="What Scribe heard" Style="{StaticResource TryDictationResultLabel}" Margin="0,16,0,0"/>
+                                                    <TextBlock x:Name="TryDictationHeardText" Style="{StaticResource TryDictationResultText}"/>
+                                                </StackPanel>
+
+                                                <StackPanel x:Name="TryDictationTypedSection">
+                                                    <TextBlock Text="What Scribe typed" Style="{StaticResource TryDictationResultLabel}"/>
+                                                    <TextBlock x:Name="TryDictationTypedText" Style="{StaticResource TryDictationResultText}"/>
+                                                </StackPanel>
+
+                                                <StackPanel x:Name="TryDictationChangesSection">
+                                                    <TextBlock x:Name="TryDictationChangesTitle" Style="{StaticResource TryDictationResultLabel}"/>
+                                                    <ItemsControl x:Name="TryDictationChangesList" Margin="0,4,0,0">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding}" Style="{StaticResource TryDictationResultText}"/>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+
+                                                <ui:CardExpander x:Name="TryDictationTimingExpander" Margin="0,16,0,0"
+                                                                 IsExpanded="False" AutomationProperties.Name="Timing details">
+                                                    <ui:CardExpander.Header>
+                                                        <TextBlock Text="Timing details" Style="{StaticResource CardTitle}"/>
+                                                    </ui:CardExpander.Header>
+                                                    <Grid Margin="0,8,0,0">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="180"/>
+                                                            <ColumnDefinition Width="110"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="Auto"/>
+                                                        </Grid.RowDefinitions>
+
+                                                        <TextBlock Grid.Row="0" Text="Recording" Style="{StaticResource CardDescription}"/>
+                                                        <TextBlock x:Name="PlaygroundCaptureDuration" Grid.Row="0" Grid.Column="1" FontWeight="SemiBold"/>
+                                                        <TextBlock x:Name="PlaygroundCaptureDetail" Grid.Row="0" Grid.Column="2" Style="{StaticResource CardDescription}"/>
+
+                                                        <TextBlock Grid.Row="1" Text="Trimming silence" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundVadDuration" Grid.Row="1" Grid.Column="1" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundVadDetail" Grid.Row="1" Grid.Column="2" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+
+                                                        <TextBlock Grid.Row="2" Text="Speech recognition" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundDecodeDuration" Grid.Row="2" Grid.Column="1" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundDecodeDetail" Grid.Row="2" Grid.Column="2" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+
+                                                        <TextBlock Grid.Row="3" Text="AI cleanup" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundAiDuration" Grid.Row="3" Grid.Column="1" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundAiDetail" Grid.Row="3" Grid.Column="2" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+
+                                                        <TextBlock Grid.Row="4" Text="Dictionary and snippets" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundPostDuration" Grid.Row="4" Grid.Column="1" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundPostDetail" Grid.Row="4" Grid.Column="2" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+
+                                                        <TextBlock Grid.Row="5" Text="Typing" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundInjectionDuration" Grid.Row="5" Grid.Column="1" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundInjectionDetail" Grid.Row="5" Grid.Column="2" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+
+                                                        <TextBlock Grid.Row="6" Text="Processing, all steps" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundTotalDuration" Grid.Row="6" Grid.Column="1" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                                        <TextBlock x:Name="PlaygroundTotalDetail" Grid.Row="6" Grid.Column="2" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
+                                                    </Grid>
+                                                </ui:CardExpander>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </ui:Card>
                                 </StackPanel>
                             </Grid>
                         </ScrollViewer>

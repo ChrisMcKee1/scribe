@@ -88,6 +88,7 @@ public static class SettingsChangeTracker
     public const string AllChangesSaved = "All changes saved";
     public const string TryDictationUnsavedNotice =
         "You have unsaved changes. Try dictation uses the settings Scribe is running with.";
+    public const string TryDictationRestartNotice = "Restart Scribe before Try dictation uses these changes.";
     public const string TryDictationSaveNow = "Save now";
 
     public static SettingsChangeSet Compare(

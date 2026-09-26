@@ -5,6 +5,7 @@ using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
@@ -1006,6 +1007,7 @@ public partial class App : Application
             _settingsWindow?.AdoptExternalAiCleanup(stored.EnableAiCleanup, revision);
         }
 
+        _settingsWindow?.AdoptStoredSettings(stored);
         _tray?.SetAiCleanupChecked(stored.EnableAiCleanup);
         _tray?.ShowInfo(stored.EnableAiCleanup ? "AI cleanup on" : "AI cleanup off");
     }
@@ -1105,6 +1107,7 @@ public partial class App : Application
             _settingsWindow?.AdoptExternalMicrophone(storedChoice, revision);
         }
 
+        _settingsWindow?.AdoptStoredSettings(stored);
         _tray?.ShowInfo($"dictating with {Scribe.Core.Settings.MicrophoneChoices.Describe(storedChoice)}");
     }
 
@@ -1233,6 +1236,7 @@ public partial class App : Application
                 services.GetRequiredService<ITranscriptionModelInstaller>(),
                 services.GetRequiredService<AppPaths>(),
                 services.GetRequiredService<StartupRegistration>(),
+                services.GetRequiredService<IOptions<TranscriptionOptions>>(),
                 position => _overlay?.Preview(position),
                 settings =>
                 {

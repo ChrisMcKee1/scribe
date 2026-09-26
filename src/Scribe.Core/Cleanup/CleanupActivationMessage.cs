@@ -42,54 +42,100 @@ public static class CleanupActivationMessage
 
     private static string CustomEndpointBody(CleanupOptions options)
     {
-        var host = DescribeHost(options.CustomEndpoint);
+        var endpoint = CleanupEndpointDescription.For(options.CustomEndpoint);
         var model = Describe(options.CustomModel);
-        return IsLocalHost(options.CustomEndpoint)
-            ? $"Scribe uses {model} in {host}. Your text stays on this PC."
-            : $"Scribe uses {model} at {host}. Your text goes to {host}.";
+        return endpoint.IsOnThisPc
+            ? $"Scribe uses {model} in {endpoint.ActivationName}. Your text stays on this PC."
+            : $"Scribe uses {model} at {endpoint.ActivationName}. Your text goes to {endpoint.ActivationName}.";
+    }
+
+    public static string TryDictationPhrase(CleanupOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.Enabled)
+        {
+            return "AI cleanup: off.";
+        }
+
+        return options.Provider switch
+        {
+            CleanupProvider.FoundryLocal =>
+                $"AI cleanup: on, {StripRecommendation(CleanupModelCatalog.Resolve(options.FoundryModelAlias).DisplayName)} on this PC.",
+            CleanupProvider.AzureFoundry =>
+                $"AI cleanup: on, {Describe(options.AzureDeployment)} in Microsoft Foundry.",
+            CleanupProvider.GitHubCopilot => string.IsNullOrWhiteSpace(options.CopilotModel)
+                ? "AI cleanup: on, GitHub Copilot."
+                : $"AI cleanup: on, GitHub Copilot with {options.CopilotModel.Trim()}.",
+            CleanupProvider.OpenAiCompatible =>
+                CustomTryDictationPhrase(options),
+            _ => "AI cleanup: on, the selected model.",
+        };
+    }
+
+    private static string CustomTryDictationPhrase(CleanupOptions options)
+    {
+        var endpoint = CleanupEndpointDescription.For(options.CustomEndpoint);
+        var model = Describe(options.CustomModel);
+        return endpoint.TryDictationPreposition switch
+        {
+            CleanupEndpointPreposition.In => $"AI cleanup: on, {model} in {endpoint.TryDictationName}.",
+            CleanupEndpointPreposition.OnThisPc => $"AI cleanup: on, {model} on this PC.",
+            _ => $"AI cleanup: on, {model} at {endpoint.TryDictationName}.",
+        };
     }
 
     private static string CopilotModel(string? model) => string.IsNullOrWhiteSpace(model) ? string.Empty : $" with {model.Trim()}";
 
-    private static bool IsLocalHost(string? endpoint) =>
-        Uri.TryCreate(endpoint?.Trim(), UriKind.Absolute, out var uri)
-        && (uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase));
-
     private static string Describe(string? name) =>
         string.IsNullOrWhiteSpace(name) ? "the selected model" : name.Trim();
 
-    /// <summary>
-    /// Host of a bring-your-own endpoint, so the notification can say "Ollama" or "LM Studio"
-    /// rather than repeating a URL the user already typed. Falls back to the raw value when it is
-    /// not a parsable URL, because echoing what the user entered beats inventing a name.
-    /// </summary>
-    private static string DescribeHost(string? endpoint)
+    private static string StripRecommendation(string displayName)
+    {
+        const string suffix = " (recommended)";
+        return displayName.EndsWith(suffix, StringComparison.Ordinal)
+            ? displayName[..^suffix.Length]
+            : displayName;
+    }
+}
+
+public enum CleanupEndpointPreposition
+{
+    In,
+    OnThisPc,
+    At,
+}
+
+public sealed record CleanupEndpointDescription(
+    string ActivationName,
+    bool IsOnThisPc,
+    string TryDictationName,
+    CleanupEndpointPreposition TryDictationPreposition)
+{
+    public static CleanupEndpointDescription For(string? endpoint)
     {
         var value = endpoint?.Trim();
         if (string.IsNullOrEmpty(value))
         {
-            return "the server you entered";
+            return new("the server you entered", false, "the server you entered", CleanupEndpointPreposition.At);
         }
 
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
-            return value;
+            return new(value, false, value, CleanupEndpointPreposition.At);
         }
 
-        // Port is the only reliable local-server signal: Ollama and LM Studio both bind loopback,
-        // so the host alone ("localhost") would not tell the two apart.
         var isLoopback = uri.IsLoopback ||
             string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase);
-        if (isLoopback)
+        if (!isLoopback)
         {
-            return uri.Port switch
-            {
-                11434 => "Ollama",
-                1234 => "LM Studio",
-                _ => $"a server on this PC (port {uri.Port})",
-            };
+            return new(uri.Host, false, uri.Host, CleanupEndpointPreposition.At);
         }
 
-        return uri.Host;
+        return uri.Port switch
+        {
+            11434 => new("Ollama", true, "Ollama", CleanupEndpointPreposition.In),
+            1234 => new("LM Studio", true, "LM Studio", CleanupEndpointPreposition.In),
+            _ => new($"a server on this PC (port {uri.Port})", true, "this PC", CleanupEndpointPreposition.OnThisPc),
+        };
     }
 }
