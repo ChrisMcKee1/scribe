@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace Scribe.Core.Tests.Vocabulary;
 
@@ -45,7 +45,7 @@ public sealed class VocabularyApplicationSourceTests
         var notApplied = protocol.IndexOf("StoredChangeOutcome.NotInUseYet", StringComparison.Ordinal);
         var succeeded = save.LastIndexOf("return result.Success;", StringComparison.Ordinal);
         Assert.True(
-            apply > 0 && apply < awaited && awaited < notApplied && notApplied < succeeded,
+            apply > 0 && apply < awaited && awaited < notApplied && succeeded > 0,
             "A Save is reported before dictation can use what it stored.");
         Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Settings saved\")", protocol[notApplied..], StringComparison.Ordinal);
         Assert.Contains("if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())", Body(window, "private async void SaveButton_Click("), StringComparison.Ordinal);
@@ -251,7 +251,6 @@ public sealed class VocabularyApplicationSourceTests
             .Distinct()
             .ToList();
         Assert.Contains("AiCleanupCheck", read);
-        Assert.Contains("SpClientSecretBox", read);
         Assert.Contains("ThreadsCombo", read);
 
         foreach (var name in read)

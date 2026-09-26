@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Scribe.Core.Feedback;
@@ -97,9 +98,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private AppSettings _committedSettings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private ICollectionView? _dictionaryView;
+    private IReadOnlyList<LoadedDictionaryDraftRow> _loadedDictionaryRows = [];
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
+    private IReadOnlyList<LoadedSnippetDraftRow> _loadedSnippetRows = [];
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
+    private IReadOnlyList<LoadedProfileDraftRow> _loadedProfileRows = [];
     private bool _loadingProfile;
     private readonly ObservableCollection<HistoryRow> _historyRows = new();
     private readonly List<HistoryRow> _historyPagedRows = new();
@@ -144,6 +148,36 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
+        if (e.Handled)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            if (_imeComposing)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            _ = HandleEscapeAsync();
+            return;
+        }
+
+        // Ctrl+S saves from anywhere; the Dictionary page's own shortcuts (Find, Add, New word pack, Alt+Left) are
+        // decided with its tabs in TryRunWordPackAccelerator.
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S)
+        {
+            if (SettingsCloseGuard.CanRunAccelerator(SettingsAccelerator.Save, new AcceleratorState(_capturing, _imeComposing, false)))
+            {
+                e.Handled = true;
+                _ = SaveFromAcceleratorAsync();
+            }
+
+            return;
+        }
+
         TryRunWordPackAccelerator(e);
     }
 
@@ -280,6 +314,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             rootContent.SizeChanged += (_, _) => ApplyWordPackLayout();
         }
+        InitializeFooterAndClose();
+        InitializeWindowFit();
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -471,6 +507,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ArgumentNullException.ThrowIfNull(stored);
         _committedSettings = stored.Clone();
         OnCommittedSettingsChanged();
+        ScheduleFooterRefresh();
         try
         {
             UpdateTryDictationPage();
@@ -504,6 +541,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private static DictionaryRow SavedDictionaryRow(DictionaryEntry entry) => new()
+    {
+        Id = entry.Id,
+        Pattern = entry.Pattern,
+        Replacement = entry.Replacement,
+        WholeWord = entry.WholeWord,
+        Enabled = entry.Enabled,
+        Origin = DraftRowOrigin.Saved,
+        LoadedPattern = entry.Pattern,
+        LoadedReplacement = entry.Replacement,
+        LoadedWholeWord = entry.WholeWord,
+        LoadedEnabled = entry.Enabled,
+    };
+
     public IReadOnlyList<DictionaryEntry> PersistLearnedDictionaryEntries(IReadOnlyList<DictionaryEntry> entries)
     {
         if (!_dictionaryLoad.IsLoaded)
@@ -534,14 +585,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var persisted = _dictionary.AddRange(candidates);
         foreach (var entry in persisted)
         {
-            _rows.Add(new DictionaryRow
-            {
-                Id = entry.Id,
-                Pattern = entry.Pattern,
-                Replacement = entry.Replacement,
-                WholeWord = entry.WholeWord,
-                Enabled = entry.Enabled,
-            });
+            var row = SavedDictionaryRow(entry);
+            _rows.Add(row);
+            AdvanceDictionaryBaseline(row);
         }
 
         if (!wasDirty)
@@ -602,14 +648,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (row is null)
         {
             persisted = _dictionary.Add(entry with { Id = 0 });
-            _rows.Add(new DictionaryRow
-            {
-                Id = persisted.Id,
-                Pattern = persisted.Pattern,
-                Replacement = persisted.Replacement,
-                WholeWord = persisted.WholeWord,
-                Enabled = persisted.Enabled,
-            });
+            var added = SavedDictionaryRow(persisted);
+            _rows.Add(added);
+            AdvanceDictionaryBaseline(added);
         }
         else
         {
@@ -630,6 +671,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             row.Replacement = persisted.Replacement;
             row.WholeWord = persisted.WholeWord;
             row.Enabled = persisted.Enabled;
+            row.Origin = DraftRowOrigin.Saved;
+            row.LoadedPattern = persisted.Pattern;
+            row.LoadedReplacement = persisted.Replacement;
+            row.LoadedWholeWord = persisted.WholeWord;
+            row.LoadedEnabled = persisted.Enabled;
+            AdvanceDictionaryBaseline(row);
         }
 
         // A quick add must not turn an otherwise untouched window dirty and start prompting the
@@ -640,6 +687,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         return persisted;
+    }
+
+    // A write that stored this row outside Save (quick add, learning from history) makes it part of what is saved, so its
+    // baseline entry is replaced by what was stored; every other row's baseline stays as it was, whatever else is unsaved.
+    private void AdvanceDictionaryBaseline(DictionaryRow row)
+    {
+        var stored = new LoadedDictionaryDraftRow(row.RowKey, row.LoadedPattern, row.LoadedReplacement, row.LoadedWholeWord, row.LoadedEnabled);
+        _loadedDictionaryRows = [.. _loadedDictionaryRows.Where(loaded => loaded.RowKey != row.RowKey), stored];
     }
 
     /// <summary>
@@ -1876,6 +1931,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         e.Handled = true;
+        if (e.Key == Key.Escape)
+        {
+            CancelCapture();
+            return;
+        }
         ApplyCaptureStep(_capture.Press(HotkeyCapture.VirtualKeyOf(e)));
     }
 
@@ -2129,7 +2189,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Model installation failed", ex.Message);
+            _log.LogWarning("Could not download the speech model ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't download the speech model", UserFacingError.Describe("download the speech model", UserFacingErrorDestination.InternetService, ex).Message);
         }
         finally
         {
@@ -4258,7 +4319,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Restore failed", $"Couldn't restore the frontier prompt: {ex.Message}");
+            _log.LogWarning("Could not restore the frontier prompt ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't restore the frontier prompt", "Couldn't restore the frontier prompt. Try again.");
         }
     }
 
@@ -4275,7 +4337,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Restore failed", $"Couldn't restore the local prompt: {ex.Message}");
+            _log.LogWarning("Could not restore the local prompt ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't restore the local prompt", "Couldn't restore the local prompt. Try again.");
         }
     }
 
@@ -4473,6 +4536,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // A running DispatcherTimer roots this window (and its loaded history rows) in the
         // dispatcher's timer list until the tick fires; stop it so close releases everything now.
         _infoDismissTimer?.Stop();
+        CleanupWindowFit();
 
         // Reads still running off the UI thread finish on their own; these make sure nothing they
         // return is published to the closed window, and cancel the usage computation between steps.
@@ -4507,6 +4571,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private Task<bool> ConfirmRiskyAsync(string title, string content, string confirmText) =>
         ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: true));
+
+    private Task<bool> ConfirmRiskyAsync(string title, string content, string confirmText, string cancelText) =>
+        ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: true, cancelText: cancelText));
 
     private async Task<bool> ShowConfirmationAsync(Wpf.Ui.Controls.MessageBox dialog)
     {
@@ -4738,12 +4805,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
-                ShowInfo("Settings saved.");
+                ShowInfo("Changes saved.");
             }
         }
         finally
         {
             _saveInProgress = false;
+            ScheduleFooterRefresh();
         }
     }
 
@@ -4759,12 +4827,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
+                _closeAccepted = true;
                 Close();
             }
         }
         finally
         {
             _saveInProgress = false;
+            ScheduleFooterRefresh();
         }
     }
 
@@ -4780,6 +4850,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // own message, leaves the window open, and returns false.
     private async Task<bool> TrySaveAsync()
     {
+        var preflight = await PrepareSavePreflightAsync();
+        if (preflight is null)
+        {
+            return false;
+        }
+
         // A Start with Windows change may still be saving its preference; writing the whole
         // document over it now would race it.
         if (_startupApply is { IsCompleted: false } pendingStartup)
@@ -4815,126 +4891,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
         }
 
-        // Commit any in-progress grid edit first so validation sees the latest input.
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-        LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-
-        // Only validate and save the dictionary/snippets when the user actually changed them.
-        // Pre-existing bad data in an untouched section (e.g. a duplicate entry that was loaded
-        // from disk) must never block saving a change made on a different page. A section whose
-        // rows have not loaded yet has no changes by definition and is passed as null.
         var dictionarySignature = DictionarySignature();
         var snippetSignature = SnippetSignature();
-        var dictionaryDirty = _dictionaryLoad.HasChanges(dictionarySignature);
-        var snippetsDirty = _snippetLoad.HasChanges(snippetSignature);
-
-        // Validate the dictionary before touching anything: a duplicate spoken form would violate
-        // the unique index, and the user deserves a pointer to the offending row rather than a
-        // database error after half the settings were applied. Jump to the section that owns the
-        // problem first; the dialog is meaningless while another page is showing.
-        List<DictionaryEntry>? entries = null;
-        DictionaryRow? duplicateRow = null;
-        if (dictionaryDirty)
-        {
-            entries = BuildDictionaryEntries(out duplicateRow);
-        }
-
-        if (duplicateRow is not null)
-        {
-            ShowSection(SectionDictionary);
-            DictionaryGrid.SelectedItem = duplicateRow;
-            DictionaryGrid.ScrollIntoView(duplicateRow);
-            ShowThemedMessage(
-                "Duplicate dictionary entry",
-                $"\"{duplicateRow.Pattern.Trim()}\" appears more than once in your dictionary.\n\n" +
-                "Each spoken word or phrase can only have one replacement. Edit or remove the " +
-                "highlighted row, then save again.");
-            return false;
-        }
-
-        if (!ValidateSnippetAndProfileDraft())
-        {
-            return false;
-        }
-
-        List<Snippet>? snippets = null;
-        IReadOnlyList<SnippetSubmission>? snippetSubmission = null;
-        SnippetRow? duplicateSnippet = null;
-        if (snippetsDirty)
-        {
-            snippets = BuildSnippets(out duplicateSnippet, out var submitted);
-            snippetSubmission = submitted;
-        }
-
-        if (duplicateSnippet is not null)
-        {
-            ShowSection(SectionVoiceSnippets);
-            SnippetList.SelectedItem = duplicateSnippet;
-            SnippetList.ScrollIntoView(duplicateSnippet);
-            ShowThemedMessage(
-                "Duplicate snippet trigger",
-                $"\"{duplicateSnippet.Phrase.Trim()}\" is used as the trigger for more than one snippet.\n\n" +
-                "Each trigger phrase can only expand to one template. Edit or remove the highlighted " +
-                "snippet, then save again.");
-            return false;
-        }
-
-        var standardBinding = _pendingBinding with { Mode = SelectedMode };
-        var dictationOnlyBinding = _pendingDictationOnlyBinding is null
-            ? null
-            : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
-        if (dictationOnlyBinding is not null && SamePhysicalBinding(standardBinding, dictationOnlyBinding))
-        {
-            ShowSection(SectionDictation);
-            ShowThemedMessage(
-                "Hotkey conflict",
-                "The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.");
-            return false;
-        }
-
-        // A custom duration outside its range blocks the Save and focuses its box, rather than being clamped or stored.
-        if (!ValidateDurationChoices())
-        {
-            return false;
-        }
-
-        // A tray change still waiting on a hotkey recording is newer than the switch as shown, so it is what is saved.
+        var entries = preflight.Entries;
+        var snippets = preflight.Snippets;
+        // snippets = BuildSnippets(out duplicateSnippet, out var submitted);
+        var snippetSubmission = preflight.SnippetSubmission;
+        // snippetSubmission = submitted;
+        // var profileSubmission = CaptureProfileSubmission();
+        var profileSubmission = preflight.ProfileSubmission;
+        dictionarySignature = preflight.DictionarySignature;
+        snippetSignature = preflight.SnippetSignature;
         var aiCleanupEnabled = _externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true);
-        var azureValidation = AzureSettingsAccess.ValidateCleanup(
-            enabled: aiCleanupEnabled,
-            usesAzureProvider: SelectedProvider == CleanupProvider.AzureFoundry,
-            signedIn: _azureSignInStatus.IsSignedIn,
-            apiKey: SelectedAzureApiKey,
-            endpoint: AzureEndpointBox.Text,
-            deployment: AzureDeploymentBox.Text,
-            authMode: SelectedAzureAuthMode,
-            tenantId: SpTenantBox.Text,
-            clientId: SpClientIdBox.Text,
-            clientSecret: SpClientSecretBox.Password);
-        if (azureValidation != AzureSettingsAccess.ValidationIssue.None)
-        {
-            ShowSection(SectionAi);
-            var message = azureValidation switch
-            {
-                AzureSettingsAccess.ValidationIssue.AuthenticationRequired when IsAzureApiKeySelected =>
-                    "Enter an API key before enabling Microsoft Foundry cleanup with key authentication.",
-                AzureSettingsAccess.ValidationIssue.AuthenticationRequired =>
-                    "Sign in to Azure, or use an endpoint and API key, before enabling Microsoft Foundry cleanup.",
-                AzureSettingsAccess.ValidationIssue.ServicePrincipalIncomplete =>
-                    "Enter the tenant ID, client ID, and client secret for the service principal, then verify them.",
-                AzureSettingsAccess.ValidationIssue.EndpointRequired =>
-                    "Choose a discovered model or enter the Microsoft Foundry or Azure OpenAI endpoint.",
-                AzureSettingsAccess.ValidationIssue.DeploymentRequired =>
-                    "Choose a discovered model or enter its exact Azure deployment name.",
-                _ => "Complete the Microsoft Foundry configuration before saving.",
-            };
-            _azureStatusMessage = message;
-            ShowThemedMessage("Microsoft Foundry is not ready", message);
-            return false;
-        }
 
         try
         {
+            var standardBinding = _pendingBinding with { Mode = SelectedMode };
+            var dictationOnlyBinding = _pendingDictationOnlyBinding is null
+                ? null
+                : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
+            CopySettings(preflight.Settings, _settings);
+
             // A tray change still waiting on the open list is newer than what the picker shows, so it is what is saved.
             _externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);
 
@@ -4962,7 +4939,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.Profiles = BuildProfiles();
-            var profileSubmission = CaptureProfileSubmission();
             _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
                 ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
@@ -5023,15 +4999,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : localPrompt;
 
+            CopySettings(preflight.Settings, _settings);
             _settings.LaunchOnLogin = StartupPreference.Observed(observedStartup, _settings.LaunchOnLogin);
 
             // With the window's intents for the AI cleanup switch and the microphone, read before Saved() forgets them.
             // Once the save commits, a tray change up to the intent for its own setting is superseded. With no intent for
             // one, its stored value is kept and _settings takes it, so the window shows what is stored rather than a value
             // the settings no longer hold.
-            var intents = new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision);
+            var intents = preflight.Intents;
+
+            // The protocol captures the word pack draft when this call starts. An edit made while the Save waited above
+            // (for Start with Windows, or an earlier save to settle) isn't in what was validated, so this Save stops here
+            // with the edit kept, and the next Save includes it.
+            if (WordPackDraftMovedSincePreflight(preflight))
+            {
+                ShowInfo(WordPackDraftChangedBeforeSave);
+                return false;
+            }
+
             var result = await _wordPackSaveProtocol.SaveAsync(
-                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission));
+                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission, dictionarySubmission: preflight.DictionarySubmission, capturedDraft: preflight.DraftSignature, capturedSections: preflight.DraftCapture));
             if (_closed)
             {
                 return false;
@@ -5059,7 +5046,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not save settings:\n{ex.Message}");
+            _log.LogWarning("Could not save Settings ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't save changes", "Couldn't save changes. Your edits are still here. Try again.");
             return false;
         }
     }
@@ -5112,6 +5100,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.Part("foundryModel").Text(SelectedFoundryModelAlias);
         draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
+        draft.Part("servicePrincipalSecret").Text(SpClientSecretBox.Password);
         draft.Part("profiles").Profiles(BuildProfiles());
         sections.Write(draft.Part("async-sections"), capture);
         draft.Part("rows")
@@ -5176,16 +5165,97 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// Reports the first row whose spoken form duplicates an earlier row (case-insensitive, to
     /// match how the post-processor and AI glossary treat patterns) via <paramref name="duplicate"/>.
     /// </summary>
-    private List<DictionaryEntry> BuildDictionaryEntries(out DictionaryRow? duplicate)
+    private List<DictionaryEntry> BuildDictionaryEntries(IReadOnlyList<DictionaryRow> rows, out IReadOnlyList<DictionarySubmission> submission)
     {
-        var result = DictionaryEntryBuilder.Build(
-            _rows.Select(r => new DictionaryEntryBuilder.Row(
-                r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList());
+        var entries = new List<DictionaryEntry>();
+        var submitted = new List<DictionarySubmission>();
+        foreach (var row in rows)
+        {
+            if (row.Origin == DraftRowOrigin.New && string.IsNullOrWhiteSpace(row.Pattern) && string.IsNullOrWhiteSpace(row.Replacement))
+            {
+                continue;
+            }
 
-        duplicate = result.HasDuplicate ? _rows[result.DuplicateIndex] : null;
-        return result.Entries.ToList();
+            var unchanged = row.Origin == DraftRowOrigin.Saved &&
+                string.Equals((row.Pattern ?? string.Empty).Trim(), (row.LoadedPattern ?? string.Empty).Trim(), StringComparison.Ordinal) &&
+                string.Equals((row.Replacement ?? string.Empty).Trim(), (row.LoadedReplacement ?? string.Empty).Trim(), StringComparison.Ordinal) &&
+                row.WholeWord == row.LoadedWholeWord &&
+                row.Enabled == row.LoadedEnabled;
+            var pattern = unchanged ? row.LoadedPattern ?? string.Empty : (row.Pattern ?? string.Empty).Trim();
+            if (!unchanged && string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            var replacement = unchanged ? row.LoadedReplacement ?? string.Empty : (row.Replacement ?? string.Empty).Trim();
+            var wholeWord = unchanged ? row.LoadedWholeWord : row.WholeWord;
+            var enabled = unchanged ? row.LoadedEnabled : row.Enabled;
+            entries.Add(new DictionaryEntry(row.Id, pattern, replacement, wholeWord, enabled));
+            submitted.Add(new DictionarySubmission(row, pattern, replacement, wholeWord, enabled));
+        }
+
+        submission = submitted;
+        return entries;
     }
 
+    private sealed record DictionarySubmission(DictionaryRow Row, string Pattern, string Replacement, bool WholeWord, bool Enabled);
+
+    private void MarkDictionaryRowsSaved(IReadOnlyList<DictionarySubmission> submission)
+    {
+        foreach (var submitted in submission)
+        {
+            var row = submitted.Row;
+            if (!_rows.Contains(row))
+            {
+                continue;
+            }
+
+            row.Origin = DraftRowOrigin.Saved;
+            row.LoadedPattern = submitted.Pattern;
+            row.LoadedReplacement = submitted.Replacement;
+            row.LoadedWholeWord = submitted.WholeWord;
+            row.LoadedEnabled = submitted.Enabled;
+            if (string.Equals(row.Pattern, submitted.Pattern, StringComparison.Ordinal) &&
+                string.Equals(row.Replacement, submitted.Replacement, StringComparison.Ordinal) &&
+                row.WholeWord == submitted.WholeWord &&
+                row.Enabled == submitted.Enabled)
+            {
+                row.Touched = false;
+            }
+        }
+
+        // What is stored now is the whole submission, rows deleted from the grid while the Save waited included, so the
+        // baseline is built from it and never from the rows still shown: a row deleted meanwhile stays an unsaved deletion.
+        _loadedDictionaryRows = [.. submission.Select(submitted => new LoadedDictionaryDraftRow(
+            submitted.Row.RowKey, submitted.Pattern, submitted.Replacement, submitted.WholeWord, submitted.Enabled))];
+    }
+
+    // Start with Windows applies the moment its switch is flipped and stores its preference itself (StartupPreference), so a
+    // Save never takes it from a draft captured earlier: the live value stays, and Save reconciles it with what Windows says.
+    // The word pack draft moved on after the preflight captured it: edited, or replaced. The first load arriving during the
+    // wait (no workspace at the preflight, a clean one now) is not an edit, so it doesn't stop the Save.
+    private bool WordPackDraftMovedSincePreflight(SavePreflightInput preflight)
+    {
+        var current = _wordPackWorkspace;
+        if (preflight.Workspace is null)
+        {
+            return current is not null && (current.EditRevision != 0 || current.HasUnsavedChanges);
+        }
+
+        return !ReferenceEquals(current, preflight.Workspace) || current.EditRevision != preflight.WorkspaceRevision;
+    }
+
+    private static void CopySettings(AppSettings source, AppSettings target)
+    {
+        var copy = source.Clone();
+        foreach (var property in typeof(AppSettings).GetProperties().Where(property =>
+            property.CanRead && property.CanWrite && property.Name != nameof(AppSettings.LaunchOnLogin)))
+        {
+            property.SetValue(target, property.GetValue(copy));
+        }
+    }
+
+    // The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.
     // Voice snippets and app profiles live in SettingsWindow.Snippets.cs and SettingsWindow.Profiles.cs.
 
     // --- Recording indicator position picker -----------------------------------------------------------
@@ -5233,7 +5303,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private static int ClampNumberBox(double? value, int fallback, int max) =>
         value is null ? Math.Clamp(fallback, 0, max) : Math.Clamp((int)Math.Round(value.Value), 0, max);
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
+    private async void CloseButton_Click(object sender, RoutedEventArgs e) => await RequestCloseAsync(CloseTrigger.CancelButton);
 
     // These records back ComboBoxes that use DisplayMemberPath, which sets what is drawn but not
     // what is announced: without a ToString override a screen reader reads the record's default
@@ -5303,6 +5373,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         private string _coverageLibraryReplacement = string.Empty;
 
         public long Id { get; set; }
+        public DraftRowOrigin Origin { get; set; } = DraftRowOrigin.New;
+        public bool Touched { get; set; }
+        public string? LoadedPattern { get; set; }
+        public string? LoadedReplacement { get; set; }
+        public bool LoadedWholeWord { get; set; } = true;
+        public bool LoadedEnabled { get; set; } = true;
+        public string RowKey => Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
 
         public string Pattern
         {
@@ -5389,6 +5466,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             field = value;
+            if (name is nameof(Pattern) or nameof(Replacement) or nameof(WholeWord) or nameof(Enabled))
+            {
+                Touched = true;
+            }
+
             OnPropertyChanged(name);
             if (name == nameof(Pattern))
             {

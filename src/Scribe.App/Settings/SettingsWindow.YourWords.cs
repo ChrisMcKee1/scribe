@@ -100,6 +100,11 @@ public partial class SettingsWindow
                     Replacement = entry.Replacement,
                     WholeWord = entry.WholeWord,
                     Enabled = entry.Enabled,
+                    Origin = DraftRowOrigin.Saved,
+                    LoadedPattern = entry.Pattern,
+                    LoadedReplacement = entry.Replacement,
+                    LoadedWholeWord = entry.WholeWord,
+                    LoadedEnabled = entry.Enabled,
                 };
                 row.PropertyChanged += DictionaryRow_PropertyChanged;
                 _rows.Add(row);
@@ -113,6 +118,7 @@ public partial class SettingsWindow
             DictionaryGrid.ItemsSource = _dictionaryView;
         }
 
+        _loadedDictionaryRows = LoadedDictionaryDraftRowsFromRows();
         _dictionaryLoad.Publish(ticket, DictionarySignature());
         SetDictionaryEditable(true);
         RefreshDictionaryStatus();
@@ -617,7 +623,8 @@ public partial class SettingsWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not read your history:\n{ex.Message}");
+                _log.LogWarning("Could not read history for AI suggestions ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't read history", UserFacingError.Describe("read your history", UserFacingErrorDestination.Database, ex).Message);
             }
 
             return;
@@ -682,7 +689,8 @@ public partial class SettingsWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not get AI suggestions:\n{ex.Message}");
+                _log.LogWarning("Could not get AI suggestions ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't get AI suggestions", UserFacingError.Describe("get AI suggestions", UserFacingErrorDestination.InternetService, ex).Message);
             }
         }
     }
@@ -698,7 +706,8 @@ public partial class SettingsWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+                _log.LogWarning("Could not scan history for dictionary cleanup ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't scan history", UserFacingError.Describe("scan your history", UserFacingErrorDestination.Database, ex).Message);
             }
 
             return;
@@ -797,7 +806,8 @@ public partial class SettingsWindow
         {
             if (!_closed)
             {
-                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+                _log.LogWarning("Could not scan history for dictionary cleanup ({Failure}).", FailureShape.Describe(ex));
+                ShowThemedMessage("Couldn't scan history", UserFacingError.Describe("scan your history", UserFacingErrorDestination.Database, ex).Message);
             }
 
             return;
@@ -919,7 +929,8 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not save the template:\n{ex.Message}");
+            _log.LogWarning("Could not save the dictionary template ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't save the template", UserFacingError.Describe("save the template", UserFacingErrorDestination.File, ex).Message);
         }
     }
 
@@ -948,7 +959,8 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not export the dictionary:\n{ex.Message}");
+            _log.LogWarning("Could not export the dictionary ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't export the dictionary", UserFacingError.Describe("export the dictionary", UserFacingErrorDestination.File, ex).Message);
         }
     }
 
@@ -973,7 +985,8 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not read that file:\n{ex.Message}");
+            _log.LogWarning("Could not read the dictionary import file ({Failure}).", FailureShape.Describe(ex));
+            ShowThemedMessage("Couldn't read that file", UserFacingError.Describe("read that file", UserFacingErrorDestination.File, ex).Message);
             return;
         }
 

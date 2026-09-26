@@ -8,7 +8,7 @@
         xmlns:settings="clr-namespace:Scribe.App.Settings"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
-        WindowStartupLocation="CenterScreen"
+        WindowStartupLocation="Manual"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
         WindowCornerPreference="Round"
@@ -672,17 +672,17 @@
                 </ListBox.GroupStyle>
             </ListBox>
 
-            <!-- Right: the selected section + a persistent Save/Cancel footer -->
+            <!-- Right: the selected section + a persistent Save footer -->
             <Grid Grid.Column="1" Margin="12,4,24,16">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Shared inline notification; any section can raise it via ShowInfo(...). Floats over
-                     the content at the top so it never shifts the section layout. -->
-                <ui:InfoBar x:Name="InfoNotice" Grid.Row="0" Panel.ZIndex="1"
-                            VerticalAlignment="Top" Margin="2,4,2,0"
+                <!-- Shared floating notification; any section can raise it via ShowInfo(...). It sits above the footer. -->
+                <ui:InfoBar x:Name="InfoNotice" Grid.Row="0" Panel.ZIndex="2"
+                            VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                            MaxWidth="480" Margin="0,0,8,8"
                             IsClosable="True" IsOpen="False">
                     <!-- WPF-UI 4.3.0 draws the close button as an icon-only Wpf.Ui Button in the bar's template
                          (CloseButton in InfoBar.xaml), the only one there, so it is named from here. -->
@@ -694,6 +694,11 @@
                 </ui:InfoBar>
 
                 <Grid Grid.Row="0">
+                    <ui:InfoBar x:Name="RecoveredSettingsNotice" Panel.ZIndex="1"
+                                VerticalAlignment="Top" Margin="2,4,14,0"
+                                IsClosable="False" IsOpen="False" Severity="Warning"
+                                Title="Using default settings"
+                                Message="Scribe couldn't use your saved settings, so it's using defaults. Review them and choose Save to keep them."/>
 
                     <!-- ============================ General ============================ -->
                     <Grid x:Name="SectionDictation">
@@ -784,6 +789,14 @@
                                         <TextBlock x:Name="DictationOnlyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Optional. Types exactly what Scribe hears, with your dictionary and snippets."/>
                                         <TextBlock x:Name="DictationOnlyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
+                                        <Grid x:Name="ShortcutValidation" Margin="0,8,0,0" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon x:Name="ShortcutValidationIcon" Grid.Column="0" Symbol="ErrorCircle16" Width="16" Height="16" Margin="0,1,6,0" VerticalAlignment="Top"/>
+                                            <TextBlock x:Name="ShortcutValidationText" Grid.Column="1" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                        </Grid>
                                         <!-- Text comes from HotkeyCaptureSession.MouseButtonsHint: which buttons, how to set one,
                                              and what binding one costs in other apps. -->
                                         <TextBlock x:Name="MouseButtonsHintText" Style="{StaticResource CardDescription}"
@@ -1572,7 +1585,11 @@
                                                     TextChanged="DictionarySearchBox_TextChanged"/>
                                     </Grid>
                                     <Grid Grid.Row="2">
-                                        <ui:Card x:Name="DictionaryGridCard" Padding="0" Style="{StaticResource PanelCard}">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <ui:Card x:Name="DictionaryGridCard" Grid.Row="0" Padding="0" Style="{StaticResource PanelCard}">
                                             <DataGrid x:Name="DictionaryGrid"
                                                       AutoGenerateColumns="False"
                                                       CanUserAddRows="False" CanUserDeleteRows="True"
@@ -1640,7 +1657,7 @@
                                                 </DataGrid.Columns>
                                             </DataGrid>
                                         </ui:Card>
-                                        <ui:Card x:Name="DictionaryStateCard" Style="{StaticResource PanelCard}" Padding="24" Visibility="Collapsed">
+                                        <ui:Card x:Name="DictionaryStateCard" Grid.Row="0" Style="{StaticResource PanelCard}" Padding="24" Visibility="Collapsed">
                                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440">
                                                 <TextBlock x:Name="DictionaryStateText" Style="{StaticResource CardTitle}" TextAlignment="Center" TextWrapping="Wrap"/>
                                                 <StackPanel x:Name="DictionaryStateActions" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
@@ -1651,6 +1668,14 @@
                                                 </StackPanel>
                                             </StackPanel>
                                         </ui:Card>
+                                        <Grid x:Name="DictionaryValidation" Grid.Row="1" Margin="12,8,12,0" Visibility="Collapsed" AutomationProperties.LiveSetting="Polite">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon x:Name="DictionaryValidationIcon" Grid.Column="0" Symbol="ErrorCircle16" Width="16" Height="16" Margin="0,1,6,0" VerticalAlignment="Top"/>
+                                            <TextBlock x:Name="DictionaryValidationText" Grid.Column="1" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                        </Grid>
                                     </Grid>
                                     <StackPanel Grid.Row="3" Margin="2,8,2,0">
                                         <TextBlock x:Name="DictionaryOnCountText" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/>
@@ -2833,16 +2858,30 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Border Height="1" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/>
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-                    <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary"
-                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click"
-                               ToolTip="Save your changes and keep this window open."/>
-                    <ui:Button x:Name="SaveCloseButton" Content="Save and close"
-                               MinWidth="120" Margin="0,0,8,0" Click="SaveCloseButton_Click"
-                               ToolTip="Save your changes and close the window."/>
-                    <ui:Button x:Name="CancelButton" Content="Cancel"
-                               MinWidth="96" Click="CancelButton_Click" IsCancel="True"/>
-                    </StackPanel>
+                    <Grid Grid.Row="1" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Ellipse x:Name="FooterDirtyDot" Width="8" Height="8" Margin="0,0,8,0"
+                                     Fill="{DynamicResource SystemFillColorAttentionBrush}" Visibility="Collapsed"
+                                     IsHitTestVisible="False"/>
+                            <TextBlock x:Name="FooterStatusText" Style="{StaticResource CardDescription}"
+                                       VerticalAlignment="Center" Text="All changes saved"
+                                       AutomationProperties.LiveSetting="Polite"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <ui:Button x:Name="SaveButton" Content="_Save" Appearance="Primary"
+                                       MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click"
+                                       ToolTip="Save your changes and keep this window open."/>
+                            <ui:Button x:Name="SaveCloseButton" Content="Save _and close"
+                                       MinWidth="120" Margin="0,0,8,0" Click="SaveCloseButton_Click"
+                                       ToolTip="Save your changes and close the window."/>
+                            <ui:Button x:Name="CloseButton" Content="_Close"
+                                       MinWidth="96" Click="CloseButton_Click"/>
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Grid>
         </Grid>

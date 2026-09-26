@@ -24,7 +24,7 @@ public sealed class ProfileSubmissionSourceTests
         Assert.Contains("profileSubmission: profileSubmission", save, StringComparison.Ordinal);
 
         var request = Body(window, "private WordPackSaveProtocolRequest BuildWordPackSaveRequest(");
-        Assert.Contains("MarkProfileRowsSaved(profileSubmission ?? []);", request, StringComparison.Ordinal);
+        Assert.Contains("MarkProfileRowsSaved(profileSubmission);", request, StringComparison.Ordinal);
 
         var mark = Body(profiles, "private void MarkProfileRowsSaved(");
         foreach (var field in new[] { "Name", "Processes", "WritingStyle", "NewlineHandling" })

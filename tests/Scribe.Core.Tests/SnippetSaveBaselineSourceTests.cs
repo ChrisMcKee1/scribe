@@ -18,7 +18,7 @@ public sealed class SnippetSaveBaselineSourceTests
         var captured = window.IndexOf("snippetSubmission = submitted;", StringComparison.Ordinal);
         Assert.True(built >= 0 && captured > built, "The Save does not take its snippet submission from the builder.");
         Assert.Contains(
-            "_snippetLoad.MarkSaved(snippetSignature);\r\n                MarkSnippetRowsSaved(snippetSubmission ?? []);",
+            "_snippetLoad.MarkSaved(snippetSignature);\r\n                MarkSnippetRowsSaved(snippetSubmission);",
             window.ReplaceLineEndings("\r\n"),
             StringComparison.Ordinal);
 

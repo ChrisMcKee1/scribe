@@ -78,7 +78,7 @@ public partial class SettingsWindow
         // Find and Add work on both Dictionary tabs, each in its own list; a new word pack only on the Word packs tab.
         var onDictionary = SectionDictionary.Visibility == Visibility.Visible;
         var onWordPacks = onDictionary && DictionaryTabs.SelectedItem == WordPacksTab;
-        if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, ImeComposing: false, onDictionary)) ||
+        if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, _imeComposing, onDictionary)) ||
             (accelerator.Value == SettingsAccelerator.NewLibrary && !onWordPacks))
         {
             return;
@@ -1649,7 +1649,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             return LibraryComposition.Preview(
                 _wordPackWorkspace.Draft,
                 _wordPackCatalog,
-                BuildDictionaryEntries(out _),
+                BuildDictionaryEntries(_rows.ToList(), out _),
                 GlossaryBudget.For(_settings.AiCleanupPromptStyle, _settings.AiCleanupProvider));
         }
         catch (Exception)
@@ -2017,11 +2017,14 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         StartupRegistrationStatus? observedStartup = null,
         bool useVocabularyReload = false,
         IReadOnlyList<SnippetSubmission>? snippetSubmission = null,
-        IReadOnlyList<ProfileSubmission>? profileSubmission = null)
+        IReadOnlyList<ProfileSubmission>? profileSubmission = null,
+        IReadOnlyList<DictionarySubmission>? dictionarySubmission = null,
+        string? capturedDraft = null,
+        SaveDraftSections.Capture? capturedSections = null)
     {
         var savedAiIntent = intents?.AiCleanup ?? 0;
         var savedMicrophoneIntent = intents?.Microphone ?? 0;
-        SaveDraftSections.Capture? savedSections = null;
+        var savedSections = capturedSections;
         return new WordPackSaveProtocolRequest(
             _wordPackWorkspace,
             payload => _settingsRepository.SaveBundle(
@@ -2031,12 +2034,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
                 intents ?? new ExternalIntents(0, 0),
                 payload),
             useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings),
-            () =>
-            {
-                var sections = BuildSaveDraftSections();
-                savedSections = sections.CaptureNow();
-                return SaveDraftSignature(sections, savedSections);
-            },
+            () => capturedDraft ?? SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             () => SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             Validate: null,
             OnSettingsCommitted,
@@ -2079,18 +2077,22 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
                 ShowMicrophones(MicrophoneSelection.From(_settings));
             }
 
-            if (dictionarySignature is not null && entries is not null)
+            if (dictionarySignature is not null && entries is not null && dictionarySubmission is not null)
             {
                 _dictionaryLoad.MarkSaved(dictionarySignature);
+                MarkDictionaryRowsSaved(dictionarySubmission);
             }
 
-            if (snippetSignature is not null && snippets is not null)
+            if (snippetSignature is not null && snippets is not null && snippetSubmission is not null)
             {
                 _snippetLoad.MarkSaved(snippetSignature);
-                MarkSnippetRowsSaved(snippetSubmission ?? []);
+                MarkSnippetRowsSaved(snippetSubmission);
             }
 
-            MarkProfileRowsSaved(profileSubmission ?? []);
+            if (profileSubmission is not null)
+            {
+                MarkProfileRowsSaved(profileSubmission);
+            }
 
             if (observedStartup is not null)
             {
