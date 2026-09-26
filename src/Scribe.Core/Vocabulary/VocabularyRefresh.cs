@@ -46,12 +46,20 @@ public sealed record VocabularyRefresh(VocabularyRefreshOutcome Outcome, Vocabul
 /// <summary>
 /// What the shell says when a change was stored but dictation cannot use it yet
 /// (<see cref="VocabularyRefreshOutcome.NotApplied"/>, <see cref="VocabularyRefreshOutcome.TimedOut"/>, or
-/// <see cref="VocabularyRefreshOutcome.Stopped"/>). Every place that reports a stored vocabulary change (a Settings save,
-/// quick add, learning from history, the Usage page's Add) reports it as in effect only after awaiting
-/// <see cref="VocabularyRefreshOutcome.Applied"/>, and otherwise with this.
+/// <see cref="VocabularyRefreshOutcome.Stopped"/>), and when a Settings save's draft moved on while it waited. Every place
+/// that reports a stored vocabulary change (a Settings save, quick add, learning from history, the Usage page's Add)
+/// reports it as in effect only after awaiting <see cref="VocabularyRefreshOutcome.Applied"/>, and otherwise with this.
 /// </summary>
 public static class VocabularyNotice
 {
+    /// <summary>
+    /// What a Settings save says when the window's draft moved on while it waited for what it stored to come into use
+    /// (<see cref="StoredChangeOutcome.ChangedWhileSaving"/>): that change is not in what was stored, so the window stays
+    /// open with it rather than close over it, and the next save stores it.
+    /// </summary>
+    public const string SettingsChangedWhileSaving =
+        "Settings saved, but something in this window changed while saving. Save again to keep that change.";
+
     /// <summary>
     /// <paramref name="saved"/>, what was stored as a clause without a closing stop (such as "Settings saved"), then that
     /// dictation is not using the change yet and keeps its previous vocabulary. True whichever way the build fell short: it

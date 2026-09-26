@@ -40,8 +40,8 @@ public sealed class VocabularyApplicationSourceTests
         // said to have saved the settings without them applying yet, and the window stays open with that.
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
         var apply = save.IndexOf("var applying = _applySettings(_settings);", StringComparison.Ordinal);
-        var awaited = save.IndexOf("var applied = await applying;", StringComparison.Ordinal);
-        var notApplied = save.IndexOf("if (!applied.Applied)", StringComparison.Ordinal);
+        var awaited = save.IndexOf("var outcome = await acknowledgement.CompleteAsync();", StringComparison.Ordinal);
+        var notApplied = save.IndexOf("if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.NotInUseYet)", StringComparison.Ordinal);
         var succeeded = save.LastIndexOf("return true;", StringComparison.Ordinal);
         Assert.True(
             apply > 0 && apply < awaited && awaited < notApplied && notApplied < succeeded,
@@ -122,6 +122,148 @@ public sealed class VocabularyApplicationSourceTests
     }
 
     [Fact]
+    public void A_save_whose_draft_changed_while_it_waited_neither_reports_success_nor_closes()
+    {
+        // Round 3, A6: the window stays editable while its Save awaits the generation for what it stored, so an edit made
+        // then is not in what was stored. The Save takes its draft when the wait starts, compares it once the answer is
+        // in (StoredChangeAcknowledgement, tested in Core), and on a change says so and returns false, which keeps Save and
+        // close from closing over the edit. It never saves the edit itself.
+        var window = Read("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
+        var save = Body(window, "private async Task<bool> TrySaveAsync()");
+
+        // The draft is taken with nothing since the controls were read that could let an edit in: no await from the first
+        // control read, through the store and the application, to the watch.
+        var read = save.IndexOf("_externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);", StringComparison.Ordinal);
+        var store = save.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
+        var apply = save.IndexOf("var applying = _applySettings(_settings);", StringComparison.Ordinal);
+        var watch = save.IndexOf(
+            "var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);",
+            StringComparison.Ordinal);
+        var awaited = save.IndexOf("var outcome = await acknowledgement.CompleteAsync();", StringComparison.Ordinal);
+        Assert.True(
+            read > 0 && read < store && store < apply && apply < watch && watch < awaited,
+            "The Save does not take its draft between storing it and awaiting its generation.");
+        Assert.DoesNotMatch(@"\bawait\b", save[read..watch]);
+
+        // A change while waiting is reported and the Save returns false; only an unchanged draft in use returns true.
+        var tail = save[awaited..];
+        var changed = tail.IndexOf("if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.ChangedWhileSaving)", StringComparison.Ordinal);
+        var succeeded = tail.IndexOf("return true;", StringComparison.Ordinal);
+        Assert.True(changed > 0 && succeeded > changed, "A Save whose draft changed while it waited can still report success.");
+        var changedBranch = tail[changed..succeeded];
+        Assert.Contains("Scribe.Core.Vocabulary.VocabularyNotice.SettingsChangedWhileSaving", changedBranch, StringComparison.Ordinal);
+        Assert.Contains("return false;", changedBranch, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(tail, Regex.Escape("return true;")));
+
+        // Nothing after the wait stores anything: the later edit waits for the user's next Save.
+        Assert.DoesNotContain("_settingsRepository.", tail, StringComparison.Ordinal);
+        Assert.DoesNotContain("_applySettings(", tail, StringComparison.Ordinal);
+
+        // Save and close closes only on a Save that returned true.
+        var saveClose = Body(window, "private async void SaveCloseButton_Click(");
+        var closes = saveClose.IndexOf("Close();", StringComparison.Ordinal);
+        var guarded = saveClose.IndexOf("if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())", StringComparison.Ordinal);
+        Assert.True(guarded > 0 && closes > guarded, "Save and close can close without a Save that returned true.");
+        Assert.Single(Regex.Matches(saveClose, Regex.Escape("Close();")));
+
+        // The draft is everything a Save stores: every editor on the pages whose controls it reads, the pending hotkeys, the
+        // rows by the signatures the Save marks as saved, and a grid row edit still in progress; hashed, never logged.
+        var draft = Body(window, "private string SaveDraftSignature()");
+        foreach (var part in new[]
+        {
+            "new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi }",
+            "AppendEditorValues(page, draft);",
+            ".Append(_pendingBinding)",
+            ".Append(_pendingDictationOnlyBinding)",
+            ".Append(DictionarySignature())",
+            ".Append(SnippetSignature())",
+            ".Append(LibrarySignature())",
+            "_profileRows.Select(row => $\"{row.Name}|{row.Processes}|{row.WritingStyle}|{row.NewlineHandling}\")",
+            ".Append(RowEditInProgress(DictionaryGrid)).Append(RowEditInProgress(LibraryGrid))",
+            "System.Security.Cryptography.SHA256.HashData(",
+        })
+        {
+            Assert.Contains(part, draft, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("_log.", draft, StringComparison.Ordinal);
+        var editors = Body(window, "private static void AppendEditorValues(DependencyObject node, StringBuilder draft)");
+        foreach (var part in new[]
+        {
+            "case DataGrid:",
+            "case Wpf.Ui.Controls.PasswordBox secret:",
+            "case Wpf.Ui.Controls.NumberBox number:",
+            ".Append(number.Text).Append('|').Append(number.Value)",
+            "case TextBox text:",
+            "case PasswordBox secret:",
+            ".Append(secret.Password)",
+            "case System.Windows.Controls.Primitives.ToggleButton toggle:",
+            "case ComboBox combo:",
+            ".Append(combo.SelectedIndex).Append('|').Append(combo.Text)",
+            "case Slider slider:",
+            "LogicalTreeHelper.GetChildren(node)",
+        })
+        {
+            Assert.Contains(part, editors, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "grid.Items is IEditableCollectionView rows && (rows.IsEditingItem || rows.IsAddingNew)",
+            window,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_control_a_save_reads_is_one_the_save_draft_compares()
+    {
+        // The draft reads the editors of four pages by walking their logical trees, and the grids and lists by their row
+        // signatures. A control a Save reads anywhere else would be missing from it, and an edit to it made while the
+        // Save waited would be closed over. So every named control the Save reads, in its body or through the properties
+        // it reads the pickers by, is declared inside one of the four pages, outside any template, resource, tooltip or
+        // menu (which are not logical children), or is one of the lists the signatures cover.
+        var window = Read("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
+        var xaml = System.Xml.Linq.XDocument.Load(Path.Combine(Root(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        System.Xml.Linq.XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var named = xaml.Descendants()
+            .Where(element => element.Attribute(x + "Name") is not null)
+            .ToLookup(element => element.Attribute(x + "Name")!.Value);
+
+        var pages = new[] { "SectionGeneral", "SectionDictation", "SectionOverlay", "SectionAi" };
+        var rowLists = new[] { "DictionaryGrid", "LibraryGrid", "SnippetList", "ProfileList" };
+        var read = Regex.Matches(Body(window, "private async Task<bool> TrySaveAsync()"), @"\b[A-Z]\w*\b")
+            .Select(match => match.Value)
+            .Where(named.Contains)
+            .Concat(["DeviceCombo", "ModeCombo", "DictationOnlyModeCombo", "AiProviderCombo", "AiPromptStyleCombo", "AzureAuthModeBox", "AzureApiKeyBox", "AzureSubscriptionBox", "OverlayPositionGrid"])
+            .Distinct()
+            .ToList();
+        Assert.Contains("AiCleanupCheck", read);
+        Assert.Contains("SpClientSecretBox", read);
+        Assert.Contains("ThreadsSlider", read);
+
+        foreach (var name in read)
+        {
+            // The pages the Save shows on a validation problem, and the status line it writes, are not values it stores.
+            if (rowLists.Contains(name) || name.StartsWith("Section", StringComparison.Ordinal) || name == "AzureStatusText")
+            {
+                continue;
+            }
+
+            var declared = Assert.Single(named[name]);
+            var ancestors = declared.Ancestors().ToList();
+            var page = ancestors.FirstOrDefault(element => pages.Contains(element.Attribute(x + "Name")?.Value));
+            Assert.True(page is not null, $"The Save reads {name}, which is on no page the draft compares.");
+            var between = ancestors.TakeWhile(element => element != page).Select(element => element.Name.LocalName).ToList();
+            Assert.DoesNotContain(between, element =>
+                element.Contains("Template", StringComparison.Ordinal) ||
+                element.Contains("Resources", StringComparison.Ordinal) ||
+                element.Contains("ToolTip", StringComparison.Ordinal) ||
+                element.Contains("ContextMenu", StringComparison.Ordinal) ||
+                element.Contains("Flyout", StringComparison.Ordinal) ||
+                element.Contains("Popup", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void A_start_that_gives_up_on_the_first_generation_ends_through_AbandonStartup_with_the_failure_notice()
     {
         // Round 3, A5: the first generation's wait is bounded (VocabularyPublisher.StartupDeadline), and what the publisher
@@ -185,7 +327,9 @@ public sealed class VocabularyApplicationSourceTests
         return source[start..end];
     }
 
-    private static string Read(params string[] parts)
+    private static string Read(params string[] parts) => File.ReadAllText(Path.Combine([Root(), .. parts]));
+
+    private static string Root()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
@@ -194,6 +338,6 @@ public sealed class VocabularyApplicationSourceTests
         }
 
         Assert.NotNull(root);
-        return File.ReadAllText(Path.Combine([root.FullName, .. parts]));
+        return root.FullName;
     }
 }

@@ -4869,9 +4869,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // Validates, persists and applies the settings. Returns true on success; on a validation problem, a save error, or a
-    // save whose vocabulary dictation could not load yet, it surfaces its own message, leaves the window open, and returns
-    // false.
+    // Validates, persists and applies the settings. Returns true on success; on a validation problem, a save error, a save
+    // whose vocabulary dictation could not load yet, or a save during which the window's draft changed, it surfaces its
+    // own message, leaves the window open, and returns false.
     private async Task<bool> TrySaveAsync()
     {
         // A Start with Windows change may still be saving its preference; writing the whole
@@ -5150,18 +5150,30 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             // Reported as saved only once dictation can use what was stored: the dictionary and libraries reach it in the
             // next vocabulary generation, built off this thread and awaited here, never waited on. A build that could not
-            // read the dictionary leaves the settings saved and dictation on its previous vocabulary, which the window
-            // says, staying open.
-            var applied = await applying;
+            // read the dictionary, or was not built by its deadline, leaves the settings saved and dictation on its
+            // previous vocabulary, which the window says, staying open. The window stays editable meanwhile, so its draft
+            // is taken now, when nothing since the controls were read could have taken an edit, and compared once the
+            // answer is in: an edit made while waiting is not in what was stored, so the Save is not reported complete and
+            // Save and close does not close over it. That edit stays in the window, unsaved, for the next Save.
+            var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);
+            var outcome = await acknowledgement.CompleteAsync();
             if (_closed)
             {
                 return false;
             }
 
-            if (!applied.Applied)
+            if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.NotInUseYet)
             {
                 ShowInfo(
                     Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied("Settings saved"),
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                return false;
+            }
+
+            if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.ChangedWhileSaving)
+            {
+                ShowInfo(
+                    Scribe.Core.Vocabulary.VocabularyNotice.SettingsChangedWhileSaving,
                     Wpf.Ui.Controls.InfoBarSeverity.Warning);
                 return false;
             }
@@ -5191,6 +5203,70 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
     }
+
+    // The window's draft as a Save stores it, for the Save's check that nothing changed while it waited for its vocabulary
+    // generation: every editor on the pages whose controls a Save reads, the pending hotkeys, the dictionary, snippet,
+    // library and profile rows (by the signatures the Save marks as saved), and whether a grid row edit is in progress.
+    // Hashed, so the copy the check keeps holds no key or secret; compared in memory only, never logged.
+    private string SaveDraftSignature()
+    {
+        var draft = new StringBuilder();
+        foreach (var page in new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi })
+        {
+            AppendEditorValues(page, draft);
+        }
+
+        draft.Append('\u001e').Append(_pendingBinding).Append('\u001f').Append(_pendingDictationOnlyBinding);
+        draft.Append('\u001e').Append(DictionarySignature());
+        draft.Append('\u001e').Append(SnippetSignature());
+        draft.Append('\u001e').Append(LibrarySignature());
+        draft.Append('\u001e').AppendJoin(
+            '\u001f', _profileRows.Select(row => $"{row.Name}|{row.Processes}|{row.WritingStyle}|{row.NewlineHandling}"));
+        draft.Append('\u001e').Append(RowEditInProgress(DictionaryGrid)).Append(RowEditInProgress(LibraryGrid));
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(draft.ToString())));
+    }
+
+    // Every editor's value in the page's logical tree, whether shown or not; a grid's rows go by their signatures instead.
+    private static void AppendEditorValues(DependencyObject node, StringBuilder draft)
+    {
+        switch (node)
+        {
+            case DataGrid:
+                return;
+            case Wpf.Ui.Controls.PasswordBox secret:
+                draft.Append('\u001f').Append(secret.Password);
+                break;
+            case Wpf.Ui.Controls.NumberBox number:
+                draft.Append('\u001f').Append(number.Text).Append('|').Append(number.Value);
+                break;
+            case TextBox text:
+                draft.Append('\u001f').Append(text.Text);
+                break;
+            case PasswordBox secret:
+                draft.Append('\u001f').Append(secret.Password);
+                break;
+            case System.Windows.Controls.Primitives.ToggleButton toggle:
+                draft.Append('\u001f').Append(toggle.IsChecked);
+                break;
+            case ComboBox combo:
+                draft.Append('\u001f').Append(combo.SelectedIndex).Append('|').Append(combo.Text);
+                break;
+            case Slider slider:
+                draft.Append('\u001f').Append(slider.Value);
+                break;
+        }
+
+        foreach (var child in LogicalTreeHelper.GetChildren(node))
+        {
+            if (child is DependencyObject element)
+            {
+                AppendEditorValues(element, draft);
+            }
+        }
+    }
+
+    private static bool RowEditInProgress(DataGrid grid) =>
+        grid.Items is IEditableCollectionView rows && (rows.IsEditingItem || rows.IsAddingNew);
 
     /// <summary>
     /// Builds the desired dictionary state from the grid rows, skipping blank placeholder rows.
