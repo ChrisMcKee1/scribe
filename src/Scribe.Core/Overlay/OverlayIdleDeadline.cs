@@ -22,6 +22,12 @@ namespace Scribe.Core.Overlay;
 /// helper through the normal path.
 /// </para>
 /// <para>Deterministic: callers pass a monotonic millisecond clock reading; nothing here reads a clock.</para>
+/// <para>
+/// A pill that hides itself (a dictation's outcome) keeps the helper in use until it has hidden, whatever the latest
+/// state asks: the idle deadline never falls before it, and a release request that arrives while it is on screen waits
+/// for it (<see cref="OverlayReleaseVerdict.Wait"/>). Otherwise a pause could end the helper under the "Typed" or
+/// "Nothing typed" of the very dictation it stopped, before anyone could read it.
+/// </para>
 /// </remarks>
 internal sealed class OverlayIdleDeadline
 {
@@ -29,6 +35,7 @@ internal sealed class OverlayIdleDeadline
     private long _armedStamp;
     private long _lastActivityMs;
     private bool _armed;
+    private long _shownUntilMs = long.MinValue;
 
     /// <summary>
     /// Stamps a command that is about to be queued. Thread-safe. Call it before the enqueue, so a commit
@@ -65,9 +72,28 @@ internal sealed class OverlayIdleDeadline
     /// <summary>
     /// Consumer only. When the deadline falls due for an idle period of <paramref name="idleMs"/>, or
     /// <c>null</c> when nothing is armed or the period is zero or less (never suspend). The period is
-    /// passed on every call so a changed setting also applies to a deadline that is already armed.
+    /// passed on every call so a changed setting also applies to a deadline that is already armed. Never
+    /// before an outcome on screen has hidden.
     /// </summary>
-    public long? DueAtMs(long idleMs) => _armed && idleMs > 0 ? _lastActivityMs + idleMs : null;
+    public long? DueAtMs(long idleMs) => _armed && idleMs > 0 ? Math.Max(_lastActivityMs + idleMs, _shownUntilMs) : null;
+
+    /// <summary>
+    /// Consumer only. A pill that hides itself (an outcome) went on screen and stays there until
+    /// <paramref name="untilMs"/>, its fade out included. Keeps the later of two such times.
+    /// </summary>
+    public void NoteShownUntil(long untilMs)
+    {
+        if (untilMs > _shownUntilMs)
+        {
+            _shownUntilMs = untilMs;
+        }
+    }
+
+    /// <summary>Consumer only. The helper is gone, ended on purpose or lost, so nothing it showed is still on screen.</summary>
+    public void ClearShown() => _shownUntilMs = long.MinValue;
+
+    /// <summary>Consumer only. When the outcome on screen at <paramref name="nowMs"/> hides, or <c>null</c> when none is.</summary>
+    public long? ShownUntilMs(long nowMs) => nowMs < _shownUntilMs ? _shownUntilMs : null;
 
     /// <summary>
     /// Consumer only, at the commit point immediately before the helper is ended. Returns <c>true</c>
@@ -107,23 +133,41 @@ internal sealed class OverlayIdleDeadline
 
     /// <summary>
     /// Consumer only. The immediate form of <see cref="TryCommitSuspend"/> for a release request stamped
-    /// <paramref name="stamp"/> (dictation was paused): the helper may be ended now when no command was
-    /// stamped after the request and the latest state does not keep the pill on screen. That is the same
-    /// validation the idle commit runs, so a request can never end the helper of a recording started after
-    /// it. A <c>true</c> result disarms the deadline until the next command.
+    /// <paramref name="stamp"/> (dictation was paused), checked at <paramref name="nowMs"/>: the helper may be ended when no
+    /// command was stamped after the request and the latest state does not keep the pill on screen. That is the same
+    /// validation the idle commit runs, so a request can never end the helper of a recording started after it. An outcome
+    /// still on screen makes the request wait for it instead. A commit disarms the deadline until the next command.
     /// </summary>
-    public bool TryCommitRelease(long stamp, OverlayDemand latest)
+    public OverlayReleaseVerdict TryCommitRelease(long stamp, OverlayDemand latest, long nowMs)
     {
         NoteStampSettled(stamp);
         if (Interlocked.Read(ref _issued) != stamp || latest == OverlayDemand.Sustained)
         {
-            return false; // the newer command re-arms the deadline when it is processed
+            return OverlayReleaseVerdict.Veto; // the newer command re-arms the deadline when it is processed
+        }
+
+        if (nowMs < _shownUntilMs)
+        {
+            return OverlayReleaseVerdict.Wait;
         }
 
         _armed = false;
-        return true;
+        return OverlayReleaseVerdict.Commit;
     }
 
     /// <summary>Consumer only. Disarms the deadline until the next processed command.</summary>
     public void Disarm() => _armed = false;
+}
+
+/// <summary>How <see cref="OverlayIdleDeadline.TryCommitRelease"/> judged a release request.</summary>
+internal enum OverlayReleaseVerdict
+{
+    /// <summary>End the helper now.</summary>
+    Commit,
+
+    /// <summary>A newer command, or a state that keeps the pill on screen, vetoes it for good; the idle deadline takes over.</summary>
+    Veto,
+
+    /// <summary>Nothing vetoes it, but an outcome is on screen: ask again once it has hidden.</summary>
+    Wait,
 }

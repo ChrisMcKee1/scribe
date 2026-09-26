@@ -344,6 +344,13 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                     _lifetime.IdlePeriodMs / 60_000);
                 break;
 
+            case OverlayDueWork.Release:
+                EndHelper();
+                TryLog(LogLevel.Information, null,
+                    "Overlay helper released because dictation was paused, once the outcome on screen had hidden; " +
+                    "the next show relaunches it.");
+                break;
+
             case OverlayDueWork.Retry:
                 TryLog(LogLevel.Information, null,
                     "Overlay relaunch retry due after a {CooldownMs} ms cooldown.", _lifetime.LastCooldownMs);
@@ -453,18 +460,24 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private void HandleRelease(long stamp)
     {
-        var helper = ObserveHelper(Environment.TickCount64);
-        var work = _lifetime.OnReleaseWhenIdle(stamp, _desired.Demand, helper);
+        var nowMs = Environment.TickCount64;
+        var helper = ObserveHelper(nowMs);
+        var work = _lifetime.OnReleaseWhenIdle(nowMs, stamp, _desired.Demand, helper);
         if (helper.Status == OverlayHelperStatus.Lost)
         {
             DiscardLostHelper();
         }
 
-        if (work == OverlayDueWork.Suspend)
+        if (work == OverlayDueWork.Release)
         {
             EndHelper();
             TryLog(LogLevel.Information, null,
                 "Overlay helper released because dictation was paused; the next show relaunches it.");
+        }
+        else if (_lifetime.ReleaseDueAtMs is { } dueMs)
+        {
+            TryLog(LogLevel.Debug, null,
+                "Overlay release on pause waits {WaitMs} ms for the outcome on screen to hide.", Math.Max(0, dueMs - nowMs));
         }
         else if (HasHelperState)
         {

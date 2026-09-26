@@ -545,6 +545,299 @@ public sealed class OverlayHelperLifetimeTests
         Assert.Equal([Idle], consumer.At("Suspend"));
     }
 
+    // ---- Outcomes: a pill that hides itself after its hold ------------------------------------------
+
+    // How long each outcome keeps the pill on screen once shown, its fade out included (PillOutcome.OnScreen).
+    private static readonly long TypedOnScreen = (long)(PillTiming.TypedHold + PillTiming.FadeOut).TotalMilliseconds;
+    private static readonly long NoticeOnScreen = (long)(PillTiming.NoticeHold + PillTiming.FadeOut).TotalMilliseconds;
+
+    [Fact]
+    public void A_pause_release_waits_until_a_typed_pill_has_faded()
+    {
+        var consumer = new Consumer();
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.AdvanceTo(5_000);
+
+        // The dictation that the pause stopped returns to idle, paused: its outcome, then the release the pause asks for.
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        Assert.Empty(consumer.At("Release"));
+        Assert.Equal(OverlayHelperStatus.Alive, consumer.HelperStatus);
+        Assert.Equal(5_000 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Equal(5_000 + TypedOnScreen, consumer.Lifetime.NextWakeAtMs());
+
+        consumer.AdvanceTo(20_000);
+
+        Assert.Equal([5_000 + TypedOnScreen], consumer.At("Release"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+        Assert.Null(consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+    }
+
+    [Fact]
+    public void A_pause_release_waits_for_an_error_notice_s_whole_hold()
+    {
+        var consumer = new Consumer();
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.AdvanceTo(3_000);
+
+        consumer.Show("NOTHINGTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        consumer.AdvanceTo(3_000 + NoticeOnScreen - 1);
+        Assert.Empty(consumer.At("Release"));
+        Assert.Equal(OverlayHelperStatus.Alive, consumer.HelperStatus);
+
+        consumer.AdvanceTo(3_000 + NoticeOnScreen);
+        Assert.Equal([3_000 + NoticeOnScreen], consumer.At("Release"));
+    }
+
+    [Fact]
+    public void A_pause_release_after_the_outcome_has_gone_ends_the_helper_at_once()
+    {
+        var justBefore = WithTypedPillAt(1_000);
+        justBefore.AdvanceTo(1_000 + TypedOnScreen - 1);
+        justBefore.RequestRelease();
+        justBefore.Drain();
+        Assert.Empty(justBefore.At("Release"));
+        Assert.Equal(1_000 + TypedOnScreen, justBefore.Lifetime.ReleaseDueAtMs);
+
+        var atTheEnd = WithTypedPillAt(1_000);
+        atTheEnd.AdvanceTo(1_000 + TypedOnScreen);
+        atTheEnd.RequestRelease();
+        atTheEnd.Drain();
+        Assert.Equal([1_000 + TypedOnScreen], atTheEnd.At("Release"));
+        Assert.Null(atTheEnd.Lifetime.ReleaseDueAtMs);
+
+        static Consumer WithTypedPillAt(long atMs)
+        {
+            var consumer = new Consumer();
+            consumer.Show("WARMUP", OverlayDemand.None);
+            consumer.Drain();
+            consumer.AdvanceTo(atMs);
+            consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+            consumer.Drain();
+            return consumer;
+        }
+    }
+
+    [Fact]
+    public void A_waiting_pause_release_is_vetoed_by_whatever_would_veto_it_at_once()
+    {
+        // A command stamped after the request: resuming raises Idle, then the next recording starts.
+        var stamped = WaitingRelease();
+        stamped.AdvanceTo(300);
+        stamped.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        stamped.Show("RECORDING", OverlayDemand.Sustained);
+        stamped.Drain();
+        stamped.AdvanceTo(10 * NoticeOnScreen);
+        Assert.Empty(stamped.At("Release"));
+        Assert.Equal(OverlayHelperStatus.Alive, stamped.HelperStatus);
+
+        // A recording published but not stamped yet when the wait ends: its demand vetoes it.
+        var published = WaitingRelease();
+        published.AdvanceTo(NoticeOnScreen - 1);
+        published.PublishOnly(OverlayDemand.Sustained);
+        published.AdvanceTo(NoticeOnScreen);
+        published.StampAndEnqueue("RECORDING");
+        published.Drain();
+        Assert.Empty(published.At("Release"));
+        Assert.Equal([NoticeOnScreen], published.At("Write RECORDING"));
+
+        static Consumer WaitingRelease()
+        {
+            var consumer = new Consumer();
+            consumer.Show("WARMUP", OverlayDemand.None);
+            consumer.Drain();
+            consumer.Show("NOTHINGTYPED Try again", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+            consumer.RequestRelease();
+            consumer.Drain();
+            Assert.Equal(NoticeOnScreen, consumer.Lifetime.ReleaseDueAtMs);
+            return consumer;
+        }
+    }
+
+    [Fact]
+    public void A_newer_pause_release_takes_the_place_of_the_waiting_one()
+    {
+        var consumer = new Consumer();
+        consumer.Show("WARMUP", OverlayDemand.None);
+        consumer.Drain();
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+        consumer.AdvanceTo(100);
+        consumer.RequestRelease(); // paused, resumed and paused again inside the hold, with nothing shown between
+        consumer.Drain();
+
+        consumer.AdvanceTo(10_000);
+
+        Assert.Equal([TypedOnScreen], consumer.At("Release"));
+    }
+
+    [Fact]
+    public void Exit_drops_a_waiting_pause_release()
+    {
+        var consumer = new Consumer();
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+        Assert.NotNull(consumer.Lifetime.ReleaseDueAtMs);
+
+        consumer.Exit();
+
+        Assert.Null(consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+        consumer.AdvanceTo(10_000);
+        Assert.Empty(consumer.At("Release"));
+    }
+
+    [Fact]
+    public void The_idle_suspend_waits_for_an_outcome_still_on_screen()
+    {
+        // An idle period shorter than the notice (the setting is in minutes; the rule must not depend on that).
+        var consumer = new Consumer(idleMs: 300);
+        consumer.Show("NOTHINGTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.Drain();
+
+        consumer.AdvanceTo(NoticeOnScreen - 1);
+        Assert.Empty(consumer.At("Suspend"));
+        Assert.Equal(OverlayHelperStatus.Alive, consumer.HelperStatus);
+
+        consumer.AdvanceTo(10_000);
+        Assert.Equal([NoticeOnScreen], consumer.At("Suspend"));
+    }
+
+    [Fact]
+    public void An_outcome_that_launched_the_helper_is_on_screen_from_the_launch()
+    {
+        var consumer = new Consumer();
+        consumer.NextLaunch(OverlayLaunchResult.Launched, takesMs: 2_000);
+
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        Assert.Equal([2_000L], consumer.At("Write TYPED"));
+        Assert.Equal(2_000 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs);
+        consumer.AdvanceTo(10_000);
+        Assert.Equal([2_000 + TypedOnScreen], consumer.At("Release"));
+    }
+
+    [Fact]
+    public void An_outcome_that_was_never_shown_keeps_nothing_on_screen()
+    {
+        var consumer = new Consumer();
+        consumer.FailNextLaunches(1);
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain(); // fails at 0: a 1 s cooldown
+        consumer.AdvanceTo(100);
+
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen); // held back by the cooldown
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        Assert.Equal([100L], consumer.At("Hold"));
+        Assert.Null(consumer.Lifetime.ReleaseDueAtMs);
+
+        // Nor does one whose launch failed, even for the next launch that succeeds.
+        var failed = new Consumer();
+        failed.FailNextLaunches(1);
+        failed.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        failed.RequestRelease();
+        failed.Drain();
+        Assert.Null(failed.Lifetime.ReleaseDueAtMs);
+        Assert.Null(failed.Lifetime.RetryDueAtMs);
+
+        failed.AdvanceTo(1_000); // the cooldown is over
+        failed.Show("RECORDING", OverlayDemand.Sustained);
+        failed.Drain();
+        failed.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        failed.RequestRelease();
+        failed.Drain();
+        Assert.Equal([1_000L], failed.At("Release"));
+        Assert.Null(failed.Lifetime.ReleaseDueAtMs);
+    }
+
+    [Fact]
+    public void A_helper_that_is_gone_shows_no_outcome_for_a_release_to_wait_for()
+    {
+        var consumer = new Consumer();
+        consumer.Show("NOTHINGTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.Drain();
+        consumer.CrashHelperAt(100);
+
+        consumer.AdvanceTo(200);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        Assert.Null(consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+    }
+
+    [Fact]
+    public void A_helper_lost_under_an_outcome_is_not_brought_back_for_it()
+    {
+        // An outcome is shown once, by its own command, and never replayed: a relaunch for it would show nothing.
+        var consumer = new Consumer();
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.Drain();
+        consumer.CrashHelperAt(100);
+
+        consumer.AdvanceTo(200);
+        consumer.StampAndEnqueue("POSITION TopCenter", ensureAlive: false); // a settings save; the latest state is unchanged
+        consumer.Drain();
+
+        Assert.Equal([0L], consumer.At("Launch"));
+        Assert.Equal([200L], consumer.At("Drop"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+    }
+
+    [Fact]
+    public void A_failed_write_under_an_outcome_does_not_relaunch()
+    {
+        var consumer = new Consumer();
+        consumer.Show("NOTHINGTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.Drain();
+        consumer.AdvanceTo(500);
+
+        consumer.FailWrite();
+
+        Assert.Equal([0L], consumer.At("Launch"));
+        Assert.Empty(consumer.At("Hold"));
+        Assert.Null(consumer.Lifetime.RetryDueAtMs);
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+
+        // The next recording brings the pill back at once: the loss inside the stable window cooled down from 500.
+        consumer.AdvanceTo(2_000);
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        Assert.Equal([0L, 2_000L], consumer.At("Launch"));
+    }
+
+    [Fact]
+    public void An_outcome_s_own_command_brings_back_a_helper_that_is_gone()
+    {
+        // Worth showing when the helper can be reached at once: the command that shows it may launch it.
+        var consumer = new Consumer();
+        consumer.Show("WARMUP", OverlayDemand.None);
+        consumer.Drain();
+        consumer.AdvanceTo(Idle); // suspended
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+
+        consumer.AdvanceTo(Idle + 10);
+        consumer.Show("PARTLYTYPED Copy it from the tray menu", OverlayDemand.Transient, showsForMs: NoticeOnScreen);
+        consumer.Drain();
+
+        Assert.Equal([0L, Idle + 10], consumer.At("Launch"));
+        Assert.Equal([Idle + 10], consumer.At("Write PARTLYTYPED Copy it from the tray menu"));
+    }
+
     /// <summary>
     /// Plays the overlay client's consumer and its producers against a scripted clock and a simulated
     /// helper, recording each decision as "<c>What</c> at <c>time</c>".
@@ -587,20 +880,23 @@ public sealed class OverlayHelperLifetimeTests
 
         // ---- Producers ----------------------------------------------------------------------------
 
-        /// <summary>ShowRecording and friends: publish the demand, stamp, enqueue.</summary>
-        public void Show(string line, OverlayDemand demand, bool ensureAlive = true, bool cancelsRetry = false)
+        /// <summary>
+        /// ShowRecording and friends: publish the demand, stamp, enqueue. An outcome passes how long it stays on screen
+        /// once shown, its fade out included (<see cref="PillOutcome.OnScreen"/>).
+        /// </summary>
+        public void Show(string line, OverlayDemand demand, bool ensureAlive = true, bool cancelsRetry = false, long showsForMs = 0)
         {
             PublishOnly(demand);
-            StampAndEnqueue(line, ensureAlive, cancelsRetry);
+            StampAndEnqueue(line, ensureAlive, cancelsRetry, showsForMs);
         }
 
         public void PublishOnly(OverlayDemand demand) => Demand = demand;
 
-        public void StampAndEnqueue(string line, bool ensureAlive = true, bool cancelsRetry = false) =>
-            _queue.Enqueue(new Pending(PendingKind.State, line, Lifetime.IssueStamp(), ensureAlive, cancelsRetry));
+        public void StampAndEnqueue(string line, bool ensureAlive = true, bool cancelsRetry = false, long showsForMs = 0) =>
+            _queue.Enqueue(new Pending(PendingKind.State, line, Lifetime.IssueStamp(), ensureAlive, cancelsRetry, showsForMs));
 
         public void RequestRelease() =>
-            _queue.Enqueue(new Pending(PendingKind.Release, "RELEASE", Lifetime.IssueStamp(), false, false));
+            _queue.Enqueue(new Pending(PendingKind.Release, "RELEASE", Lifetime.IssueStamp(), false, false, 0));
 
         public void CrashHelperAt(long atMs)
         {
@@ -619,9 +915,9 @@ public sealed class OverlayHelperLifetimeTests
                 if (pending.Kind == PendingKind.Release)
                 {
                     var observed = Observe();
-                    var work = Lifetime.OnReleaseWhenIdle(pending.Stamp, Demand, observed);
+                    var work = Lifetime.OnReleaseWhenIdle(NowMs, pending.Stamp, Demand, observed);
                     DiscardIfLost(observed);
-                    if (work == OverlayDueWork.Suspend)
+                    if (work == OverlayDueWork.Release)
                     {
                         Record("Release");
                         _helper = OverlayHelperStatus.Absent;
@@ -631,7 +927,8 @@ public sealed class OverlayHelperLifetimeTests
                 }
 
                 var helper = Observe();
-                var action = Lifetime.OnStateCommand(NowMs, pending.Stamp, pending.EnsureAlive, pending.CancelsRetry, Demand, helper);
+                var action = Lifetime.OnStateCommand(
+                    NowMs, pending.Stamp, pending.EnsureAlive, pending.CancelsRetry, Demand, helper, pending.ShowsForMs);
                 Carry(action, helper, pending.Line);
             }
         }
@@ -694,6 +991,10 @@ public sealed class OverlayHelperLifetimeTests
             {
                 case OverlayDueWork.Suspend:
                     Record("Suspend");
+                    _helper = OverlayHelperStatus.Absent;
+                    break;
+                case OverlayDueWork.Release:
+                    Record("Release");
                     _helper = OverlayHelperStatus.Absent;
                     break;
                 case OverlayDueWork.Retry:
@@ -761,6 +1062,7 @@ public sealed class OverlayHelperLifetimeTests
             Release,
         }
 
-        private readonly record struct Pending(PendingKind Kind, string Line, long Stamp, bool EnsureAlive, bool CancelsRetry);
+        private readonly record struct Pending(
+            PendingKind Kind, string Line, long Stamp, bool EnsureAlive, bool CancelsRetry, long ShowsForMs);
     }
 }
