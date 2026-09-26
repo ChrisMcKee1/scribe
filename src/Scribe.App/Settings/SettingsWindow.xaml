@@ -1660,69 +1660,100 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="SnippetsPageTitle" Text="Voice snippets" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Say a trigger phrase, like 'insert my standup update', and Scribe types the saved template instead. Pick distinctive phrases you wouldn't say by accident. Edits apply when you save."/>
+                                       Text="Say a phrase and Scribe types saved text instead, like your email address or a sign-off."/>
                         </StackPanel>
                         <Grid Grid.Row="1">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="250"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid x:Name="SnippetTextChangesNotice" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:InfoBar x:Name="SnippetTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
+                                <ui:Button x:Name="SnippetTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
+                            </Grid>
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="270"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
 
-                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="*"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
-                                    <ListBox x:Name="SnippetList" Grid.Row="0" BorderThickness="0"
-                                             Background="Transparent" DisplayMemberPath="Phrase"
-                                             AutomationProperties.LabeledBy="{Binding ElementName=SnippetsPageTitle}"
-                                             SelectionChanged="SnippetList_SelectionChanged"/>
-                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-                                        <ui:Button x:Name="SnippetAddButton" Content="Add" MinWidth="70"
-                                                   Margin="0,0,8,0" Click="SnippetAddButton_Click"/>
-                                        <ui:Button x:Name="SnippetDeleteButton" Content="Delete" MinWidth="70"
-                                                   Click="SnippetDeleteButton_Click"/>
-                                    </StackPanel>
-                                </Grid>
-                            </ui:Card>
-
-                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
-                                <Grid>
-                                    <StackPanel x:Name="SnippetEditor" Visibility="Collapsed" VerticalAlignment="Top">
-                                        <TextBlock x:Name="SnippetPhraseTitle" Text="Trigger phrase" Style="{StaticResource CardTitle}"/>
-                                        <ui:TextBox x:Name="SnippetPhraseBox" Margin="0,8,0,0"
-                                                    HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
-                                                    PlaceholderText="insert my standup update"
-                                                    AutomationProperties.LabeledBy="{Binding ElementName=SnippetPhraseTitle}"
-                                                    TextChanged="SnippetPhraseBox_TextChanged"/>
-                                        <StackPanel Margin="0,16,0,0">
-                                            <CheckBox x:Name="SnippetEnabledCheck" Style="{StaticResource SettingCheckBox}"
-                                                      AutomationProperties.LabeledBy="{Binding ElementName=SnippetEnabledLabel}"
-                                                      AutomationProperties.HelpText="{Binding Text, ElementName=SnippetEnabledDescription}"
-                                                      Click="SnippetEnabledCheck_Click">
-                                                <TextBlock x:Name="SnippetEnabledLabel" Text="Enabled" Style="{StaticResource CardTitle}"/>
-                                            </CheckBox>
-                                            <TextBlock x:Name="SnippetEnabledDescription" Style="{StaticResource CardDescription}" Margin="28,2,0,0"
-                                                       Text="Applies this voice snippet after you save."/>
+                                <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <ListBox x:Name="SnippetList" Grid.Row="0" BorderThickness="0"
+                                                 Background="Transparent"
+                                                 AutomationProperties.LabeledBy="{Binding ElementName=SnippetsPageTitle}"
+                                                 SelectionChanged="SnippetList_SelectionChanged">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="4,6">
+                                                        <TextBlock Text="{Binding PrimaryText}" Style="{StaticResource CardTitle}" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="{Binding SecondaryText}" Style="{StaticResource CardDescription}"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                            <ui:Button x:Name="SnippetAddButton" Content="Add" MinWidth="70"
+                                                       Margin="0,0,8,0" Click="SnippetAddButton_Click"/>
+                                            <ui:Button x:Name="SnippetDeleteButton" Content="Delete..." MinWidth="78"
+                                                       Click="SnippetDeleteButton_Click"/>
                                         </StackPanel>
-                                        <TextBlock x:Name="SnippetTemplateTitle" Text="Expands to" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                        <ui:TextBox x:Name="SnippetTemplateBox" Margin="0,8,0,0"
-                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
-                                                    TextWrapping="Wrap" MinHeight="220" MaxHeight="380"
-                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                    SpellCheck.IsEnabled="True"
-                                                    AutomationProperties.LabeledBy="{Binding ElementName=SnippetTemplateTitle}"
-                                                    TextChanged="SnippetTemplateBox_TextChanged"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="Line breaks are kept, except in terminals when 'Smart' line-break handling is on, where they become spaces so Enter isn't sent."/>
-                                    </StackPanel>
-                                    <TextBlock x:Name="SnippetEmptyHint"
-                                               Text="Select a snippet on the left, or click Add to create one."
-                                               Style="{StaticResource CardDescription}" Margin="0"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
+                                    </Grid>
+                                </ui:Card>
+
+                                <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
+                                    <Grid>
+                                        <StackPanel x:Name="SnippetEditor" Visibility="Collapsed" VerticalAlignment="Top">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="SnippetEditorTitle" Text="Snippet" Style="{StaticResource DetailTitle}" VerticalAlignment="Center"/>
+                                                <CheckBox x:Name="SnippetEnabledCheck" Grid.Column="1" Style="{StaticResource SettingCheckBox}"
+                                                          Content="On" VerticalAlignment="Center"
+                                                          AutomationProperties.Name="On"
+                                                          Click="SnippetEnabledCheck_Click"/>
+                                            </Grid>
+                                            <TextBlock x:Name="SnippetPhraseTitle" Text="When you say" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                            <ui:TextBox x:Name="SnippetPhraseBox" Margin="0,8,0,0"
+                                                        HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                        PlaceholderText="Say this phrase"
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=SnippetPhraseTitle}"
+                                                        TextChanged="SnippetPhraseBox_TextChanged"/>
+                                            <TextBlock Text="Choose words you wouldn't say by accident." Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
+                                            <TextBlock x:Name="SnippetPhraseValidation" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,6,0,0" Visibility="Collapsed"/>
+
+                                            <TextBlock x:Name="SnippetTemplateTitle" Text="Scribe types" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                            <ui:TextBox x:Name="SnippetTemplateBox" Margin="0,8,0,0"
+                                                        HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                        TextWrapping="Wrap" MinHeight="220" MaxHeight="380"
+                                                        VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                        TextAlignment="Left" SpellCheck.IsEnabled="True"
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=SnippetTemplateTitle}"
+                                                        TextChanged="SnippetTemplateBox_TextChanged"/>
+                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                       Text="Line breaks follow your line-break settings for the app you dictate into."/>
+                                            <TextBlock x:Name="SnippetTemplateValidation" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,6,0,0" Visibility="Collapsed"/>
+                                        </StackPanel>
+                                        <StackPanel x:Name="SnippetEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
+                                            <TextBlock x:Name="SnippetEmptyHint"
+                                                       Text="Select a snippet to edit it."
+                                                       Style="{StaticResource CardDescription}" Margin="0"
+                                                       HorizontalAlignment="Center" TextAlignment="Center"/>
+                                            <ui:Button x:Name="SnippetEmptyActionButton" Content="Add snippet" MinWidth="110" Margin="0,12,0,0" HorizontalAlignment="Center" Click="SnippetAddButton_Click" Visibility="Collapsed"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </ui:Card>
+                            </Grid>
                         </Grid>
                     </Grid>
 
@@ -1738,73 +1769,147 @@
                                        Text="Use a different writing style or line-break rule in specific apps, like Outlook or Teams."/>
                         </StackPanel>
                         <Grid Grid.Row="1">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="250"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid x:Name="ProfileAiCleanupNotice" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:InfoBar x:Name="ProfileAiCleanupInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Informational" Title="AI cleanup is off"/>
+                                <ui:Button x:Name="ProfileAiCleanupActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="120" Content="Go to AI cleanup" Click="ProfileAiCleanupButton_Click"/>
+                            </Grid>
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="270"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
 
-                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="*"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
-                                    <ListBox x:Name="ProfileList" Grid.Row="0" BorderThickness="0"
-                                             Background="Transparent" DisplayMemberPath="Name"
-                                             AutomationProperties.LabeledBy="{Binding ElementName=ProfilesPageTitle}"
-                                             SelectionChanged="ProfileList_SelectionChanged"/>
-                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-                                        <ui:Button x:Name="ProfileAddButton" Content="Add" MinWidth="70"
-                                                   Margin="0,0,8,0" Click="ProfileAddButton_Click"/>
-                                        <ui:Button x:Name="ProfileDeleteButton" Content="Delete" MinWidth="70"
-                                                   Click="ProfileDeleteButton_Click"/>
-                                    </StackPanel>
-                                </Grid>
-                            </ui:Card>
+                                <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <ListBox x:Name="ProfileList" Grid.Row="0" BorderThickness="0"
+                                                 Background="Transparent"
+                                                 AutomationProperties.LabeledBy="{Binding ElementName=ProfilesPageTitle}"
+                                                 SelectionChanged="ProfileList_SelectionChanged">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="4,6">
+                                                        <TextBlock Text="{Binding PrimaryText}" Style="{StaticResource CardTitle}" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="{Binding SecondaryText}" Style="{StaticResource CardDescription}" TextTrimming="CharacterEllipsis"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                        <WrapPanel Grid.Row="1" Margin="0,8,0,0">
+                                            <ui:Button x:Name="ProfileAddButton" Content="Add" MinWidth="70" Margin="0,0,8,8" Click="ProfileAddButton_Click"/>
+                                            <ui:Button x:Name="ProfileDeleteButton" Content="Delete..." MinWidth="78" Margin="0,0,8,8" Click="ProfileDeleteButton_Click"/>
+                                            <ui:Button x:Name="ProfileMoveUpButton" Content="Move up" MinWidth="82" Margin="0,0,8,8" Click="ProfileMoveUpButton_Click"/>
+                                            <ui:Button x:Name="ProfileMoveDownButton" Content="Move down" MinWidth="98" Margin="0,0,8,8" Click="ProfileMoveDownButton_Click"/>
+                                        </WrapPanel>
+                                    </Grid>
+                                </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
-                                <Grid>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                        <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
-                                            <TextBlock x:Name="ProfileNameTitle" Text="Profile name" Style="{StaticResource CardTitle}"/>
-                                            <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
-                                                        HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
-                                                        PlaceholderText="e.g. Email"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=ProfileNameTitle}"
-                                                        TextChanged="ProfileNameBox_TextChanged"/>
+                                <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
+                                    <Grid>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
+                                                <TextBlock x:Name="ProfileNameTitle" Text="Name" Style="{StaticResource CardTitle}"/>
+                                                <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
+                                                            HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                            PlaceholderText="For example, Email"
+                                                            AutomationProperties.LabeledBy="{Binding ElementName=ProfileNameTitle}"
+                                                            TextChanged="ProfileNameBox_TextChanged"/>
+                                                <TextBlock x:Name="ProfileNameValidation" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,6,0,0" Visibility="Collapsed"/>
 
-                                            <TextBlock x:Name="ProfileProcessesTitle" Text="Apps (process names)" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                            <ui:TextBox x:Name="ProfileProcessesBox" Margin="0,8,0,0"
-                                                        HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
-                                                        PlaceholderText="OUTLOOK, olk, thunderbird"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=ProfileProcessesTitle}"
-                                                        TextChanged="ProfileProcessesBox_TextChanged"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                       Text="Comma-separated process names, without .exe (Task Manager's Details tab shows them). Examples: OUTLOOK for classic Outlook, olk for new Outlook, slack, WindowsTerminal, Code for VS Code."/>
+                                                <TextBlock x:Name="ProfileAppsTitle" Text="Apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Scribe uses this profile when one of these apps is in front."/>
+                                                <ItemsControl x:Name="ProfileAppsChips" Margin="0,8,0,0">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <WrapPanel/>
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Background="{DynamicResource ControlFillColorSecondaryBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="10,4" Margin="0,0,8,8">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center"/>
+                                                                    <ui:Button Content="Remove" Appearance="Transparent" Margin="8,0,0,0" Padding="4,0" MinWidth="0" Height="24"
+                                                                               AutomationProperties.Name="{Binding RemoveName}" Click="ProfileAppChipRemove_Click"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <WrapPanel Margin="0,0,0,0">
+                                                    <ui:Button x:Name="ProfileAddAppButton" Content="Add app..." MinWidth="110" Margin="0,0,8,8" Click="ProfileAddAppButton_Click"/>
+                                                </WrapPanel>
+                                                <Border x:Name="AppPickerPanel" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource ControlStrongStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Width="420" MaxHeight="440" HorizontalAlignment="Left" Visibility="Collapsed">
+                                                            <StackPanel>
+                                                                <TextBlock Text="Add app" Style="{StaticResource DetailTitle}"/>
+                                                                <TextBlock Text="Choose apps Scribe can see now, or apps you've dictated into recently." Style="{StaticResource CardDescription}" Margin="0,4,0,8"/>
+                                                                <ListBox x:Name="AppPickerList" MaxHeight="280" BorderThickness="0" Background="Transparent">
+                                                                    <ListBox.ItemTemplate>
+                                                                        <DataTemplate>
+                                                                            <CheckBox Content="{Binding Label}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,4"/>
+                                                                        </DataTemplate>
+                                                                    </ListBox.ItemTemplate>
+                                                                </ListBox>
+                                                                <TextBlock x:Name="AppPickerEmptyText" Text="No apps found." Style="{StaticResource CardDescription}" Margin="0,8,0,0" Visibility="Collapsed"/>
+                                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                                                                    <ui:Button Content="Add" MinWidth="72" Margin="0,0,8,0" Click="AppPickerAddButton_Click"/>
+                                                                    <ui:Button Content="Cancel" MinWidth="72" Click="AppPickerCancelButton_Click"/>
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                </Border>
+                                                <TextBlock x:Name="ProfileAppsValidation" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" Margin="0,0,0,6" Visibility="Collapsed"/>
+                                                <Expander x:Name="ProfileProgramNamesExpander" Header="Type program names" Margin="0,6,0,0">
+                                                    <StackPanel Margin="0,8,0,0">
+                                                        <ui:TextBox x:Name="ProfileProcessesBox"
+                                                                    HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                                    PlaceholderText="OUTLOOK, olk, slack"
+                                                                    AutomationProperties.LabeledBy="{Binding ElementName=ProfileAppsTitle}"
+                                                                    TextChanged="ProfileProcessesBox_TextChanged"/>
+                                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="Use comma-separated program names when an app is not listed above."/>
+                                                    </StackPanel>
+                                                </Expander>
 
-                                            <TextBlock x:Name="ProfileStyleTitle" Text="Writing style for these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                            <ui:TextBox x:Name="ProfileStyleBox" Margin="0,8,0,0"
-                                                        HorizontalAlignment="Stretch" AcceptsReturn="True"
-                                                        TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
-                                                        VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                        SpellCheck.IsEnabled="True"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=ProfileStyleTitle}"
-                                                        TextChanged="ProfileStyleBox_TextChanged"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                       Text="Leave blank to keep your global writing style. Needs AI cleanup to be enabled to take effect."/>
+                                                <TextBlock x:Name="ProfileStyleTitle" Text="Writing style for these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ui:TextBox x:Name="ProfileStyleBox" Margin="0,8,0,0"
+                                                            HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                            TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                            VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                            TextAlignment="Left" SpellCheck.IsEnabled="True"
+                                                            AutomationProperties.LabeledBy="{Binding ElementName=ProfileStyleTitle}"
+                                                            TextChanged="ProfileStyleBox_TextChanged"/>
+                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                           Text="Leave empty to use your main writing style."/>
 
-                                            <TextBlock x:Name="ProfileNewlineTitle" Text="Line breaks in these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                            <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                      AutomationProperties.LabeledBy="{Binding ElementName=ProfileNewlineTitle}"
-                                                      SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
+                                                <TextBlock x:Name="ProfileNewlineTitle" Text="Line breaks in these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=ProfileNewlineTitle}"
+                                                          SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                        <StackPanel x:Name="ProfileEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
+                                            <TextBlock x:Name="ProfileEmptyHint"
+                                                       Text="Select a profile to edit it."
+                                                       Style="{StaticResource CardDescription}" Margin="0"
+                                                       HorizontalAlignment="Center" TextAlignment="Center"/>
                                         </StackPanel>
-                                    </ScrollViewer>
-                                    <TextBlock x:Name="ProfileEmptyHint"
-                                               Text="Select a profile on the left, or click Add to create one."
-                                               Style="{StaticResource CardDescription}" Margin="0"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
+                                    </Grid>
+                                </ui:Card>
+                            </Grid>
+                            <TextBlock x:Name="ProfileOrderHint" Grid.Row="2" Style="{StaticResource CardDescription}" Margin="2,8,0,0" Visibility="Collapsed"
+                                       Text="When an app matches more than one profile, Scribe uses the one higher in the list."/>
                         </Grid>
                     </Grid>
 

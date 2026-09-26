@@ -219,6 +219,66 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     [Fact]
+    public void Snippet_list_text_shows_off_state_and_new_placeholder()
+    {
+        Assert.Equal(new SnippetListItemText("New snippet", null), SnippetListText.Describe(" ", enabled: true));
+        Assert.Equal(new SnippetListItemText("insert signature", "Off"), SnippetListText.Describe(" insert signature ", enabled: false));
+    }
+
+    [Fact]
+    public void Profile_list_text_and_chips_hide_process_jargon_until_needed()
+    {
+        var description = ProfileListText.Describe(" Email ", "OUTLOOK.exe, ms-teams, outlook");
+
+        Assert.Equal("Email", description.Primary);
+        Assert.Equal("Outlook, Teams", description.Secondary);
+
+        var chips = ProfileAppChips.FromProgramNames("OUTLOOK.exe, ms-teams");
+        Assert.Collection(
+            chips,
+            chip =>
+            {
+                Assert.Equal("OUTLOOK", chip.ProgramName);
+                Assert.Equal("Outlook", chip.DisplayName);
+                Assert.Equal("Remove Outlook", chip.RemoveName);
+            },
+            chip => Assert.Equal("Teams", chip.DisplayName));
+        Assert.Equal("OUTLOOK, ms-teams", ProfileAppChips.ToProgramNames(chips));
+    }
+
+    [Fact]
+    public void App_picker_options_put_running_apps_first_and_deduplicate_selected_apps()
+    {
+        var options = AppPickerOptions.Build(
+            [
+                new AppPickerCandidate("WINWORD.exe", "Word", IsRunning: true),
+                new AppPickerCandidate("OUTLOOK", "Outlook", IsRunning: true),
+            ],
+            [
+                new RecentApp("OUTLOOK", "Outlook", 5),
+                new RecentApp("slack", "Slack", 3),
+            ],
+            selectedApps: ["WINWORD"]);
+
+        Assert.Collection(
+            options,
+            option =>
+            {
+                Assert.Equal("OUTLOOK", option.ProcessName);
+                Assert.Equal("Outlook (OUTLOOK)", option.Label);
+                Assert.True(option.IsRunning);
+                Assert.Equal(5, option.RecentDictations);
+            },
+            option =>
+            {
+                Assert.Equal("slack", option.ProcessName);
+                Assert.Equal("Slack (slack)", option.Label);
+                Assert.False(option.IsRunning);
+                Assert.Equal(3, option.RecentDictations);
+            });
+    }
+
+    [Fact]
     public void Usage_period_state_keeps_old_period_while_loading_or_failed()
     {
         Assert.Equal("Showing Last 7 days. Loading Last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);

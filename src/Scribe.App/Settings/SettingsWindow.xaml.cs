@@ -1719,7 +1719,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             SelectedPromptStyle));
     }
 
-    private void PostCheck_Toggled(object sender, RoutedEventArgs e) => UpdateDictionaryGlossaryHint();
+    private void PostCheck_Toggled(object sender, RoutedEventArgs e)
+    {
+        UpdateDictionaryGlossaryHint();
+        RefreshTextChangesNotice();
+    }
 
     // --- Word packs -----------------------------------------------------------------------
 
@@ -2730,8 +2734,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void AiCleanupCheck_Toggled(object sender, RoutedEventArgs e)
     {
-        // Before the loading guard: the dictionary line reads this switch whatever set it.
+        // Before the loading guard: dictionary, snippets and profile notices read this switch whatever set it.
         UpdateDictionaryGlossaryHint();
+        RefreshTextChangesNotice();
+        RefreshProfileRules();
         if (_loadingUi)
         {
             return;
@@ -5148,6 +5154,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        if (!ValidateSnippetAndProfileDraft())
+        {
+            return false;
+        }
+
         List<Snippet>? snippets = null;
         SnippetRow? duplicateSnippet = null;
         if (snippetsDirty)
@@ -5539,329 +5550,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return result.Entries.ToList();
     }
 
-    // --- Voice snippets --------------------------------------------------------------------
-
-    private void InitializeSnippetList()
-    {
-        SnippetList.ItemsSource = _snippetRows;
-        _snippetEmptyText = SnippetEmptyHint.Text;
-        SnippetEmptyHint.Text = "Loading snippets...";
-        SetSnippetsEditable(false);
-    }
-
-    // Same reason as the dictionary: an edit before the rows arrive would be saved as a deletion.
-    private void SetSnippetsEditable(bool editable)
-    {
-        SnippetList.IsEnabled = editable;
-        SnippetAddButton.IsEnabled = editable;
-        SnippetDeleteButton.IsEnabled = editable;
-    }
-
-    private async void LoadSnippetsAsync()
-    {
-        if (!_snippetLoad.TryBegin(SnippetSignature(), out var ticket))
-        {
-            return;
-        }
-
-        IReadOnlyList<Snippet> snippets;
-        try
-        {
-            snippets = await Task.Run(() => _snippets.GetAll());
-        }
-        catch (Exception ex)
-        {
-            if (_snippetLoad.Fail(ticket))
-            {
-                TryLog(ex, "Could not load snippets for Settings.");
-                SnippetEmptyHint.Text =
-                    "Couldn't load your snippets, so they can't be edited right now. Close Settings and open it again to retry.";
-            }
-
-            return;
-        }
-
-        if (!_snippetLoad.CanPublish(ticket))
-        {
-            return;
-        }
-
-        _snippetRows.Clear();
-        foreach (var snippet in snippets)
-        {
-            _snippetRows.Add(new SnippetRow
-            {
-                Id = snippet.Id,
-                Phrase = snippet.Phrase,
-                Template = snippet.Template,
-                Enabled = snippet.Enabled,
-            });
-        }
-
-        _snippetLoad.Publish(ticket, SnippetSignature());
-        SnippetEmptyHint.Text = _snippetEmptyText;
-        SetSnippetsEditable(true);
-    }
-
-    private SnippetRow? SelectedSnippet => SnippetList.SelectedItem as SnippetRow;
-
-    private void SnippetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var row = SelectedSnippet;
-        SnippetEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
-        SnippetEmptyHint.Visibility = row is null ? Visibility.Visible : Visibility.Collapsed;
-        if (row is null)
-        {
-            return;
-        }
-
-        _loadingSnippet = true;
-        try
-        {
-            SnippetPhraseBox.Text = row.Phrase;
-            SnippetTemplateBox.Text = row.Template;
-            SnippetEnabledCheck.IsChecked = row.Enabled;
-        }
-        finally
-        {
-            _loadingSnippet = false;
-        }
-    }
-
-    private void SnippetAddButton_Click(object sender, RoutedEventArgs e)
-    {
-        var row = new SnippetRow { Phrase = "new snippet", Template = string.Empty };
-        _snippetRows.Add(row);
-        SnippetList.SelectedItem = row;
-        SnippetList.ScrollIntoView(row);
-        SnippetPhraseBox.Focus();
-        SnippetPhraseBox.SelectAll();
-    }
-
-    private void SnippetDeleteButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedSnippet is { } row)
-        {
-            _snippetRows.Remove(row);
-        }
-    }
-
-    private void SnippetPhraseBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_loadingSnippet && SelectedSnippet is { } row)
-        {
-            row.Phrase = SnippetPhraseBox.Text;
-        }
-    }
-
-    private void SnippetTemplateBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_loadingSnippet && SelectedSnippet is { } row)
-        {
-            row.Template = SnippetTemplateBox.Text;
-        }
-    }
-
-    private void SnippetEnabledCheck_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_loadingSnippet && SelectedSnippet is { } row)
-        {
-            row.Enabled = SnippetEnabledCheck.IsChecked == true;
-        }
-    }
-
-    /// <summary>
-    /// Builds the desired snippet state from the editor rows, skipping rows with a blank phrase or
-    /// template. Reports the first duplicate trigger phrase (case-insensitive) like the dictionary.
-    /// </summary>
-    private List<Snippet> BuildSnippets(out SnippetRow? duplicate)
-    {
-        var result = SnippetBuilder.Build(
-            _snippetRows.Select(r => new SnippetBuilder.Row(
-                r.Id, r.Phrase, r.Template, r.Enabled)).ToList());
-
-        duplicate = result.HasDuplicate ? _snippetRows[result.DuplicateIndex] : null;
-        return result.Snippets.ToList();
-    }
-
-    // --- Per-app profiles ------------------------------------------------------------------
-
-    private void LoadProfiles()
-    {
-        ProfileNewlineCombo.DisplayMemberPath = nameof(ProfileNewlineChoice.Label);
-        ProfileNewlineCombo.ItemsSource = new[]
-        {
-            new ProfileNewlineChoice(null, "Use the global setting"),
-            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart: one line in terminals"),
-            new ProfileNewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line, never send Enter"),
-            new ProfileNewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
-        };
-
-        foreach (var profile in _settings.Profiles)
-        {
-            _profileRows.Add(new ProfileRow
-            {
-                Name = profile.Name,
-                Processes = string.Join(", ", profile.ProcessNames),
-                WritingStyle = profile.WritingStyle ?? string.Empty,
-                NewlineHandling = profile.NewlineHandling,
-            });
-        }
-
-        ProfileList.ItemsSource = _profileRows;
-    }
-
-    private ProfileRow? SelectedProfile => ProfileList.SelectedItem as ProfileRow;
-
-    private void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        var row = SelectedProfile;
-        ProfileEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
-        ProfileEmptyHint.Visibility = row is null ? Visibility.Visible : Visibility.Collapsed;
-        if (row is null)
-        {
-            return;
-        }
-
-        _loadingProfile = true;
-        try
-        {
-            ProfileNameBox.Text = row.Name;
-            ProfileProcessesBox.Text = row.Processes;
-            ProfileStyleBox.Text = row.WritingStyle;
-            var choices = (ProfileNewlineChoice[])ProfileNewlineCombo.ItemsSource;
-            ProfileNewlineCombo.SelectedItem =
-                choices.FirstOrDefault(c => c.Mode == row.NewlineHandling) ?? choices[0];
-        }
-        finally
-        {
-            _loadingProfile = false;
-        }
-    }
-
-    /// <summary>
-    /// Offers a blank profile or one of the built-in templates. Templates are added on request
-    /// rather than seeded on upgrade, so an existing user's dictation formatting never changes
-    /// without them asking. Presented as a menu on the existing Add button rather than a second
-    /// button, because the profile list column is too narrow for three.
-    /// </summary>
-    private void ProfileAddButton_Click(object sender, RoutedEventArgs e)
-    {
-        var menu = new ContextMenu
-        {
-            PlacementTarget = ProfileAddButton,
-            Placement = System.Windows.Controls.Primitives.PlacementMode.Top,
-        };
-
-        var blank = new MenuItem { Header = "Blank profile" };
-        blank.Click += (_, _) => AddBlankProfile();
-        menu.Items.Add(blank);
-        menu.Items.Add(new Separator());
-
-        foreach (var preset in ProfilePresets.All)
-        {
-            var existing = FindProfileRow(preset.Profile.Name);
-            var item = new MenuItem
-            {
-                Header = preset.Profile.Name,
-                ToolTip = preset.Description,
-
-                // Adding the same template twice is never useful: matching is first-wins, so the
-                // second copy would list the same processes and never apply. Point at the one
-                // already there instead.
-                IsEnabled = existing is null,
-            };
-
-            if (existing is null)
-            {
-                item.Click += (_, _) => AddPresetProfile(preset);
-            }
-
-            menu.Items.Add(item);
-        }
-
-        menu.IsOpen = true;
-    }
-
-    private void AddBlankProfile()
-    {
-        var row = new ProfileRow { Name = "New profile" };
-        _profileRows.Add(row);
-        ProfileList.SelectedItem = row;
-        ProfileList.ScrollIntoView(row);
-        ProfileNameBox.Focus();
-        ProfileNameBox.SelectAll();
-    }
-
-    private void AddPresetProfile(ProfilePresets.Preset preset)
-    {
-        var profile = ProfilePresets.Instantiate(preset);
-        var row = new ProfileRow
-        {
-            Name = profile.Name,
-            Processes = string.Join(", ", profile.ProcessNames),
-            WritingStyle = profile.WritingStyle ?? string.Empty,
-            NewlineHandling = profile.NewlineHandling,
-        };
-
-        _profileRows.Add(row);
-        ProfileList.SelectedItem = row;
-        ProfileList.ScrollIntoView(row);
-    }
-
-    private ProfileRow? FindProfileRow(string name) =>
-        _profileRows.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
-
-    private void ProfileDeleteButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedProfile is { } row)
-        {
-            _profileRows.Remove(row);
-        }
-    }
-
-    private void ProfileNameBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_loadingProfile && SelectedProfile is { } row)
-        {
-            row.Name = ProfileNameBox.Text;
-        }
-    }
-
-    private void ProfileProcessesBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_loadingProfile && SelectedProfile is { } row)
-        {
-            row.Processes = ProfileProcessesBox.Text;
-        }
-    }
-
-    private void ProfileStyleBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_loadingProfile && SelectedProfile is { } row)
-        {
-            row.WritingStyle = ProfileStyleBox.Text;
-        }
-    }
-
-    private void ProfileNewlineCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_loadingProfile && SelectedProfile is { } row)
-        {
-            row.NewlineHandling = (ProfileNewlineCombo.SelectedItem as ProfileNewlineChoice)?.Mode;
-        }
-    }
-
-    /// <summary>Builds the profile list to persist, skipping rows with no name and no processes.</summary>
-    private List<AppProfile> BuildProfiles() =>
-        ProfileBuilder.Build(
-            _profileRows.Select(r => new ProfileBuilder.Row(
-                r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
-
-    private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label)
-    {
-        public override string ToString() => Label;
-    }
+    // Voice snippets and app profiles live in SettingsWindow.Snippets.cs and SettingsWindow.Profiles.cs.
 
     // --- Recording indicator position picker -----------------------------------------------------------
 
@@ -7412,8 +7101,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     public sealed class SnippetRow : System.ComponentModel.INotifyPropertyChanged
     {
         private string _phrase = string.Empty;
+        private string _template = string.Empty;
+        private bool _enabled = true;
 
         public long Id { get; set; }
+        public DraftRowOrigin Origin { get; set; } = DraftRowOrigin.New;
+        public bool Touched { get; set; }
+        public string? LoadedPhrase { get; set; }
+        public string? LoadedTemplate { get; set; }
+        public bool LoadedEnabled { get; set; } = true;
+        public string RowKey => Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
 
         public string Phrase
         {
@@ -7423,25 +7120,62 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 if (_phrase != value)
                 {
                     _phrase = value;
-                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Phrase)));
+                    Notify(nameof(Phrase));
+                    Notify(nameof(PrimaryText));
                 }
             }
         }
 
-        public string Template { get; set; } = string.Empty;
-        public bool Enabled { get; set; } = true;
+        public string Template
+        {
+            get => _template;
+            set
+            {
+                if (_template != value)
+                {
+                    _template = value;
+                    Notify(nameof(Template));
+                }
+            }
+        }
 
-        // The ListBox draws Phrase via DisplayMemberPath, but UI Automation falls back to
-        // ToString(), so without this the list reads out as a column of identical type names.
-        public override string ToString() => Phrase;
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled != value)
+                {
+                    _enabled = value;
+                    Notify(nameof(Enabled));
+                    Notify(nameof(SecondaryText));
+                }
+            }
+        }
+
+        public string PrimaryText => SnippetListText.Describe(Phrase, Enabled).Primary;
+        public string SecondaryText => SnippetListText.Describe(Phrase, Enabled).Secondary ?? string.Empty;
+
+        public override string ToString() => PrimaryText;
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        private void Notify(string propertyName) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
     }
 
-    /// <summary>Editable profile row; Name notifies so the ListBox label tracks the detail pane.</summary>
     public sealed class ProfileRow : System.ComponentModel.INotifyPropertyChanged
     {
         private string _name = string.Empty;
+        private string _processes = string.Empty;
+
+        public DraftRowOrigin Origin { get; set; } = DraftRowOrigin.New;
+        public bool Touched { get; set; }
+        public string? LoadedName { get; set; }
+        public string? LoadedProcesses { get; set; }
+        public string? LoadedWritingStyle { get; set; }
+        public NewlineInjectionMode? LoadedNewlineHandling { get; set; }
+        public string RowKey => Origin == DraftRowOrigin.Saved ? $"saved:{LoadedName}:{LoadedProcesses}" : $"new:{GetHashCode()}";
 
         public string Name
         {
@@ -7451,18 +7185,37 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 if (_name != value)
                 {
                     _name = value;
-                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Name)));
+                    Notify(nameof(Name));
+                    Notify(nameof(PrimaryText));
                 }
             }
         }
 
-        public string Processes { get; set; } = string.Empty;
+        public string Processes
+        {
+            get => _processes;
+            set
+            {
+                if (_processes != value)
+                {
+                    _processes = value;
+                    Notify(nameof(Processes));
+                    Notify(nameof(SecondaryText));
+                }
+            }
+        }
+
         public string WritingStyle { get; set; } = string.Empty;
         public NewlineInjectionMode? NewlineHandling { get; set; }
+        public string PrimaryText => ProfileListText.Describe(Name, Processes).Primary;
+        public string SecondaryText => ProfileListText.Describe(Name, Processes).Secondary;
 
-        public override string ToString() => Name;
+        public override string ToString() => PrimaryText;
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        private void Notify(string propertyName) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
     }
 
     public sealed class FailureRow
