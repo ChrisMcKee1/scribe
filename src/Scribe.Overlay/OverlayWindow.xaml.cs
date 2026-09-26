@@ -359,13 +359,6 @@ public sealed partial class OverlayWindow : Window
         OverlayLog.Write($"OverlayWindow.ShowOutcome state={state} hold={hold.TotalMilliseconds:0}ms reasonLength={ReasonLength(detail)}");
     });
 
-    /// <summary>
-    /// The AI cleanup failure flash the outcomes replace, drawn like an error. Only the app shell still sends it, from its
-    /// cleanup failure and error handlers; it goes once the shell shows outcomes.
-    /// </summary>
-    public void ShowFailed(string? reason) =>
-        ShowOutcome(OverlayState.Failed, string.IsNullOrWhiteSpace(reason) ? "Used raw transcription" : reason);
-
     // The reason is display text composed by the engine and can carry user configuration, such as a
     // microphone's name or a custom cleanup endpoint's host inside a failure detail. The pill shows it; the
     // shared log only records how long it was. The wire protocol carries no fixed category to log instead.
@@ -409,14 +402,13 @@ public sealed partial class OverlayWindow : Window
         state is OverlayState.TypedWithoutCleanup || IsError(state);
 
     private static bool IsError(OverlayState state) =>
-        state is OverlayState.NothingTyped or OverlayState.PartlyTyped or OverlayState.Failed;
+        state is OverlayState.NothingTyped or OverlayState.PartlyTyped;
 
     private static string NoticeTitleFor(OverlayState state) => state switch
     {
         OverlayState.TypedWithoutCleanup => "Typed without AI cleanup",
         OverlayState.NothingTyped => "Nothing typed",
         OverlayState.PartlyTyped => "Not all of it was typed",
-        OverlayState.Failed => "Intelligence failed",
         _ => string.Empty,
     };
 

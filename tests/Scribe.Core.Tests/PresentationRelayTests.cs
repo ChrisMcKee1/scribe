@@ -465,7 +465,7 @@ public sealed class PresentationRelayTests
 
         Assert.Equal(["recording", "processing", "recording"], pill);
 
-        // Delivered the way the shell posts its failure flash today, beside the relay rather than through it, the same late
+        // Delivered the way the shell used to post its failure flash, beside the relay rather than through it, the same late
         // outcome lands on top of the newer recording.
         var beside = new List<string>();
         var besideRelay = new PresentationRelay<DictationPresentation>(

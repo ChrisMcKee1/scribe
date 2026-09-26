@@ -35,12 +35,6 @@ public static class OverlayPipeProtocol
     /// <summary>The outcome <see cref="PillOutcomeKind.PartlyTyped"/>, with its next step.</summary>
     public const string PartlyTyped = "PARTLYTYPED";
 
-    /// <summary>
-    /// The AI cleanup failure flash the outcomes replace, with its reason. Only the shell's cleanup failure and error
-    /// handlers still send it; it goes once the shell hands on outcomes instead.
-    /// </summary>
-    public const string Failed = "FAILED";
-
     /// <summary>Hides the pill, unless an outcome is still holding on screen.</summary>
     public const string Hide = "HIDE";
 
@@ -56,8 +50,8 @@ public static class OverlayPipeProtocol
     /// <summary>Every verb the app can send, and so every verb the overlay must parse.</summary>
     public static IReadOnlyList<string> Verbs { get; } =
     [
-        Warmup, Recording, Warning, Processing, Typed, TypedWithoutCleanup, NothingTyped, PartlyTyped, Failed, Hide, Meter,
-        Position, Exit,
+        Warmup, Recording, Warning, Processing, Typed, TypedWithoutCleanup, NothingTyped, PartlyTyped, Hide, Meter, Position,
+        Exit,
     ];
 
     /// <summary>The verb that shows <paramref name="kind"/>: its name, in capitals.</summary>
@@ -82,9 +76,6 @@ public static class OverlayPipeProtocol
 
     /// <summary>Processing, saying whether AI cleanup runs for this capture.</summary>
     public static string ProcessingLine(bool aiCleanup) => Processing + (aiCleanup ? " 1" : " 0");
-
-    /// <summary>The AI cleanup failure flash the outcomes replace.</summary>
-    public static string FailedLine(string? reason) => Line(Failed, reason);
 
     /// <summary>The live input level, scaled to 0 to 1000.</summary>
     public static string MeterLine(int level) => Meter + " " + level.ToString(CultureInfo.InvariantCulture);

@@ -38,13 +38,6 @@ public interface IOverlayController
     /// </summary>
     void ShowOutcome(PillOutcome outcome);
 
-    /// <summary>
-    /// The AI cleanup failure flash the outcomes replace, drawn like an error, then auto-hides. It fires before the text is
-    /// typed, and the shell also shows it for errors, so it cannot say what reached the target; it stays only until the
-    /// shell hands on outcomes instead.
-    /// </summary>
-    void ShowFailed(string? reason);
-
     /// <summary>Hides the pill (ignored while an outcome is still holding on screen).</summary>
     void HideOverlay();
 

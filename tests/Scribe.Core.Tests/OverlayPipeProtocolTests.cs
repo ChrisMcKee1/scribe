@@ -82,8 +82,6 @@ public sealed class OverlayPipeProtocolTests
         Assert.Equal("WARNING Microphone  muted", OverlayPipeProtocol.WarningLine(" Microphone\r\nmuted\n"));
         Assert.Equal("WARNING", OverlayPipeProtocol.WarningLine("   "));
         Assert.Equal("WARNING", OverlayPipeProtocol.WarningLine(null));
-        Assert.Equal("FAILED AI cleanup failed. Try again.", OverlayPipeProtocol.FailedLine("AI cleanup failed.\nTry again."));
-        Assert.Equal("FAILED", OverlayPipeProtocol.FailedLine(null));
     }
 
     [Fact]
@@ -123,14 +121,32 @@ public sealed class OverlayPipeProtocolTests
         Assert.DoesNotContain("writer.WriteLine(_desired.Line);", client, StringComparison.Ordinal);
         Assert.DoesNotContain("Enqueue(_desired.Line", client, StringComparison.Ordinal);
 
-        // The outcome, and the failure flash it replaces, are transient, need the helper, and keep it for their hold.
+        // The outcome is transient, needs the helper, and keeps it for its hold.
         Assert.Matches(new Regex(@"new DesiredState\(OverlayPipeProtocol\.OutcomeLine\(outcome\), OverlayDemand\.Transient\)"), client);
         Assert.Matches(new Regex(@"Enqueue\(desired\.Line, ensureAlive: true, showsFor: outcome\.OnScreen\)"), client);
-        Assert.Matches(new Regex(@"new DesiredState\(OverlayPipeProtocol\.FailedLine\(reason\), OverlayDemand\.Transient\)"), client);
         Assert.Contains(
             "_lifetime.OnStateCommand(\n            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, item.ShowsForMs);",
             client.ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_shell_shows_a_dictation_s_outcome_in_place_of_the_hide_and_nothing_else_on_the_pill()
+    {
+        // The relay's render callback: the outcome travels on the Idle change, so it keeps that change's revision.
+        var shell = StripComments(File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "App.xaml.cs")))
+            .ReplaceLineEndings("\n");
+        var render = shell[shell.IndexOf("private void RenderDictationState(DictationStateChange change)", StringComparison.Ordinal)..];
+        render = render[..render.IndexOf("\n    }\n", StringComparison.Ordinal)];
+        Assert.Matches(
+            new Regex(@"default:\s*if \(change\.Outcome is \{ \} outcome\)\s*\{\s*_overlay\?\.ShowOutcome\(outcome\);\s*\}\s*else\s*\{\s*_overlay\?\.HideOverlay\(\);\s*\}"),
+            render);
+
+        // The failure flash, which fired before the text was typed and for errors alike, is gone; the pill hears about a
+        // failure only as an outcome.
+        Assert.DoesNotContain("ShowFailed", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("CleanupFailed", shell, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(shell, Regex.Escape("_overlay?.ShowOutcome(")));
     }
 
     private static PillOutcome Outcome(PillOutcomeKind kind) => kind switch

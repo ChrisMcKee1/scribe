@@ -136,15 +136,6 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue(desired.Line, ensureAlive: true, showsFor: outcome.OnScreen);
     }
 
-    public void ShowFailed(string? reason)
-    {
-        CancelPreview();
-        Unsubscribe();
-        var desired = new DesiredState(OverlayPipeProtocol.FailedLine(reason), OverlayDemand.Transient);
-        _desired = desired;
-        Enqueue(desired.Line, ensureAlive: true, showsFor: PillTiming.NoticeHold + PillTiming.FadeOut);
-    }
-
     public void HideOverlay()
     {
         CancelPreview();
@@ -410,7 +401,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
         catch (Exception ex)
         {
-            // The command word only: a FAILED, WARNING or outcome argument is user-facing text.
+            // The command word only: a WARNING or outcome argument is user-facing text.
             TryLog(LogLevel.Warning, ex, "Overlay command {Command} failed; tearing down for relaunch.", item.Verb);
             RecoverFromFailedWrite();
         }
@@ -1158,8 +1149,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         public static Command KeepWarmChanged { get; } = new(CommandKind.KeepWarm);
 
         /// <summary>
-        /// The command word alone, for the log. A FAILED, WARNING or outcome argument is user-facing text: a reason, or a
-        /// next step that can name a microphone.
+        /// The command word alone, for the log. A WARNING or outcome argument is user-facing text: a reason, or a next step
+        /// that can name a microphone.
         /// </summary>
         public string Verb => Kind switch
         {
@@ -1182,8 +1173,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         /// <summary>
         /// What a relaunched helper, or one being moved, is told to show: the state itself, unless it hides itself (a
-        /// dictation's outcome, or the failure flash). That is shown once, by its own command; replayed, a settings save
-        /// minutes after a dictation would flash its "Typed" again.
+        /// dictation's outcome). That is shown once, by its own command; replayed, a settings save minutes after a
+        /// dictation would flash its "Typed" again.
         /// </summary>
         public string ReplayLine => Demand == OverlayDemand.Transient ? OverlayPipeProtocol.Hide : Line;
     }

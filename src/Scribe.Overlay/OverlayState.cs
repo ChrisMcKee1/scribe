@@ -27,10 +27,4 @@ public enum OverlayState
 
     /// <summary>Part of the text was typed: an error icon, the error edge and the next step.</summary>
     PartlyTyped,
-
-    /// <summary>
-    /// The AI cleanup failure flash the outcomes replace, drawn like an error ("Intelligence failed" and the reason). Only
-    /// the app shell's <c>ShowFailed</c> still sends it; it goes once the shell shows outcomes.
-    /// </summary>
-    Failed,
 }

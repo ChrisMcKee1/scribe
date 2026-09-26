@@ -121,9 +121,6 @@ internal sealed class OverlayIpcServer : IDisposable
             case "PARTLYTYPED":
                 _window.ShowOutcome(OverlayState.PartlyTyped, arg);
                 break;
-            case "FAILED":
-                _window.ShowFailed(arg);
-                break;
             case "HIDE":
                 _window.Hide();
                 break;

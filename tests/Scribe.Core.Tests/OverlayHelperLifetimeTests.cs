@@ -191,20 +191,20 @@ public sealed class OverlayHelperLifetimeTests
     [Fact]
     public void A_command_stamped_before_the_commit_point_keeps_the_warm_helper()
     {
-        // The flash is stamped and queued while the consumer runs the due suspend. It does not keep the pill
-        // on screen, so only its stamp can veto the suspend and let it reach the helper that is still warm.
+        // The outcome is stamped and queued while the consumer runs the due suspend. It does not keep the pill
+        // on screen before it is shown, so only its stamp can veto the suspend and let it reach the helper that is still warm.
         var consumer = new Consumer();
         consumer.Show("WARMUP", OverlayDemand.None);
         consumer.Drain();
 
         consumer.AdvanceTo(Idle - 1);
-        consumer.Show("FAILED reason", OverlayDemand.Transient); // queued, not taken yet
+        consumer.Show("NOTHINGTYPED Try again", OverlayDemand.Transient); // queued, not taken yet
         consumer.AdvanceTo(Idle);
         consumer.Drain();
 
         Assert.Empty(consumer.At("Suspend"));
         Assert.Equal([0L], consumer.At("Launch"));
-        Assert.Equal([Idle], consumer.At("Write FAILED reason"));
+        Assert.Equal([Idle], consumer.At("Write NOTHINGTYPED Try again"));
     }
 
     [Fact]
@@ -292,11 +292,11 @@ public sealed class OverlayHelperLifetimeTests
     }
 
     [Fact]
-    public void A_failure_flash_never_earns_a_retry()
+    public void An_outcome_never_earns_a_retry()
     {
         var consumer = new Consumer();
         consumer.FailNextLaunches(1);
-        consumer.Show("FAILED reason", OverlayDemand.Transient);
+        consumer.Show("NOTHINGTYPED Try again", OverlayDemand.Transient);
         consumer.Drain();
 
         Assert.Null(consumer.Lifetime.RetryDueAtMs);
@@ -312,7 +312,7 @@ public sealed class OverlayHelperLifetimeTests
         consumer.Show("RECORDING", OverlayDemand.Sustained);
         consumer.Drain();
         consumer.AdvanceTo(300);
-        consumer.Show("FAILED reason", OverlayDemand.Transient); // held back: the cooldown is still running
+        consumer.Show("NOTHINGTYPED Try again", OverlayDemand.Transient); // held back: the cooldown is still running
         consumer.Drain();
 
         consumer.AdvanceTo(5_000);

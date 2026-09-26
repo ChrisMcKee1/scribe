@@ -159,15 +159,6 @@ internal sealed class DictationController : IDisposable
     public event Action<DictationPipelineReport>? PipelineReported;
 
     /// <summary>
-    /// Raised (on a background thread) when AI cleanup was enabled but failed at runtime, so the
-    /// dictation fell back to raw transcription. Carries a short reason for the failure overlay. It fires
-    /// before the text is typed; the dictation's outcome (<see cref="DictationStateChange.Outcome"/>) says the
-    /// same once the insertion has finished, and the shell's failure flash from this event goes once it shows
-    /// outcomes.
-    /// </summary>
-    public event Action<string>? CleanupFailed;
-
-    /// <summary>
     /// Raised (on a background thread) when text injection failed but the finalized transcript was
     /// preserved in <see cref="LastTranscriptStore"/>, so the shell can point the user at the tray
     /// recovery path instead of leaving the preserved text undiscoverable.
@@ -1275,21 +1266,20 @@ internal sealed class DictationController : IDisposable
 
                 if (cleanup.Outcome == CleanupOutcome.Failed)
                 {
-                    // Cleanup is unavailable or failed: keep the raw transcription, signal the UI FIRST
-                    // so the overlay flashes red immediately, then persist the failure on a background
-                    // thread. The failure log opens its own SQLite connection per call, so a busy
-                    // timeout there must never sit in front of raising the flash or injecting the raw
-                    // text. Cleanup stays enabled; runtime failures can retry on the next dictation.
+                    // Cleanup is unavailable or failed: keep the raw transcription and persist the failure on a
+                    // background thread. The failure log opens its own SQLite connection per call, so a busy
+                    // timeout there must never sit in front of injecting the raw text. The pill says so once the
+                    // text is in ("Typed without AI cleanup" and the reason; PillOutcome.Of). Cleanup stays enabled;
+                    // runtime failures can retry on the next dictation.
                     var reason = cleanup.FailureReason ?? "Intelligence failed.";
 
-                    // The reason is diagnostics-safe and goes to the overlay. The display detail, which
-                    // can name the endpoint's host or quote its own error, goes only to the Settings
-                    // failure log in the local database. The log line keeps to codes, as above.
+                    // The reason is diagnostics-safe and is what the pill shows. The display detail, which can name
+                    // the endpoint's host or quote its own error, goes only to the Settings failure log in the local
+                    // database. The log line keeps to codes, as above.
                     var localDetail = cleanup.DisplayDetail ?? reason;
                     _log.LogWarning(
                         "#{Id} AI cleanup failed ({Provider}, status {Status}); using raw transcription.",
                         session.Id, settings.AiCleanupProvider, _cleanup.Status);
-                    RaiseCleanupFailed(reason);
                     var rawForLog = result.Text;
                     _ = Task.Run(() => RecordCleanupFailure(settings, localDetail, rawForLog));
                 }
@@ -1697,18 +1687,6 @@ internal sealed class DictationController : IDisposable
         catch (Exception ex)
         {
             _log.LogWarning("A pipeline report handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
-        }
-    }
-
-    private void RaiseCleanupFailed(string reason)
-    {
-        try
-        {
-            CleanupFailed?.Invoke(reason);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning("A CleanupFailed handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
         }
     }
 

@@ -1713,10 +1713,10 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   hands the outcome on with the Idle change that ends the dictation (`DictationStateChange.Outcome`), under that
   change's revision, so a late outcome never covers a newer recording and nothing waits for it. A new recording or
   processing state replaces an outcome at once, and a hide during its hold is ignored. The holds and fades live in
-  `PillTiming`; the overlay keeps copies, which `OverlayPillSourceTests` checks. **The shell does not show outcomes
-  yet**: `App.RenderDictationState` still hides the pill on Idle, and its cleanup-failure and error handlers still
-  send `FAILED`, drawn in the error look with its old words. Rendering `change.Outcome` there (in place of the
-  hide) and retiring `FAILED`, `ShowFailed` and `DictationController.CleanupFailed` is the one step left.
+  `PillTiming`; the overlay keeps copies, which `OverlayPillSourceTests` checks. The shell's `RenderDictationState`
+  shows the change's outcome in place of the hide, and nothing else puts a failure on the pill: the old `FAILED`
+  flash, which fired before the text was typed and for errors alike, is gone with `ShowFailed` and the controller's
+  `CleanupFailed`, and the controller's `Error` reaches only the tray (`OverlayPipeProtocolTests` pins the shell).
 - **Never tie the helper to `DictationController.ModelsReleased`.** Releasing the speech models and
   ending the pill are separate decisions; the old wiring could end a newer recording's pill.
 - **The pill never activates itself.** Every show, the first after a launch included, is `AppWindow.Show(activateWindow:
