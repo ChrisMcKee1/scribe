@@ -48,7 +48,6 @@ public static class HotkeyText
         return string.Join("+", parts);
     }
 
-
     /// <summary>Describes a shortcut inside a sentence, including mouse buttons with an article.</summary>
     public static string SentenceName(HotkeyBinding binding, Func<uint, string?>? layoutName = null)
     {
@@ -94,7 +93,7 @@ public static class HotkeyText
     }
 
     /// <summary>"Hold" or "Press", for a sentence that starts with how a binding is used.</summary>
-    internal static string Verb(HotkeyMode mode) => mode == HotkeyMode.Toggle ? "Press" : "Hold";
+    public static string Verb(HotkeyMode mode) => mode == HotkeyMode.Toggle ? "Press" : "Hold";
 
     // Where a keyboard without Page Down or Page Up has them, for the Page keys these bindings use, in the order they use
     // them: many laptops have no such keys, and every other place that names the defaults says so.

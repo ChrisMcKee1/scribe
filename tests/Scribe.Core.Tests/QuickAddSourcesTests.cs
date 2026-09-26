@@ -90,5 +90,4 @@ public sealed class QuickAddSourcesTests
     }
 
     private sealed record Source(string HistoryText, DateTimeOffset TimestampUtc, long AddedAtRevision);
-
 }

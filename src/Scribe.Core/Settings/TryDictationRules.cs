@@ -170,7 +170,6 @@ public sealed record TryDictationResultView(
             true,
             TryDictationSummaryAction.None);
     }
-
 }
 
 public sealed record TryDictationResultViewInput(

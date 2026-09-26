@@ -154,5 +154,4 @@ public sealed class MicrophoneChoicesTests
 
         Assert.Contains(menu.Choices, choice => choice.Label == "Microphone (6- Insta360 Link 2 Pro)" + MicrophoneChoices.DefaultSuffix);
     }
-
 }

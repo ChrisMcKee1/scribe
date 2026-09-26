@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -47,7 +48,8 @@ public static partial class UsageAnalyzer
         IReadOnlyList<AppUsage> TopApps,
         IReadOnlyList<TrendPoint> Trend,
         IReadOnlyList<TermUsage> Terms,
-        TrendGranularity Granularity = TrendGranularity.Daily);
+        TrendGranularity Granularity = TrendGranularity.Daily,
+        TimeSpan LongestDictation = default);
 
     /// <summary>
     /// Computes one internally consistent snapshot. Every metric uses entries on or after
@@ -95,12 +97,10 @@ public static partial class UsageAnalyzer
 
         var apps = selected
             .GroupBy(
-                entry => string.IsNullOrWhiteSpace(entry.TargetApp) ? "Unknown app" : entry.TargetApp.Trim(),
+                entry => string.IsNullOrWhiteSpace(entry.TargetApp) ? "Unknown app" : AppDisplayName.For(entry.TargetApp.Trim()),
                 StringComparer.OrdinalIgnoreCase)
             .Select(group => new AppUsage(
-                string.IsNullOrWhiteSpace(group.First().TargetApp)
-                    ? "Unknown app"
-                    : group.OrderBy(entry => entry.TargetApp, StringComparer.Ordinal).First().TargetApp!.Trim(),
+                group.Key,
                 group.Count(),
                 group.Sum(entry => wordCounts[entry.Id])))
             .OrderByDescending(app => app.Dictations)
@@ -118,7 +118,8 @@ public static partial class UsageAnalyzer
             TopApps: apps,
             Trend: trend,
             Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare),
-            Granularity: granularity);
+            Granularity: granularity,
+            LongestDictation: TimeSpan.FromMilliseconds(selected.Count == 0 ? 0 : selected.Max(entry => Math.Max(0, entry.AudioMilliseconds))));
     }
 
     /// <summary>Counts Unicode letter/number words without assuming a particular language.</summary>
@@ -235,7 +236,7 @@ public static partial class UsageAnalyzer
                 var token = match.Value.TrimEnd('.', ',', ':', ';', '!', '?');
                 if (token.Length < 2 ||
                     coveredForms.Contains(token) ||
-                    !DictionarySuggestionMiner.IsJargonShaped(token))
+                    !DictionarySuggestionMiner.IsCandidate(token))
                 {
                     continue;
                 }

@@ -3286,7 +3286,6 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 disposable.Dispose();
             }
         }
-
     }
 
     /*

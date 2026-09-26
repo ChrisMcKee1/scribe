@@ -623,5 +623,4 @@ public sealed class AzureSettingsAccessTests
         Assert.True(open.ShowManualToggleButton);
         Assert.True(open.ShowEndpointPanel);
     }
-
 }

@@ -20,6 +20,7 @@ public partial class SettingsWindow
         UpdateDurationCustomVisibility(HistoryRetentionCombo, HistoryRetentionCustomBox);
         UpdateDurationCustomVisibility(MaxDictationCombo, MaxDictationCustomBox);
         UpdateDurationCustomVisibility(IdleReleaseCombo, IdleReleaseCustomBox);
+        RefreshHistorySettingsSummary();
     }
 
     private static void UpdateDurationCustomVisibility(ComboBox combo, Wpf.Ui.Controls.NumberBox customBox)
