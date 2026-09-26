@@ -90,6 +90,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ILibraryVocabularySource _libraryVocabulary;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
+    private readonly Func<Func<Task>, Task>? _runUpdateRestartGuard;
     private StoreUpdateService? _storeUpdates;
     private readonly ILogger<SettingsWindow> _log;
     private readonly TranscriptionOptions _runningTranscription;
@@ -276,6 +277,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ILibraryVocabularySource libraryVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
+        Func<Func<Task>, Task>? runUpdateRestartGuard = null,
         SessionDiagnostics? diagnostics = null)
     {
         _settingsRepository = settingsRepository;
@@ -301,6 +303,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _libraryVocabulary.Changed += OnLibraryVocabularyChanged;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
+        _runUpdateRestartGuard = runUpdateRestartGuard;
         _diagnostics = diagnostics;
         _log = log;
 
@@ -798,6 +801,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     private async void UpdateApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_runUpdateRestartGuard is not null)
+        {
+            await _runUpdateRestartGuard(ApplyUpdateAfterGuardAsync);
+            return;
+        }
+
+        await ApplyUpdateAfterGuardAsync();
+    }
+
+    private async Task ApplyUpdateAfterGuardAsync()
     {
         if (_updates?.IsStoreManaged == true)
         {

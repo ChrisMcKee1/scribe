@@ -349,7 +349,7 @@ public partial class App : Application
                 // Tray updates are best effort, and so is saying one failed.
             }
         });
-        _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
+        _tray.QuitRequested += TrayQuit;
         _tray.SettingsRequested += OpenSettings;
         _tray.CopyLastDictationRequested += CopyLastDictation;
         _tray.CopyRecentDictationRequested += CopyRecentDictation;
@@ -1417,11 +1417,55 @@ public partial class App : Application
         _quickAddWindow.UseHeardText(spoken);
     }
 
-    private void RestartToUpdate()
+    private async void TrayQuit()
     {
-        if (_updates?.ApplyNowAndRestart() != true)
+        await RunCloseGuardsThenAsync(CloseTrigger.TrayQuit, () =>
         {
-            ShowTrayNotice(TrayNotices.RestartFailed());
+            Shutdown();
+            return Task.CompletedTask;
+        });
+    }
+
+    private async void RestartToUpdate()
+    {
+        await RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, () =>
+        {
+            if (_updates?.ApplyNowAndRestart() != true)
+            {
+                ShowTrayNotice(TrayNotices.RestartFailed());
+            }
+
+            return Task.CompletedTask;
+        });
+    }
+
+    private async Task RunCloseGuardsThenAsync(CloseTrigger trigger, Func<Task> action)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(() => RunCloseGuardsThenAsync(trigger, action)).Task.Unwrap();
+            return;
+        }
+
+        var state = new AppExitCloseState(
+            _settingsWindow?.HasAppCloseChanges(trigger) == true,
+            _quickAddWindow?.HasAppCloseCorrection() == true);
+        var step = AppExitCloseGuard.First(state);
+        while (step is AppExitCloseStep.Settings or AppExitCloseStep.QuickAdd)
+        {
+            var accepted = step switch
+            {
+                AppExitCloseStep.Settings => _settingsWindow is null || await _settingsWindow.RequestAppCloseAsync(trigger),
+                AppExitCloseStep.QuickAdd => _quickAddWindow is null || await _quickAddWindow.RequestAppCloseAsync(),
+                _ => true,
+            };
+            var result = accepted ? AppExitCloseStepResult.Saved : AppExitCloseStepResult.KeepEditing;
+            step = AppExitCloseGuard.Next(step, result, state);
+        }
+
+        if (step == AppExitCloseStep.Proceed)
+        {
+            await action();
         }
     }
 
@@ -1617,6 +1661,7 @@ public partial class App : Application
                 services.GetRequiredService<ILibraryVocabularySource>(),
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
+                action => RunCloseGuardsThenAsync(CloseTrigger.UpdateRestart, action),
                 services.GetRequiredService<SessionDiagnostics>());
             _settingsWindow.Closed += (_, _) =>
             {
