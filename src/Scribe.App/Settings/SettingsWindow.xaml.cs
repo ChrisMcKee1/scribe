@@ -72,11 +72,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _settingsRecovered;
     private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
-    private readonly Action<AppSettings> _applySettings;
-    private readonly Action _reloadVocabulary;
-    // The library selection of the settings dictation runs on, for the usage report: after a failed Save _settings holds
-    // unsaved library switches, and a fresh read of the stored document may find it unreadable.
-    private readonly Func<IReadOnlyList<string>> _enabledLibrariesInUse;
+
+    // Both return the answer of the vocabulary generation the application asked for, which the window awaits before it
+    // says a stored change is in effect.
+    private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;
+    private readonly Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _reloadVocabulary;
+
+    // The committed library vocabulary dictation uses, which the usage report's library selection comes from: never the
+    // window's own library switches (after a failed Save _settings holds unsaved ones), and never a fresh read of the
+    // stored document, which may have turned unreadable.
+    private readonly ILibraryVocabularySource _libraryVocabulary;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
@@ -116,6 +121,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string _statsSummaryEmptyText = string.Empty;
 
     private UsageAnalyzer.Snapshot? _usageSnapshot;
+
+    // The library scope of the usage report the shown snapshot came from (UsageReport.Result.LibraryScope), set and
+    // cleared with the snapshot: the usage insight is handed over only under it, so its library labels never go once
+    // their library's AI permission narrowed or its content changed after the report was built (contract 3.3.6).
+    private AiVocabularyScope _usageLibraryScope = AiVocabularyScope.None;
     private bool _usageInsightRunning;
     private readonly LatestRequestCoalescer<UsagePeriodChoice> _usageLoads = new();
     private int _azureDeploymentLoadVersion;
@@ -185,9 +195,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AppPaths paths,
         StartupRegistration startup,
         Action<OverlayPosition> previewOverlay,
-        Action<AppSettings> applySettings,
-        Action reloadVocabulary,
-        Func<IReadOnlyList<string>> enabledLibrariesInUse,
+        Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> applySettings,
+        Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> reloadVocabulary,
+        ILibraryVocabularySource libraryVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         SessionDiagnostics? diagnostics = null)
@@ -208,7 +218,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
-        _enabledLibrariesInUse = enabledLibrariesInUse;
+        _libraryVocabulary = libraryVocabulary;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -1909,19 +1919,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // Save skips sections the user never touched, so a pre-existing data problem in one section
     // (e.g. a duplicate dictionary entry loaded from disk) can never block saving a change made in
     // another. The signatures capture everything the section's SaveAll would write; the matching
-    // snapshots live in the section's SettingsSectionLoad.
-    private string DictionarySignature() => string.Join(
-        "", _rows.Select(r => $"{r.Id}|{r.Pattern}|{r.Replacement}|{r.WholeWord}|{r.Enabled}"));
+    // snapshots live in the section's SettingsSectionLoad. Every value is framed (DraftSnapshot) and the
+    // rows are counted, so no text typed or pasted into a row can make changed rows sign like the saved
+    // ones: joined with a '|', a phrase "a" with the template "b|c" signed like "a|b" with "c", and a
+    // Save skipped the section, or closed over it while waiting for its vocabulary.
+    private string DictionarySignature() => new Scribe.Core.Vocabulary.DraftSnapshot()
+        .DictionaryRows([.. _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled))])
+        .Hash();
 
-    private string SnippetSignature() => string.Join(
-        "", _snippetRows.Select(r => $"{r.Id}|{r.Phrase}|{r.Template}|{r.Enabled}"));
+    private string SnippetSignature() => new Scribe.Core.Vocabulary.DraftSnapshot()
+        .SnippetRows([.. _snippetRows.Select(r => new SnippetBuilder.Row(r.Id, r.Phrase, r.Template, r.Enabled))])
+        .Hash();
 
     /// <summary>
     /// Which libraries are on. Used to detect a change made while an asynchronous scan was running,
     /// since a library toggled mid-scan silently changes which terms the verdict applies to.
     /// </summary>
-    private string LibrarySignature() => string.Join(
-        "", _libraryRows.Select(r => $"{r.Id}|{r.Enabled}"));
+    private string LibrarySignature() => new Scribe.Core.Vocabulary.DraftSnapshot()
+        .LibraryRows([.. _libraryRows.Select(r => (r.Id, r.Enabled))])
+        .Hash();
 
     /// <summary>Set once the window has closed, so async continuations know not to touch its controls.</summary>
     private bool _closed;
@@ -4943,8 +4959,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // Validates, persists and applies the settings. Returns true on success; on a validation problem
-    // or a save error it surfaces its own message, leaves the window open, and returns false.
+    // Validates, persists and applies the settings. Returns true on success; on a validation problem, a save error, a save
+    // whose vocabulary dictation could not load yet, or a save during which the window's draft changed, it surfaces its
+    // own message, leaves the window open, and returns false.
     private async Task<bool> TrySaveAsync()
     {
         // A Start with Windows change may still be saving its preference; writing the whole
@@ -5206,7 +5223,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             // The one place this window applies its own document, which SaveBundle has just stored. Anything else here
             // that has to put settings into effect uses the stored ones (StoredSettingsReapply).
-            _applySettings(_settings);
+            var applying = _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
             // no-op; important now that Save keeps the window open for page-by-page editing. Only
@@ -5219,6 +5236,36 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (snippets is not null)
             {
                 _snippetLoad.MarkSaved(snippetSignature);
+            }
+
+            // Reported as saved only once dictation can use what was stored: the dictionary and libraries reach it in the
+            // next vocabulary generation, built off this thread and awaited here, never waited on. A build that could not
+            // read the dictionary, or was not built by its deadline, leaves the settings saved and dictation on its
+            // previous vocabulary, which the window says, staying open. The window stays editable meanwhile, so its draft
+            // is taken now, when nothing since the controls were read could have taken an edit, and compared once the
+            // answer is in: an edit made while waiting is not in what was stored, so the Save is not reported complete and
+            // Save and close does not close over it. That edit stays in the window, unsaved, for the next Save.
+            var acknowledgement = Scribe.Core.Vocabulary.StoredChangeAcknowledgement.Watch(applying, SaveDraftSignature);
+            var outcome = await acknowledgement.CompleteAsync();
+            if (_closed)
+            {
+                return false;
+            }
+
+            if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.NotInUseYet)
+            {
+                ShowInfo(
+                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied("Settings saved"),
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                return false;
+            }
+
+            if (outcome == Scribe.Core.Vocabulary.StoredChangeOutcome.ChangedWhileSaving)
+            {
+                ShowInfo(
+                    Scribe.Core.Vocabulary.VocabularyNotice.SettingsChangedWhileSaving,
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                return false;
             }
 
             return true;
@@ -5246,6 +5293,106 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
     }
+
+    // What a Save stores, read the way the Save reads it, for the Save's check that nothing it stores changed while it
+    // waited for its vocabulary generation. Values stored straight from an editor come from walking the four pages whose
+    // controls a Save reads, each editor as typed (an editable combo box by its text, a number box by its text as well as
+    // its committed value), so an edit that would apply only when its editor loses focus, like a deployment typed into the
+    // Azure model picker, still counts. The rest are taken as the Save computes them: the hotkeys with their modes (a
+    // capture in progress, which applies only when its keys are released, shows in the hotkey boxes the walk reads, and
+    // in the capture flag), the AI cleanup switch and the microphone with any tray change still waiting, the Azure
+    // subscription the deployment resolves to, the profiles and the set of enabled libraries it writes, and whether the
+    // dictionary or the snippets differ from what storage holds (a read that finishes during the wait publishes what storage
+    // holds, so it is no change) or a grid row edit is in progress. The walk leaves out the controls one of those already
+    // carries, and the Start with Windows switch, which applies on its own when flipped: a Save stores the Windows
+    // observation it read before the wait, never the switch. Every value is framed by DraftSnapshot, and so are the row
+    // signatures behind the dictionary and snippet flags (DictionarySignature, SnippetSignature), so no text typed or
+    // pasted can make two different drafts alike, and the draft is hashed, so the copy the check keeps holds no key or
+    // secret; never logged.
+    private string SaveDraftSignature()
+    {
+        HashSet<DependencyObject> carriedElsewhere =
+        [
+            LaunchCheck, ModeCombo, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck, AzureSubscriptionBox,
+        ];
+        var draft = new Scribe.Core.Vocabulary.DraftSnapshot();
+        foreach (var page in new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi })
+        {
+            draft.Part(page.Name);
+            AppendEditorValues(page, carriedElsewhere, draft);
+        }
+
+        draft.Part("hotkeys")
+            .Binding(_pendingBinding with { Mode = SelectedMode })
+            .Binding(_pendingDictationOnlyBinding is null
+                ? null
+                : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode })
+            .Flag(_capturing);
+        draft.Part("intents")
+            .Flag(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
+            .Microphone(_externalMicrophone.ForSave(ShownMicrophone));
+        draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
+            _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
+        draft.Part("profiles").Profiles(BuildProfiles());
+        draft.Part("libraries").LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds);
+        draft.Part("rows")
+            .Flag(_dictionaryLoad.HasChanges(DictionarySignature()))
+            .Flag(_snippetLoad.HasChanges(SnippetSignature()))
+            .Flag(RowEditInProgress(DictionaryGrid))
+            .Flag(RowEditInProgress(LibraryGrid));
+        return draft.Hash();
+    }
+
+    // Every editor's value in the page's logical tree, whether shown or not, as the Save reads it, each after its kind: an
+    // editable combo box by its text, any other by its selection; a grid's rows are compared through their section instead.
+    private static void AppendEditorValues(DependencyObject node, HashSet<DependencyObject> skipped, Scribe.Core.Vocabulary.DraftSnapshot draft)
+    {
+        if (skipped.Contains(node))
+        {
+            return;
+        }
+
+        switch (node)
+        {
+            case DataGrid:
+                return;
+            case Wpf.Ui.Controls.PasswordBox secret:
+                draft.Part("password").Text(secret.Password);
+                break;
+            case Wpf.Ui.Controls.NumberBox number:
+                draft.Part("number").Text(number.Text).Number(number.Value);
+                break;
+            case TextBox text:
+                draft.Part("text").Text(text.Text);
+                break;
+            case PasswordBox secret:
+                draft.Part("password").Text(secret.Password);
+                break;
+            case System.Windows.Controls.Primitives.ToggleButton toggle:
+                draft.Part("toggle").Flag(toggle.IsChecked);
+                break;
+            case ComboBox { IsEditable: true } editable:
+                draft.Part("editable").Text(editable.Text);
+                break;
+            case ComboBox combo:
+                draft.Part("choice").Number(combo.SelectedIndex).Text(combo.Text);
+                break;
+            case Slider slider:
+                draft.Part("slider").Number(slider.Value);
+                break;
+        }
+
+        foreach (var child in LogicalTreeHelper.GetChildren(node))
+        {
+            if (child is DependencyObject element)
+            {
+                AppendEditorValues(element, skipped, draft);
+            }
+        }
+    }
+
+    private static bool RowEditInProgress(DataGrid grid) =>
+        grid.Items is IEditableCollectionView rows && (rows.IsEditingItem || rows.IsAddingNew);
 
     /// <summary>
     /// Builds the desired dictionary state from the grid rows, skipping blank placeholder rows.
@@ -6141,6 +6288,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // The shown snapshot no longer matches the request, so the insight button must not send it.
         _usageSnapshot = null;
+        _usageLibraryScope = AiVocabularyScope.None;
         RefreshUsageInsightAvailability();
 
         if (_usageLoads.Submit(period) is { } work)
@@ -6159,10 +6307,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 var request = work;
                 var now = DateTimeOffset.UtcNow;
-                var libraryIds = _enabledLibrariesInUse();
                 result = await Task.Run(
-                    () => UsageReport.Build(
-                        _history, _dictionary, _libraries, libraryIds, request.Value.Days, now, request.Cancellation),
+                    () =>
+                    {
+                        // The library service is a vocabulary source, so the report takes its library entries and its
+                        // shareable labels from one Current snapshot of that service and ignores these ids (contract
+                        // 3.3.6). The ids, those of the committed vocabulary dictation runs on (the libraries the settings
+                        // in use enable, never the window's unsaved switches), are what UsageReport reads a service that
+                        // is not a source by, as release 0.4.4 read the libraries, sharing no library label.
+                        var vocabulary = _libraryVocabulary.Current;
+                        return UsageReport.Build(
+                            _history,
+                            _dictionary,
+                            _libraries,
+                            [.. vocabulary.AiScope.PermittedLibraryIds],
+                            request.Value.Days,
+                            now,
+                            request.Cancellation);
+                    },
                     request.Cancellation);
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested)
@@ -6200,6 +6362,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void ShowUsage(UsagePeriodChoice period, UsageReport.Result result)
     {
         _usageSnapshot = result.Snapshot;
+        _usageLibraryScope = result.LibraryScope;
         var snapshot = _usageSnapshot;
 
         UsageCoverageText.Text = result.PeriodCapped
@@ -6251,6 +6414,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void ShowUsageFailure(Exception failure)
     {
         _usageSnapshot = null;
+        _usageLibraryScope = AiVocabularyScope.None;
         UsageCoverageText.Text = "Usage is temporarily unavailable.";
         UsageInsightText.Text = failure.Message;
         UsageInsightButton.IsEnabled = false;
@@ -6281,9 +6445,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // Only what is stored goes live. After a Save that failed, _settings still holds every edit it was given, a
             // picked AI cleanup provider among them, and applying it would send later dictations there with nothing
             // saved. The stored settings rebuild the post-processor and the glossary with the new entry; when none can be
-            // used, only the vocabulary reloads.
-            StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);
-            ShowInfo($"Added \"{term.Text}\" to your dictionary.");
+            // used, only the vocabulary reloads. Either way the entry is said to be added once dictation can use it.
+            var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);
+            var refresh = await reapplied.Vocabulary;
+            if (_closed)
+            {
+                return;
+            }
+
+            if (refresh.Applied)
+            {
+                ShowInfo($"Added \"{term.Text}\" to your dictionary.");
+            }
+            else
+            {
+                ShowInfo(
+                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied($"Added \"{term.Text}\" to your dictionary"),
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            }
+
             LoadUsage();
         }
         catch (Exception ex)
@@ -6314,6 +6494,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        // Taken with the snapshot, so the summary goes under the scope of the report it was built from.
+        var libraryScope = _usageLibraryScope;
+
         if (_cleanup.Recipient is not { } recipient)
         {
             UsageInsightText.Text = "Configure a ready AI cleanup model to generate an insight.";
@@ -6325,18 +6508,30 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageInsightText.Text = "Generating insight…";
         try
         {
+            // Every request, the first attempt and each retry, goes only while the report's library scope is still
+            // permitted and its libraries' content is unchanged.
             var completion = await _cleanup.CompleteAsync(
                 UsageInsight.SystemPrompt,
                 UsageInsight.BuildSummary(snapshot),
-                recipient);
+                recipient,
+                libraryScope);
             if (!InsightStillApplies(snapshot))
             {
                 return;
             }
 
-            UsageInsightText.Text = completion.Outcome == CompletionOutcome.RecipientChanged
-                ? "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again."
-                : UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.";
+            UsageInsightText.Text = completion.Outcome switch
+            {
+                ScopedCompletionOutcome.RecipientChanged when completion.NothingSent =>
+                    "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again.",
+
+                // A later attempt was stopped after an earlier one had gone, so this must not say nothing was sent.
+                ScopedCompletionOutcome.RecipientChanged or ScopedCompletionOutcome.NotReady =>
+                    "AI cleanup changed while the insight was being requested, so it was stopped. Try again.",
+                ScopedCompletionOutcome.LibraryScopeNarrowed =>
+                    "Usage changed while the insight was being prepared. Generate it again.",
+                _ => UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.",
+            };
         }
         catch (Exception ex)
         {

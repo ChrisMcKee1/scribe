@@ -9,6 +9,7 @@ using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Scribe.Core.Vocabulary;
 
 namespace Scribe.Core.Tests;
 
@@ -90,16 +91,19 @@ public sealed class StoredSettingsReapplyTests : IDisposable
         // The Add stores the entry, as PersistLearnedDictionaryEntries does, then puts it into effect.
         _dictionary.AddRange([DictionaryEntry.New(Term.ToLowerInvariant(), Term)]);
         var applied = new List<AppSettings>();
+        var answer = Task.FromResult(new VocabularyRefresh(VocabularyRefreshOutcome.Applied, VocabularyGeneration.Empty));
         var outcome = StoredSettingsReapply.Reapply(
             _settings,
             settings =>
             {
                 applied.Add(settings);
                 cleanup.Configure(OptionsFor(settings));
+                return answer;
             },
-            () => Assert.Fail("The stored settings are readable, so they are what goes live."));
+            () => throw new InvalidOperationException("The stored settings are readable, so they are what goes live."));
 
-        Assert.Equal(StoredSettingsReapplied.StoredSettings, outcome);
+        Assert.Equal(StoredSettingsReapplied.StoredSettings, outcome.Reapplied);
+        Assert.Same(answer, outcome.Vocabulary);
         Assert.Equal(CleanupProvider.FoundryLocal, Assert.Single(applied).AiCleanupProvider);
         Assert.Equal(CleanupProvider.AzureFoundry, editing.AiCleanupProvider);
         Assert.Equal("picked-deployment", editing.AiCleanupAzureDeployment);
@@ -135,12 +139,70 @@ public sealed class StoredSettingsReapplyTests : IDisposable
 
         var applied = new List<AppSettings>();
         var reloads = 0;
-        var outcome = StoredSettingsReapply.Reapply(_settings, applied.Add, () => reloads++);
+        var answer = Task.FromResult(new VocabularyRefresh(VocabularyRefreshOutcome.Applied, VocabularyGeneration.Empty));
+        var outcome = StoredSettingsReapply.Reapply(
+            _settings,
+            settings =>
+            {
+                applied.Add(settings);
+                return answer;
+            },
+            () =>
+            {
+                reloads++;
+                return answer;
+            });
 
-        Assert.Equal(StoredSettingsReapplied.VocabularyOnly, outcome);
+        Assert.Equal(StoredSettingsReapplied.VocabularyOnly, outcome.Reapplied);
+        Assert.Same(answer, outcome.Vocabulary);
         Assert.Empty(applied);
         Assert.Equal(1, reloads);
         Assert.True(_settings.LastLoadFailed);
+    }
+
+    [Theory]
+    [InlineData("readable")]
+    [InlineData("unreadable")]
+    public async Task The_result_completes_only_once_the_generation_built_from_the_stored_dictionary_is_published(string state)
+    {
+        // Dictation's vocabulary is built by the publisher, with the build held here: the Usage page's Add may say the
+        // entry was added only once the result's answer, which it awaits, is in; that is when the next dictation takes it.
+        var saved = AppSettings.CreateDefault();
+        saved.EnabledDictionaryLibraryIds = [];
+        _settings.Save(saved);
+        var inUse = _settings.Load();
+        var queued = new List<Action>();
+        var processor = new TextPostProcessor(_dictionary, NullLogger<TextPostProcessor>.Instance);
+        using var publisher = new VocabularyPublisher(
+            new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds),
+            _dictionary,
+            processor,
+            NullLogger<VocabularyPublisher>.Instance,
+            queued.Add);
+        var starting = publisher.StartAsync();
+        Assert.Single(queued)();
+        queued.Clear();
+        var before = (await starting.WaitAsync(Bound)).Generation;
+        if (state == "unreadable")
+        {
+            _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
+        }
+
+        _dictionary.AddRange([DictionaryEntry.New(Term.ToLowerInvariant(), Term)]);
+        var reapplied = StoredSettingsReapply.Reapply(_settings, _ => publisher.RefreshAsync(), publisher.RefreshAsync);
+
+        Assert.Equal(
+            state == "readable" ? StoredSettingsReapplied.StoredSettings : StoredSettingsReapplied.VocabularyOnly,
+            reapplied.Reapplied);
+        Assert.False(reapplied.Vocabulary.IsCompleted);
+        Assert.Same(before, publisher.Current);
+
+        Assert.Single(queued)();
+        var refresh = await reapplied.Vocabulary.WaitAsync(Bound);
+        Assert.Equal(VocabularyRefreshOutcome.Applied, refresh.Outcome);
+        Assert.Same(refresh.Generation, publisher.Current);
+        Assert.Contains(refresh.Generation.Dictionary, entry => entry.Replacement == Term);
+        Assert.Equal(Term, processor.ProcessDetailed(Term.ToLowerInvariant(), null, publisher.Current.Rules).Text);
     }
 
     // Checked only at the commit, a reference to an audio blob that does not exist makes SQLite refuse it, and the
