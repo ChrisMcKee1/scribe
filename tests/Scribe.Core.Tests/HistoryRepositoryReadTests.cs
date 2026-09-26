@@ -92,6 +92,40 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     [Fact]
 
+    public void Search_uses_sqlite_like_for_text_and_friendly_app_names_for_apps()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        var ascii = repository.Add(Entry("ASCII case match"));
+
+        var accentNullApp = repository.Add(Entry("Été forecast"));
+
+        var accentWithApp = repository.Add(Entry("Été plan", targetApp: "notepad"));
+
+        var app = repository.Add(Entry("plain text", targetApp: "notepad"));
+
+
+
+        var accentResults = repository.Search("été", 10);
+
+        Assert.DoesNotContain(accentResults, entry => entry.Id == accentNullApp.Id);
+
+        Assert.DoesNotContain(accentResults, entry => entry.Id == accentWithApp.Id);
+
+        Assert.Contains(repository.Search("ascii", 10), entry => entry.Id == ascii.Id);
+
+        Assert.Contains(repository.Search("Notepad", 10), entry => entry.Id == app.Id);
+
+    }
+
+
+
+    [Fact]
+
     public void Search_is_newest_first_and_capped()
 
     {
@@ -152,7 +186,7 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
         var inner = new HistoryRepository(database);
 
-        using var writer = new HistoryWriter(inner, NullLogger<HistoryWriter>.Instance);
+        var writer = new CompletingWriter(() => inner.Add(Entry("needle from the accepted write")));
 
         var ordered = new OrderedHistoryRepository(
 
@@ -168,32 +202,47 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
 
 
-        Assert.True(writer.Enqueue(Entry("needle from the accepted write"), audio: null));
-
-
-
         Assert.Contains(ordered.Search("accepted write", 10), entry => entry.Text == "needle from the accepted write");
+
+        Assert.True(writer.Waited);
 
     }
 
 
 
     private sealed class CompletingWriter(Action complete) : IHistoryWriter
+
     {
+
         public bool Waited { get; private set; }
 
+
+
         public bool Enqueue(HistoryEntry entry, CapturedAudio? audio, long dictationId = 0) =>
+
             throw new NotSupportedException();
 
+
+
         public bool WaitForAcceptedWrites(TimeSpan timeout)
+
         {
+
             Waited = true;
+
             complete();
+
             return true;
+
         }
 
+
+
         public HistoryDrainResult Complete(TimeSpan timeout) => new(true, 0, 0);
+
     }
+
+
 
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-09-26T12:00:00Z");
 

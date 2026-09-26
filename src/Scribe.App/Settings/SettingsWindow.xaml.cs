@@ -116,8 +116,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ObservableCollection<HistoryRow> _historyRows = new();
     private readonly List<HistoryRow> _historyPagedRows = new();
     private readonly HistoryDeletionNotifier? _historyDeletionNotifier;
+    private readonly HistoryReadGeneration _historyMutationGeneration = new();
     private CancellationTokenSource? _historySearchDelay;
     private long _historySearchTicket;
+    private long _historyOlderTicket;
     private bool _historyLoadedOlder;
     private bool _historyMayHaveOlder;
     private bool _historyOlderLoading;

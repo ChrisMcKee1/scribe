@@ -206,7 +206,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         }
 
         using var connection = _database.Open();
-        using var command = CreateHistoryReadCommand(connection);
+        using var command = CreateHistoryReadCommand(connection, ", text LIKE $query ESCAPE '\\' AS text_match");
         command.CommandText +=
             """
              FROM history
@@ -221,7 +221,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         while (reader.Read() && results.Count < limit)
         {
             var entry = ReadHistoryEntry(reader);
-            if (MatchesSearch(entry, query))
+            if (reader.GetInt64(10) != 0 || FriendlyAppMatches(entry, query))
             {
                 results.Add(entry);
             }
@@ -230,7 +230,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         return results;
     }
 
-    private SqliteCommand CreateHistoryReadCommand(SqliteConnection connection)
+    private SqliteCommand CreateHistoryReadCommand(SqliteConnection connection, string extraSelect = "")
     {
         var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
         var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
@@ -242,7 +242,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         command.CommandText =
             $"""
             SELECT id, timestamp_utc, text, audio_ms, decode_ms, {cleanupExpression},
-                   target_app, audio_blob_id, {modelExpression}, {ratingExpression}
+                   target_app, audio_blob_id, {modelExpression}, {ratingExpression}{extraSelect}
             """;
         return command;
     }
@@ -272,12 +272,9 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9));
 
-    private static bool MatchesSearch(HistoryEntry entry, string query) =>
-        ContainsAsciiFold(entry.Text, query) ||
-        (!string.IsNullOrWhiteSpace(entry.TargetApp) && ContainsAsciiFold(AppDisplayName.For(entry.TargetApp), query));
-
-    private static bool ContainsAsciiFold(string? value, string query) =>
-        value?.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+    private static bool FriendlyAppMatches(HistoryEntry entry, string query) =>
+        !string.IsNullOrWhiteSpace(entry.TargetApp) &&
+        AppDisplayName.For(entry.TargetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static string EscapeLike(string query) =>
         query.Replace("\\", "\\\\", StringComparison.Ordinal)

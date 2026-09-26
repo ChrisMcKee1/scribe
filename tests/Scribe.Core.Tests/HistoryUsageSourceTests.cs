@@ -48,7 +48,7 @@ public sealed class HistoryUsageSourceTests
         var history = Read("SettingsWindow.History.cs");
         var rate = Body(history, "private async void RateHistoryRow(");
         Assert.DoesNotMatch(new Regex(@"_historyRows\[\w+\]\s*=(?!=)"), rate);
-        Assert.Equal(2, Regex.Matches(rate, @"ReplaceHistoryRow\(").Count);
+        Assert.Contains("UpdateHistoryRowById(id", rate, StringComparison.Ordinal);
 
         var replace = Body(history, "private void ReplaceHistoryRow(");
         Assert.Contains("ReferenceEquals(HistoryGrid.SelectedItem, _historyRows[index])", replace, StringComparison.Ordinal);
@@ -80,6 +80,24 @@ public sealed class HistoryUsageSourceTests
         var retry = Body(Read("SettingsWindow.History.cs"), "private void HistoryRetryButton_Click(");
         Assert.Contains("ApplyHistoryLoadState(loadFailed: false, loading: true);", retry, StringComparison.Ordinal);
         Assert.DoesNotContain("HistoryStatusPanel.Visibility", retry, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void History_deletion_matching_uses_the_persisted_row_id()
+    {
+        var covers = Body(Read("SettingsWindow.History.cs"), "private static bool HistoryDeletionCoversRow(");
+        Assert.Contains("entry.Id == row.Id", covers, StringComparison.Ordinal);
+        Assert.DoesNotContain("entry.Text", covers, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Older_page_completion_clears_loading_before_search_or_stale_return()
+    {
+        var loadOlder = Body(Read("SettingsWindow.History.cs"), "private async void HistoryLoadOlderButton_Click(");
+        Assert.Contains(
+            "if (ticket == Interlocked.Read(ref _historyOlderTicket))\r\n        {\r\n            _historyOlderLoading = false;\r\n        }\r\n\r\n        if (_closed || !_historyMutationGeneration.IsCurrent(generation) || IsHistorySearchActive())",
+            loadOlder,
+            StringComparison.Ordinal);
     }
 
     private static string Read(string file) => File.ReadAllText(Path.Combine(SettingsFolder(), file));

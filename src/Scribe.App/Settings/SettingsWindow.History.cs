@@ -26,6 +26,7 @@ public partial class SettingsWindow
             return;
         }
 
+        var generation = _historyMutationGeneration.Capture();
         IReadOnlyList<HistoryEntry> entries;
         try
         {
@@ -44,7 +45,7 @@ public partial class SettingsWindow
             return;
         }
 
-        if (!_historyLoad.Publish(ticket, string.Empty))
+        if (!_historyLoad.Publish(ticket, string.Empty) || !_historyMutationGeneration.IsCurrent(generation))
         {
             return;
         }
@@ -115,6 +116,8 @@ public partial class SettingsWindow
 
         _historyOlderLoading = true;
         _historyOlderLoadFailed = false;
+        var ticket = Interlocked.Increment(ref _historyOlderTicket);
+        var generation = _historyMutationGeneration.Capture();
         UpdateHistoryRangeLine();
 
         IReadOnlyList<HistoryEntry> entries;
@@ -124,19 +127,28 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            _historyOlderLoading = false;
-            _historyOlderLoadFailed = true;
+            if (ticket == Interlocked.Read(ref _historyOlderTicket))
+            {
+                _historyOlderLoading = false;
+                _historyOlderLoadFailed = _historyMutationGeneration.IsCurrent(generation);
+            }
+
             TryLog(ex, "Could not load older dictation history for Settings.");
             UpdateHistoryRangeLine();
             return;
         }
 
-        if (_closed || IsHistorySearchActive())
+        if (ticket == Interlocked.Read(ref _historyOlderTicket))
         {
+            _historyOlderLoading = false;
+        }
+
+        if (_closed || !_historyMutationGeneration.IsCurrent(generation) || IsHistorySearchActive())
+        {
+            UpdateHistoryRangeLine();
             return;
         }
 
-        _historyOlderLoading = false;
         _historyOlderLoadFailed = false;
         _historyLoadedOlder = true;
         _historyMayHaveOlder = entries.Count > HistoryRowFormat.RecentLimit;
@@ -160,10 +172,11 @@ public partial class SettingsWindow
         var source = new CancellationTokenSource();
         _historySearchDelay = source;
         var ticket = Interlocked.Increment(ref _historySearchTicket);
-        _ = RunHistorySearchAsync(query, ticket, debounce, source.Token);
+        var generation = _historyMutationGeneration.Capture();
+        _ = RunHistorySearchAsync(query, ticket, generation, debounce, source.Token);
     }
 
-    private async Task RunHistorySearchAsync(string query, long ticket, bool debounce, CancellationToken cancellationToken)
+    private async Task RunHistorySearchAsync(string query, long ticket, long generation, bool debounce, CancellationToken cancellationToken)
     {
         try
         {
@@ -173,7 +186,11 @@ public partial class SettingsWindow
             }
 
             var entries = await Task.Run(() => _history.Search(query, HistoryRowFormat.RecentLimit), cancellationToken);
-            if (cancellationToken.IsCancellationRequested || _closed || ticket != Interlocked.Read(ref _historySearchTicket) || !string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal))
+            if (cancellationToken.IsCancellationRequested ||
+                _closed ||
+                ticket != Interlocked.Read(ref _historySearchTicket) ||
+                !_historyMutationGeneration.IsCurrent(generation) ||
+                !string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal))
             {
                 return;
             }
@@ -189,7 +206,7 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            if (_closed || ticket != Interlocked.Read(ref _historySearchTicket))
+            if (_closed || ticket != Interlocked.Read(ref _historySearchTicket) || !_historyMutationGeneration.IsCurrent(generation))
             {
                 return;
             }
@@ -408,6 +425,7 @@ public partial class SettingsWindow
         }
 
         ReplaceHistoryRow(index, row with { Rating = next, RatingPending = true });
+        UpdateHistoryCachedRow(id, cached => cached with { Rating = next, RatingPending = true });
 
         var saved = false;
         try
@@ -426,11 +444,8 @@ public partial class SettingsWindow
             return;
         }
 
-        var current = IndexOfHistoryRow(id);
-        if (current >= 0)
-        {
-            ReplaceHistoryRow(current, _historyRows[current] with { Rating = shown, RatingPending = false });
-        }
+        _historyMutationGeneration.CompleteRatingWrite(saved);
+        UpdateHistoryRowById(id, current => current with { Rating = shown, RatingPending = false });
 
         UpdateHistorySelection();
 
@@ -485,6 +500,27 @@ public partial class SettingsWindow
         }
     }
 
+    private void UpdateHistoryRowById(long id, Func<HistoryRow, HistoryRow> update)
+    {
+        if (IndexOfHistoryRow(id) is >= 0 and var shownIndex)
+        {
+            ReplaceHistoryRow(shownIndex, update(_historyRows[shownIndex]));
+        }
+        else
+        {
+            UpdateHistoryCachedRow(id, update);
+        }
+    }
+
+    private void UpdateHistoryCachedRow(long id, Func<HistoryRow, HistoryRow> update)
+    {
+        var pageIndex = _historyPagedRows.FindIndex(row => row.Id == id);
+        if (pageIndex >= 0)
+        {
+            _historyPagedRows[pageIndex] = update(_historyPagedRows[pageIndex]);
+        }
+    }
+
     private void OnHistoryDeleted(HistoryDeletion deletion)
     {
         _ = Dispatcher.BeginInvoke(() => ApplyHistoryDeletion(deletion));
@@ -497,6 +533,7 @@ public partial class SettingsWindow
             return;
         }
 
+        _historyMutationGeneration.AdvanceForDeletion();
         var selectedId = SelectedHistory?.Id;
         _historyPagedRows.RemoveAll(row => HistoryDeletionCoversRow(deletion, row));
         for (var i = _historyRows.Count - 1; i >= 0; i--)
@@ -527,7 +564,7 @@ public partial class SettingsWindow
         deletion.Kind switch
         {
             HistoryDeletionKind.Entry when deletion.Entry is { } entry =>
-                entry.Id == row.Id || string.Equals(entry.Text, row.Text, StringComparison.Ordinal),
+                entry.Id == row.Id,
             HistoryDeletionKind.Clear => true,
             HistoryDeletionKind.OlderThan when deletion.CutoffUtc is { } cutoff => row.TimestampUtc < cutoff,
             _ => false,
