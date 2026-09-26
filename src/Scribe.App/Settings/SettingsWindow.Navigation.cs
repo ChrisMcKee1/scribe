@@ -37,10 +37,8 @@ public partial class SettingsWindow
     [
         SectionDictation,
         SectionAdvanced,
-        SectionRecordingIndicator,
         SectionAi,
         SectionDictionary,
-        SectionWordPacks,
         SectionVoiceSnippets,
         SectionAppProfiles,
         SectionTryDictation,

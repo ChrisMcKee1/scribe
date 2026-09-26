@@ -228,6 +228,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
 
         InitializeComponent();
+        InitializeNavigation();
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -1053,8 +1054,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
             DictationOnlyModeCombo.SelectedIndex = ModeIndex(_pendingDictationOnlyBinding?.Mode ?? HotkeyMode.Hold);
-            DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Hint;
-            MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;
+            DefaultHotkeysHintText.Text = "Restores hold Page Down for dictation and hold Page Up for the shortcut without AI cleanup.";
+            MouseButtonsHintText.Text = string.Empty;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
@@ -1065,9 +1066,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             StoreAudioHintText.Text = StorageRetentionPolicy.StoredAudioHint;
             ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
             SpaceAfterDictationCheck.IsChecked = _settings.AddSpaceAfterDictation;
-            MaxDictationBox.Value = Math.Clamp(_settings.MaxDictationMinutes, 0, 1440);
-            IdleReleaseBox.Value = Math.Clamp(_settings.ReleaseModelsAfterIdleMinutes, 0, 120);
-            HistoryRetentionBox.Value = Math.Clamp(_settings.HistoryRetentionDays, 0, 3650);
+            LoadDurationChoices(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, _settings.HistoryRetentionDays);
+            LoadDurationChoices(MaxDictationCombo, MaxDictationCustomBox, DurationChoiceKind.MaxDictation, _settings.MaxDictationMinutes);
+            LoadDurationChoices(IdleReleaseCombo, IdleReleaseCustomBox, DurationChoiceKind.IdleRelease, _settings.ReleaseModelsAfterIdleMinutes);
             HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
 
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
@@ -1078,8 +1079,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             NewlineCombo.SelectedItem =
                 newlineItems.FirstOrDefault(i => i.Mode == _settings.NewlineHandling) ?? newlineItems[0];
 
-            ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
-            UpdateThreadsLabel();
+            ThreadsCombo.ItemsSource = ThreadChoices.Build(_settings.DecodeThreads);
+            ThreadsCombo.SelectedValuePath = nameof(ThreadChoice.Value);
+            ThreadsCombo.SelectedValue = _settings.DecodeThreads;
             TranscriptionModelCombo.SelectedItem =
                 TranscriptionModelCatalog.Resolve(_settings.TranscriptionModelId);
             UpdateTranscriptionModelUi();
@@ -2534,9 +2536,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Threads -------------------------------------------------------------------------
 
-    private void ThreadsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
-        UpdateThreadsLabel();
-
     private void TranscriptionModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_loadingUi)
@@ -2591,17 +2590,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TranscriptionModelProgress.Visibility = Visibility.Collapsed;
             UpdateTranscriptionModelUi();
         }
-    }
-
-    private void UpdateThreadsLabel()
-    {
-        if (ThreadsLabel is null)
-        {
-            return;
-        }
-
-        var value = (int)ThreadsSlider.Value;
-        ThreadsLabel.Text = value == 0 ? "Auto" : value.ToString();
     }
 
     // --- AI cleanup ----------------------------------------------------------------------
@@ -5117,11 +5105,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // NumberBox.Value is a nullable double: a cleared box falls back to the saved value
             // rather than silently becoming 0, which here means "off/forever".
             _settings.MaxDictationMinutes =
-                ClampNumberBox(MaxDictationBox.Value, _settings.MaxDictationMinutes, 1440);
+                SelectedDurationValue(MaxDictationCombo, MaxDictationCustomBox, _settings.MaxDictationMinutes);
             _settings.ReleaseModelsAfterIdleMinutes =
-                ClampNumberBox(IdleReleaseBox.Value, _settings.ReleaseModelsAfterIdleMinutes, 120);
+                SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, _settings.ReleaseModelsAfterIdleMinutes);
             _settings.HistoryRetentionDays =
-                ClampNumberBox(HistoryRetentionBox.Value, _settings.HistoryRetentionDays, 3650);
+                SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, _settings.HistoryRetentionDays);
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =
@@ -5134,7 +5122,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
             }
 
-            _settings.DecodeThreads = (int)ThreadsSlider.Value;
+            _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
                 ((TranscriptionModel?)TranscriptionModelCombo.SelectedItem)?.Id ??
                 TranscriptionModelCatalog.DefaultId;

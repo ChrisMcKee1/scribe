@@ -529,7 +529,8 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Contains("_capture.Release(HotkeyCapture.VirtualKeyOf(e.ChangedButton), ActiveSelectedMode)", code);
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(code, @"if \(step\.Handled\)\s*\{\s*e\.Handled = true;").Count);
         Assert.Contains("AddHook(CaptureNonClientMouseButtons)", code);
-        Assert.Contains("MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;", code);
+        Assert.Contains("x:Name=\"MouseButtonsHintText\"", xaml);
+        Assert.Contains("MouseButtonsHintText.Text = string.Empty;", code);
     }
 
     [Fact]
@@ -540,7 +541,8 @@ public sealed class HotkeyCaptureSessionTests
         var xaml = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
         var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
 
-        Assert.Contains("Hold: keep the key, mouse button, chord or shortcut down while speaking.", xaml);
+        Assert.Contains("Choose Change, then press a key, two keys or a mouse button", xaml);
+        Assert.Contains("Press and hold", code);
         Assert.DoesNotContain("two-part chord", xaml);
         Assert.Contains("The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.", code);
     }
