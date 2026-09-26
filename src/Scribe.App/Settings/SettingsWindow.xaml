@@ -1598,11 +1598,14 @@
                         </StackPanel>
                         <TabControl x:Name="DictionaryTabs" Grid.Row="1">
                             <TabItem x:Name="YourWordsTab" Header="Your words">
-                                <Grid>
+                                <!-- The tab scrolls as a whole only when a short window at large text can't hold its rows and a
+                                     usable grid; the grid row's height is fitted in code (FitYourWordsGridToScroll). -->
+                                <ScrollViewer x:Name="YourWordsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="YourWordsScroll_ScrollChanged">
+                                <Grid x:Name="YourWordsContent">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
+                                        <RowDefinition x:Name="YourWordsGridRow" Height="300"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <Grid x:Name="DictionaryTextChangesNotice" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,8">
@@ -1613,12 +1616,16 @@
                                         <ui:InfoBar x:Name="DictionaryTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
                                         <ui:Button x:Name="DictionaryTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
                                     </Grid>
-                                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                                    <Grid x:Name="YourWordsToolbarGrid" Grid.Row="1" Margin="0,0,0,10" SizeChanged="YourWordsToolbarGrid_SizeChanged">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <WrapPanel Grid.Column="0" Orientation="Horizontal">
+                                        <WrapPanel x:Name="YourWordsToolbarButtons" Grid.Column="0" Orientation="Horizontal">
                                             <ui:Button x:Name="DictionaryAddButton" Padding="8,5" Content="Add word"
                                                        Icon="{ui:SymbolIcon Add24}"
                                                        Margin="0,0,4,0" Click="DictionaryAddButton_Click"
@@ -1761,6 +1768,7 @@
                                         </ui:CardExpander>
                                     </StackPanel>
                                 </Grid>
+                                </ScrollViewer>
                             </TabItem>
                             <TabItem x:Name="WordPacksTab" Header="Word packs">
                                 <Grid x:Name="SectionWordPacks" SizeChanged="SectionWordPacks_SizeChanged">

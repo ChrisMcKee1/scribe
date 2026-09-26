@@ -389,6 +389,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         SectionVoiceSnippets.SizeChanged += (_, _) => ApplyListPaneWidths();
         ProfileMainGrid.SizeChanged += (_, _) => ApplyListPaneWidths();
 
+        // Your words' column minimums need the columns' natural widths, which exist once its page has been laid out.
+        DictionaryGrid.IsVisibleChanged += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, UpdateDictionaryColumnMinimums);
+
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>
         {
