@@ -5959,62 +5959,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
         draft.Part("profiles").Profiles(BuildProfiles());
         draft.Part("libraries").LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds);
-        draft.Part("word-pack-workspace");
-        AppendWordPackDraftSignature(draft);
+        WordPackDraftSignature.Write(draft, _wordPackWorkspace);
         draft.Part("rows")
             .Text(DictionarySignature())
             .Text(SnippetSignature())
             .Flag(RowEditInProgress(DictionaryGrid))
             .Flag(RowEditInProgress(LibraryGrid));
         return draft.Hash();
-    }
-
-    private void AppendWordPackDraftSignature(Scribe.Core.Vocabulary.DraftSnapshot draft)
-    {
-        if (_wordPackWorkspace is null)
-        {
-            draft.Text(null);
-            return;
-        }
-
-        var snapshot = _wordPackWorkspace.Draft;
-        draft.Number(snapshot.BaseGeneration).Number(snapshot.Libraries.Count);
-        foreach (var library in snapshot.Libraries)
-        {
-            var content = library.Content;
-            draft.Part("pack")
-                .Text(content.Id)
-                .Flag(content.BuiltIn)
-                .Text(content.Name)
-                .Text(content.Category)
-                .Text(content.Description)
-                .Text(content.BasedOn)
-                .Number((long)library.Origin)
-                .Number((long)library.State)
-                .Flag(library.PendingDelete)
-                .Flag(snapshot.LocalState.EnabledIds.Contains(content.Id))
-                .Flag(_wordPackWorkspace.ShowsAiPermission(content.Id))
-                .Number(content.Rows.Count);
-            foreach (var row in content.Rows)
-            {
-                draft.Part("term")
-                    .Text(row.Values.Spoken)
-                    .Text(row.Values.Written)
-                    .Flag(row.Values.WholeWord)
-                    .Flag(row.Values.Enabled)
-                    .Number((long)row.Origin);
-            }
-        }
-
-        draft.Part("recently-deleted").Number(snapshot.RecentlyDeleted.Count);
-        foreach (var entry in snapshot.RecentlyDeleted)
-        {
-            draft.Text(entry.EntryName)
-                .Text(entry.OriginalId)
-                .Text(entry.Name)
-                .Number(entry.TermCount)
-                .Number((long)entry.State);
-        }
     }
 
     // Every editor's value in the page's logical tree, whether shown or not, as the Save reads it, each after its kind: an

@@ -10,6 +10,7 @@ namespace Scribe.Core.Settings;
 public sealed class WordPackSaveProtocol
 {
     private readonly IWordPackSaveProtocolStore _store;
+    private readonly SemaphoreSlim _settlementGate = new(1, 1);
     private WordPackSaveSession? _pending;
     private long _pendingGeneration;
 
@@ -102,6 +103,7 @@ public sealed class WordPackSaveProtocol
             }
         }
 
+        string? standingWarning = null;
         if (session is not null && outcome is not null)
         {
             var wordPackResult = await ApplyOutcomeAsync(session, outcome, transactionError, request).ConfigureAwait(true);
@@ -109,6 +111,8 @@ public sealed class WordPackSaveProtocol
             {
                 return wordPackResult;
             }
+
+            standingWarning = wordPackResult.Message;
         }
         else if (transactionError is not null)
         {
@@ -120,7 +124,10 @@ public sealed class WordPackSaveProtocol
             return WordPackSaveProtocolResult.Error("Could not save settings.");
         }
 
-        return await AcknowledgePublicationAsync(request, savedDraft).ConfigureAwait(true);
+        var acknowledgement = await AcknowledgePublicationAsync(request, savedDraft).ConfigureAwait(true);
+        return acknowledgement.Success && standingWarning is not null
+            ? WordPackSaveProtocolResult.Warning(standingWarning)
+            : acknowledgement;
     }
 
     public async Task<WordPackSaveProtocolResult> TrySettlePendingAsync(WordPackSaveProtocolRequest request)
@@ -131,35 +138,55 @@ public sealed class WordPackSaveProtocol
             return WordPackSaveProtocolResult.SuccessResult();
         }
 
-        LibraryCatalog catalog;
+        await _settlementGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            catalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
-        }
-        catch
-        {
-            return WordPackSaveProtocolResult.Warning(
-                "Scribe is still finishing an earlier save. Try again in a moment.");
-        }
-
-        var pending = _pending;
-        if (catalog.Generation == _pendingGeneration)
-        {
-            pending.MarkSaved(catalog);
-            ClearPending();
-            request.OnWordPacksChanged?.Invoke();
-            var repairs = await SavePendingReferenceRepairsAsync(pending).ConfigureAwait(true);
-            if (!repairs.Success)
+            var pending = _pending;
+            var pendingGeneration = _pendingGeneration;
+            if (pending is null)
             {
-                return repairs;
+                return WordPackSaveProtocolResult.SuccessResult();
             }
 
-            return await AcknowledgePublicationAsync(request, request.CaptureDraft()).ConfigureAwait(true);
-        }
+            LibraryCatalog catalog;
+            try
+            {
+                catalog = await _store.LoadCatalogAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                return WordPackSaveProtocolResult.Warning(
+                    "Scribe is still finishing an earlier save. Try again in a moment.");
+            }
 
-        ClearPending();
-        request.OnWordPacksChanged?.Invoke();
-        return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+            if (!ReferenceEquals(_pending, pending) || _pendingGeneration != pendingGeneration)
+            {
+                return WordPackSaveProtocolResult.Warning(
+                    "Scribe is still finishing an earlier save. Try again in a moment.");
+            }
+
+            if (catalog.Generation == pendingGeneration)
+            {
+                pending.MarkSaved(catalog);
+                ClearPending();
+                request.OnWordPacksChanged?.Invoke();
+                var repairs = await SavePendingReferenceRepairsAsync(pending).ConfigureAwait(true);
+                if (!repairs.Success)
+                {
+                    return repairs;
+                }
+
+                return await AcknowledgePublicationAsync(request, request.CaptureDraft()).ConfigureAwait(true);
+            }
+
+            ClearPending();
+            request.OnWordPacksChanged?.Invoke();
+            return WordPackSaveProtocolResult.Warning("Your word pack changes weren't saved. Your edits are still here.");
+        }
+        finally
+        {
+            _settlementGate.Release();
+        }
     }
 
     private async Task<WordPackSaveProtocolResult> ApplyOutcomeAsync(
@@ -188,7 +215,7 @@ public sealed class WordPackSaveProtocol
 
                 if (outcome.Status == LibrarySaveStatus.AppliedAwaitingRelease)
                 {
-                    return WordPackSaveProtocolResult.Warning(
+                    return WordPackSaveProtocolResult.SuccessResult(
                         "Saved. Close the word pack file in the other app so Scribe can finish.");
                 }
 

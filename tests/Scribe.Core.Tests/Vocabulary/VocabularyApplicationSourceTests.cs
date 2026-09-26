@@ -182,7 +182,7 @@ public sealed class VocabularyApplicationSourceTests
             ".LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)",
             ".Text(DictionarySignature())",
             ".Text(SnippetSignature())",
-            "AppendWordPackDraftSignature(draft);",
+            "WordPackDraftSignature.Write(draft, _wordPackWorkspace);",
             ".Flag(RowEditInProgress(DictionaryGrid))",
             ".Flag(RowEditInProgress(LibraryGrid))",
             "return draft.Hash();",
