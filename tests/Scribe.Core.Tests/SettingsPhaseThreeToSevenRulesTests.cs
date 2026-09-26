@@ -119,6 +119,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(FoundryLocalSetupStage.DownloadingOrLoading, AiCleanupStatusKind.Busy, null, false)]
     [InlineData(FoundryLocalSetupStage.Loaded, AiCleanupStatusKind.Success, "Unload", true)]
     [InlineData(FoundryLocalSetupStage.Failed, AiCleanupStatusKind.Error, "Try again", false)]
+    [InlineData(FoundryLocalSetupStage.ModelFailed, AiCleanupStatusKind.Error, "Try again", false)]
     public void Foundry_setup_describes_one_next_action(
         FoundryLocalSetupStage stage,
         AiCleanupStatusKind kind,
@@ -130,6 +131,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(kind, state.Kind);
         Assert.Equal(action, state.ActionText);
         Assert.Equal(canUnload, state.CanUnload);
+        Assert.Equal(stage, state.Stage);
     }
 
     [Theory]
@@ -138,7 +140,15 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(CleanupStatus.Disabled, true, true, null, FoundryLocalSetupStage.Checking)]
     [InlineData(CleanupStatus.Disabled, true, true, true, FoundryLocalSetupStage.Loaded)]
     [InlineData(CleanupStatus.Unavailable, true, true, false, FoundryLocalSetupStage.CachedUnloaded)]
-    [InlineData(CleanupStatus.Unavailable, true, false, null, FoundryLocalSetupStage.Failed)]
+    [InlineData(CleanupStatus.Unavailable, true, false, null, FoundryLocalSetupStage.ModelFailed)]
+    [InlineData(CleanupStatus.Unavailable, true, false, false, FoundryLocalSetupStage.ModelFailed)]
+    [InlineData(CleanupStatus.Unavailable, false, false, null, FoundryLocalSetupStage.Failed)]
+    [InlineData(CleanupStatus.Unavailable, false, true, null, FoundryLocalSetupStage.Failed)]
+    [InlineData(CleanupStatus.Unavailable, true, true, null, FoundryLocalSetupStage.Checking)]
+    [InlineData(CleanupStatus.Downloading, true, true, false, FoundryLocalSetupStage.DownloadingOrLoading)]
+    [InlineData(CleanupStatus.Downloading, true, true, null, FoundryLocalSetupStage.DownloadingOrLoading)]
+    [InlineData(CleanupStatus.Initializing, false, false, null, FoundryLocalSetupStage.SettingUp)]
+    [InlineData(CleanupStatus.Ready, true, true, null, FoundryLocalSetupStage.Loaded)]
     [InlineData(CleanupStatus.Disabled, false, false, false, FoundryLocalSetupStage.NotSetUp)]
     public void Foundry_setup_distinguishes_cached_and_unknown_residency(
         CleanupStatus status,
@@ -471,7 +481,9 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { CleanupProvider.AzureFoundry, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
         { CleanupProvider.GitHubCopilot, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
         { CleanupProvider.GitHubCopilot, CleanupStatus.Initializing, null, "On. Getting ready..." },
-        { CleanupProvider.GitHubCopilot, CleanupStatus.Unavailable, null, "On, but not ready. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.GitHubCopilot, CleanupStatus.Unavailable, null, "On, but not ready: GitHub Copilot isn't installed." },
+        { CleanupProvider.GitHubCopilot, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, null, "On, but not ready. Until it's ready, Scribe types what it hears." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Initializing, null, "On. Getting ready..." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Connection refused", "On, but not ready: Connection refused. Until it's ready, Scribe types what it hears." },
@@ -526,5 +538,88 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         saved.AiCleanupCustomModel = "qwen";
         var draft = saved.Clone();
         return AiCleanupPageState.Describe(saved, draft, status, customSetup: setup, safeReason: safeReason);
+    }
+
+    [Fact]
+    public void A_cached_model_loads_and_unloads_through_the_expected_page_states()
+    {
+        // Load pressed: the service reports Downloading while it loads the cached model, then Ready; Unload publishes
+        // Unavailable with the model still on disk (TextCleanupService.DecideResidentChange).
+        var steps = new (CleanupStatus Status, bool? Loaded, FoundryLocalSetupStage Stage, string Line, string? Action)[]
+        {
+            (CleanupStatus.Disabled, false, FoundryLocalSetupStage.CachedUnloaded, "On. Getting ready...", "Load"),
+            (CleanupStatus.Downloading, false, FoundryLocalSetupStage.DownloadingOrLoading, "On. Getting ready...", null),
+            (CleanupStatus.Ready, true, FoundryLocalSetupStage.Loaded, "On. Using Qwen3 1.7B on this PC.", "Unload"),
+            (CleanupStatus.Unavailable, false, FoundryLocalSetupStage.CachedUnloaded, "On. Getting ready...", "Load"),
+        };
+
+        foreach (var (status, loaded, stage, line, action) in steps)
+        {
+            var mapped = FoundryLocalSetup.FromCleanupStatus(status, runtimeReady: true, modelCached: true, modelLoaded: loaded);
+            Assert.Equal(stage, mapped);
+
+            var page = ActiveFoundry(FoundryLocalSetup.Describe(mapped, "Qwen3 1.7B", "about 1.3 GB"), status);
+            Assert.Equal(line, page.StatusLine);
+            Assert.Equal(action, page.StatusRow!.ActionText);
+        }
+    }
+
+    [Fact]
+    public void Runtime_ready_without_a_model_reads_getting_ready_on_the_top_card()
+    {
+        var page = ActiveFoundry(FoundryLocalSetup.Describe(FoundryLocalSetupStage.RuntimeReady, "Qwen3 1.7B", "about 1.3 GB"), CleanupStatus.Disabled);
+
+        Assert.Equal("On. Getting ready...", page.StatusLine);
+        Assert.Equal("Ready to download Qwen3 1.7B (about 1.3 GB).", page.StatusRow!.Text);
+        Assert.Equal("Download and load", page.StatusRow.ActionText);
+    }
+
+    [Fact]
+    public void A_model_that_failed_after_the_runtime_came_up_is_not_a_runtime_failure()
+    {
+        var page = ActiveFoundry(FoundryLocalSetup.Describe(FoundryLocalSetupStage.ModelFailed, "Qwen3 1.7B"), CleanupStatus.Unavailable);
+
+        Assert.Equal("On, but not ready. Until it's ready, Scribe types what it hears.", page.StatusLine);
+        Assert.Equal("Couldn't download or load Qwen3 1.7B. Try again, or choose another model.", page.StatusRow!.Text);
+        Assert.DoesNotContain("runtime", page.StatusRow.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_failed_model_list_does_not_stop_a_running_deployment()
+    {
+        var page = ActiveAzure(new AzureAiSetupState(AzureSetupResult.ListingFailed, SafeReason: "Azure denied access."), CleanupStatus.Ready);
+
+        Assert.Equal("On. AI cleanup is ready.", page.StatusLine);
+        Assert.Equal(AiCleanupStatusKind.Error, page.StatusRow!.Kind);
+        Assert.Equal("Couldn't list your models. Azure denied access.", page.StatusRow.Text);
+    }
+
+    [Fact]
+    public void A_known_setup_problem_explains_an_unavailable_service_and_a_reason_explains_the_rest()
+    {
+        Assert.Equal(
+            "On, but not ready: Azure CLI isn't installed.",
+            ActiveAzure(new AzureAiSetupState(AzureSetupResult.CliMissing), CleanupStatus.Unavailable).StatusLine);
+        Assert.Equal(
+            "On, but not ready: you're not signed in to Azure.",
+            ActiveAzure(new AzureAiSetupState(AzureSetupResult.NotSignedIn), CleanupStatus.Unavailable, "ignored when the cause is known").StatusLine);
+        Assert.Equal(
+            "On. AI cleanup is ready.",
+            ActiveAzure(new AzureAiSetupState(AzureSetupResult.CliMissing), CleanupStatus.Ready).StatusLine);
+        Assert.Equal(
+            "On, but not ready: Copilot didn't answer. Until it's ready, Scribe types what it hears.",
+            ActiveCopilot(new CopilotSetupState(CopilotSetupResult.ModelsListed), CleanupStatus.Unavailable, "Copilot didn't answer").StatusLine);
+        Assert.Equal(
+            "On. AI cleanup is ready.",
+            ActiveCopilot(new CopilotSetupState(CopilotSetupResult.ModelsListed), CleanupStatus.Ready).StatusLine);
+    }
+
+    private static AiCleanupPageDescription ActiveFoundry(FoundryLocalSetupDescription setup, CleanupStatus status)
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.FoundryLocal;
+        var draft = saved.Clone();
+        return AiCleanupPageState.Describe(saved, draft, status, foundrySetup: setup, modelName: "Qwen3 1.7B");
     }
 }

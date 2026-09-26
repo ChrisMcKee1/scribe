@@ -225,16 +225,35 @@ public static class AiCleanupPageState
             ? new AiCleanupStatusRow2(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new("Set up"))
             : new AiCleanupStatusRow2(setup.Kind, setup.Text, setup.ActionText is null ? null : new(setup.ActionText, setup.CanUnload || setup.ActionText != "Unload"));
         var model = string.IsNullOrWhiteSpace(modelName) ? "the selected model" : modelName;
-        var line = row.Kind switch
+
+        // The top card follows the setup stage (the 6.2.1 rows), not the row's color: "Ready to download" is an Info row
+        // whose top card still reads "Getting ready".
+        var line = (setup?.Stage ?? FoundryLocalSetupStage.NotSetUp) switch
         {
-            AiCleanupStatusKind.Success => $"On. Using {model} on this PC.",
-            AiCleanupStatusKind.Busy => "On. Getting ready...",
-            AiCleanupStatusKind.Error => "On, but not ready. Until it's ready, Scribe types what it hears.",
-            AiCleanupStatusKind.Info when row.Text == "No model is loaded." => "On. Getting ready...",
+            FoundryLocalSetupStage.Loaded => $"On. Using {model} on this PC.",
+            FoundryLocalSetupStage.SettingUp or FoundryLocalSetupStage.RuntimeReady or FoundryLocalSetupStage.CachedUnloaded
+                or FoundryLocalSetupStage.Checking or FoundryLocalSetupStage.DownloadingOrLoading => "On. Getting ready...",
+            FoundryLocalSetupStage.Failed or FoundryLocalSetupStage.ModelFailed => NotReadyLine,
             _ => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
         };
         return new(true, line, null, row);
     }
+
+    private const string NotReadyLine = "On, but not ready. Until it's ready, Scribe types what it hears.";
+
+    // The saved, active remote provider's top card reports the running service (plan 6.2.1 "after Save: live status").
+    // A discovery or verification outcome belongs to the setup row: a failed model list does not stop a running
+    // deployment. A known setup problem only explains why the service is unavailable.
+    private static string LiveRemoteLine(CleanupStatus liveStatus, string? knownCause, string? safeReason) => liveStatus switch
+    {
+        CleanupStatus.Ready => "On. AI cleanup is ready.",
+        CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
+        CleanupStatus.Unavailable when knownCause is not null => knownCause,
+        CleanupStatus.Unavailable when !string.IsNullOrWhiteSpace(safeReason) =>
+            $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
+        CleanupStatus.Unavailable => NotReadyLine,
+        _ => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
+    };
 
     private static AiCleanupPageDescription DescribeRemote(
         CleanupStatus status,
@@ -276,28 +295,15 @@ public static class AiCleanupPageState
 
     private static AiCleanupPageDescription DescribeAzure(CleanupStatus liveStatus, AzureAiSetupState setup, string? safeReason)
     {
-        var row = AzureRow(setup);
-        var line = liveStatus switch
+        var knownCause = setup.Result switch
         {
-            CleanupStatus.Ready => setup.Result switch
-            {
-                AzureSetupResult.CliMissing => "On, but not ready: Azure CLI isn't installed.",
-                AzureSetupResult.NotSignedIn or AzureSetupResult.SigningIn => "On, but not ready: you're not signed in to Azure.",
-                AzureSetupResult.ServicePrincipalIncomplete => "On, but not ready: the app details aren't complete.",
-                AzureSetupResult.ApiKeyIncomplete => "On, but not ready: enter the endpoint, deployment name and key.",
-                AzureSetupResult.ListingFailed or AzureSetupResult.ApiKeyVerificationFailed or AzureSetupResult.ServicePrincipalVerificationFailed =>
-                    "On, but not ready. Until it's ready, Scribe types what it hears.",
-                AzureSetupResult.NotChecked => "On. Choose Check sign-in to continue.",
-                _ => "On. AI cleanup is ready.",
-            },
-            CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
-            CleanupStatus.Unavailable => string.IsNullOrWhiteSpace(safeReason)
-                ? "On, but not ready. Until it's ready, Scribe types what it hears."
-                : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
-            CleanupStatus.Disabled => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
-            _ => "On. Choose Check sign-in to continue.",
+            AzureSetupResult.CliMissing => "On, but not ready: Azure CLI isn't installed.",
+            AzureSetupResult.NotSignedIn or AzureSetupResult.SigningIn => "On, but not ready: you're not signed in to Azure.",
+            AzureSetupResult.ServicePrincipalIncomplete => "On, but not ready: the app details aren't complete.",
+            AzureSetupResult.ApiKeyIncomplete => "On, but not ready: enter the endpoint, deployment name and key.",
+            _ => null,
         };
-        return new(true, line, null, row);
+        return new(true, LiveRemoteLine(liveStatus, knownCause, safeReason), null, AzureRow(setup));
     }
 
     private static AiCleanupStatusRow2 AzureRow(AzureAiSetupState setup) => setup.Result switch
@@ -320,23 +326,10 @@ public static class AiCleanupPageState
 
     private static AiCleanupPageDescription DescribeCopilot(CleanupStatus liveStatus, CopilotSetupState setup, string? safeReason)
     {
-        var row = CopilotRow(setup);
-        var line = liveStatus switch
-        {
-            CleanupStatus.Ready => setup.Result switch
-            {
-                CopilotSetupResult.ToolNotFound => "On, but not ready: GitHub Copilot isn't installed.",
-                CopilotSetupResult.NotChecked => "On. Choose Get models to see what your subscription includes.",
-                _ => "On. AI cleanup is ready.",
-            },
-            CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
-            CleanupStatus.Unavailable => string.IsNullOrWhiteSpace(safeReason)
-                ? "On, but not ready. Until it's ready, Scribe types what it hears."
-                : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
-            CleanupStatus.Disabled => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
-            _ => "On. Choose Get models to see what your subscription includes.",
-        };
-        return new(true, line, null, row);
+        var knownCause = setup.Result is CopilotSetupResult.ToolNotFound or CopilotSetupResult.Installing
+            ? "On, but not ready: GitHub Copilot isn't installed."
+            : null;
+        return new(true, LiveRemoteLine(liveStatus, knownCause, safeReason), null, CopilotRow(setup));
     }
 
     private static AiCleanupStatusRow2 CopilotRow(CopilotSetupState setup) => setup.Result switch
@@ -349,21 +342,8 @@ public static class AiCleanupPageState
         _ => new(AiCleanupStatusKind.Info, "Not checked yet.", new("Get models")),
     };
 
-    private static AiCleanupPageDescription DescribeCustom(CleanupStatus liveStatus, CustomEndpointSetupState setup, string? safeReason)
-    {
-        var row = CustomRow(setup);
-        var line = liveStatus switch
-        {
-            CleanupStatus.Ready => "On. AI cleanup is ready.",
-            CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
-            CleanupStatus.Unavailable => string.IsNullOrWhiteSpace(safeReason)
-                ? "On, but not ready. Until it's ready, Scribe types what it hears."
-                : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
-            CleanupStatus.Disabled => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
-            _ => "On. Set up the AI service, then test the connection.",
-        };
-        return new(true, line, null, row);
-    }
+    private static AiCleanupPageDescription DescribeCustom(CleanupStatus liveStatus, CustomEndpointSetupState setup, string? safeReason) =>
+        new(true, LiveRemoteLine(liveStatus, knownCause: null, safeReason), null, CustomRow(setup));
 
     private static AiCleanupStatusRow2 CustomRow(CustomEndpointSetupState setup) => setup.Result switch
     {

@@ -12,13 +12,15 @@ public enum FoundryLocalSetupStage
     DownloadingOrLoading,
     Loaded,
     Failed,
+    ModelFailed,
 }
 
 public sealed record FoundryLocalSetupDescription(
     AiCleanupStatusKind Kind,
     string Text,
     string? ActionText,
-    bool CanUnload);
+    bool CanUnload,
+    FoundryLocalSetupStage Stage = FoundryLocalSetupStage.NotSetUp);
 
 public static class FoundryLocalSetup
 {
@@ -30,7 +32,7 @@ public static class FoundryLocalSetup
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
         var size = string.IsNullOrWhiteSpace(modelSize) ? "the model" : modelSize;
-        return stage switch
+        FoundryLocalSetupDescription description = stage switch
         {
             FoundryLocalSetupStage.NotSetUp => new(
                 AiCleanupStatusKind.Warning,
@@ -48,8 +50,14 @@ public static class FoundryLocalSetup
                 "Couldn't start the on-device AI runtime. Try again, or choose another AI service.",
                 "Try again",
                 false),
+            FoundryLocalSetupStage.ModelFailed => new(
+                AiCleanupStatusKind.Error,
+                $"Couldn't download or load {modelName}. Try again, or choose another model.",
+                "Try again",
+                false),
             _ => throw new ArgumentOutOfRangeException(nameof(stage), stage, null),
         };
+        return description with { Stage = stage };
     }
 
     public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached) =>
@@ -57,28 +65,54 @@ public static class FoundryLocalSetup
 
     public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached, bool? modelLoaded)
     {
+        // Work in progress outranks what is settled: the service reports Downloading while it loads a cached model
+        // (TextCleanupService publishes it before LoadAsync), so a cached model must not offer another Load meanwhile.
+        switch (status)
+        {
+            case CleanupStatus.Initializing:
+                return FoundryLocalSetupStage.SettingUp;
+            case CleanupStatus.Downloading:
+                return FoundryLocalSetupStage.DownloadingOrLoading;
+        }
+
+        // Known residency decides next. A manual unload publishes Unavailable (DecideResidentChange), which is not a
+        // failure: the model is on disk and one Load away.
         if (modelLoaded == true)
         {
             return FoundryLocalSetupStage.Loaded;
         }
 
-        if (modelLoaded == false && modelCached)
+        if (modelLoaded == false)
         {
-            return FoundryLocalSetupStage.CachedUnloaded;
+            if (modelCached)
+            {
+                return FoundryLocalSetupStage.CachedUnloaded;
+            }
+
+            return status == CleanupStatus.Unavailable ? Failure(runtimeReady)
+                : runtimeReady ? FoundryLocalSetupStage.RuntimeReady
+                : FoundryLocalSetupStage.NotSetUp;
         }
 
-        if (modelLoaded is null && modelCached)
+        if (status == CleanupStatus.Ready)
         {
-            return FoundryLocalSetupStage.Checking;
+            return FoundryLocalSetupStage.Loaded;
         }
 
-        return status switch
+        if (modelCached)
         {
-            CleanupStatus.Ready => FoundryLocalSetupStage.Loaded,
-            CleanupStatus.Initializing => FoundryLocalSetupStage.SettingUp,
-            CleanupStatus.Downloading => FoundryLocalSetupStage.DownloadingOrLoading,
-            CleanupStatus.Unavailable => FoundryLocalSetupStage.Failed,
-            _ => runtimeReady ? FoundryLocalSetupStage.RuntimeReady : FoundryLocalSetupStage.NotSetUp,
-        };
+            return status == CleanupStatus.Unavailable && !runtimeReady
+                ? FoundryLocalSetupStage.Failed
+                : FoundryLocalSetupStage.Checking;
+        }
+
+        return status == CleanupStatus.Unavailable ? Failure(runtimeReady)
+            : runtimeReady ? FoundryLocalSetupStage.RuntimeReady
+            : FoundryLocalSetupStage.NotSetUp;
     }
+
+    // Unavailable after the runtime came up means the model could not be found, downloaded or loaded; only a runtime
+    // that never came up is the runtime failure.
+    private static FoundryLocalSetupStage Failure(bool runtimeReady) =>
+        runtimeReady ? FoundryLocalSetupStage.ModelFailed : FoundryLocalSetupStage.Failed;
 }
