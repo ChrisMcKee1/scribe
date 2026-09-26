@@ -301,7 +301,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>
-            (PresentationSource.FromVisual(this) as HwndSource)?.AddHook(CaptureNonClientMouseButtons);
+        {
+            if (PresentationSource.FromVisual(this) is HwndSource source)
+            {
+                source.AddHook(CaptureNonClientMouseButtons);
+                source.AddHook(WordPackDpiChangedHook);
+            }
+        };
         RefreshAiStatus();
         InitializeUpdateCard();
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";

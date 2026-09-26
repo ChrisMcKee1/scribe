@@ -41,4 +41,26 @@ public sealed class WordPackUiTextTests
     {
         Assert.Equal(expected, WordPackUiText.MarkerLabel(marker));
     }
+
+    [Fact]
+    public void Word_pack_text_columns_stay_text_columns_for_typing_tab()
+    {
+        var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        Assert.Contains("<DataGridTextColumn x:Name=\"LibraryTermSpokenColumn\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("<DataGridTextColumn x:Name=\"LibraryTermWrittenColumn\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("CellStyle=\"{StaticResource WordPackWrittenCell}\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("<DataGridTemplateColumn x:Name=\"LibraryTermWrittenColumn\"", xaml, StringComparison.Ordinal);
+    }
+
+    private static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return root.FullName;
+    }
 }

@@ -25,6 +25,8 @@ namespace Scribe.App.Settings;
 
 public partial class SettingsWindow
 {
+    private const int WmDpiChanged = 0x02E0;
+
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     private LibraryWorkspace? _wordPackWorkspace;
     private LibraryCatalog? _wordPackCatalog;
@@ -99,6 +101,7 @@ public partial class SettingsWindow
     {
         LibraryGrid.ItemsSource = _libraryRows;
         DataGridCheckBoxClick.Attach(LibraryGrid);
+        DataGridTypingTab.Attach(LibraryTermsGrid);
 
         // The Word packs tab stages switches in the workspace. Save commits the workspace's change set with the
         // settings document, then marks exactly that change set saved after the library journal publishes it.
@@ -308,6 +311,12 @@ public partial class SettingsWindow
         {
             RefreshTermRows(_selectedLibraryId);
         }
+
+        if (_librarySearchResult.IsActive)
+        {
+            var packs = _librarySearchResult.Libraries.Count(library => library.Count > 0);
+            AnnounceFrom(LibrarySearchBox, $"{_librarySearchResult.TotalMatches:N0} matches in {packs:N0} word packs");
+        }
     }
 
     private void ApplySearchState(LibraryRow row)
@@ -490,7 +499,6 @@ public partial class SettingsWindow
         AddTermCommand(menu, commands, row, TermCommands.TurnOn, "Turn on", () => SetWordPackTermEnabled(row, true));
         AddTermCommand(menu, commands, row, TermCommands.Delete, "Delete word", () => DeleteWordPackTerm(row));
         AddTermCommand(menu, commands, row, TermCommands.RestoreBuiltIn, "Restore the built-in version", () => RestoreBuiltInTerm(row));
-        AddTermCommand(menu, commands, row, TermCommands.ShowOtherSources, "Show other word packs with this word", () => OpenWordDetails(row));
         AddTermCommand(menu, commands, row, TermCommands.Copy, "Copy", () => ScribeClipboard.SetText($"{row.Pattern},{row.Replacement}"));
         AddTermCommand(menu, commands, row, TermCommands.CopyToDictionary, "Copy to my dictionary", () => CopyWordPackTermToDictionary(row));
         menu.IsOpen = true;
@@ -726,7 +734,7 @@ public partial class SettingsWindow
         var restore = new Button { Content = "Restore word pack", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0) };
         var purge = new Button { Content = "Delete permanently", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0) };
         var close = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
-        var dialog = new Window
+        var dialog = new Wpf.Ui.Controls.FluentWindow
         {
             Title = $"Recently deleted ({_wordPackWorkspace.Draft.RecentlyDeleted.Count})",
             Owner = this,
@@ -747,9 +755,13 @@ public partial class SettingsWindow
                 }
             }
         };
-        purge.Click += (_, _) =>
+        purge.Click += async (_, _) =>
         {
-            if (list.SelectedItem is RecentlyDeletedRow row)
+            if (list.SelectedItem is RecentlyDeletedRow row &&
+                await ConfirmRiskyAsync(
+                    "Delete word pack permanently",
+                    $"Delete {row.Entry.Name} permanently? This can't be undone.",
+                    "Delete permanently"))
             {
                 _wordPackWorkspace.DeletePermanently(row.Entry);
                 dialog.DialogResult = true;
@@ -804,6 +816,7 @@ public partial class SettingsWindow
         {
             LibraryRenameValidation.Text = LibraryEditor.Message(issue);
             LibraryRenameValidation.Visibility = Visibility.Visible;
+            AnnounceFrom(LibraryDetailRenameBox, LibraryRenameValidation.Text);
             return;
         }
 
@@ -996,8 +1009,42 @@ public partial class SettingsWindow
         LibraryDetailEmpty.Text = SearchNoMatchesText(libraryId);
         LibraryEmptyActionButton.Content = _librarySearchResult?.IsActive == true ? $"Add \"{_librarySearchResult.Query}\" to this word pack" : "Add first word";
         LibraryEmptyActionButton.Visibility = _wordPackWorkspace.CanEditContent(libraryId) ? Visibility.Visible : Visibility.Collapsed;
+        RefreshSearchLinks(libraryId);
         UpdateLibraryTermCount(rows.Count);
         RefreshWordDetails();
+    }
+
+    private void RefreshSearchLinks(string libraryId)
+    {
+        LibrarySearchLinksPanel.Children.Clear();
+        if (_librarySearchResult?.IsActive != true || _wordPackWorkspace is null || _librarySearchResult.CountIn(libraryId) > 0)
+        {
+            return;
+        }
+
+        foreach (var match in _librarySearchResult.FoundElsewhere(libraryId).Take(5))
+        {
+            if (_wordPackWorkspace.Draft.Find(match.LibraryId) is not { } pack)
+            {
+                continue;
+            }
+
+            var button = new Wpf.Ui.Controls.Button
+            {
+                Content = $"{pack.Content.Name} ({match.Count:N0})",
+                Appearance = Wpf.Ui.Controls.ControlAppearance.Transparent,
+                Margin = new Thickness(0, 0, 8, 4),
+            };
+            button.Click += (_, _) =>
+            {
+                LibraryGrid.SelectedItem = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, match.LibraryId, StringComparison.OrdinalIgnoreCase));
+                if (_wordPackLayout?.SideBySide == false)
+                {
+                    ShowWordPackCardPage();
+                }
+            };
+            LibrarySearchLinksPanel.Children.Add(button);
+        }
     }
 
     private string SearchNoMatchesText(string libraryId)
@@ -1045,7 +1092,9 @@ public partial class SettingsWindow
             removalIntent: false);
         if (!result.Applied && result.Issue is { } issue)
         {
-            ShowInfo(LibraryEditor.Message(issue, row.Pattern), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            var message = LibraryEditor.Message(issue, row.Pattern);
+            ShowInfo(message, Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            AnnounceFrom(LibraryTermsGrid, message);
         }
 
         RefreshWordPackList(_selectedLibraryId);
@@ -1082,6 +1131,40 @@ public partial class SettingsWindow
 
     private void LibraryTermsGrid_KeyDown(object sender, KeyEventArgs e)
     {
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.Z && !IsTextEditingKeyboardFocus())
+        {
+            e.Handled = true;
+            if (_wordPackWorkspace?.CanUndo == true)
+            {
+                _wordPackWorkspace.Undo();
+                RefreshWordPackList(_selectedLibraryId);
+                if (_selectedLibraryId is not null)
+                {
+                    RefreshTermRows(_selectedLibraryId);
+                }
+                ShowWordPackNotice("Undo", "Undid the latest word pack change.", Wpf.Ui.Controls.InfoBarSeverity.Informational);
+            }
+
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.Y && !IsTextEditingKeyboardFocus())
+        {
+            e.Handled = true;
+            if (_wordPackWorkspace?.CanRedo == true)
+            {
+                _wordPackWorkspace.Redo();
+                RefreshWordPackList(_selectedLibraryId);
+                if (_selectedLibraryId is not null)
+                {
+                    RefreshTermRows(_selectedLibraryId);
+                }
+                ShowWordPackNotice("Redo", "Redid the latest word pack change.", Wpf.Ui.Controls.InfoBarSeverity.Informational);
+            }
+
+            return;
+        }
+
         if (LibraryTermsGrid.SelectedItem is not LibraryTermRow row)
         {
             return;
@@ -1134,6 +1217,16 @@ public partial class SettingsWindow
 
     private void SectionWordPacks_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyWordPackLayout();
 
+    private IntPtr WordPackDpiChangedHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmDpiChanged)
+        {
+            Dispatcher.BeginInvoke(ApplyWordPackLayout);
+        }
+
+        return IntPtr.Zero;
+    }
+
     private void ApplyWordPackLayout()
     {
         if (SectionWordPacks.ActualWidth <= 0 || SectionWordPacks.ActualHeight <= 0)
@@ -1142,8 +1235,8 @@ public partial class SettingsWindow
         }
 
         _wordPackLayout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(
-            ActualWidth,
-            ActualHeight,
+            SectionWordPacks.ActualWidth,
+            SectionWordPacks.ActualHeight,
             Math.Max(1, SystemFonts.MessageFontSize / 12.0),
             WordPackNoticeBar.IsOpen,
             WordDetailsPanel.Visibility == Visibility.Visible));
@@ -1370,7 +1463,7 @@ public partial class SettingsWindow
         panel.Children.Add(nameBox);
         panel.Children.Add(summary);
         panel.Children.Add(errors);
-        var dialog = new Window
+        var dialog = new Wpf.Ui.Controls.FluentWindow
         {
             Title = "Import a word pack",
             Owner = this,
@@ -1401,9 +1494,28 @@ public partial class SettingsWindow
         return dialog.ShowDialog() == true ? plan with { SuggestedName = nameBox.Text } : null;
     }
 
-    private void LibraryExportButton_Click(object sender, RoutedEventArgs e)
+    private async void LibraryExportButton_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedLibrary() is not { } library)
+        {
+            return;
+        }
+
+        var draft = _wordPackWorkspace?.Draft.Find(library.Id);
+        if (draft is null)
+        {
+            return;
+        }
+
+        var exportMessage = draft.Content.BuiltIn
+            ? "Exports a standalone copy, not its built-in update history."
+            : "Exports the selected word pack as a CSV file.";
+        if (_wordPackWorkspace?.UnsavedLibraryIds.Contains(library.Id) == true)
+        {
+            exportMessage = $"Export includes unsaved edits. Save applies them to dictation.\n\n{exportMessage}";
+        }
+
+        if (!await ConfirmAsync("Export word pack", exportMessage, "Export"))
         {
             return;
         }
@@ -1422,14 +1534,15 @@ public partial class SettingsWindow
 
         try
         {
-            var content = _wordPackWorkspace?.Draft.Find(library.Id)?.Content;
+            var content = draft.Content;
             if (content is null)
             {
                 return;
             }
 
             File.WriteAllBytes(dialog.FileName, LibraryCsvCodec.Instance.WriteExport(content));
-            ShowInfo("Exported the word pack.");
+            var off = content.Rows.Count(row => !row.Values.Enabled);
+            ShowInfo($"Exported {content.Rows.Count:N0} {(content.Rows.Count == 1 ? "word" : "words")}, including {off:N0} turned-off {(off == 1 ? "word" : "words")}.");
         }
         catch (Exception ex)
         {
@@ -1651,7 +1764,17 @@ public partial class SettingsWindow
             WordPackSaveProtocolSeverity.Warning => Wpf.Ui.Controls.InfoBarSeverity.Warning,
             _ => Wpf.Ui.Controls.InfoBarSeverity.Success,
         };
-        ShowInfo(result.Message, severity);
+        ShowWordPackNotice("Word packs", result.Message, severity);
+    }
+
+    private void ShowWordPackNotice(string title, string message, Wpf.Ui.Controls.InfoBarSeverity severity)
+    {
+        WordPackNoticeBar.Title = title;
+        WordPackNoticeBar.Message = message;
+        WordPackNoticeBar.Severity = severity;
+        WordPackNoticeBar.IsOpen = true;
+        AnnounceFrom(WordPackNoticeBar, message);
+        ApplyWordPackLayout();
     }
     private sealed class WordPackSaveStore : IWordPackSaveProtocolStore
     {
