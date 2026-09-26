@@ -355,6 +355,9 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>A foreground notice for <paramref name="window"/>, published as the hook thread's WinEvent callback publishes one; for tests.</summary>
     internal void NoticeForegroundForTests(nint window) => CurrentInstallation?.NoticeForeground(window);
 
+    /// <summary>How many foreground notices the current installation has published (its notice's revision); for tests.</summary>
+    internal long ForegroundNoticesPublishedForTests => CurrentInstallation?.ForegroundNoticesPublished ?? 0;
+
     /// <summary>Test seam, null in production: run on the hook thread as it takes a move ahead, before it judges it.</summary>
     internal Action? BeforeKeyboardMoveForTests { get; set; }
 
@@ -893,7 +896,8 @@ public sealed class HotkeyService : IHotkeyService
     // found already gone when it was released means Windows removed it, so for a while no registration may have seen the
     // keys, and the key state is no longer to be trusted: the hook is reinstalled with a fresh engine, as for one that
     // stopped receiving events. Replaced registrations whose grace is over are released (the moves' own sequence
-    // normally does it first). Callers hold _sync.
+    // normally does it first), and while no step of the moves is scheduled, the window in front is handed to the pool side
+    // again, so a sequence that ended while a remote client stayed in front starts over. Callers hold _sync.
     private void MaintainKeyboardHookLocked()
     {
         if (_installation is not { } installation)
@@ -960,6 +964,9 @@ public sealed class HotkeyService : IHotkeyService
         // A move still waiting is asked for again once a period, whatever held it back: a backstop for a retry its own
         // trigger could not deliver (a timer Windows refused, a posted message lost). Judged afresh on the hook thread.
         installation.RetryDeferredMoveAhead();
+
+        // And a sequence of moves that ended while a remote client stayed in front is started over (review round 3, item 2).
+        installation.RenoticeForegroundIfIdle();
     }
 
     // A marker-tagged key-up for the unassigned VK 0xFF is inert for every app but still traverses
@@ -1528,12 +1535,31 @@ public sealed class HotkeyService : IHotkeyService
         /// </summary>
         public void NoticeForegroundNow() => _foregroundNotice.Notify(_service._foregroundWindow());
 
+        /// <summary>
+        /// The watchdog, once a period, never the hook thread (the check takes the pool side's gate): while no step of the
+        /// moves ahead is scheduled, hands the window in front to the pool side again, as a foreground notice would (review
+        /// round 3, item 2). A sequence can end while a remote client stays in front, when a step reads the foreground at a
+        /// moment Windows has none (a window losing activation) and no notice follows, and nothing else would start it over
+        /// until the foreground changed. Mid-sequence it publishes nothing, so no move judged on the current revision is
+        /// dropped for it. Never waits for the hook thread.
+        /// </summary>
+        public void RenoticeForegroundIfIdle()
+        {
+            if (!_engine.IsRetired && _precedence.IsIdle)
+            {
+                _foregroundNotice.Notify(_service._foregroundWindow());
+            }
+        }
+
         // The pool side's read of the latest foreground revision, as a method so the notice made after it in the constructor
         // is read when it is called.
         private long PublishedForegroundRevision() => _foregroundNotice.PublishedRevision;
 
         /// <summary>Any thread, for tests: publishes a foreground notice for <paramref name="window"/>, as the WinEvent callback does.</summary>
         public void NoticeForeground(nint window) => _foregroundNotice.Notify(window);
+
+        /// <summary>Any thread, for tests: how many foreground notices this installation has published.</summary>
+        public long ForegroundNoticesPublished => _foregroundNotice.PublishedRevision;
 
         /// <summary>A move asked for by a test: made without the foreground check.</summary>
         public const long ForcedMove = -1;

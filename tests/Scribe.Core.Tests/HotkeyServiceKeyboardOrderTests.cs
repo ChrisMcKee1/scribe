@@ -374,6 +374,44 @@ public partial class HotkeyServiceTests
             $"The fifth move was made, releasing {service.RetiredKeyboardHooksReleased} registration(s) inside their grace.");
     }
 
+    [Fact]
+    public void Start_restores_a_lost_sequence_at_the_watchdog_s_upkeep_while_a_remote_client_stays_in_front()
+    {
+        // Review round 3, item 2 (A7): the watchdog retried only a move that waited, and never looked at what is in front
+        // again, so a sequence lost while a remote client stayed in front was not restored until the foreground changed.
+        // Here the first move's tick reads the window in front while R is losing activation and Windows has none, which ends
+        // the sequence, and no notice follows (R regaining activation publishes no change). The watchdog's upkeep hands the
+        // window in front to the notice again while the sequence is idle, and the sequence starts over.
+        var inFront = ScriptedRemoteWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
+        service.Start();
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.MadeTimer?.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The remote client in front when the hook installed scheduled no move.");
+
+        Volatile.Write(ref inFront, 0);
+        clock.Timer.Fire();
+        Assert.Null(clock.Timer.Due);
+        Volatile.Write(ref inFront, ScriptedRemoteWindow);
+
+        var published = service.ForegroundNoticesPublishedForTests;
+        service.MaintainKeyboardHookNow();
+        Assert.Equal(published + 1, service.ForegroundNoticesPublishedForTests);
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.Timer.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The watchdog's upkeep did not restore the sequence.");
+        clock.Timer.Fire();
+        Assert.True(SpinWait.SpinUntil(() => service.KeyboardHookMoves == 1, HookTimeout), "The restored sequence moved nothing.");
+
+        // Mid-sequence, the upkeep publishes nothing: the next step stays as scheduled.
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, clock.Timer.Due);
+        published = service.ForegroundNoticesPublishedForTests;
+        service.MaintainKeyboardHookNow();
+        Assert.Equal(published, service.ForegroundNoticesPublishedForTests);
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, clock.Timer.Due);
+    }
+
     // Window handles of the test's own, never real windows, named by the scripted process lookup below.
     private const nint ScriptedRemoteWindow = 0x1111;
     private const nint ScriptedLocalWindow = 0x2222;
