@@ -408,6 +408,14 @@ public partial class App : Application
                 {
                     _trayFeedback.Decide(TrayFeedbackEvent.AiCleanupSuccess);
                 }
+
+                // Once per failing episode, as the controller's CleanupFailed event did (only for a failed attempt; a skip
+                // because cleanup wasn't ready never raised it). The pill's outcome says "Typed without AI cleanup" either way.
+                if (report.Cleanup?.Outcome is CleanupOutcome.Failed &&
+                    _trayFeedback.Decide(TrayFeedbackEvent.AiCleanupFailure).Channel == TrayFeedbackChannel.Notice)
+                {
+                    ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
+                }
             });
         _controller.Error += message =>
         {
@@ -418,7 +426,6 @@ public partial class App : Application
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
             Dispatcher.BeginInvoke(() => ShowDictationProblem(warning.Message, warning.RecordingRevision, warning.PillText, controllerError: false));
         };
-        _controller.CleanupFailed += OnCleanupFailed;
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
         {
             // Best-effort, exactly like the other tray balloons: a notification failure must never
@@ -888,7 +895,9 @@ public partial class App : Application
     /// <summary>
     /// Reflects the newest dictation state in the tray icon and the recording overlay. Runs on the UI thread, only for a
     /// change newer than the last one shown, so a late notice from the previous dictation can never hide the pill of the
-    /// recording that started after it. The overlay only shows while recording and only when the user has it enabled.
+    /// recording that started after it. The overlay only shows while recording and only when the user has it enabled; the
+    /// return to idle that ends a dictation shows its outcome in place of the hide, under the same rule, so a late outcome
+    /// never covers a newer recording.
     /// </summary>
     private void RenderDictationState(DictationStateChange change)
     {
@@ -934,7 +943,17 @@ public partial class App : Application
                     _overlay?.ShowProcessing(change.AiPolishing);
                     break;
                 default:
-                    _overlay?.HideOverlay();
+                    // What the finished dictation did ("Typed", or a notice), held by the overlay and then hidden; a
+                    // quietly discarded one, a pause while idle and every other idle change just hide.
+                    if (change.Outcome is { } outcome)
+                    {
+                        _overlay?.ShowOutcome(outcome);
+                    }
+                    else
+                    {
+                        _overlay?.HideOverlay();
+                    }
+
                     break;
             }
         }
@@ -942,37 +961,12 @@ public partial class App : Application
         // Pausing is the user standing Scribe down, so the idle helper (~100 MB) is ended now rather
         // than after the keep-warm period, as pausing already does for the speech models. Only the
         // newest change gets here, so a pause shown late can never release the helper under a newer
-        // recording; a newer command or an on-screen state still vetoes it inside the client as well.
+        // recording; a newer command or an on-screen state still vetoes it inside the client as well,
+        // and an outcome the pause's own dictation just showed holds the release until it has hidden.
         if (state == DictationState.Paused)
         {
             _overlay?.ReleaseWhenIdle();
         }
-    }
-
-    /// <summary>
-    /// Shows the brief red "intelligence failed" overlay when AI cleanup fell back to raw text.
-    /// Raised on a background thread, so the overlay mutation is posted to the UI thread (never
-    /// invoked: the raising thread must not wait for it) and only shown when the user has the overlay
-    /// enabled and the app is not already shutting down by the time it runs.
-    /// </summary>
-    private void OnCleanupFailed(string reason)
-    {
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (_trayFeedback.Decide(TrayFeedbackEvent.AiCleanupFailure).Channel == TrayFeedbackChannel.Notice)
-            {
-                ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
-            }
-
-            if (_controller?.IsClosing == false)
-            {
-                var overlayEnabled = _controller.CurrentSettings.ShowOverlay;
-                if (overlayEnabled)
-                {
-                    _overlay?.ShowFailed(reason);
-                }
-            }
-        });
     }
 
     /// <summary>
@@ -1357,9 +1351,11 @@ public partial class App : Application
             return;
         }
 
-        if (controllerError && settings?.ShowOverlay == true)
+        // With the recording indicator on, the pill's outcome says what the dictation did, so a controller error needs no
+        // notice of its own, unless the outcome can't carry it (a disconnect mid-recording, whose outcome then describes
+        // the insertion). A controller error the indicator doesn't carry is a notice, never a pill warning.
+        if (controllerError && settings?.ShowOverlay == true && DictationProblemText.CarriedByPillOutcome(problem))
         {
-            _overlay?.ShowFailed(pillText ?? notice.PillText ?? notice.Title);
             return;
         }
 
@@ -1367,7 +1363,7 @@ public partial class App : Application
             problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete
                 ? TrayFeedbackEvent.TypingFailure
                 : TrayFeedbackEvent.DictationProblem,
-            settings?.ShowOverlay == true);
+            !controllerError && settings?.ShowOverlay == true);
         if (decision.Channel == TrayFeedbackChannel.Pill)
         {
             OnRecordingWarning(recordingRevision, pillText ?? notice.PillText ?? notice.Title);

@@ -266,6 +266,9 @@ internal sealed class HookedHistory(HistoryRepository inner) : IHistoryMaintenan
 
     public Action? OnClearAudio { get; set; }
 
+    /// <summary>Runs as maintenance reads the audio usage, the last step of its pass, outside the write gate.</summary>
+    public Action? OnAudioUsage { get; set; }
+
     public int DeleteEntriesOlderThan(DateTimeOffset cutoffUtc) => inner.DeleteEntriesOlderThan(cutoffUtc);
 
     public int ClearAudioOlderThan(DateTimeOffset cutoffUtc)
@@ -288,7 +291,11 @@ internal sealed class HookedHistory(HistoryRepository inner) : IHistoryMaintenan
         return inner.EvictAudio(blobIds, maxStoredBytes);
     }
 
-    public StoredAudioUsage GetStoredAudioUsage() => inner.GetStoredAudioUsage();
+    public StoredAudioUsage GetStoredAudioUsage()
+    {
+        OnAudioUsage?.Invoke();
+        return inner.GetStoredAudioUsage();
+    }
 
     public void RequestYield() => inner.RequestYield();
 }

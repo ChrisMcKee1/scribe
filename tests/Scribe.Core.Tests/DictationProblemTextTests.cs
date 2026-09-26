@@ -6,6 +6,17 @@ namespace Scribe.Core.Tests;
 
 public sealed class DictationProblemTextTests
 {
+    [Fact]
+    public void The_pill_outcome_carries_every_controller_error_but_a_disconnect()
+    {
+        // Overlay stream OV: every RaiseError site ends in an outcome the pill shows, except OnCaptureFaulted, which is
+        // raised mid-recording while processing goes on to describe the insertion (coordinator's per-path list at 885175f).
+        foreach (var problem in Enum.GetValues<DictationProblem>())
+        {
+            Assert.Equal(problem != DictationProblem.MicrophoneDisconnected, DictationProblemText.CarriedByPillOutcome(problem));
+        }
+    }
+
     public static IEnumerable<object?[]> ProblemRows()
     {
         yield return Row(DictationProblem.MicrophoneMuted, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Your microphone is muted", "Unmute it to keep dictating. Scribe is still recording.", TrayNoticeKind.RecordingWarning, true, "Microphone muted", TrayNoticeAction.None);

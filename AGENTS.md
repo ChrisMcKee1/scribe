@@ -390,10 +390,12 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
                                     CaptureTriggerBinding, StartupFailureNotice
     Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
-                                    OverlayPreviewGate
+                                    OverlayPreviewGate, PillOutcome (what a finished dictation shows on the
+                                    pill), PillTiming, OverlayPipeProtocol (every pipe verb and line)
     Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
                                     SrgbColor: the foreground on every accent and palette fill, and the lightness
-                                    of accent text, links and switch tracks (see Accent contrast)
+                                    of accent text, links and switch tracks (see Accent contrast); PillPalette,
+                                    the recording pill's colours over ScribeBrand
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
                                     SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync;
@@ -417,7 +419,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     AccentContrastResources (writes the accent colours), ButtonLabelContrast
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
-    OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
+    OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110), states, motion
+    App.xaml                        the pill's theme brushes (Default, Light, HighContrast)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
                                     Libraries/Integration/ the word pack parts together, over real files)
@@ -1771,13 +1774,18 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 (`SystemBackdropElement`/`TransparentBackdrop`) and sidesteps the legacy layered path.
 
 - The WPF engine drives the overlay one‑way over a **named pipe** via
-  `src/Scribe.App/Overlay/OverlayProcessClient.cs` (state changes, meter levels, position,
-  hide/exit).
+  `src/Scribe.App/Overlay/OverlayProcessClient.cs` (state changes, outcomes, meter levels, position,
+  hide/exit). **Every line is built by `Scribe.Core.Overlay.OverlayPipeProtocol`**, whose verbs the overlay's
+  `OverlayIpcServer` parses from literals of its own (it has no Scribe.Core reference). `OverlayPipeProtocolTests`
+  holds the overlay's switch to exactly the protocol's verbs, the client to building its lines from the protocol,
+  and each outcome verb to the overlay state of the same name. Add a verb in both, or the overlay logs
+  `unknown command` and ignores it.
 - The pill's screen anchor is set with the `POSITION <name>` pipe command. The wire tokens are the
   value names of **two enums kept in sync by name**: `Scribe.Core.Models.OverlayPosition` (engine)
   and `Scribe.Overlay.OverlayAnchor` (overlay, which deliberately has no Scribe.Core reference).
-  Add/rename values in BOTH or the overlay silently ignores the command. The client replays the
-  applied position right after every pipe (re)connect, so relaunches keep the user's anchor.
+  Add/rename values in BOTH or the overlay silently ignores the command (`OverlayPipeProtocolTests` compares
+  the names). The client replays the applied position right after every pipe (re)connect, so relaunches keep
+  the user's anchor.
 - `Scribe.Overlay.exe` is resolved in this order: `SCRIBE_OVERLAY_EXE` env →
   **installer layout** `AppContext.BaseDirectory\Overlay\Scribe.Overlay.exe` → dev fallback
   walking the repo to `src\Scribe.Overlay\bin\...\Scribe.Overlay.exe`.
@@ -1792,8 +1800,11 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
       helper is suspended and the next show relaunches it. The app pushes the period with
       `SetKeepWarm(ReleaseModelsAfterIdleMinutes)` at startup, with every state change and when Settings
       saves; 0 keeps the helper resident.
-    - Pausing dictation hides the pill, then sends a stamped `ReleaseWhenIdle`, vetoed like the idle
-      suspend.
+    - Pausing dictation sends a stamped `ReleaseWhenIdle` right after the shell shows the `Paused` change, vetoed
+      like the idle suspend. A pause while idle is that change at once, and hides the pill first. A pause that ends
+      a recording, or comes while a dictation is processing, raises no `Paused` change at once: that dictation is
+      processed as usual, and its return to idle is the `Paused` change, which carries and shows its outcome (or
+      hides a quiet discard); the release then waits until the outcome has hidden (below).
     - Both are re-checked at the commit point: a command stamped after the deadline was armed, or a
       recording or processing pill that must show, vetoes them. Stamps are taken when a command is
       queued, never in the consumer.
@@ -1801,8 +1812,71 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
       helper; if a recording or processing pill must show, one retry at cooldown end replays only the
       latest state and position. A helper lost within 10 s of launching, judged by its process exit
       time, counts as a failed launch; a successful launch resets the backoff.
-- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview and restores the
-  applied position on the first engine command after one.
+    - A dictation's outcome keeps the helper while it is on screen: its command passes how long (the hold plus
+      the fade out, `PillOutcome.OnScreen`), timed from when its write to the helper returns
+      (`OverlayHelperLifetime.OnShown`, after an existing helper's write and a launch's alike): a write can take
+      up to the client's 1.5 s timeout and still succeed, and the overlay starts its own hold only once it has the
+      line. One whose write failed, or that could not be shown, keeps nothing. The idle deadline never falls
+      before it has hidden, and a pause release that nothing vetoes waits for it, is judged again once it has
+      hidden, and gives way to a newer request, a newer command or a recording (`OverlayDueWork.Release`).
+      Without this a pause ended the helper under the "Typed" or "Nothing typed" of the very dictation it
+      stopped.
+    - A lost helper is brought back, by a later command or after a failed write, only while a recording or
+      processing pill must show. An outcome is never replayed, so a relaunch for one would show nothing.
+    - A state command that a newer state replaced is never written. Every request publishes a `DesiredState` of
+      its own, compared by reference, and its command carries it. The client judges the command before the
+      lifetime decides, which takes it as `superseded` so the command never launches the helper on its own
+      account, and again right before the write, after any launch, because a launch replays the latest state
+      first. Without this a helper relaunched for dictation A's outcome replayed dictation B's `RECORDING` and
+      then wrote A's `TYPED` over it. The engine's anchor move writes the applied anchor as it stands when it is
+      written, so it never puts back an older one. A preview's commands carry no state, only their preview's
+      generation, and the preview gate judges them the same two ways: when they are taken, and again right after
+      the launch (`OverlayPreviewGate.ConfirmWrite`), before anything of them is written. Without the second
+      judgement a preview's recording look passed the gate, launched a replacement helper, and was written over the
+      Processing that the launch had replayed for a dictation started meanwhile.
+- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview, both when the consumer takes
+  them and at their write, and restores the applied position on the first engine command after one; an end
+  turned away at its write leaves that restore to the next engine command.
+- **The pill is drawn in Signal On** (the palette decision's section 5, `OverlayWindow.xaml`): an opaque navy
+  gradient face with a sheen over its top 45%, and one edge drawn inside it for the state: 1.5 DIP blue while
+  listening, a 1 DIP neutral hairline while processing and after text was typed, 1 DIP pink when nothing, or not
+  all, was typed. No plate, glow, bloom or red wash, and no record dot. Listening shows five level bars in the
+  icon's proportions (0.26, 0.56, 1, 0.56, 0.26 of 16 DIP over a 4 DIP floor), each laid out 16 DIP tall and scaled
+  by the level with a `ScaleY` render transform, so a level update never runs a layout pass. Processing shows three
+  dots, the same for transcribing and AI cleanup; the words say which. It is the same in both app themes and
+  never follows the Windows accent.
+- **Every colour the pill draws is a `Scribe.Core.Appearance.PillPalette` colour**, and the palette reads every
+  brand value from `ScribeBrand` (decision PD15). The brushes are theme resources in the overlay's `App.xaml`:
+  Default and Light hold the same values, and HighContrast draws system colours only, fully opaque, with a 2 DIP
+  WindowText edge in every state, Highlight for the bars and dots, and WindowText for the icons. WinUI picks that
+  dictionary itself; the window also reads the contrast state in its own process at each show (the state line's
+  `contrast=`). `OverlayPillSourceTests` holds every colour the overlay's XAML writes, read from the parsed
+  document whatever the quotes or syntax (a markup extension's arguments, quoted either way, included), to the
+  palette (Transparent aside) and each brush to its role's colours, the contrast dictionary to system colours,
+  and every theme resource, storyboard target and icon path the window names to one that exists: a missing theme
+  key throws only when the window loads, which no build catches.
+- **Motion follows Windows "Animation effects"**, read with `UISettings.AnimationsEnabled` at each show (the state
+  line's `animations=`): with it on, the pill fades in over 120 ms and out over 150 ms and the processing dots
+  bounce; with it off there are no fades and the dots stand still. The level bars follow the level either way,
+  because that is information. Nothing runs while the pill is hidden: hiding stops the dots and both timers, and a
+  fade out ends in the hide. `ProcessingStoryboard` is the only repeating animation; `PulseStoryboard` is gone.
+- **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
+  produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and the cleanup's
+  diagnostics-safe reason, never its display detail), or Nothing typed / Not all of it was typed (an error icon and
+  the next step: "Copy it from the tray menu" after an insertion that failed, otherwise the failure's own message);
+  notices hold 1.3 s. The truth rules: a check only after the whole insertion succeeded, the space after the
+  dictation included; a partial insertion or a dictation left for the recovery copy is the error state; a
+  dictation discarded quietly (the speech detector found no speech in audio that was not digital silence, or
+  nothing was left after the dictionary) shows nothing, while digital silence and a recogniser that returned
+  nothing on real audio are notices ("Nothing typed" and their message). The controller hands the outcome on
+  with the change that ends the dictation, Idle, or Paused when a pause ended it (`DictationStateChange.Outcome`),
+  under that change's revision, so a late outcome never covers a newer recording and nothing waits for it. A new
+  recording or processing state replaces an outcome at once, and a hide during its hold is ignored. The holds and
+  fades live in `PillTiming`; the overlay keeps copies, which `OverlayPillSourceTests` checks. The shell's
+  `RenderDictationState` shows the change's outcome in place of the hide, and nothing else puts a failure on the
+  pill: the old `FAILED` flash, which fired before the text was typed and for errors alike, is gone with
+  `ShowFailed` and the controller's `CleanupFailed`, and the controller's `Error` reaches only the tray
+  (`OverlayPipeProtocolTests` pins the shell).
 - **Never tie the helper to `DictationController.ModelsReleased`.** Releasing the speech models and
   ending the pill are separate decisions; the old wiring could end a newer recording's pill.
 - **The pill never activates itself.** Every show, the first after a launch included, is `AppWindow.Show(activateWindow:
@@ -1823,10 +1897,17 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `SystemBackdrop=TransparentBackdrop assigned`, `TransparentBackdrop.OnTargetConnected applied`,
   `size=462x192`, `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
   stays alive (no teardown) with **zero IOExceptions** after launch (and no `0x80040154` or
-  `0x8007007E`, which point to a missing component). The failure and warning pills log
-  `reasonLength=<n>`, never the reason text. The client's lifetime lines are `Overlay helper suspended
-  after N idle minutes`, `Overlay helper released because dictation was paused`, `Overlay relaunch
-  retry due after a N ms cooldown` and `Overlay command <verb> failed; tearing down for relaunch.`
+  `0x8007007E`, which point to a missing component). The outcome and warning pills log
+  `reasonLength=<n>`, never the reason text (`OverlayWindow.ShowOutcome state=<State> hold=<n>ms reasonLength=<n>`),
+  the controller logs `#<n> finished with outcome <Kind>` (the kind only), and a hold ends in
+  `OverlayWindow.OutcomeTimer.Tick`. With Animation effects on, a show logs `StartStoryboard FadeInStoryboard begun`
+  and a hide ends in `OverlayWindow.FadeOut completed; window hidden`; with them off, neither appears.
+  `PulseStoryboard` never appears. The client's lifetime lines are `Overlay helper suspended
+  after N idle minutes`, `Overlay helper released because dictation was paused` (with `, once the outcome on
+  screen had hidden` when it waited, after `Overlay release on pause waits N ms for the outcome on screen to hide.`),
+  `Overlay relaunch retry due after a N ms cooldown`, `Overlay command <verb> failed; tearing down for relaunch.`
+  and, at Debug, `Overlay command <verb> skipped: a newer state replaced it.` and `Overlay command <verb> skipped: a
+  newer request superseded its preview.`
 
 ## Accent contrast (read before touching theme resources or anything drawn on an accent fill)
 

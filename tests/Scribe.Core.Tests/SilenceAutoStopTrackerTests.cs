@@ -232,36 +232,43 @@ public sealed class SilenceAutoStopTrackerTests
         Assert.True(outcome.HeardSpeech);
     }
 
-    [Fact]
-    public void Updating_allocates_nothing()
+    // In the collection that runs alone (stream TR, item 1): no other test runs while it measures.
+    [Collection(AllocationMeasurementCollection.Name)]
+    public sealed class Allocations
     {
-        // It runs once per capture buffer on the audio thread, for the whole dictation.
-        var tracker = new SilenceAutoStopTracker(startedMs: 0, leadInLimitMs: long.MaxValue);
-        for (var i = 1; i <= 1_000; i++)
+        [Fact]
+        public void Updating_allocates_nothing()
         {
-            tracker.Update(0.1f * (i % 7), i * 10L);
-        }
-
-        // The tracker allocates nothing, but with the whole suite running in parallel the runtime has been
-        // seen to allocate about 3 KB on this thread during one measured pass (3 full-suite runs in 20,
-        // never with this class alone). That is one-time work, while an allocation in Update recurs on
-        // every pass of 100,000 buffers, so one clean pass proves the claim and a real allocation still
-        // fails all five.
-        var allocated = long.MaxValue;
-        var next = 1_001;
-        for (var pass = 0; pass < 5 && allocated != 0; pass++)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = next; i < next + 100_000; i++)
+            // It runs once per capture buffer on the audio thread, for the whole dictation.
+            var tracker = new SilenceAutoStopTracker(startedMs: 0, leadInLimitMs: long.MaxValue);
+            for (var i = 1; i <= 1_000; i++)
             {
-                tracker.Update(i % 3 == 0 ? 0f : 0.05f * (i % 11), i * 10L);
+                tracker.Update(0.1f * (i % 7), i * 10L);
             }
 
-            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            next += 100_000;
-        }
+            _ = RuntimeWork.Now().Since(RuntimeWork.Now());
 
-        Assert.Equal(0, allocated);
+            // One measured pass, and its count is the verdict. The test used to measure up to five passes and keep the first
+            // that allocated nothing, for about 3 KB the runtime was seen to allocate on this thread in one pass while the
+            // whole suite ran beside it (3 full-suite runs in 20, never with this class alone); that also passed an
+            // allocation made once in the first pass (stream TR, round 2, A2). It runs alone now, and a failure says what the
+            // runtime did in the pass.
+            var work = RuntimeWork.Now();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            Pass(1_001);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            var during = RuntimeWork.Now().Since(work);
+
+            AllocationMeasurement.AssertZero(allocated, during, "A pass of 100,000 updates", () => Pass(101_001));
+
+            void Pass(int first)
+            {
+                for (var i = first; i < first + 100_000; i++)
+                {
+                    tracker.Update(i % 3 == 0 ? 0f : 0.05f * (i % 11), i * 10L);
+                }
+            }
+        }
     }
 
     [Theory]

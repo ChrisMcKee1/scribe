@@ -49,6 +49,15 @@ public static class DictationProblemText
         return null;
     }
 
+    /// <summary>
+    /// Whether the recording pill's outcome (the overlay's "Typed", "Nothing typed" and "Not all of it was typed") already
+    /// tells the user about this problem when the recording indicator is on, so no tray notice is needed for it. A
+    /// disconnect is raised mid-recording, and processing goes on with what was captured, so the outcome then describes
+    /// the insertion (usually "Typed") and the disconnect would reach nobody. Typing failures keep their notice for its
+    /// Copy last dictation action whatever this says.
+    /// </summary>
+    public static bool CarriedByPillOutcome(DictationProblem problem) => problem != DictationProblem.MicrophoneDisconnected;
+
     public static DictationProblemNotice Describe(DictationProblem problem, HotkeyMode mode = HotkeyMode.Hold, string? shortcut = null, string? device = null, string? chosenDevice = null, string? usedDevice = null, int minutes = 10)
     {
         var key = string.IsNullOrWhiteSpace(shortcut) ? "your shortcut" : shortcut.Trim();
