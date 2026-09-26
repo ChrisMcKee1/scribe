@@ -1,5 +1,7 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
 
@@ -32,8 +34,10 @@ public partial class SettingsWindow
             }
 
             var target = issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateBox : SnippetPhraseBox;
-            var validation = issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidation : SnippetPhraseValidation;
-            ShowValidation(validation, issue.Message);
+            var panel = issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidation : SnippetPhraseValidation;
+            var text = issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidationText : SnippetPhraseValidationText;
+            var icon = issue.Code == ValidationCode.SnippetTextEmpty ? SnippetTemplateValidationIcon : SnippetPhraseValidationIcon;
+            ShowValidation(panel, text, icon, target, issue.Message);
             target.Focus();
             return false;
         }
@@ -47,9 +51,12 @@ public partial class SettingsWindow
                 ProfileList.ScrollIntoView(profile);
             }
 
-            var target = issue.Code == ValidationCode.ProfileAppsEmpty ? (Control)ProfileAddAppButton : ProfileNameBox;
-            var validation = issue.Code == ValidationCode.ProfileAppsEmpty ? ProfileAppsValidation : ProfileNameValidation;
-            ShowValidation(validation, issue.Message);
+            var appsIssue = issue.Code == ValidationCode.ProfileAppsEmpty;
+            var target = appsIssue ? (Control)ProfileAddAppButton : ProfileNameBox;
+            var panel = appsIssue ? ProfileAppsValidation : ProfileNameValidation;
+            var text = appsIssue ? ProfileAppsValidationText : ProfileNameValidationText;
+            var icon = appsIssue ? ProfileAppsValidationIcon : ProfileNameValidationIcon;
+            ShowValidation(panel, text, icon, target, issue.Message);
             target.Focus();
             return false;
         }
@@ -57,16 +64,23 @@ public partial class SettingsWindow
         return true;
     }
 
-    private static void ShowValidation(TextBlock target, string message)
+    private void ShowValidation(FrameworkElement panel, TextBlock text, Wpf.Ui.Controls.SymbolIcon icon, Control field, string message)
     {
-        target.Text = message;
-        target.Visibility = Visibility.Visible;
+        text.Text = message;
+        icon.Foreground = TryFindResource("SystemFillColorCriticalBrush") as Brush ?? Brushes.Red;
+        panel.Visibility = Visibility.Visible;
+        AutomationProperties.SetHelpText(field, message);
+        if (field.IsKeyboardFocusWithin)
+        {
+            AnnounceFrom(field, message);
+        }
     }
 
-    private static void HideValidation(TextBlock target)
+    private static void HideValidation(FrameworkElement panel, TextBlock text, Control field)
     {
-        target.Text = string.Empty;
-        target.Visibility = Visibility.Collapsed;
+        text.Text = string.Empty;
+        panel.Visibility = Visibility.Collapsed;
+        AutomationProperties.SetHelpText(field, string.Empty);
     }
 
     private void RefreshTextChangesNotice()
@@ -83,4 +97,3 @@ public partial class SettingsWindow
     private void TextChangesNoticeButton_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage.Advanced, nameof(PostCheck));
 }
-

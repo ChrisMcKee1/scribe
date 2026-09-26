@@ -49,10 +49,23 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData("OUTLOOK.EXE", "Outlook")]
     [InlineData("ms-teams", "Teams")]
     [InlineData("WINWORD", "Word")]
-    [InlineData("olk", "Outlook")]
+    [InlineData("olk", "New Outlook")]
     [InlineData("unknown-app.exe", "unknown-app")]
     public void App_display_names_are_friendly_when_known(string process, string expected) =>
         Assert.Equal(expected, AppDisplayName.For(process));
+
+    [Theory]
+    [InlineData("OUTLOOK", "outlook", "Outlook")]
+    [InlineData("olk", "new-outlook", "New Outlook")]
+    [InlineData("ms-teams", "teams", "Teams")]
+    [InlineData("Teams", "teams", "Teams")]
+    [InlineData("WindowsTerminal", "terminal", "Terminal")]
+    [InlineData("wt", "terminal", "Terminal")]
+    public void App_display_groups_keep_distinct_program_groups(string process, string key, string display)
+    {
+        Assert.Equal(key, AppDisplayName.GroupKeyFor(process));
+        Assert.Equal(display, AppDisplayName.For(process));
+    }
 
     [Fact]
     public void Ai_cleanup_off_rows_cover_complete_incomplete_and_empty_setup()
@@ -228,22 +241,35 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Profile_list_text_and_chips_hide_process_jargon_until_needed()
     {
-        var description = ProfileListText.Describe(" Email ", "OUTLOOK.exe, ms-teams, outlook");
+        var description = ProfileListText.Describe(" Email ", "OUTLOOK.exe, ms-teams, Teams, olk");
 
         Assert.Equal("Email", description.Primary);
-        Assert.Equal("Outlook, Teams", description.Secondary);
+        Assert.Equal("Outlook, Teams, New Outlook", description.Secondary);
 
-        var chips = ProfileAppChips.FromProgramNames("OUTLOOK.exe, ms-teams");
+        var chips = ProfileAppChips.FromProgramNames("OUTLOOK.exe, ms-teams, Teams, olk");
         Assert.Collection(
             chips,
             chip =>
             {
-                Assert.Equal("OUTLOOK", chip.ProgramName);
+                Assert.Equal("outlook", chip.GroupKey);
                 Assert.Equal("Outlook", chip.DisplayName);
+                Assert.Equal(["OUTLOOK"], chip.ProgramNames);
                 Assert.Equal("Remove Outlook", chip.RemoveName);
             },
-            chip => Assert.Equal("Teams", chip.DisplayName));
-        Assert.Equal("OUTLOOK, ms-teams", ProfileAppChips.ToProgramNames(chips));
+            chip =>
+            {
+                Assert.Equal("teams", chip.GroupKey);
+                Assert.Equal("Teams", chip.DisplayName);
+                Assert.Equal(["ms-teams", "Teams"], chip.ProgramNames);
+            },
+            chip =>
+            {
+                Assert.Equal("new-outlook", chip.GroupKey);
+                Assert.Equal("New Outlook", chip.DisplayName);
+                Assert.Equal(["olk"], chip.ProgramNames);
+            });
+        Assert.Equal("OUTLOOK, ms-teams, Teams, olk", ProfileAppChips.ToProgramNames(chips));
+        Assert.Equal("OUTLOOK, olk", ProfileAppChips.RemoveGroup("OUTLOOK, ms-teams, Teams, olk", "teams"));
     }
 
     [Fact]

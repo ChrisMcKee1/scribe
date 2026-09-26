@@ -5375,8 +5375,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (snippets is not null)
             {
-                _snippetLoad.MarkSaved(snippetSignature);
+                RefreshSnippetRowsFromStorage();
+                _snippetLoad.MarkSaved(SnippetSignature());
             }
+
+            MarkProfileRowsSaved();
 
             // Reported as saved only once dictation can use what was stored: the dictionary and libraries reach it in the
             // next vocabulary generation, built off this thread and awaited here, never waited on. A build that could not
@@ -7149,12 +7152,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     _enabled = value;
                     Notify(nameof(Enabled));
                     Notify(nameof(SecondaryText));
+                    Notify(nameof(HasSecondaryText));
                 }
             }
         }
 
         public string PrimaryText => SnippetListText.Describe(Phrase, Enabled).Primary;
         public string SecondaryText => SnippetListText.Describe(Phrase, Enabled).Secondary ?? string.Empty;
+        public bool HasSecondaryText => !string.IsNullOrEmpty(SecondaryText);
 
         public override string ToString() => PrimaryText;
 

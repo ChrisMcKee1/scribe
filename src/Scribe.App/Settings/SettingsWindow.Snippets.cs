@@ -155,7 +155,7 @@ public partial class SettingsWindow
             row.Phrase = SnippetPhraseBox.Text;
             row.Touched = true;
             SnippetEditorTitle.Text = row.PrimaryText;
-            HideValidation(SnippetPhraseValidation);
+            HideValidation(SnippetPhraseValidation, SnippetPhraseValidationText, SnippetPhraseBox);
         }
     }
 
@@ -165,7 +165,7 @@ public partial class SettingsWindow
         {
             row.Template = SnippetTemplateBox.Text;
             row.Touched = true;
-            HideValidation(SnippetTemplateValidation);
+            HideValidation(SnippetTemplateValidation, SnippetTemplateValidationText, SnippetTemplateBox);
         }
     }
 
@@ -226,9 +226,55 @@ public partial class SettingsWindow
 
     private void ClearSnippetValidation()
     {
-        HideValidation(SnippetPhraseValidation);
-        HideValidation(SnippetTemplateValidation);
+        HideValidation(SnippetPhraseValidation, SnippetPhraseValidationText, SnippetPhraseBox);
+        HideValidation(SnippetTemplateValidation, SnippetTemplateValidationText, SnippetTemplateBox);
     }
+
+    private void RefreshSnippetRowsFromStorage()
+
+    {
+
+        var selectedPhrase = SelectedSnippet?.Phrase;
+
+        _snippetRows.Clear();
+
+        foreach (var snippet in _snippets.GetAll())
+
+        {
+
+            _snippetRows.Add(new SnippetRow
+
+            {
+
+                Id = snippet.Id,
+
+                Phrase = snippet.Phrase,
+
+                Template = snippet.Template,
+
+                Enabled = snippet.Enabled,
+
+                Origin = DraftRowOrigin.Saved,
+
+                LoadedPhrase = snippet.Phrase,
+
+                LoadedTemplate = snippet.Template,
+
+                LoadedEnabled = snippet.Enabled,
+
+            });
+
+        }
+
+
+
+        SnippetList.SelectedItem = _snippetRows.FirstOrDefault(row => string.Equals(row.Phrase, selectedPhrase, StringComparison.OrdinalIgnoreCase));
+
+        RefreshSnippetEmptyState();
+
+    }
+
+
 
     private IReadOnlyList<SnippetDraftRow> SnippetDraftRows() =>
         _snippetLoad.IsLoaded

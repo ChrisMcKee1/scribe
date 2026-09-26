@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -13,6 +14,8 @@ public partial class SettingsWindow
 {
     private readonly VisibleAppService _visibleApps = new();
     private readonly ObservableCollection<AppPickerRow> _appPickerRows = new();
+    private int _appPickerRequest;
+    private ProfileRow? _appPickerOwner;
 
     private void LoadProfiles()
     {
@@ -52,7 +55,7 @@ public partial class SettingsWindow
     private void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         ClearProfileValidation();
-        AppPickerPanel.Visibility = Visibility.Collapsed;
+        InvalidateAppPicker();
         var row = SelectedProfile;
         ProfileEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
         RefreshProfileEmptyState();
@@ -89,6 +92,8 @@ public partial class SettingsWindow
         };
 
         var blank = new MenuItem { Header = ProfilePresetHeader("Blank profile", "Start with an empty app profile.") };
+        AutomationProperties.SetName(blank, "Blank profile");
+        AutomationProperties.SetHelpText(blank, "Start with an empty app profile.");
         blank.Click += (_, _) => AddBlankProfile();
         menu.Items.Add(blank);
         menu.Items.Add(new Separator());
@@ -101,6 +106,8 @@ public partial class SettingsWindow
                 Header = ProfilePresetHeader(preset.Profile.Name, preset.Description),
                 IsEnabled = existing is null,
             };
+            AutomationProperties.SetName(item, preset.Profile.Name);
+            AutomationProperties.SetHelpText(item, preset.Description);
 
             if (existing is null)
             {
@@ -216,7 +223,7 @@ public partial class SettingsWindow
         {
             row.Name = ProfileNameBox.Text;
             row.Touched = true;
-            HideValidation(ProfileNameValidation);
+            HideValidation(ProfileNameValidation, ProfileNameValidationText, ProfileNameBox);
         }
     }
 
@@ -225,7 +232,7 @@ public partial class SettingsWindow
         if (!_loadingProfile && SelectedProfile is { } row)
         {
             ApplyProfileProcesses(row, ProfileProcessesBox.Text, markTouched: true);
-            HideValidation(ProfileAppsValidation);
+            HideValidation(ProfileAppsValidation, ProfileAppsValidationText, ProfileAddAppButton);
         }
     }
 
@@ -254,6 +261,8 @@ public partial class SettingsWindow
             return;
         }
 
+        var request = ++_appPickerRequest;
+        _appPickerOwner = row;
         _appPickerRows.Clear();
         AppPickerEmptyText.Visibility = Visibility.Collapsed;
         AppPickerPanel.Visibility = Visibility.Visible;
@@ -271,6 +280,11 @@ public partial class SettingsWindow
             options = [];
         }
 
+        if (request != _appPickerRequest || !ReferenceEquals(_appPickerOwner, row) || !ReferenceEquals(SelectedProfile, row))
+        {
+            return;
+        }
+
         foreach (var option in options)
         {
             _appPickerRows.Add(new AppPickerRow(option));
@@ -286,9 +300,9 @@ public partial class SettingsWindow
 
     private void AppPickerAddButton_Click(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile is not { } row)
+        if (SelectedProfile is not { } row || !ReferenceEquals(_appPickerOwner, row))
         {
-            AppPickerPanel.Visibility = Visibility.Collapsed;
+            InvalidateAppPicker();
             return;
         }
 
@@ -296,11 +310,19 @@ public partial class SettingsWindow
         apps.AddRange(_appPickerRows.Where(option => option.IsSelected).Select(option => option.ProcessName));
         ApplyProfileProcesses(row, string.Join(", ", ProgramNames.Normalize(apps)), markTouched: true);
         ProfileProcessesBox.Text = row.Processes;
-        AppPickerPanel.Visibility = Visibility.Collapsed;
-        HideValidation(ProfileAppsValidation);
+        InvalidateAppPicker();
+        HideValidation(ProfileAppsValidation, ProfileAppsValidationText, ProfileAddAppButton);
     }
 
-    private void AppPickerCancelButton_Click(object sender, RoutedEventArgs e) => AppPickerPanel.Visibility = Visibility.Collapsed;
+    private void AppPickerCancelButton_Click(object sender, RoutedEventArgs e) => InvalidateAppPicker();
+
+    private void InvalidateAppPicker()
+    {
+        _appPickerRequest++;
+        _appPickerOwner = null;
+        _appPickerRows.Clear();
+        AppPickerPanel.Visibility = Visibility.Collapsed;
+    }
 
     private void ProfileAppChipRemove_Click(object sender, RoutedEventArgs e)
     {
@@ -309,11 +331,10 @@ public partial class SettingsWindow
             return;
         }
 
-        var apps = ProgramNames.Normalize(SplitProfileProcesses(row.Processes))
-            .Where(app => !string.Equals(app, chip.ProgramName, StringComparison.OrdinalIgnoreCase));
+        var apps = SplitProfileProcesses(ProfileAppChips.RemoveGroup(row.Processes, chip.GroupKey));
         ApplyProfileProcesses(row, string.Join(", ", apps), markTouched: true);
         ProfileProcessesBox.Text = row.Processes;
-        HideValidation(ProfileAppsValidation);
+        HideValidation(ProfileAppsValidation, ProfileAppsValidationText, ProfileAddAppButton);
     }
 
     private void ApplyProfileProcesses(ProfileRow row, string processes, bool markTouched)
@@ -374,6 +395,32 @@ public partial class SettingsWindow
             _profileRows.Select(r => new ProfileBuilder.Row(
                 r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
 
+    private void MarkProfileRowsSaved()
+
+    {
+
+        foreach (var row in _profileRows)
+
+        {
+
+            row.Origin = DraftRowOrigin.Saved;
+
+            row.LoadedName = row.Name;
+
+            row.LoadedProcesses = row.Processes;
+
+            row.LoadedWritingStyle = row.WritingStyle;
+
+            row.LoadedNewlineHandling = row.NewlineHandling;
+
+            row.Touched = false;
+
+        }
+
+    }
+
+
+
     private IReadOnlyList<ProfileDraftRow> ProfileDraftRows() =>
         _profileRows.Select(row => new ProfileDraftRow(
             RowKey: row.RowKey,
@@ -390,8 +437,8 @@ public partial class SettingsWindow
 
     private void ClearProfileValidation()
     {
-        HideValidation(ProfileNameValidation);
-        HideValidation(ProfileAppsValidation);
+        HideValidation(ProfileNameValidation, ProfileNameValidationText, ProfileNameBox);
+        HideValidation(ProfileAppsValidation, ProfileAppsValidationText, ProfileAddAppButton);
     }
 
     private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label)

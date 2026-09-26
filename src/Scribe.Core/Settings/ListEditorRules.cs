@@ -114,37 +114,90 @@ public static class ProfileListText
         return new ProfileListItemText(primary, secondary.Length == 0 ? EmptyApps : secondary);
     }
 
-    public static string FriendlyApps(string? apps)
-    {
-        var names = ProgramNames.Normalize(SplitApps(apps));
-        return string.Join(", ", names.Select(AppDisplayName.For));
-    }
+    public static string FriendlyApps(string? apps) =>
+        string.Join(", ", ProfileAppChips.FromProgramNames(apps).Select(chip => chip.DisplayName));
 
     private static IEnumerable<string> SplitApps(string? apps) =>
         (apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }
 
-public sealed record ProfileAppChip(string ProgramName, string DisplayName, string RemoveName)
+public sealed record ProfileAppChip(string GroupKey, string DisplayName, IReadOnlyList<string> ProgramNames, string RemoveName)
+
 {
-    public static ProfileAppChip FromProgramName(string programName)
+
+    public static ProfileAppChip FromProgramNames(IReadOnlyList<string> programNames)
+
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(programName);
-        var normalized = ProgramNames.Normalize([programName]).First();
-        var display = AppDisplayName.For(normalized);
-        return new ProfileAppChip(normalized, display, $"Remove {display}");
+
+        ArgumentNullException.ThrowIfNull(programNames);
+
+        if (programNames.Count == 0)
+
+        {
+
+            throw new ArgumentException("At least one program name is required.", nameof(programNames));
+
+        }
+
+
+
+        var first = programNames[0];
+
+        var display = AppDisplayName.For(first);
+
+        return new ProfileAppChip(AppDisplayName.GroupKeyFor(first), display, programNames, $"Remove {display}");
+
     }
+
 }
+
+
 
 public static class ProfileAppChips
+
 {
-    public static IReadOnlyList<ProfileAppChip> FromProgramNames(string? apps) =>
-        ProgramNames.Normalize((apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .Select(ProfileAppChip.FromProgramName)
+
+    public static IReadOnlyList<ProfileAppChip> FromProgramNames(string? apps)
+
+    {
+
+        var normalized = ProgramNames.Normalize((apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        return normalized
+
+            .GroupBy(AppDisplayName.GroupKeyFor, StringComparer.OrdinalIgnoreCase)
+
+            .Select(group => ProfileAppChip.FromProgramNames(group.ToList()))
+
             .ToList();
 
+    }
+
+
+
+    public static string RemoveGroup(string? apps, string groupKey)
+
+    {
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupKey);
+
+        var filtered = ProgramNames.Normalize((apps ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+
+            .Where(app => !string.Equals(AppDisplayName.GroupKeyFor(app), groupKey, StringComparison.OrdinalIgnoreCase));
+
+        return string.Join(", ", filtered);
+
+    }
+
+
+
     public static string ToProgramNames(IEnumerable<ProfileAppChip> chips) =>
-        string.Join(", ", chips.Select(chip => chip.ProgramName));
+
+        string.Join(", ", chips.SelectMany(chip => chip.ProgramNames));
+
 }
+
+
 
 public sealed record AppPickerCandidate(string ProcessName, string DisplayName, bool IsRunning, int RecentDictations = 0);
 
