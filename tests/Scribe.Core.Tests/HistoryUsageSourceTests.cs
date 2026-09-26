@@ -95,9 +95,37 @@ public sealed class HistoryUsageSourceTests
     {
         var loadOlder = Body(Read("SettingsWindow.History.cs"), "private async void HistoryLoadOlderButton_Click(");
         Assert.Contains(
-            "if (ticket == Interlocked.Read(ref _historyOlderTicket))\r\n        {\r\n            _historyOlderLoading = false;\r\n        }\r\n\r\n        if (_closed || !_historyMutationGeneration.IsCurrent(generation) || IsHistorySearchActive())",
+            "if (requestStillCurrent)\r\n        {\r\n            _historyOlderLoading = false;\r\n        }\r\n\r\n        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: false);",
             loadOlder,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Stale_current_search_and_needed_first_load_are_retried()
+    {
+        var history = Read("SettingsWindow.History.cs");
+        var search = Body(history, "private async Task RunHistorySearchAsync(");
+        Assert.Contains("CompleteRead(generation, requestStillCurrent, retryWhenStale: true)", search, StringComparison.Ordinal);
+        Assert.Contains("StartHistorySearch(debounce: false);", search, StringComparison.Ordinal);
+
+        var load = Body(history, "private async void LoadHistory()");
+        Assert.True(
+            load.IndexOf("CompleteRead(generation, requestStillCurrent, retryIfStale)", StringComparison.Ordinal) <
+            load.IndexOf("_historyLoad.Publish(ticket, string.Empty)", StringComparison.Ordinal),
+            "The generation must be checked before a recent load is marked published.");
+        Assert.Contains("LoadHistory();", load, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Replacing_the_page_cache_invalidates_older_page_tickets()
+    {
+        var history = Read("SettingsWindow.History.cs");
+        var load = Body(history, "private async void LoadHistory()");
+        Assert.Contains("Interlocked.Increment(ref _historyOlderTicket);", load, StringComparison.Ordinal);
+
+        var loadOlder = Body(history, "private async void HistoryLoadOlderButton_Click(");
+        Assert.Contains("var requestStillCurrent = ticket == Interlocked.Read(ref _historyOlderTicket);", loadOlder, StringComparison.Ordinal);
+        Assert.Contains("completion == HistoryReadCompletion.Drop", loadOlder, StringComparison.Ordinal);
     }
 
     private static string Read(string file) => File.ReadAllText(Path.Combine(SettingsFolder(), file));

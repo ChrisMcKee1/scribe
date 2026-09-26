@@ -45,12 +45,23 @@ public partial class SettingsWindow
             return;
         }
 
-        if (!_historyLoad.Publish(ticket, string.Empty) || !_historyMutationGeneration.IsCurrent(generation))
+        var requestStillCurrent = _historyLoad.CanPublish(ticket);
+        var retryIfStale = _historyPagedRows.Count == 0 && _historyRows.Count == 0;
+        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryIfStale);
+        if (completion == HistoryReadCompletion.Retry)
+        {
+            _historyLoad.Fail(ticket);
+            LoadHistory();
+            return;
+        }
+
+        if (completion == HistoryReadCompletion.Drop || !_historyLoad.Publish(ticket, string.Empty))
         {
             return;
         }
 
         var selectedId = SelectedHistory?.Id;
+        Interlocked.Increment(ref _historyOlderTicket);
         _historyLoadedOlder = false;
         _historyOlderLoading = false;
         _historyOlderLoadFailed = false;
@@ -138,12 +149,14 @@ public partial class SettingsWindow
             return;
         }
 
-        if (ticket == Interlocked.Read(ref _historyOlderTicket))
+        var requestStillCurrent = ticket == Interlocked.Read(ref _historyOlderTicket);
+        if (requestStillCurrent)
         {
             _historyOlderLoading = false;
         }
 
-        if (_closed || !_historyMutationGeneration.IsCurrent(generation) || IsHistorySearchActive())
+        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: false);
+        if (_closed || completion == HistoryReadCompletion.Drop || IsHistorySearchActive())
         {
             UpdateHistoryRangeLine();
             return;
@@ -186,11 +199,19 @@ public partial class SettingsWindow
             }
 
             var entries = await Task.Run(() => _history.Search(query, HistoryRowFormat.RecentLimit), cancellationToken);
-            if (cancellationToken.IsCancellationRequested ||
-                _closed ||
-                ticket != Interlocked.Read(ref _historySearchTicket) ||
-                !_historyMutationGeneration.IsCurrent(generation) ||
-                !string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal))
+            var requestStillCurrent =
+                !cancellationToken.IsCancellationRequested &&
+                !_closed &&
+                ticket == Interlocked.Read(ref _historySearchTicket) &&
+                string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal);
+            var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: true);
+            if (completion == HistoryReadCompletion.Retry)
+            {
+                StartHistorySearch(debounce: false);
+                return;
+            }
+
+            if (completion == HistoryReadCompletion.Drop)
             {
                 return;
             }
@@ -206,7 +227,18 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            if (_closed || ticket != Interlocked.Read(ref _historySearchTicket) || !_historyMutationGeneration.IsCurrent(generation))
+            var requestStillCurrent =
+                !_closed &&
+                ticket == Interlocked.Read(ref _historySearchTicket) &&
+                string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal);
+            var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: true);
+            if (completion == HistoryReadCompletion.Retry)
+            {
+                StartHistorySearch(debounce: false);
+                return;
+            }
+
+            if (completion == HistoryReadCompletion.Drop)
             {
                 return;
             }
