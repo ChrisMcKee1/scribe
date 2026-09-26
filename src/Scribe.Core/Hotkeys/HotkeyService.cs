@@ -1808,8 +1808,10 @@ public sealed class HotkeyService : IHotkeyService
 
             if (_engine.HoldsSwallowedKey)
             {
-                Interlocked.Increment(ref _moveAheadsDeferred);
                 DeferMove(revision, window);
+
+                // Counted after the move is kept and flagged, so whoever sees the count can ask for its retry.
+                Interlocked.Increment(ref _moveAheadsDeferred);
                 return;
             }
 
@@ -1819,9 +1821,11 @@ public sealed class HotkeyService : IHotkeyService
             ReleaseRetired(force: false);
             if (_retired.IsFull)
             {
-                Interlocked.Increment(ref _movesDeferredForSlots);
                 DeferMove(revision, window);
                 ArmMoveRetry(_retired.MillisecondsUntilOldestExpires(NowMs(), RetiredHookRegistrations.GraceMs));
+
+                // Counted last, so whoever sees the count also sees the retry it armed (the interlocked add is a full fence).
+                Interlocked.Increment(ref _movesDeferredForSlots);
                 return;
             }
 
