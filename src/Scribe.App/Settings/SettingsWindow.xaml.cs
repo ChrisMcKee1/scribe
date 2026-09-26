@@ -2809,6 +2809,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 AiModelBox.Text = selected;
             }
+
+            // The rebuild decides the last operation's outcome once, from the alias it restored. The combo can't be asked
+            // while its items are replaced: its selection is cleared then, and its alias reads as the display text. A
+            // failure or a running operation for that model keeps its row; anything else is retired, so the service's
+            // progress and the catalog's loaded state show.
+            if (_foundryOperationStatus is { } outcome &&
+                !(FoundryLocalSetup.KeepsThroughPickerRebuild(outcome) &&
+                  string.Equals(selected, _foundryOperationAlias, StringComparison.OrdinalIgnoreCase)))
+            {
+                _foundryOperationStatus = null;
+                _foundryOperationAlias = null;
+            }
         }
         finally
         {
@@ -2840,14 +2852,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // A rebuild of the picker (a catalog refresh) selects programmatically: a failed or running operation keeps its row
-        // through it, and any other outcome is retired so the service's progress and the catalog's loaded state show. A
-        // real choice of another model retires the last operation's outcome whatever it was.
-        var keepsOutcome = _suppressComboFilter &&
-            _foundryOperationStatus is { } outcome &&
-            FoundryLocalSetup.KeepsThroughPickerRebuild(outcome) &&
-            string.Equals(SelectedFoundryModelAlias, _foundryOperationAlias, StringComparison.OrdinalIgnoreCase);
-        if (!keepsOutcome)
+        // A real choice of another model retires the last operation's outcome, whatever it was. A rebuild of the picker (a
+        // catalog refresh) selects programmatically and decides for itself in SetFoundryModelItems.
+        if (!_suppressComboFilter)
         {
             _foundryOperationStatus = null;
             _foundryOperationAlias = null;

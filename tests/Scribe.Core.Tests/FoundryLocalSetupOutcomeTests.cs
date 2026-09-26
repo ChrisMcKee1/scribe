@@ -46,4 +46,50 @@ public sealed class FoundryLocalSetupOutcomeTests
 
         Assert.Equal(retired, FoundryLocalSetup.RetiredBySaveThatServesIt(outcome));
     }
+
+    [Fact]
+    public void The_picker_rebuild_decides_from_the_alias_it_restored()
+    {
+        // AI review, round 5: replacing the picker's items raises SelectionChanged with the selection cleared, when the
+        // combo's alias reads as its display text, so a decision taken there cleared a failed Load's error. The rebuild
+        // decides once, from the alias it captured; SelectionChanged decides only for a real choice.
+        var window = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var rebuild = Body(window, "private void SetFoundryModelItems(");
+        Assert.Contains("FoundryLocalSetup.KeepsThroughPickerRebuild(outcome)", rebuild, StringComparison.Ordinal);
+        Assert.Contains("string.Equals(selected, _foundryOperationAlias", rebuild, StringComparison.Ordinal);
+
+        var changed = Body(window, "private void AiModelBox_SelectionChanged(");
+        Assert.Contains("if (!_suppressComboFilter)", changed, StringComparison.Ordinal);
+        Assert.DoesNotContain("SelectedFoundryModelAlias", changed, StringComparison.Ordinal);
+    }
+
+    private static string Body(string source, string signature)
+    {
+        var start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{signature} was not found.");
+        var open = source.IndexOf('{', start);
+        var depth = 0;
+        for (var i = open; i < source.Length; i++)
+        {
+            depth += source[i] switch { '{' => 1, '}' => -1, _ => 0 };
+            if (depth == 0)
+            {
+                return source[open..(i + 1)];
+            }
+        }
+
+        throw new InvalidOperationException($"{signature} has no end.");
+    }
+
+    private static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return root.FullName;
+    }
 }
