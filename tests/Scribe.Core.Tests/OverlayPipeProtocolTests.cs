@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Scribe.Core.Models;
 using Scribe.Core.Overlay;
+using Scribe.Core.Tray;
 
 namespace Scribe.Core.Tests;
 
@@ -72,8 +73,8 @@ public sealed class OverlayPipeProtocolTests
             "PARTLYTYPED Copy it from the tray menu",
             OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.PartlyTyped)));
         Assert.Equal(
-            "NOTHINGTYPED Nothing was recognised, try again",
-            OverlayPipeProtocol.OutcomeLine(PillOutcome.Of(null, false, null, "nothing was recognised, try again")!));
+            "NOTHINGTYPED Didn't catch any words, try again",
+            OverlayPipeProtocol.OutcomeLine(PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.NothingRecognized))!));
     }
 
     [Fact]

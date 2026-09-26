@@ -15,6 +15,7 @@ using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Scribe.Core.TextInjection;
+using Scribe.Core.Tray;
 using Scribe.Core.Transcription;
 using Scribe.Core.Vad;
 using Scribe.Core.Vocabulary;
@@ -137,14 +138,14 @@ internal sealed class DictationController : IDisposable
     public event Action? ModelsReleased;
 
     /// <summary>Raised when a capture or transcription step fails.</summary>
-    public event Action<string>? Error;
+    public event Action<DictationProblemReport>? Error;
 
     /// <summary>
     /// Raised for a recoverable capture warning while recording continues. Carries the revision of the Recording change it
     /// belongs to, taken under the lifecycle's gate, so the pill shows it only while that recording is still what it shows;
     /// 0 when that recording was already over, when only the tray notice still applies.
     /// </summary>
-    public event Action<DictationWarning>? Warning;
+    public event Action<DictationProblemReport>? Warning;
 
     /// <summary>
     /// Raised after a capture is dictated and inserted, with the text as history keeps it: without the space the target
@@ -737,7 +738,7 @@ internal sealed class DictationController : IDisposable
             if (_audio.LastDeviceMuted)
             {
                 _log.LogWarning("Recording started on a muted microphone.");
-                RaiseWarning("microphone is muted, unmute it to dictate", id, "Microphone muted");
+                RaiseWarning(new DictationProblemReport(DictationProblem.MicrophoneMuted), id);
             }
 
             // Only for a toggle, judged by the binding that fired, and attached only while this recording is still the
@@ -769,9 +770,9 @@ internal sealed class DictationController : IDisposable
 
             // Guarded: a log failure here would skip the reset and leave the controller Recording for good.
             TryLog(log => log.LogError("Failed to start audio capture: {Failure}", FailureShape.DescribeWithStack(ex)));
-            const string failure = "microphone unavailable";
-            AbandonRecording(id, PillOutcome.Of(insertion: null, cleanupRequested: false, cleanup: null, failure));
-            RaiseError(failure);
+            var problem = new DictationProblemReport(DictationProblem.MicrophoneUnavailable);
+            AbandonRecording(id, PillOutcome.Of(insertion: null, cleanupRequested: false, cleanup: null, problem));
+            RaiseError(problem);
         }
     }
 
@@ -834,7 +835,7 @@ internal sealed class DictationController : IDisposable
             "#{Id} the active microphone stopped unexpectedly: {Failure}",
             _lifecycle.CurrentDictationId,
             FailureShape.DescribeWithStack(error));
-        RaiseError("microphone disconnected");
+        RaiseError(new DictationProblemReport(DictationProblem.MicrophoneDisconnected));
         StopAndProcess(DictationStopReason.MicrophoneFault);
     }
 
@@ -899,7 +900,7 @@ internal sealed class DictationController : IDisposable
                 "A forgotten toggle looks exactly like this.",
                 id, minutes);
 
-            RaiseWarning($"dictation hit the {minutes} minute limit and was transcribed", id, pillText: null);
+            RaiseWarning(new DictationProblemReport(DictationProblem.DurationLimit, Minutes: minutes), id);
 
             StopAndProcess(DictationStopReason.DurationLimit, id);
         }
@@ -1025,14 +1026,14 @@ internal sealed class DictationController : IDisposable
             settings.EnableAiCleanup,
             settings.ApplyPostProcessing,
             session.StartedTimestamp);
-        var currentStage = "Audio capture";
+        var currentStage = TryDictationReportClassifier.StageAudioCapture;
         long insertedTimestamp = 0;
 
         // What the pill says about this dictation when it returns to idle (PillOutcome.Of decides): how the insertion went,
         // what AI cleanup returned, and the failure processing reported, each set where the pipeline learns it.
         InjectionResult? pillInsertion = null;
         CleanupResult? pillCleanup = null;
-        string? pillFailure = null;
+        DictationProblemReport? pillProblem = null;
         try
         {
             // This dictation owns the capture from its admission until the capture is stopped and released, so that
@@ -1092,19 +1093,19 @@ internal sealed class DictationController : IDisposable
                 _log.LogWarning(
                     "#{Id} capture from '{Device}' produced no audio after a {Held:F2}s hold.",
                     session.Id, device ?? "default device", heldSeconds);
-                report.Fail("Audio capture", "The microphone produced no audio.");
+                report.Fail(TryDictationReportClassifier.StageAudioCapture, TryDictationReportClassifier.AudioCaptureFailed);
                 RaisePipelineReport(report);
 
                 // A press too brief to record anything is not a broken microphone, and telling
                 // somebody to go and change devices over it sends them to fix the wrong thing. A
                 // support log showed this exact misdirection: the device took five seconds to open,
                 // the user let go, and Scribe blamed their hardware.
-                pillFailure = heldSeconds < 1.0
-                    ? "that was too quick, hold the key while you speak"
+                pillProblem = heldSeconds < 1.0
+                    ? new DictationProblemReport(DictationProblem.TooQuick)
                     : device is null
-                        ? "no audio captured. Check your microphone in Settings"
-                        : $"no audio from '{device}'. Pick a different microphone in Settings";
-                RaiseError(pillFailure);
+                        ? new DictationProblemReport(DictationProblem.NoAudio)
+                        : new DictationProblemReport(DictationProblem.NoAudioFromDevice, Device: device);
+                RaiseError(pillProblem);
                 return;
             }
 
@@ -1113,7 +1114,7 @@ internal sealed class DictationController : IDisposable
             if (settings.UseVoiceActivityDetection)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                currentStage = "Voice activity detection";
+                currentStage = TryDictationReportClassifier.StageVoiceActivityDetection;
                 var vadTimer = Stopwatch.StartNew();
                 var trimmed = _vad.Trim(captured);
                 vadTimer.Stop();
@@ -1123,14 +1124,14 @@ internal sealed class DictationController : IDisposable
                 {
                     activity?.SetTag(ScribeTelemetry.TagVadKept, false);
                     activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.VadNoSpeech);
-                    if (RaiseSilentCaptureError(report, "Voice activity detection") is { } silent)
+                    if (RaiseSilentCaptureError(report, TryDictationReportClassifier.StageVoiceActivityDetection) is { } silent)
                     {
-                        pillFailure = silent;
+                        pillProblem = silent;
                         return;
                     }
 
                     _log.LogInformation("VAD detected no speech; discarding capture.");
-                    report.Fail("Voice activity detection", "No speech was detected.");
+                    report.Fail(TryDictationReportClassifier.StageVoiceActivityDetection, TryDictationReportClassifier.NoSpeechDetected);
                     RaisePipelineReport(report);
                     return;
                 }
@@ -1161,7 +1162,7 @@ internal sealed class DictationController : IDisposable
                 _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
             }
 
-            currentStage = "Speech recognition";
+            currentStage = TryDictationReportClassifier.StageSpeechRecognition;
             var recognitionStarted = Stopwatch.GetTimestamp();
             var result = _transcription.Transcribe(audio, cancellationToken);
             LogRecognitionTiming(session.Id, recognizerResident, Stopwatch.GetElapsedTime(recognitionStarted), result);
@@ -1171,9 +1172,9 @@ internal sealed class DictationController : IDisposable
             if (result.IsEmpty)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.NoSpeech);
-                if (RaiseSilentCaptureError(report, "Speech recognition") is { } silent)
+                if (RaiseSilentCaptureError(report, TryDictationReportClassifier.StageSpeechRecognition) is { } silent)
                 {
-                    pillFailure = silent;
+                    pillProblem = silent;
                     return;
                 }
 
@@ -1194,10 +1195,10 @@ internal sealed class DictationController : IDisposable
                     audio.Duration.TotalSeconds,
                     _audio.LastDeviceName ?? "unknown",
                     _audio.LastSignalReport?.Describe() ?? "unavailable");
-                report.Fail("Speech recognition", "No speech was recognized.");
+                report.Fail(TryDictationReportClassifier.StageSpeechRecognition, TryDictationReportClassifier.NoSpeechRecognized);
                 RaisePipelineReport(report);
-                pillFailure = "nothing was recognised, try again";
-                RaiseError(pillFailure);
+                pillProblem = new DictationProblemReport(DictationProblem.NothingRecognized);
+                RaiseError(pillProblem);
                 return;
             }
 
@@ -1235,7 +1236,7 @@ internal sealed class DictationController : IDisposable
             activity?.SetTag(ScribeTelemetry.TagAiCleanup, settings.EnableAiCleanup);
             if (settings.EnableAiCleanup)
             {
-                currentStage = "AI cleanup";
+                currentStage = TryDictationReportClassifier.StageAiCleanup;
                 var cleanupTimer = Stopwatch.StartNew();
 
                 // With the vocabulary this dictation was admitted with: its glossary, and every request handed over only
@@ -1308,7 +1309,7 @@ internal sealed class DictationController : IDisposable
             pillCleanup = cleanup;
             report.CleanedText = recognized;
 
-            currentStage = "Dictionary and snippets";
+            currentStage = TryDictationReportClassifier.StageDictionaryAndSnippets;
             var postTimer = Stopwatch.StartNew();
 
             // The same generation the cleanup above ran with, never a newer one a Save published meanwhile.
@@ -1324,7 +1325,7 @@ internal sealed class DictationController : IDisposable
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.EmptyAfterPostProcess);
                 _log.LogInformation("Post-processing produced empty text; nothing to inject.");
-                report.Fail("Dictionary and snippets", "Post-processing produced empty text.");
+                report.Fail(TryDictationReportClassifier.StageDictionaryAndSnippets, TryDictationSummary.EmptyTextReason);
                 RaisePipelineReport(report);
                 return;
             }
@@ -1353,7 +1354,7 @@ internal sealed class DictationController : IDisposable
             // line breaks were handled, which trims the text for a single-line target. DictationInsertion keeps the text
             // for recovery before it types anything, and hands back the text as dictated for history: only the injector
             // callback below ever sees the typed form with the space, so nothing that keeps text can be given it.
-            currentStage = "Text insertion";
+            currentStage = TryDictationReportClassifier.StageTextInsertion;
             var injectionTimer = Stopwatch.StartNew();
             var insertion = DictationInsertion.Insert(
                 text,
@@ -1374,15 +1375,15 @@ internal sealed class DictationController : IDisposable
                 activity?.SetStatus(ActivityStatusCode.Error, injection.Error);
                 _log.LogWarning(
                     "Text injection failed for {App}: {Error}", targetApp ?? "the focused app", injection.Error);
-                pillFailure = injection.Error == InjectionResult.FocusChangedError
-                    ? "focus changed, so the dictation was not inserted"
-                    : "text could not be inserted completely";
-                RaiseError(pillFailure);
+                pillProblem = injection.Error == InjectionResult.FocusChangedError
+                    ? new DictationProblemReport(DictationProblem.FocusChanged)
+                    : new DictationProblemReport(DictationProblem.TypingIncomplete);
+                RaiseError(pillProblem);
 
                 // The transcript was stored before typing began, so close the loop: without a hint the
                 // preserved text looks lost, because the overlay flash is the only other signal.
                 RaiseInjectionFailed();
-                report.Fail("Text insertion", injection.Error ?? "Text could not be inserted.");
+                report.Fail(TryDictationReportClassifier.StageTextInsertion, TryDictationReportClassifier.TextInsertionFailed);
                 RaisePipelineReport(report);
                 return;
             }
@@ -1419,26 +1420,28 @@ internal sealed class DictationController : IDisposable
             // By shape here too: the trace bridge writes an error span's description into the shared log.
             activity?.SetStatus(ActivityStatusCode.Error, FailureShape.Describe(ex));
             _log.LogInformation("Dictation skipped because no speech model is installed ({Failure}).", FailureShape.Describe(ex));
-            report.Fail(currentStage, ex.Message);
+            report.Fail(currentStage, TryDictationReportClassifier.FailureReasonForStage(currentStage));
             RaisePipelineReport(report);
-            pillFailure = "choose a speech model in Settings";
-            RaiseError(pillFailure);
+            pillProblem = new DictationProblemReport(DictationProblem.NoSpeechModel);
+            RaiseError(pillProblem);
         }
         catch (Exception ex)
         {
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
             activity?.SetStatus(ActivityStatusCode.Error, FailureShape.Describe(ex));
             _log.LogError("Dictation processing failed: {Failure}", FailureShape.DescribeWithStack(ex));
-            report.Fail(currentStage, ex.Message);
+            report.Fail(currentStage, TryDictationReportClassifier.FailureReasonForStage(currentStage));
             RaisePipelineReport(report);
-            pillFailure = "transcription failed";
-            RaiseError(pillFailure);
+            pillProblem = currentStage == TryDictationReportClassifier.StageSpeechRecognition
+                ? new DictationProblemReport(DictationProblem.ModelLoadFailed)
+                : new DictationProblemReport(DictationProblem.RecognitionFailed);
+            RaiseError(pillProblem);
         }
         finally
         {
             // After the pipeline, never in it: the outcome is decided here from what it set, and shown with the return to
             // idle, which already accepts the next press.
-            ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillFailure));
+            ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, settings.Hotkey.Mode));
         }
     }
 
@@ -1470,7 +1473,7 @@ internal sealed class DictationController : IDisposable
     // mic mute. Historically this fell through the silent VAD/no-speech discard paths and looked
     // like Scribe simply did nothing. Returns the message it raised, which the pill shows too, so the
     // caller can skip its own quiet discard; null when the capture was not silent.
-    private string? RaiseSilentCaptureError(DictationPipelineReport report, string stage)
+    private DictationProblemReport? RaiseSilentCaptureError(DictationPipelineReport report, string stage)
     {
         if (!_audio.LastCaptureWasSilent)
         {
@@ -1480,13 +1483,13 @@ internal sealed class DictationController : IDisposable
         var device = _audio.LastDeviceName;
         _log.LogWarning("Capture from '{Device}' contained only silence; the microphone is likely muted.",
             device ?? "default device");
-        report.Fail(stage, "The capture contained only silence. The microphone is likely muted.");
+        report.Fail(stage, TryDictationReportClassifier.SilentCapture);
         RaisePipelineReport(report);
-        var message = device is null
-            ? "no sound was captured, your microphone may be muted"
-            : $"no sound from '{device}', it may be muted";
-        RaiseError(message);
-        return message;
+        var problem = device is null
+            ? new DictationProblemReport(DictationProblem.OnlySilence)
+            : new DictationProblemReport(DictationProblem.OnlySilenceFromDevice, Device: device);
+        RaiseError(problem);
+        return problem;
     }
 
     private void EnqueueHistory(
@@ -1610,7 +1613,7 @@ internal sealed class DictationController : IDisposable
     // Once shutdown has begun nobody is left to read an error or a warning. The shell never waits for the UI thread to
     // show one (it posts; see UiThreadDispatch), so standing down here is about not queuing notices for a closing app.
     // Guarded as well, so a throwing handler is reported instead of re-entering the pipeline's own failure path.
-    private void RaiseError(string message)
+    private void RaiseError(DictationProblemReport report)
     {
         if (_lifecycle.IsClosing)
         {
@@ -1619,7 +1622,7 @@ internal sealed class DictationController : IDisposable
 
         try
         {
-            Error?.Invoke(message);
+            Error?.Invoke(report);
         }
         catch (Exception ex)
         {
@@ -1630,7 +1633,7 @@ internal sealed class DictationController : IDisposable
     // The revision is taken under the lifecycle's gate: a warning raised late for a recording that a pause or a stop has
     // already ended carries 0, and one raised just before is dropped by the shell once a newer change has been shown.
     // The pill text is what the recording pill shows while that recording is live; null shows nothing there.
-    private void RaiseWarning(string message, long dictationId, string? pillText)
+    private void RaiseWarning(DictationProblemReport report, long dictationId)
     {
         if (_lifecycle.IsClosing)
         {
@@ -1640,21 +1643,12 @@ internal sealed class DictationController : IDisposable
         try
         {
             var revision = _lifecycle.TryGetRecordingPresentation(dictationId)?.Revision ?? 0;
-            Warning?.Invoke(new DictationWarning(message, revision, pillText));
+            Warning?.Invoke(report with { RecordingRevision = revision });
         }
         catch (Exception ex)
         {
             _log.LogWarning("A Warning handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
         }
-    }
-
-    // Names both microphones: the one the user chose and the one this dictation is really using.
-    private static string UnavailableMicrophoneMessage(string? chosenName, string? usedName)
-    {
-        var chosen = string.IsNullOrWhiteSpace(chosenName) ? "your chosen microphone" : $"'{chosenName}'";
-        var used = string.IsNullOrWhiteSpace(usedName) ? string.Empty : $", '{usedName}'";
-        return $"{chosen} isn't available, so Scribe is using the Windows default microphone{used}. " +
-            "Choose a microphone from the tray menu or in Settings";
     }
 
     // Through the notice a muted microphone uses: a tray notification always, and the pill only while the recording is
@@ -1672,9 +1666,11 @@ internal sealed class DictationController : IDisposable
             "#{Id} the chosen microphone '{Chosen}' is not available; recording from the Windows default '{Device}' ({When}).",
             id, settings.InputDeviceName ?? "unnamed", open.DeviceName ?? "unknown", announcement));
         RaiseWarning(
-            UnavailableMicrophoneMessage(settings.InputDeviceName, open.DeviceName),
-            id,
-            announcement == UnavailableMicrophoneAnnouncement.WhileRecording ? "Using default mic" : null);
+            new DictationProblemReport(
+                DictationProblem.FallbackMicrophone,
+                ChosenDevice: settings.InputDeviceName,
+                UsedDevice: open.DeviceName),
+            id);
     }
 
     private void RaisePipelineReport(DictationPipelineReport report)
@@ -1876,15 +1872,6 @@ internal sealed class DictationController : IDisposable
 /// other change, and for a dictation discarded quietly.
 /// </param>
 internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing, PillOutcome? Outcome = null);
-
-/// <summary>A recoverable capture warning.</summary>
-/// <param name="Message">The notice for the tray.</param>
-/// <param name="RecordingRevision">
-/// The revision of the Recording change the warning belongs to (see <see cref="PresentationRelay{T}.PublishIfCurrent"/>),
-/// or 0 when that recording was already over when the warning was raised.
-/// </param>
-/// <param name="PillText">What the recording pill shows for it while that recording is live, or null for nothing.</param>
-internal readonly record struct DictationWarning(string Message, long RecordingRevision, string? PillText);
 
 internal sealed class DictationPipelineReport(
     nint targetWindow,

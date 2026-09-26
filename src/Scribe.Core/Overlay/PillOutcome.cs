@@ -1,6 +1,7 @@
-using System.Globalization;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Models;
 using Scribe.Core.TextInjection;
+using Scribe.Core.Tray;
 
 namespace Scribe.Core.Overlay;
 
@@ -77,11 +78,17 @@ public sealed record PillOutcome
     /// <param name="insertion">How typing into the target went, or <c>null</c> when the dictation ended before insertion.</param>
     /// <param name="cleanupRequested">Whether the capture asked for AI cleanup, from its own settings (the dictation-only hotkey turns it off).</param>
     /// <param name="cleanup">What AI cleanup returned, or <c>null</c> when it never ran.</param>
-    /// <param name="failure">
-    /// The message the dictation raised when it ended without inserting anything (it carries its own next step), or
-    /// <c>null</c>. Only consulted when there was no insertion: whatever was reported, the insertion says what arrived.
+    /// <param name="problem">
+    /// The typed problem the dictation raised when it ended without inserting anything, or <c>null</c>. Only consulted
+    /// when there was no insertion: whatever was reported, the insertion says what arrived.
     /// </param>
-    public static PillOutcome? Of(InjectionResult? insertion, bool cleanupRequested, CleanupResult? cleanup, string? failure)
+    /// <param name="mode">The shortcut mode that selects the too-quick instruction.</param>
+    public static PillOutcome? Of(
+        InjectionResult? insertion,
+        bool cleanupRequested,
+        CleanupResult? cleanup,
+        DictationProblemReport? problem,
+        HotkeyMode mode = HotkeyMode.Hold)
     {
         if (insertion is not null)
         {
@@ -101,8 +108,8 @@ public sealed record PillOutcome
             };
         }
 
-        var step = OneLine(failure);
-        return step.Length == 0 ? null : new PillOutcome(PillOutcomeKind.NothingTyped, SentenceCase(step));
+        var step = problem is null ? null : DictationProblemText.PillLine(problem, mode);
+        return string.IsNullOrWhiteSpace(step) ? null : new PillOutcome(PillOutcomeKind.NothingTyped, step);
     }
 
     // Why the text went in without AI cleanup that was asked for, or null when cleanup ran (a partly degraded result still
@@ -123,8 +130,4 @@ public sealed record PillOutcome
     // The pipe carries one line per command, and the pill shows one line of detail.
     private static string OneLine(string? text) =>
         (text ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
-
-    // The failure messages are written to follow "Scribe: " in the tray's tooltip; on the pill they start the line.
-    private static string SentenceCase(string text) =>
-        char.IsLower(text[0]) ? char.ToUpper(text[0], CultureInfo.InvariantCulture) + text[1..] : text;
 }

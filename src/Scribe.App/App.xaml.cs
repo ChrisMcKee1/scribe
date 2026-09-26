@@ -417,14 +417,14 @@ public partial class App : Application
                     ShowTrayNotice(TrayNotices.AiCleanupEpisodeFailed());
                 }
             });
-        _controller.Error += message =>
+        _controller.Error += report =>
         {
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(message, recordingRevision: 0, pillText: null, controllerError: true));
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: true));
         };
-        _controller.Warning += warning =>
+        _controller.Warning += report =>
         {
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(warning.Message, warning.RecordingRevision, warning.PillText, controllerError: false));
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: false));
         };
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -1336,41 +1336,34 @@ public partial class App : Application
         }
     }
 
-    private void ShowDictationProblem(string legacyMessage, long recordingRevision, string? pillText, bool controllerError)
+    private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
     {
-        var problem = DictationProblemText.FromLegacy(legacyMessage) ?? DictationProblem.RecognitionFailed;
         var settings = _controller?.CurrentSettings;
+        var mode = settings?.Hotkey.Mode ?? HotkeyMode.Hold;
         var notice = DictationProblemText.Describe(
-            problem,
-            settings?.Hotkey.Mode ?? HotkeyMode.Hold,
+            report,
+            mode,
             settings?.Hotkey is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
-        if (problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete)
+        var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
+        if (routing == DictationProblemSurface.PillAndNotice)
         {
             _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
             return;
         }
 
-        // With the recording indicator on, the pill's outcome says what the dictation did, so a controller error needs no
-        // notice of its own, unless the outcome can't carry it (a disconnect mid-recording, whose outcome then describes
-        // the insertion). A controller error the indicator doesn't carry is a notice, never a pill warning.
-        if (controllerError && settings?.ShowOverlay == true && DictationProblemText.CarriedByPillOutcome(problem))
+        if (controllerError && routing == DictationProblemSurface.PillOutcome)
         {
             return;
         }
 
-        var decision = _trayFeedback.Decide(
-            problem is DictationProblem.FocusChanged or DictationProblem.TypingIncomplete
-                ? TrayFeedbackEvent.TypingFailure
-                : TrayFeedbackEvent.DictationProblem,
-            !controllerError && settings?.ShowOverlay == true);
-        if (decision.Channel == TrayFeedbackChannel.Pill)
+        if (!controllerError && routing == DictationProblemSurface.RecordingPill)
         {
-            OnRecordingWarning(recordingRevision, pillText ?? notice.PillText ?? notice.Title);
+            OnRecordingWarning(report.RecordingRevision, DictationProblemText.PillLine(report, mode) ?? notice.Title);
             return;
         }
 
-        if (decision.Channel == TrayFeedbackChannel.Notice)
+        if (routing == DictationProblemSurface.Notice || routing == DictationProblemSurface.PillOutcome)
         {
             if (notice.Action == TrayNoticeAction.CopyLastDictation)
             {

@@ -6,42 +6,52 @@ namespace Scribe.Core.Tests;
 
 public sealed class DictationProblemTextTests
 {
-    [Fact]
-    public void The_pill_outcome_carries_every_controller_error_but_a_disconnect()
-    {
-        // Overlay stream OV: every RaiseError site ends in an outcome the pill shows, except OnCaptureFaulted, which is
-        // raised mid-recording while processing goes on to describe the insertion (coordinator's per-path list at 885175f).
-        foreach (var problem in Enum.GetValues<DictationProblem>())
-        {
-            Assert.Equal(problem != DictationProblem.MicrophoneDisconnected, DictationProblemText.CarriedByPillOutcome(problem));
-        }
-    }
-
     public static IEnumerable<object?[]> ProblemRows()
     {
-        yield return Row(DictationProblem.MicrophoneMuted, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Your microphone is muted", "Unmute it to keep dictating. Scribe is still recording.", TrayNoticeKind.RecordingWarning, true, "Microphone muted", TrayNoticeAction.None);
-        yield return Row(DictationProblem.MicrophoneUnavailable, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't start recording", "Scribe couldn't open your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Error, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.MicrophoneDisconnected, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Microphone disconnected", "Your microphone stopped during the dictation. Check that it's connected, then try again.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.DurationLimit, null, null, null, 3, HotkeyMode.Hold, "Page Down", "Dictation stopped at 3 minutes", "Scribe stops recording after 3 minutes and types what it heard. You can change this in Settings, Advanced.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.TooQuick, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Nothing recorded", "That was too quick. Hold Page Down while you speak, then let go.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.TooQuick, null, null, null, 10, HotkeyMode.Toggle, "Page Down", "Nothing recorded", "That was too quick. Press Page Down, speak, then press it again.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.NoAudio, null, null, null, 10, HotkeyMode.Hold, "Page Down", "No sound recorded", "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.NoAudioFromDevice, "Jabra", null, null, 10, HotkeyMode.Hold, "Page Down", "No sound recorded", "Scribe didn't get any sound from \"Jabra\". Choose another microphone from the Microphone menu.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.NothingRecognized, null, null, null, 10, HotkeyMode.Hold, "Page Down", "No words recognized", "Scribe didn't catch any words. Try again, a little closer to the microphone.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.FocusChanged, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, false, null, TrayNoticeAction.CopyLastDictation);
-        yield return Row(DictationProblem.TypingIncomplete, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, false, null, TrayNoticeAction.CopyLastDictation);
-        yield return Row(DictationProblem.NoSpeechModel, null, null, null, 10, HotkeyMode.Hold, "Page Down", "No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.OpenSettings);
-        yield return Row(DictationProblem.RecognitionFailed, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, false, null, TrayNoticeAction.OpenSettingsDiagnostics);
-        yield return Row(DictationProblem.ModelLoadFailed, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.OpenSettingsDiagnostics);
-        yield return Row(DictationProblem.OnlySilence, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Only silence recorded", "Your microphone may be muted. Unmute it and try again.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.OnlySilenceFromDevice, "Jabra", null, null, 10, HotkeyMode.Hold, "Page Down", "Only silence recorded", "\"Jabra\" may be muted. Unmute it and try again.", TrayNoticeKind.Warning, false, null, TrayNoticeAction.None);
-        yield return Row(DictationProblem.FallbackMicrophone, null, "Laptop", "Jabra", 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "\"Laptop\" isn't available, so Scribe is recording from \"Jabra\", the Windows default. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, "Using default mic", TrayNoticeAction.None);
-        yield return Row(DictationProblem.FallbackMicrophone, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "Your chosen microphone isn't available, so Scribe is recording from the Windows default microphone. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, "Using default mic", TrayNoticeAction.None);
+        yield return Row(DictationProblem.MicrophoneMuted, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Your microphone is muted", "Unmute it to keep dictating. Scribe is still recording.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
+        yield return Row(DictationProblem.MicrophoneUnavailable, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't start recording", "Scribe couldn't open your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Error, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.MicrophoneDisconnected, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Microphone disconnected", "Your microphone stopped during the dictation. Check that it's connected, then try again.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.DurationLimit, null, null, null, 3, HotkeyMode.Hold, "Page Down", "Dictation stopped at 3 minutes", "Scribe stops recording after 3 minutes and types what it heard. You can change this in Settings, Advanced.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.TooQuick, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Nothing recorded", "That was too quick. Hold Page Down while you speak, then let go.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.TooQuick, null, null, null, 10, HotkeyMode.Toggle, "Page Down", "Nothing recorded", "That was too quick. Press Page Down, speak, then press it again.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.NoAudio, null, null, null, 10, HotkeyMode.Hold, "Page Down", "No sound recorded", "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.NoAudioFromDevice, "Jabra", null, null, 10, HotkeyMode.Hold, "Page Down", "No sound recorded", "Scribe didn't get any sound from \"Jabra\". Choose another microphone from the Microphone menu.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.NothingRecognized, null, null, null, 10, HotkeyMode.Hold, "Page Down", "No words recognized", "Scribe didn't catch any words. Try again, a little closer to the microphone.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.FocusChanged, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, false, TrayNoticeAction.CopyLastDictation);
+        yield return Row(DictationProblem.TypingIncomplete, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, false, TrayNoticeAction.CopyLastDictation);
+        yield return Row(DictationProblem.NoSpeechModel, null, null, null, 10, HotkeyMode.Hold, "Page Down", "No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, false, TrayNoticeAction.OpenSettings);
+        yield return Row(DictationProblem.RecognitionFailed, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, false, TrayNoticeAction.OpenSettingsDiagnostics);
+        yield return Row(DictationProblem.ModelLoadFailed, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, false, TrayNoticeAction.OpenSettingsDiagnostics);
+        yield return Row(DictationProblem.OnlySilence, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Only silence recorded", "Your microphone may be muted. Unmute it and try again.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.OnlySilenceFromDevice, "Jabra", null, null, 10, HotkeyMode.Hold, "Page Down", "Only silence recorded", "\"Jabra\" may be muted. Unmute it and try again.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
+        yield return Row(DictationProblem.FallbackMicrophone, null, "Laptop", "Jabra", 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "\"Laptop\" isn't available, so Scribe is recording from \"Jabra\", the Windows default. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
+        yield return Row(DictationProblem.FallbackMicrophone, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "Your chosen microphone isn't available, so Scribe is recording from the Windows default microphone. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
+    }
+
+    public static IEnumerable<object?[]> PillRows()
+    {
+        yield return Pill(DictationProblem.TooQuick, HotkeyMode.Hold, 10, "Hold the shortcut while you speak");
+        yield return Pill(DictationProblem.TooQuick, HotkeyMode.Toggle, 10, "Press, speak, then press again");
+        yield return Pill(DictationProblem.NoAudio, HotkeyMode.Hold, 10, "No sound, check your microphone");
+        yield return Pill(DictationProblem.NoAudioFromDevice, HotkeyMode.Hold, 10, "No sound, try another microphone");
+        yield return Pill(DictationProblem.OnlySilence, HotkeyMode.Hold, 10, "Your microphone may be muted");
+        yield return Pill(DictationProblem.OnlySilenceFromDevice, HotkeyMode.Hold, 10, "Your microphone may be muted");
+        yield return Pill(DictationProblem.MicrophoneMuted, HotkeyMode.Hold, 10, "Microphone muted");
+        yield return Pill(DictationProblem.MicrophoneUnavailable, HotkeyMode.Hold, 10, "Couldn't open your microphone");
+        yield return Pill(DictationProblem.DurationLimit, HotkeyMode.Hold, 10, "Stopped at the 10-minute limit");
+        yield return Pill(DictationProblem.NothingRecognized, HotkeyMode.Hold, 10, "Didn't catch any words, try again");
+        yield return Pill(DictationProblem.FocusChanged, HotkeyMode.Hold, 10, "Copy it from the tray menu");
+        yield return Pill(DictationProblem.TypingIncomplete, HotkeyMode.Hold, 10, "Copy it from the tray menu");
+        yield return Pill(DictationProblem.NoSpeechModel, HotkeyMode.Hold, 10, "Choose a speech model in Advanced");
+        yield return Pill(DictationProblem.RecognitionFailed, HotkeyMode.Hold, 10, "Something went wrong, try again");
+        yield return Pill(DictationProblem.ModelLoadFailed, HotkeyMode.Hold, 10, "The speech model didn't load");
+        yield return Pill(DictationProblem.FallbackMicrophone, HotkeyMode.Hold, 10, "Using the default microphone");
+        yield return Pill(DictationProblem.MicrophoneDisconnected, HotkeyMode.Hold, 10, null);
     }
 
     [Theory]
     [MemberData(nameof(ProblemRows))]
-    public void Every_problem_has_exact_notice_kind_silent_flag_pill_and_action(DictationProblem problem, string? device, string? chosen, string? used, int minutes, HotkeyMode mode, string shortcut, string title, string body, TrayNoticeKind kind, bool silent, string? pill, TrayNoticeAction action)
+    public void Every_problem_has_exact_notice_kind_silent_flag_and_action(DictationProblem problem, string? device, string? chosen, string? used, int minutes, HotkeyMode mode, string shortcut, string title, string body, TrayNoticeKind kind, bool silent, TrayNoticeAction action)
     {
         var notice = DictationProblemText.Describe(problem, mode, shortcut, device, chosen, used, minutes);
 
@@ -49,8 +59,37 @@ public sealed class DictationProblemTextTests
         Assert.Equal(body, notice.Body);
         Assert.Equal(kind, notice.Kind);
         Assert.Equal(silent, TrayNoticeDelivery.For(kind).Silent);
-        Assert.Equal(pill, notice.PillText);
         Assert.Equal(action, notice.Action);
+    }
+
+    [Theory]
+    [MemberData(nameof(PillRows))]
+    public void Every_problem_has_the_catalog_pill_line_or_is_notice_only(DictationProblem problem, HotkeyMode mode, int minutes, string? expected)
+    {
+        Assert.Equal(expected, DictationProblemText.PillLine(problem, mode, minutes));
+    }
+
+    [Fact]
+    public void Pill_lines_fit_have_no_dashes_and_use_US_spelling()
+    {
+        foreach (var mode in new[] { HotkeyMode.Hold, HotkeyMode.Toggle })
+        {
+            foreach (var minutes in new[] { 1, 10, 1440 })
+            {
+                foreach (var problem in Enum.GetValues<DictationProblem>())
+                {
+                    var line = DictationProblemText.PillLine(problem, mode, minutes);
+                    if (line is null) continue;
+                    Assert.True(line.Length <= 34, $"{problem} {mode} {minutes}: {line.Length} {line}");
+                    Assert.DoesNotContain('\u2013', line);
+                    Assert.DoesNotContain('\u2014', line);
+                    Assert.DoesNotContain("recognised", line, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain("key", line, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain("button", line, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain("Settings", line, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+        }
     }
 
     [Fact]
@@ -62,31 +101,38 @@ public sealed class DictationProblemTextTests
     }
 
     [Fact]
-    public void FromLegacy_maps_every_current_dictation_controller_string()
+    public void Routing_covers_every_problem_with_indicator_on_and_off()
     {
-        Assert.Equal(DictationProblem.TooQuick, DictationProblemText.FromLegacy("that was too quick, hold the key while you speak"));
-        Assert.Equal(DictationProblem.NoAudio, DictationProblemText.FromLegacy("no audio captured. Check your microphone in Settings"));
-        Assert.Equal(DictationProblem.NoAudioFromDevice, DictationProblemText.FromLegacy("no audio from 'Jabra'. Pick a different microphone in Settings"));
-        Assert.Equal(DictationProblem.OnlySilence, DictationProblemText.FromLegacy("no sound was captured, your microphone may be muted"));
-        Assert.Equal(DictationProblem.OnlySilenceFromDevice, DictationProblemText.FromLegacy("no sound from 'Jabra', it may be muted"));
-        Assert.Equal(DictationProblem.MicrophoneUnavailable, DictationProblemText.FromLegacy("microphone unavailable"));
-        Assert.Equal(DictationProblem.MicrophoneDisconnected, DictationProblemText.FromLegacy("microphone disconnected"));
-        Assert.Equal(DictationProblem.NothingRecognized, DictationProblemText.FromLegacy("nothing was recognised, try again"));
-        Assert.Equal(DictationProblem.FocusChanged, DictationProblemText.FromLegacy("focus changed, so the dictation was not inserted"));
-        Assert.Equal(DictationProblem.TypingIncomplete, DictationProblemText.FromLegacy("text could not be inserted completely"));
-        Assert.Equal(DictationProblem.NoSpeechModel, DictationProblemText.FromLegacy("choose a speech model in Settings"));
-        Assert.Equal(DictationProblem.RecognitionFailed, DictationProblemText.FromLegacy("transcription failed"));
-        Assert.Equal(DictationProblem.ModelLoadFailed, DictationProblemText.FromLegacy("model failed to load, see logs"));
-        Assert.Equal(DictationProblem.MicrophoneMuted, DictationProblemText.FromLegacy("microphone is muted, unmute it to dictate"));
-        Assert.Equal(DictationProblem.DurationLimit, DictationProblemText.FromLegacy("dictation hit the 10 minute limit and was transcribed"));
-        Assert.Equal(DictationProblem.FallbackMicrophone, DictationProblemText.FromLegacy("\"Laptop\" isn't available, so Scribe is using the Windows default microphone."));
+        foreach (var problem in Enum.GetValues<DictationProblem>())
+        {
+            var on = DictationProblemRouting.Decide(problem, recordingIndicatorOn: true);
+            var off = DictationProblemRouting.Decide(problem, recordingIndicatorOn: false);
+
+            Assert.Equal(Expected(problem, indicatorOn: true), on);
+            Assert.Equal(Expected(problem, indicatorOn: false), off);
+        }
+
+        static DictationProblemSurface Expected(DictationProblem problem, bool indicatorOn) => problem switch
+        {
+            DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
+            DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
+            DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone =>
+                indicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
+            _ => indicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
+        };
     }
 
     [Fact]
-    public void Controller_fallback_microphone_text_stays_mapped()
+    public void Controller_passes_only_typed_problem_reports()
     {
         var controller = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Dictation", "DictationController.cs"));
-        Assert.Contains("isn't available, so Scribe is using the Windows default microphone", controller, StringComparison.Ordinal);
+
+        Assert.Contains("public event Action<DictationProblemReport>? Error", controller, StringComparison.Ordinal);
+        Assert.Contains("public event Action<DictationProblemReport>? Warning", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseError(\"", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseError($\"", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseWarning(\"", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseWarning($\"", controller, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -128,8 +174,11 @@ public sealed class DictationProblemTextTests
         }
     }
 
-    private static object?[] Row(DictationProblem problem, string? device, string? chosen, string? used, int minutes, HotkeyMode mode, string shortcut, string title, string body, TrayNoticeKind kind, bool silent, string? pill, TrayNoticeAction action) =>
-        [problem, device, chosen, used, minutes, mode, shortcut, title, body, kind, silent, pill, action];
+    private static object?[] Row(DictationProblem problem, string? device, string? chosen, string? used, int minutes, HotkeyMode mode, string shortcut, string title, string body, TrayNoticeKind kind, bool silent, TrayNoticeAction action) =>
+        [problem, device, chosen, used, minutes, mode, shortcut, title, body, kind, silent, action];
+
+    private static object?[] Pill(DictationProblem problem, HotkeyMode mode, int minutes, string? line) =>
+        [problem, mode, minutes, line];
 
     private static string RepositoryRoot()
     {

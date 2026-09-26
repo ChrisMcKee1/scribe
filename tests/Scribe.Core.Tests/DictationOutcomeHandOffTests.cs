@@ -20,7 +20,7 @@ public sealed class DictationOutcomeHandOffTests
 
         Assert.Single(Regex.Matches(Controller, Regex.Escape("PillOutcome.Of(pillInsertion,")));
         Assert.Contains(
-            "ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillFailure));",
+            "ResetToIdle(session.Id, insertedTimestamp, PillOutcome.Of(pillInsertion, settings.EnableAiCleanup, pillCleanup, pillProblem, settings.Hotkey.Mode));",
             process[process.LastIndexOf("finally", StringComparison.Ordinal)..],
             StringComparison.Ordinal);
 
@@ -36,20 +36,23 @@ public sealed class DictationOutcomeHandOffTests
 
         var raised = Regex.Matches(process, @"RaiseError\((?<message>[^;]*)\);").Select(m => m.Groups["message"].Value).ToArray();
         Assert.Equal(5, raised.Length);
-        Assert.All(raised, message => Assert.Equal("pillFailure", message));
+        Assert.All(raised, message => Assert.Equal("pillProblem", message));
 
-        // Five messages set where processing raises them, and a silent capture's two, which come back from the helper
+        // Five problems set where processing raises them, and a silent capture's two, which come back from the helper
         // that raised them.
-        Assert.Equal(7, Regex.Matches(process, @"(?<!string\? )pillFailure = ").Count);
+        Assert.Equal(7, Regex.Matches(process, @"(?<!DictationProblemReport\? )pillProblem = ").Count);
         Assert.Equal(2, SilentAssignments(process));
-        Assert.Contains("private string? RaiseSilentCaptureError(", Controller, StringComparison.Ordinal);
+        Assert.Contains("private DictationProblemReport? RaiseSilentCaptureError(", Controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("public event Action<string>? Error", Controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseError(\"", Controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseWarning(\"", Controller, StringComparison.Ordinal);
     }
 
     [Fact]
     public void A_microphone_that_never_opened_says_nothing_was_typed()
     {
         Assert.Contains(
-            "AbandonRecording(id, PillOutcome.Of(insertion: null, cleanupRequested: false, cleanup: null, failure));",
+            "AbandonRecording(id, PillOutcome.Of(insertion: null, cleanupRequested: false, cleanup: null, problem));",
             Controller,
             StringComparison.Ordinal);
         var abandon = Body(Controller, "private void AbandonRecording(");
@@ -79,7 +82,7 @@ public sealed class DictationOutcomeHandOffTests
     }
 
     private static int SilentAssignments(string process) =>
-        Regex.Matches(process, @"RaiseSilentCaptureError\(report, ""[^""]+""\) is \{ \} silent\)\s*\{\s*pillFailure = silent;").Count;
+        Regex.Matches(process, @"RaiseSilentCaptureError\(report, TryDictationReportClassifier\.[^)]+\) is \{ \} silent\)\s*\{\s*pillProblem = silent;").Count;
 
     // The text of a member from its signature to its matching closing brace.
     private static string Body(string code, string signature)

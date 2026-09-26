@@ -22,67 +22,98 @@ public enum DictationProblem
     FallbackMicrophone,
 }
 
-public sealed record DictationProblemNotice(string Title, string Body, TrayNoticeKind Kind, string? PillText, TrayNoticeAction Action = TrayNoticeAction.None);
+public sealed record DictationProblemReport(
+    DictationProblem Problem,
+    string? Device = null,
+    string? ChosenDevice = null,
+    string? UsedDevice = null,
+    int Minutes = 10,
+    long RecordingRevision = 0);
+
+public sealed record DictationProblemNotice(string Title, string Body, TrayNoticeKind Kind, TrayNoticeAction Action = TrayNoticeAction.None);
+
+public enum DictationProblemSurface
+{
+    None,
+    PillOutcome,
+    RecordingPill,
+    Notice,
+    PillAndNotice,
+}
+
+public static class DictationProblemRouting
+{
+    public static DictationProblemSurface Decide(DictationProblem problem, bool recordingIndicatorOn) => problem switch
+    {
+        DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
+        DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
+        DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone =>
+            recordingIndicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
+        _ => recordingIndicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
+    };
+}
 
 public static class DictationProblemText
 {
-    public static DictationProblem? FromLegacy(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        var value = text.Trim();
-        if (value.StartsWith("that was too quick", StringComparison.OrdinalIgnoreCase)) return DictationProblem.TooQuick;
-        if (value.StartsWith("no audio from", StringComparison.OrdinalIgnoreCase)) return DictationProblem.NoAudioFromDevice;
-        if (value.StartsWith("no audio captured", StringComparison.OrdinalIgnoreCase)) return DictationProblem.NoAudio;
-        if (value.StartsWith("no sound from", StringComparison.OrdinalIgnoreCase)) return DictationProblem.OnlySilenceFromDevice;
-        if (value.StartsWith("no sound was captured", StringComparison.OrdinalIgnoreCase)) return DictationProblem.OnlySilence;
-        if (value.StartsWith("microphone is muted", StringComparison.OrdinalIgnoreCase)) return DictationProblem.MicrophoneMuted;
-        if (value.Contains("isn't available, so Scribe is using the Windows default microphone", StringComparison.OrdinalIgnoreCase)) return DictationProblem.FallbackMicrophone;
-        if (value.Equals("microphone unavailable", StringComparison.OrdinalIgnoreCase)) return DictationProblem.MicrophoneUnavailable;
-        if (value.Equals("microphone disconnected", StringComparison.OrdinalIgnoreCase)) return DictationProblem.MicrophoneDisconnected;
-        if (value.StartsWith("dictation hit", StringComparison.OrdinalIgnoreCase)) return DictationProblem.DurationLimit;
-        if (value.StartsWith("nothing was recognised", StringComparison.OrdinalIgnoreCase)) return DictationProblem.NothingRecognized;
-        if (value.StartsWith("focus changed", StringComparison.OrdinalIgnoreCase)) return DictationProblem.FocusChanged;
-        if (value.StartsWith("text could not be inserted", StringComparison.OrdinalIgnoreCase)) return DictationProblem.TypingIncomplete;
-        if (value.StartsWith("choose a speech model", StringComparison.OrdinalIgnoreCase)) return DictationProblem.NoSpeechModel;
-        if (value.StartsWith("transcription failed", StringComparison.OrdinalIgnoreCase)) return DictationProblem.RecognitionFailed;
-        if (value.StartsWith("model failed to load", StringComparison.OrdinalIgnoreCase)) return DictationProblem.ModelLoadFailed;
-        return null;
-    }
-
-    /// <summary>
-    /// Whether the recording pill's outcome (the overlay's "Typed", "Nothing typed" and "Not all of it was typed") already
-    /// tells the user about this problem when the recording indicator is on, so no tray notice is needed for it. A
-    /// disconnect is raised mid-recording, and processing goes on with what was captured, so the outcome then describes
-    /// the insertion (usually "Typed") and the disconnect would reach nobody. Typing failures keep their notice for its
-    /// Copy last dictation action whatever this says.
-    /// </summary>
-    public static bool CarriedByPillOutcome(DictationProblem problem) => problem != DictationProblem.MicrophoneDisconnected;
-
-    public static DictationProblemNotice Describe(DictationProblem problem, HotkeyMode mode = HotkeyMode.Hold, string? shortcut = null, string? device = null, string? chosenDevice = null, string? usedDevice = null, int minutes = 10)
+    public static DictationProblemNotice Describe(
+        DictationProblem problem,
+        HotkeyMode mode = HotkeyMode.Hold,
+        string? shortcut = null,
+        string? device = null,
+        string? chosenDevice = null,
+        string? usedDevice = null,
+        int minutes = 10)
     {
         var key = string.IsNullOrWhiteSpace(shortcut) ? "your shortcut" : shortcut.Trim();
         var quotedDevice = Quote(Shorten(device ?? "your microphone", 60));
         return problem switch
         {
-            DictationProblem.TooQuick => new("Nothing recorded", mode == HotkeyMode.Toggle ? $"That was too quick. Press {key}, speak, then press it again." : $"That was too quick. Hold {key} while you speak, then let go.", TrayNoticeKind.Warning, null),
-            DictationProblem.NoAudio => new("No sound recorded", "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Warning, null),
-            DictationProblem.NoAudioFromDevice => new("No sound recorded", $"Scribe didn't get any sound from {quotedDevice}. Choose another microphone from the Microphone menu.", TrayNoticeKind.Warning, null),
-            DictationProblem.OnlySilence => new("Only silence recorded", "Your microphone may be muted. Unmute it and try again.", TrayNoticeKind.Warning, null),
-            DictationProblem.OnlySilenceFromDevice => new("Only silence recorded", $"{quotedDevice} may be muted. Unmute it and try again.", TrayNoticeKind.Warning, null),
-            DictationProblem.MicrophoneMuted => new("Your microphone is muted", "Unmute it to keep dictating. Scribe is still recording.", TrayNoticeKind.RecordingWarning, "Microphone muted"),
-            DictationProblem.MicrophoneUnavailable => new("Couldn't start recording", "Scribe couldn't open your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Error, null),
-            DictationProblem.MicrophoneDisconnected => new("Microphone disconnected", "Your microphone stopped during the dictation. Check that it's connected, then try again.", TrayNoticeKind.Warning, null),
-            DictationProblem.DurationLimit => new($"Dictation stopped at {minutes} minutes", $"Scribe stops recording after {minutes} minutes and types what it heard. You can change this in Settings, Advanced.", TrayNoticeKind.Warning, null),
-            DictationProblem.NothingRecognized => new("No words recognized", "Scribe didn't catch any words. Try again, a little closer to the microphone.", TrayNoticeKind.Warning, null),
-            DictationProblem.FocusChanged => new("Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, null, TrayNoticeAction.CopyLastDictation),
-            DictationProblem.TypingIncomplete => new("Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, null, TrayNoticeAction.CopyLastDictation),
-            DictationProblem.NoSpeechModel => new("No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, null, TrayNoticeAction.OpenSettings),
-            DictationProblem.RecognitionFailed => new("Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, null, TrayNoticeAction.OpenSettingsDiagnostics),
-            DictationProblem.ModelLoadFailed => new("Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, null, TrayNoticeAction.OpenSettingsDiagnostics),
-            DictationProblem.FallbackMicrophone => new("Using another microphone", FallbackMicrophoneBody(chosenDevice, usedDevice), TrayNoticeKind.RecordingWarning, "Using default mic"),
-            _ => new("Dictation didn't finish", "Try again.", TrayNoticeKind.Warning, null),
+            DictationProblem.TooQuick => new("Nothing recorded", mode == HotkeyMode.Toggle ? $"That was too quick. Press {key}, speak, then press it again." : $"That was too quick. Hold {key} while you speak, then let go.", TrayNoticeKind.Warning),
+            DictationProblem.NoAudio => new("No sound recorded", "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Warning),
+            DictationProblem.NoAudioFromDevice => new("No sound recorded", $"Scribe didn't get any sound from {quotedDevice}. Choose another microphone from the Microphone menu.", TrayNoticeKind.Warning),
+            DictationProblem.OnlySilence => new("Only silence recorded", "Your microphone may be muted. Unmute it and try again.", TrayNoticeKind.Warning),
+            DictationProblem.OnlySilenceFromDevice => new("Only silence recorded", $"{quotedDevice} may be muted. Unmute it and try again.", TrayNoticeKind.Warning),
+            DictationProblem.MicrophoneMuted => new("Your microphone is muted", "Unmute it to keep dictating. Scribe is still recording.", TrayNoticeKind.RecordingWarning),
+            DictationProblem.MicrophoneUnavailable => new("Couldn't start recording", "Scribe couldn't open your microphone. Check that it's connected, or choose another from the Microphone menu.", TrayNoticeKind.Error),
+            DictationProblem.MicrophoneDisconnected => new("Microphone disconnected", "Your microphone stopped during the dictation. Check that it's connected, then try again.", TrayNoticeKind.Warning),
+            DictationProblem.DurationLimit => new($"Dictation stopped at {minutes} minutes", $"Scribe stops recording after {minutes} minutes and types what it heard. You can change this in Settings, Advanced.", TrayNoticeKind.Warning),
+            DictationProblem.NothingRecognized => new("No words recognized", "Scribe didn't catch any words. Try again, a little closer to the microphone.", TrayNoticeKind.Warning),
+            DictationProblem.FocusChanged => new("Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, TrayNoticeAction.CopyLastDictation),
+            DictationProblem.TypingIncomplete => new("Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, TrayNoticeAction.CopyLastDictation),
+            DictationProblem.NoSpeechModel => new("No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettings),
+            DictationProblem.RecognitionFailed => new("Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsDiagnostics),
+            DictationProblem.ModelLoadFailed => new("Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettingsDiagnostics),
+            DictationProblem.FallbackMicrophone => new("Using another microphone", FallbackMicrophoneBody(chosenDevice, usedDevice), TrayNoticeKind.RecordingWarning),
+            _ => new("Dictation didn't finish", "Try again.", TrayNoticeKind.Warning),
         };
     }
+
+    public static DictationProblemNotice Describe(DictationProblemReport report, HotkeyMode mode = HotkeyMode.Hold, string? shortcut = null) =>
+        Describe(report.Problem, mode, shortcut, report.Device, report.ChosenDevice, report.UsedDevice, report.Minutes);
+
+    public static string? PillLine(DictationProblemReport report, HotkeyMode mode = HotkeyMode.Hold) =>
+        PillLine(report.Problem, mode, report.Minutes);
+
+    public static string? PillLine(DictationProblem problem, HotkeyMode mode = HotkeyMode.Hold, int minutes = 10) => problem switch
+    {
+        DictationProblem.TooQuick => mode == HotkeyMode.Toggle
+            ? "Press, speak, then press again"
+            : "Hold the shortcut while you speak",
+        DictationProblem.NoAudio => "No sound, check your microphone",
+        DictationProblem.NoAudioFromDevice => "No sound, try another microphone",
+        DictationProblem.OnlySilence or DictationProblem.OnlySilenceFromDevice => "Your microphone may be muted",
+        DictationProblem.MicrophoneMuted => "Microphone muted",
+        DictationProblem.MicrophoneUnavailable => "Couldn't open your microphone",
+        DictationProblem.DurationLimit => $"Stopped at the {minutes}-minute limit",
+        DictationProblem.NothingRecognized => "Didn't catch any words, try again",
+        DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => "Copy it from the tray menu",
+        DictationProblem.NoSpeechModel => "Choose a speech model in Advanced",
+        DictationProblem.RecognitionFailed => "Something went wrong, try again",
+        DictationProblem.ModelLoadFailed => "The speech model didn't load",
+        DictationProblem.FallbackMicrophone => "Using the default microphone",
+        DictationProblem.MicrophoneDisconnected => null,
+        _ => null,
+    };
 
     private static string FallbackMicrophoneBody(string? chosenDevice, string? usedDevice)
     {
