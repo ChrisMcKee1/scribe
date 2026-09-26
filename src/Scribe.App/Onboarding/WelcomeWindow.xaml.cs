@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Settings;
 
@@ -15,6 +17,7 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly Action _openSettings;
     private readonly Action _tryItNow;
+    private bool _welcomeAnimationStarted;
 
     public WelcomeWindow((string Title, string Body) gesture, Action openSettings, Action? tryItNow = null)
     {
@@ -26,7 +29,38 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
         GestureTitle.Text = NormalizeGestureTitle(gesture.Title);
         GestureHint.Text = NormalizeGestureBody(gesture.Body);
         ApplyWindowFit();
+        Loaded += WelcomeWindow_Loaded;
         SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
+    }
+
+    private void WelcomeWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (_welcomeAnimationStarted)
+        {
+            return;
+        }
+
+        _welcomeAnimationStarted = true;
+        if (!SystemParameters.ClientAreaAnimation || !IsVisible)
+        {
+            WelcomeStaticMark.Visibility = Visibility.Visible;
+            WelcomeAnimatedMark.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        WelcomeStaticMark.Visibility = Visibility.Collapsed;
+        WelcomeAnimatedMark.Visibility = Visibility.Visible;
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        foreach (var scale in new[] { WelcomeBar1Scale, WelcomeBar2Scale, WelcomeBar3Scale, WelcomeBar4Scale, WelcomeBar5Scale })
+        {
+            scale.BeginAnimation(
+                ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(600))
+                {
+                    EasingFunction = easing,
+                    FillBehavior = FillBehavior.HoldEnd,
+                });
+        }
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)

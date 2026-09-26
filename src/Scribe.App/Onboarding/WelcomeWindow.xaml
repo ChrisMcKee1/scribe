@@ -35,14 +35,57 @@
 
         <ui:TitleBar Grid.Row="0" Title="Welcome to Scribe" ShowMaximize="False">
             <ui:TitleBar.Icon>
-                <ui:SymbolIcon Symbol="Mic24"/>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="28,8,28,16">
-                <ui:SymbolIcon Symbol="Mic48" FontSize="40" HorizontalAlignment="Center"
-                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <Grid Width="64" Height="64" HorizontalAlignment="Center" AutomationProperties.Name="Scribe">
+                    <Image x:Name="WelcomeStaticMark" Source="pack://application:,,,/Assets/scribe-mark.png"
+                           Width="64" Height="64" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <Grid x:Name="WelcomeAnimatedMark" Width="64" Height="64" Visibility="Collapsed">
+                        <Image Source="pack://application:,,,/Assets/scribe-mark-nobars.png"
+                               Width="64" Height="64" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <Canvas Width="64" Height="64" IsHitTestVisible="False">
+                            <Rectangle Canvas.Left="24.75" Canvas.Top="22.125" Width="1.875" Height="4.125"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar1Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="27.75" Canvas.Top="19.875" Width="1.875" Height="8.625"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar2Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="31" Canvas.Top="16.125" Width="2" Height="15.625"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar3Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="34.375" Canvas.Top="19.875" Width="1.875" Height="8.625"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar4Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Canvas.Left="37.375" Canvas.Top="22.125" Width="1.875" Height="4.125"
+                                       RadiusX="1" RadiusY="1" Fill="{DynamicResource ScribeSignalBrush}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <Rectangle.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeBar5Scale" ScaleY="0"/>
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                        </Canvas>
+                    </Grid>
+                </Grid>
                 <TextBlock Text="Welcome to Scribe"
                            FontSize="26" FontWeight="SemiBold"
                            HorizontalAlignment="Center" Margin="0,12,0,0"

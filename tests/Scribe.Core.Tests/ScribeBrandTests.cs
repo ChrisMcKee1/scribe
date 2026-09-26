@@ -1,3 +1,4 @@
+using System.IO;
 using Scribe.Core.Appearance;
 using Xunit;
 
@@ -40,6 +41,30 @@ public sealed class ScribeBrandTests
         Assert.Equal("#549DFF", Hex(ScribeBrand.LevelBase));
     }
 
+    [Fact]
+    public void App_xaml_brand_brushes_match_the_core_brand_colours()
+    {
+        var app = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "App.xaml"));
+
+        Assert.Contains("x:Key=\"ScribePillFaceBrush\"", app);
+        Assert.Contains($"Color=\"{Hex(ScribeBrand.PillFaceTop)}\" Offset=\"0\"", app);
+        Assert.Contains($"Color=\"{Hex(ScribeBrand.PillFaceBottom)}\" Offset=\"1\"", app);
+        Assert.Contains($"x:Key=\"ScribePillListeningEdgeBrush\" Color=\"{Hex(ScribeBrand.ListeningEdge)}\"", app);
+        Assert.Contains($"x:Key=\"ScribeLevelTipBrush\" Color=\"{Hex(ScribeBrand.LevelTip)}\"", app);
+        Assert.Contains($"x:Key=\"ScribeSignalBrush\" Color=\"{Hex(ScribeBrand.Signal)}\"", app);
+    }
+
+    [Fact]
+    public void Position_picker_no_longer_uses_the_critical_system_fill()
+    {
+        var appRoot = Path.Combine(RepositoryRoot(), "src", "Scribe.App");
+        foreach (var file in Directory.EnumerateFiles(appRoot, "*.xaml", SearchOption.AllDirectories))
+        {
+            var text = File.ReadAllText(file);
+            Assert.DoesNotContain("SystemFillColorCriticalBrush", text);
+        }
+    }
+
     [Theory]
     // Save at rest: white on the light accent button, black on the dark one.
     [InlineData("#FFFFFF", "#0C48CF", 7.39)]
@@ -54,6 +79,17 @@ public sealed class ScribeBrandTests
     {
         var ratio = WcagContrast.Ratio(SrgbColor.Parse(foreground), SrgbColor.Parse(background));
         Assert.Equal(expected, Math.Round(ratio, 2), 2);
+    }
+
+    private static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        return root?.FullName ?? throw new InvalidOperationException("Could not find the repository root.");
     }
 
     private static string Hex(SrgbColor color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
