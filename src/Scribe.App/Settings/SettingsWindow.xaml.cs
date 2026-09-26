@@ -1691,7 +1691,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             header.Children.Add(new TextBlock
             {
                 Text = LegacyLibraryPageContainment.PageNotice,
-                Style = (Style)FindResource("SettingHint"),
+                Style = (Style)FindResource("CardDescription"),
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 8, 0, 0),
             });
