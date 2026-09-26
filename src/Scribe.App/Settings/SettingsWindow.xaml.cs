@@ -17,6 +17,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
@@ -94,7 +95,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private LibraryWorkspace? _wordPackWorkspace;
     private LibraryCatalog? _wordPackCatalog;
     private bool _updatingLibraryRows;
+    private bool _updatingLibraryTerms;
     private LibraryOrdering? _libraryOrdering;
+    private readonly LibrarySearch _librarySearch = LibrarySearch.ForCurrentCulture();
+    private readonly LibraryTermSort _libraryTermSort = LibraryTermSort.ForCurrentCulture();
+    private readonly ObservableCollection<LibraryTermRow> _libraryTermRows = new();
+    private DispatcherTimer? _librarySearchTimer;
+    private LibrarySearchResult? _librarySearchResult;
+    private LibraryTermSortOrder _libraryTermSortOrder = LibraryTermSortOrder.SavedOrder;
+    private string? _selectedLibraryId;
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
@@ -124,6 +133,46 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // cleared with the snapshot: the usage insight is handed over only under it, so its library labels never go once
     // their library's AI permission narrowed or its content changed after the report was built (contract 3.3.6).
     private AiVocabularyScope _usageLibraryScope = AiVocabularyScope.None;
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        base.OnPreviewKeyDown(e);
+        if (e.Handled)
+        {
+            return;
+        }
+
+        var accelerator =
+            Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F ? SettingsAccelerator.Find :
+            Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.N ? SettingsAccelerator.AddTerm :
+            Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N ? SettingsAccelerator.NewLibrary :
+            (SettingsAccelerator?)null;
+        if (accelerator is null)
+        {
+            return;
+        }
+
+        var onWordPacks = DictionaryTabs.SelectedItem == WordPacksTab;
+        if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, ImeComposing: false, onWordPacks)))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        switch (accelerator.Value)
+        {
+            case SettingsAccelerator.Find:
+                LibrarySearchBox.Focus();
+                LibrarySearchBox.SelectAll();
+                break;
+            case SettingsAccelerator.AddTerm:
+                AddWordPackTerm();
+                break;
+            case SettingsAccelerator.NewLibrary:
+                LibraryNewButton_Click(this, new RoutedEventArgs());
+                break;
+        }
+    }
     private bool _usageInsightRunning;
     private readonly LatestRequestCoalescer<UsagePeriodChoice> _usageLoads = new();
     private int _azureDeploymentLoadVersion;
@@ -1730,6 +1779,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         _libraryDetailEmptyText = LibraryDetailEmpty.Text;
         LibraryDetailEmpty.Text = "Loading word packs...";
+        LibraryTermsGrid.ItemsSource = _libraryTermRows;
         SetLibrariesEditable(false);
         UpdateLibraryDetail(null);
     }
@@ -1749,10 +1799,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LibraryRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(LibraryRow.Enabled) && !_updatingLibraryRows && sender is LibraryRow row)
+        if (_updatingLibraryRows || sender is not LibraryRow row)
+        {
+            return;
+        }
+
+        if (e.PropertyName == nameof(LibraryRow.Enabled))
         {
             _wordPackWorkspace?.SetEnabled(row.Id, row.Enabled);
             Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        }
+        else if (e.PropertyName == nameof(LibraryRow.AiCleanup))
+        {
+            _wordPackWorkspace?.SetAiPermission(row.Id, row.AiCleanup);
         }
     }
 
@@ -1811,7 +1870,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _libraryRows.Clear();
         foreach (var library in _libraryOrdering.Sort(catalog.Libraries.Select(l => l.Content), l => l.Name, l => l.Id))
         {
-            _libraryRows.Add(NewLibraryRow(library, catalog.LocalState.EnabledIds.Contains(library.Id)));
+            _libraryRows.Add(NewLibraryRow(library));
         }
         _updatingLibraryRows = false;
 
@@ -1836,6 +1895,212 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void LibraryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
 
+    private void LibrarySearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _librarySearchTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _librarySearchTimer.Stop();
+        _librarySearchTimer.Tick -= LibrarySearchTimer_Tick;
+        _librarySearchTimer.Tick += LibrarySearchTimer_Tick;
+        _librarySearchTimer.Start();
+    }
+
+    private void LibrarySearchTimer_Tick(object? sender, EventArgs e)
+    {
+        _librarySearchTimer?.Stop();
+        ApplyLibrarySearch();
+    }
+
+    private void ApplyLibrarySearch()
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var sources = _wordPackWorkspace.Draft.Libraries
+            .Where(library => !library.PendingDelete)
+            .Select(library => new LibrarySearchSource(library.Content.Id, _wordPackWorkspace.RowsOf(library.Content.Id)))
+            .ToList();
+        _librarySearchResult = _librarySearch.Search(sources, LibrarySearchBox.Text);
+        foreach (var row in _libraryRows)
+        {
+            ApplySearchState(row);
+        }
+
+        if (_selectedLibraryId is not null)
+        {
+            RefreshTermRows(_selectedLibraryId);
+        }
+    }
+
+    private void ApplySearchState(LibraryRow row)
+    {
+        row.MatchCount = _librarySearchResult?.IsActive == true ? _librarySearchResult.CountIn(row.Id) : null;
+    }
+
+    private void LibraryNewButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var id = _wordPackWorkspace.CreateLibrary();
+        RefreshWordPackList(id);
+        RefreshDictionaryStatus();
+    }
+
+    private void LibraryMoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var menu = new ContextMenu();
+        var duplicate = new MenuItem { Header = "Duplicate" };
+        duplicate.IsEnabled = LibraryGrid.SelectedItem is LibraryRow;
+        duplicate.Click += (_, _) =>
+        {
+            if (LibraryGrid.SelectedItem is LibraryRow row)
+            {
+                var id = _wordPackWorkspace.Duplicate(row.Id);
+                RefreshWordPackList(id);
+            }
+        };
+        menu.Items.Add(duplicate);
+
+        var deleted = new MenuItem { Header = $"Recently deleted ({_wordPackWorkspace.Draft.RecentlyDeleted.Count})" };
+        deleted.Click += (_, _) => ShowRecentlyDeletedDialog();
+        menu.Items.Add(deleted);
+
+        menu.PlacementTarget = LibraryMoreButton;
+        menu.IsOpen = true;
+    }
+
+    private void LibraryTermDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedLibraryId is null || _wordPackWorkspace is null ||
+            sender is not FrameworkElement { DataContext: LibraryTermRow row })
+        {
+            return;
+        }
+
+        if (!_wordPackWorkspace.CanEditContent(_selectedLibraryId))
+        {
+            ShowInfo("This word pack can't be edited right now.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        try
+        {
+            _wordPackWorkspace.DeleteTerm(_selectedLibraryId, row.RowId);
+            RefreshTermRows(_selectedLibraryId);
+            RefreshWordPackList(_selectedLibraryId);
+            RefreshDictionaryStatus();
+        }
+        catch (InvalidOperationException)
+        {
+            ShowInfo("This term can be turned off or restored, but not deleted.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+    }
+
+    private void AddWordPackTerm()
+    {
+        if (_selectedLibraryId is null || _wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        if (!_wordPackWorkspace.CanEditContent(_selectedLibraryId))
+        {
+            ShowInfo("This word pack can't be edited right now.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        var result = _wordPackWorkspace.AddTerm(_selectedLibraryId, new TermValues(string.Empty, string.Empty), removalIntent: false);
+        if (!result.Applied)
+        {
+            ShowInfo(result.Issue is null ? "Couldn't add a term." : LibraryEditor.Message(result.Issue), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        RefreshTermRows(_selectedLibraryId);
+        RefreshWordPackList(_selectedLibraryId);
+        if (_libraryTermRows.LastOrDefault() is { } row)
+        {
+            LibraryTermsGrid.SelectedItem = row;
+            LibraryTermsGrid.ScrollIntoView(row);
+        }
+    }
+
+    private void ShowRecentlyDeletedDialog()
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var list = new ListBox
+        {
+            MinWidth = 420,
+            MinHeight = 180,
+            ItemsSource = _wordPackWorkspace.Draft.RecentlyDeleted.Select(entry =>
+                new RecentlyDeletedRow(entry)).ToList(),
+            DisplayMemberPath = nameof(RecentlyDeletedRow.Display),
+        };
+        var restore = new Button { Content = "Restore word pack", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0) };
+        var purge = new Button { Content = "Delete permanently", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0) };
+        var close = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
+        var dialog = new Window
+        {
+            Title = $"Recently deleted ({_wordPackWorkspace.Draft.RecentlyDeleted.Count})",
+            Owner = this,
+            Width = 560,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        restore.Click += (_, _) =>
+        {
+            if (list.SelectedItem is RecentlyDeletedRow row)
+            {
+                var content = _libraryStore.ReadRecentlyDeleted(row.Entry);
+                if (content is not null)
+                {
+                    var id = _wordPackWorkspace.RestoreDeleted(content);
+                    RefreshWordPackList(id);
+                    dialog.DialogResult = true;
+                }
+            }
+        };
+        purge.Click += (_, _) =>
+        {
+            if (list.SelectedItem is RecentlyDeletedRow row)
+            {
+                _wordPackWorkspace.DeletePermanently(row.Entry);
+                dialog.DialogResult = true;
+            }
+        };
+        dialog.Content = new StackPanel
+        {
+            Margin = new Thickness(16),
+            Children =
+            {
+                list,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Margin = new Thickness(0, 16, 0, 0),
+                    Children = { restore, purge, close },
+                },
+            },
+        };
+        dialog.ShowDialog();
+        RefreshWordPackList();
+        RefreshDictionaryStatus();
+    }
+
     // Drives the right-hand preview panel from the selected library row: header plus a read-only grid
     // of its spoken-to-written terms. Resolving from the cached snapshot keeps clicking through
     // libraries instant (no per-click file reads).
@@ -1847,16 +2112,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (library is null)
         {
-            LibraryTermsGrid.ItemsSource = null;
+            _selectedLibraryId = null;
+            _libraryTermRows.Clear();
             LibraryTermsGrid.Visibility = Visibility.Collapsed;
             LibraryDetailEmpty.Visibility = Visibility.Visible;
             LibraryDetailName.Text = string.Empty;
             LibraryDetailMeta.Text = string.Empty;
             LibraryDetailDesc.Text = string.Empty;
             LibraryDetailDesc.Visibility = Visibility.Collapsed;
+            LibraryExportButton.IsEnabled = false;
+            LibraryRemoveButton.Visibility = Visibility.Collapsed;
             return;
         }
 
+        _selectedLibraryId = library.Content.Id;
         var content = library.Content;
         var count = content.Rows.Count;
         LibraryDetailName.Text = content.Name;
@@ -1866,9 +2135,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LibraryDetailDesc.Visibility =
             string.IsNullOrWhiteSpace(content.Description) ? Visibility.Collapsed : Visibility.Visible;
 
-        LibraryTermsGrid.ItemsSource = content.Rows.Select(row => new LibraryTermRow(row.Values)).ToList();
+        RefreshTermRows(library.Content.Id);
         LibraryTermsGrid.Visibility = Visibility.Visible;
         LibraryDetailEmpty.Visibility = Visibility.Collapsed;
+        LibraryExportButton.IsEnabled = true;
+        LibraryRemoveButton.Visibility = content.BuiltIn ? Visibility.Collapsed : Visibility.Visible;
     }
 
     // The enabled-set persisted in settings: the ids of every ticked library still in the list, in precedence order, so
@@ -1903,7 +2174,107 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .ToList();
     }
 
-    private static LibraryRow NewLibraryRow(LibraryContent library, bool enabled) => new()
+    private void RefreshTermRows(string libraryId)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        foreach (var row in _libraryTermRows)
+        {
+            row.PropertyChanged -= LibraryTermRow_PropertyChanged;
+        }
+
+        var rows = _wordPackWorkspace.RowsOf(libraryId);
+        if (_librarySearchResult?.IsActive == true)
+        {
+            var matches = _librarySearchResult.MatchesIn(libraryId).ToHashSet();
+            rows = rows.Where(row => matches.Contains(row.RowId)).ToList();
+        }
+
+        rows = _libraryTermSort.Sort(rows, _libraryTermSortOrder);
+        _updatingLibraryTerms = true;
+        _libraryTermRows.Clear();
+        foreach (var row in rows)
+        {
+            var view = new LibraryTermRow(row.RowId, row.Row.Values);
+            view.PropertyChanged += LibraryTermRow_PropertyChanged;
+            _libraryTermRows.Add(view);
+        }
+
+        _updatingLibraryTerms = false;
+        LibraryDetailEmpty.Visibility = _libraryTermRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        LibraryDetailEmpty.Text = SearchNoMatchesText(libraryId);
+    }
+
+    private string SearchNoMatchesText(string libraryId)
+    {
+        if (_librarySearchResult?.IsActive != true || _librarySearchResult.CountIn(libraryId) > 0 || _wordPackWorkspace is null)
+        {
+            return _libraryDetailEmptyText;
+        }
+
+        var selected = _wordPackWorkspace.Draft.Find(libraryId)?.Content.Name ?? "this word pack";
+        var elsewhere = _librarySearchResult.FoundElsewhere(libraryId)
+            .Select(match => _wordPackWorkspace.Draft.Find(match.LibraryId) is { } pack
+                ? $"{pack.Content.Name} ({match.Count})"
+                : null)
+            .Where(text => text is not null)
+            .ToList();
+        return elsewhere.Count == 0
+            ? $"No matches in {selected}."
+            : $"No matches in {selected}. Found in: {string.Join(", ", elsewhere)}";
+    }
+
+    private void LibraryTermRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_updatingLibraryTerms || sender is not LibraryTermRow row || _selectedLibraryId is null || _wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        if (!_wordPackWorkspace.CanEditContent(_selectedLibraryId))
+        {
+            ShowInfo("This word pack can't be edited right now.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        var result = _wordPackWorkspace.EditTerm(
+            _selectedLibraryId,
+            row.RowId,
+            new TermValues(row.Pattern, row.Replacement, row.WholeWord, row.Enabled),
+            removalIntent: string.IsNullOrEmpty(row.Replacement));
+        if (!result.Applied && result.Issue is { } issue)
+        {
+            ShowInfo(LibraryEditor.Message(issue, row.Pattern), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+
+        RefreshWordPackList(_selectedLibraryId);
+        RefreshDictionaryStatus();
+    }
+
+    private void LibraryTermsGrid_Sorting(object sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;
+        var header = e.Column.Header?.ToString();
+        _libraryTermSortOrder = header switch
+        {
+            "Scribe hears" => _libraryTermSortOrder == LibraryTermSortOrder.SpokenAscending
+                ? LibraryTermSortOrder.SpokenDescending
+                : LibraryTermSortOrder.SpokenAscending,
+            "Scribe writes" => _libraryTermSortOrder == LibraryTermSortOrder.WrittenAscending
+                ? LibraryTermSortOrder.WrittenDescending
+                : LibraryTermSortOrder.WrittenAscending,
+            _ => LibraryTermSortOrder.SavedOrder,
+        };
+        if (_selectedLibraryId is not null)
+        {
+            RefreshTermRows(_selectedLibraryId);
+        }
+    }
+
+    private LibraryRow NewLibraryRow(LibraryContent library) => new()
     {
         Id = library.Id,
         Name = library.Name,
@@ -1911,8 +2282,42 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Terms = library.Rows.Count,
         Source = LibrarySource(library.BuiltIn),
         BuiltIn = library.BuiltIn,
-        Enabled = enabled,
+        Enabled = _wordPackWorkspace?.Draft.LocalState.EnabledIds.Contains(library.Id) == true,
+        AiCleanup = _wordPackWorkspace?.ShowsAiPermission(library.Id) == true,
     };
+
+    private void RefreshWordPackList(string? selectId = null)
+    {
+        if (_wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        selectId ??= (LibraryGrid.SelectedItem as LibraryRow)?.Id;
+        foreach (var row in _libraryRows)
+        {
+            row.PropertyChanged -= LibraryRow_PropertyChanged;
+        }
+
+        _updatingLibraryRows = true;
+        _libraryRows.Clear();
+        var ordering = _libraryOrdering ??= LibraryOrdering.ForCurrentCulture();
+        foreach (var library in ordering.Sort(
+                     _wordPackWorkspace.Draft.Libraries.Where(l => !l.PendingDelete).Select(l => l.Content),
+                     l => l.Name,
+                     l => l.Id))
+        {
+            var row = NewLibraryRow(library);
+            ApplySearchState(row);
+            _libraryRows.Add(row);
+        }
+
+        _updatingLibraryRows = false;
+        if (selectId is not null)
+        {
+            LibraryGrid.SelectedItem = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, selectId, StringComparison.OrdinalIgnoreCase));
+        }
+    }
 
     private void LibraryImportButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1926,12 +2331,38 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        DictionaryLibrary imported;
         try
         {
-            var csv = File.ReadAllText(dialog.FileName);
-            var suggestedName = Path.GetFileNameWithoutExtension(dialog.FileName);
-            imported = _libraries.Import(csv, suggestedName);
+            if (_wordPackWorkspace is null)
+            {
+                return;
+            }
+
+            var bytes = File.ReadAllBytes(dialog.FileName);
+            var document = LibraryCsvCodec.Instance.ReadImport(bytes);
+            var plan = LibraryImportPlanner.Plan(
+                document,
+                new LibraryImportTarget.NewLibrary(Path.GetFileName(dialog.FileName)),
+                _wordPackWorkspace.Draft);
+            if (ShowImportWordPackDialog(plan) is not { } accepted)
+            {
+                return;
+            }
+
+            var before = _wordPackWorkspace.Draft.Libraries.Select(l => l.Content.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var result = _wordPackWorkspace.ApplyImport(accepted, ImportConflictChoice.KeepMine);
+            if (!result.Applied)
+            {
+                ShowThemedMessage("Couldn't import the word pack", result.Issue is null
+                    ? "Couldn't import the word pack. Your edits are still here."
+                    : LibraryEditor.Message(result.Issue));
+                return;
+            }
+
+            var importedId = _wordPackWorkspace.Draft.Libraries.FirstOrDefault(l => !before.Contains(l.Content.Id))?.Content.Id;
+            RefreshWordPackList(importedId);
+            RefreshDictionaryStatus();
+            ShowInfo("Imported the word pack. Save to apply it.");
         }
         catch (Exception ex)
         {
@@ -1939,28 +2370,58 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ShowThemedMessage("Couldn't import the word pack", "Couldn't import the word pack. Check the file and try again.");
             return;
         }
-
-        AddImportedLibrary(imported);
-        ShowInfo("Imported the word pack. This is already saved.");
     }
 
-    // Newly imported libraries start switched off, like the built-in ones, so an import never silently changes how
-    // dictation is spelled until the user turns it on. The row takes its place in the A to Z list once, now, and is
-    // selected and scrolled into view so the preview shows it.
-    private void AddImportedLibrary(DictionaryLibrary imported)
+    private LibraryImportPlan? ShowImportWordPackDialog(LibraryImportPlan plan)
     {
-        var content = new LibraryContent(
-            imported.Id,
-            imported.BuiltIn,
-            imported.Name,
-            imported.Category,
-            imported.Description,
-            imported.Entries.Select(entry => Scribe.Core.Libraries.LibraryRow.Custom(TermValues.FromEntry(entry))).ToList());
-        var newRow = NewLibraryRow(content, enabled: false);
-        var ordering = _libraryOrdering ??= LibraryOrdering.ForCurrentCulture();
-        _libraryRows.Insert(ordering.InsertionIndex(_libraryRows, newRow, r => r.Name, r => r.Id), newRow);
-        LibraryGrid.SelectedItem = newRow;
-        LibraryGrid.ScrollIntoView(newRow);
+        var nameBox = new TextBox { Text = plan.SuggestedName, MinWidth = 320, Margin = new Thickness(0, 8, 0, 8) };
+        var summary = new TextBlock
+        {
+            Text = $"{plan.Adds:N0} added, {plan.WrittenDifferently:N0} written differently, {plan.AlreadyHere:N0} already here, {plan.Skipped:N0} couldn't be read.",
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var errors = new TextBlock
+        {
+            Text = plan.SkippedRows.Count == 0
+                ? "No row errors."
+                : string.Join(Environment.NewLine, plan.SkippedRows.Take(6).Select(row => $"Row {row.Line}: {row.Kind}")),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock { Text = "Replacement name" });
+        panel.Children.Add(nameBox);
+        panel.Children.Add(summary);
+        panel.Children.Add(errors);
+        var dialog = new Window
+        {
+            Title = "Import a word pack",
+            Owner = this,
+            Width = 520,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(16),
+                Children =
+                {
+                    panel,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Margin = new Thickness(0, 16, 0, 0),
+                        Children =
+                        {
+                            new Button { Content = "Cancel", IsCancel = true, MinWidth = 90, Margin = new Thickness(0, 0, 8, 0) },
+                            new Button { Content = $"Import {plan.Operations.Count:N0} valid terms", IsDefault = true, MinWidth = 150 },
+                        },
+                    },
+                },
+            },
+        };
+        ((Button)((StackPanel)((StackPanel)dialog.Content).Children[1]).Children[1]).Click += (_, _) => dialog.DialogResult = true;
+        return dialog.ShowDialog() == true ? plan with { SuggestedName = nameBox.Text } : null;
     }
 
     private void LibraryExportButton_Click(object sender, RoutedEventArgs e)
@@ -1973,6 +2434,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var dialog = new SaveFileDialog
         {
             FileName = library.Id + ".csv",
+            Title = "Export word pack",
             Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
             DefaultExt = ".csv",
         };
@@ -1983,7 +2445,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            File.WriteAllText(dialog.FileName, DictionaryLibraryCsv.Export(library), CsvEncoding);
+            var content = _wordPackWorkspace?.Draft.Find(library.Id)?.Content;
+            if (content is null)
+            {
+                return;
+            }
+
+            File.WriteAllBytes(dialog.FileName, LibraryCsvCodec.Instance.WriteExport(content));
+            ShowInfo("Exported the word pack.");
         }
         catch (Exception ex)
         {
@@ -2007,30 +2476,29 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         if (!await ConfirmRiskyAsync(
-                "Remove word pack",
-                $"Remove {row.Name}? Its words stop applying right away. You can import the file again later.",
-                "Remove"))
+                "Delete word pack",
+                $"Delete \"{row.Name}\" and its {row.Terms:N0} {(row.Terms == 1 ? "word" : "words")}? You can restore it from Recently deleted for 30 days. Your dictionary is unchanged.",
+                "Delete word pack"))
         {
             return;
         }
 
         try
         {
-            _libraries.Remove(row.Id);
+            _wordPackWorkspace?.DeleteLibrary(row.Id);
         }
         catch (Exception ex)
         {
-            TryLog(ex, "Could not remove a word pack from Settings.");
-            ShowThemedMessage("Couldn't remove the word pack", "Couldn't remove the word pack. Try again.");
+            TryLog(ex, "Could not stage a word pack deletion from Settings.");
+            ShowThemedMessage("Couldn't delete the word pack", "Couldn't delete the word pack. Try again.");
             return;
         }
 
-        _libraryRows.Remove(row);
+        RefreshWordPackList();
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
 
-        // A removed library supplies nothing any more, so the dictionary page's badges and glossary count drop it now.
         RefreshDictionaryStatus();
-        ShowInfo("Removed the word pack. This is already saved.");
+        ShowInfo("Deleted the word pack. Save to apply it.");
     }
 
     // Resolves the grid's selected row back to its loaded library from the cached snapshot,
@@ -2043,14 +2511,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return null;
         }
 
-        var library = _libraries.GetLibraries().FirstOrDefault(l =>
-            string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
-        if (library is null)
+        var draft = _wordPackWorkspace?.Draft.Find(row.Id);
+        if (draft is null)
         {
             ShowInfo("That word pack is no longer available.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return null;
         }
 
-        return library;
+        return new DictionaryLibrary(
+            draft.Content.Id,
+            draft.Content.Name,
+            draft.Content.Category,
+            draft.Content.Description,
+            draft.Content.BuiltIn,
+            draft.Content.Rows.Select(row => row.Values.ToEntry()).ToList())
+        {
+            FileName = draft.FileName,
+        };
     }
 
     // Save skips sections the user never touched, so a pre-existing data problem in one section
@@ -7143,14 +7620,54 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public override string ToString() => Name;
     }
 
-    /// <summary>One read-only row of a word pack's term preview.</summary>
-    private sealed class LibraryTermRow(TermValues values)
+    /// <summary>One editable row of the selected word pack.</summary>
+    private sealed class LibraryTermRow(long rowId, TermValues values) : INotifyPropertyChanged
     {
-        public string Pattern { get; } = values.Spoken;
+        private string _pattern = values.Spoken;
+        private string _replacement = values.Written;
+        private bool _wholeWord = values.WholeWord;
+        private bool _enabled = values.Enabled;
 
-        public string Replacement { get; } = values.Written;
+        public long RowId { get; } = rowId;
+
+        public string Pattern
+        {
+            get => _pattern;
+            set => Set(ref _pattern, value ?? string.Empty);
+        }
+
+        public string Replacement
+        {
+            get => _replacement;
+            set => Set(ref _replacement, value ?? string.Empty);
+        }
+
+        public bool WholeWord
+        {
+            get => _wholeWord;
+            set => Set(ref _wholeWord, value);
+        }
+
+        public bool Enabled
+        {
+            get => _enabled;
+            set => Set(ref _enabled, value);
+        }
 
         public override string ToString() => $"Spoken {Pattern}, written {Replacement}";
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value))
+            {
+                return;
+            }
+
+            field = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        }
     }
 
     private sealed record UsageTermRow(string Text, int Dictations)
@@ -7159,6 +7676,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             $"({Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")})";
 
         public override string ToString() => Text;
+    }
+
+    private sealed record RecentlyDeletedRow(RecentlyDeletedLibrary Entry)
+    {
+        public string Display =>
+            $"{Entry.Name}, Imported, {Entry.TermCount:N0} {(Entry.TermCount == 1 ? "word" : "words")}, deleted {Entry.DeletedUtc.LocalDateTime:g}";
     }
 
     /// <summary>
@@ -7340,15 +7863,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     public sealed class LibraryRow : INotifyPropertyChanged
     {
         private bool _enabled;
+        private bool _aiCleanup;
+        private int? _matchCount;
 
         public string Id { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public int Terms { get; set; }
 
-        /// <summary>Where the library comes from, "Built-in" or "Your library": the secondary line under its name.</summary>
+        /// <summary>Where the word pack comes from, "Built-in" or "Imported": the secondary line under its name.</summary>
         public string Source { get; set; } = string.Empty;
         public bool BuiltIn { get; set; }
+        public string DisplaySource => MatchCount is { } count ? $"{Source}, {count:N0} {(count == 1 ? "match" : "matches")}" : Source;
+        public int? MatchCount
+        {
+            get => _matchCount;
+            set
+            {
+                if (_matchCount != value)
+                {
+                    _matchCount = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MatchCount)));
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplaySource)));
+                }
+            }
+        }
 
         /// <summary>What UI Automation reads for the name cell, which shows both lines.</summary>
         public string AccessibleName => $"{Name}, {Source}";
@@ -7362,6 +7901,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 {
                     _enabled = value;
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Enabled)));
+                }
+            }
+        }
+
+        public bool AiCleanup
+        {
+            get => _aiCleanup;
+            set
+            {
+                if (_aiCleanup != value)
+                {
+                    _aiCleanup = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AiCleanup)));
                 }
             }
         }
