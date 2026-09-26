@@ -29,8 +29,12 @@ public sealed class AudioCaptureShutdownTests
     {
         var stack = new FakeCaptureStack();
         using var openMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
-        var service = stack.CreateService(BlockedThreads.SafetyTimeout);
+
+        // Disposal waits out the open for as long as this bound, and the test checks it is still waiting: longer than every guard
+        // here, so only the test's release ends the wait (stream TR round 5, A9).
+        var service = stack.CreateService(TimeSpan.FromMinutes(10));
 
         var hotkeyThread = BlockedThreads.Start(() => service.Start());
         Assert.True(stack.Devices.OpenEntered.Wait(BlockedThreads.SafetyTimeout));
@@ -61,6 +65,7 @@ public sealed class AudioCaptureShutdownTests
     {
         var stack = new FakeCaptureStack();
         using var openMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
         var service = stack.CreateService(TimeSpan.Zero);
 
@@ -117,6 +122,7 @@ public sealed class AudioCaptureShutdownTests
 
         using var callbackEntered = new ManualResetEventSlim();
         using var callbackMayGoOn = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(callbackMayGoOn);
         service.LevelChanged += (_, _) =>
         {
             callbackEntered.Set();
@@ -169,6 +175,7 @@ public sealed class AudioCaptureShutdownTests
         using var preempted = new ManualResetEventSlim();
         using var resumed = new ManualResetEventSlim();
         using var notified = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(resumed);
         service.LevelChanged += (_, _) =>
         {
             var stop = lifecycle.TryBeginProcessing(recording.DictationId);

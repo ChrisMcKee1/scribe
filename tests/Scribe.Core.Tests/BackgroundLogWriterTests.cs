@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -7,6 +8,10 @@ public class BackgroundLogWriterTests
 {
     // Generous bound for "this must happen"; the tests never sleep to make something happen.
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
+
+    // A writer bound that a test checks is still running out while the test holds the disk: longer than every guard here,
+    // so the test's release ends the wait and the bound never does (stream TR round 5, A9).
+    private static readonly TimeSpan Outlasting = TimeSpan.FromMinutes(10);
 
     private static readonly DateTime Now = new(2026, 9, 21, 14, 5, 9, 123);
 
@@ -18,6 +23,7 @@ public class BackgroundLogWriterTests
         using var release = new ManualResetEventSlim(false);
         var sink = new GatedSink(release);
         using var writer = new BackgroundLogWriter(sink);
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("first"));
         Assert.True(sink.WriteStarted.Wait(Patience), "the writer thread never picked up the first line");
@@ -52,6 +58,7 @@ public class BackgroundLogWriterTests
         var sink = new GatedSink(release);
         using var writer = new BackgroundLogWriter(
             sink, new BackgroundLogWriterOptions { PromptWriteTimeout = TimeSpan.FromMilliseconds(50) });
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("first"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -71,6 +78,7 @@ public class BackgroundLogWriterTests
         using var release = new ManualResetEventSlim(false);
         var sink = new GatedSink(release);
         using var writer = new BackgroundLogWriter(sink);
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("1"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -155,7 +163,8 @@ public class BackgroundLogWriterTests
         using var release = new ManualResetEventSlim(false);
         var sink = new GatedSink(release);
         using var writer = new BackgroundLogWriter(
-            sink, new BackgroundLogWriterOptions { MaxQueuedRecords = 1, PromptWriteTimeout = Patience });
+            sink, new BackgroundLogWriterOptions { MaxQueuedRecords = 1, PromptWriteTimeout = Outlasting });
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("1"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -181,6 +190,7 @@ public class BackgroundLogWriterTests
         using var writer = new BackgroundLogWriter(
             sink,
             new BackgroundLogWriterOptions { MaxQueuedRecords = 1, PromptWriteTimeout = TimeSpan.FromMilliseconds(50) });
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("1"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -207,6 +217,7 @@ public class BackgroundLogWriterTests
         var sink = new GatedSink(release);
         using var writer = new BackgroundLogWriter(
             sink, new BackgroundLogWriterOptions { MaxQueuedRecords = 1, PromptWriteTimeout = Patience });
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("1"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -282,7 +293,8 @@ public class BackgroundLogWriterTests
         using var release = new ManualResetEventSlim(false);
         var sink = new GatedSink(release);
         var writer = new BackgroundLogWriter(
-            sink, new BackgroundLogWriterOptions { DisposeTimeout = Patience, PromptWriteTimeout = Patience });
+            sink, new BackgroundLogWriterOptions { DisposeTimeout = Outlasting, PromptWriteTimeout = Outlasting });
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("before"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -315,6 +327,7 @@ public class BackgroundLogWriterTests
                 DisposeTimeout = TimeSpan.FromMilliseconds(50),
                 PromptWriteTimeout = TimeSpan.FromMilliseconds(50),
             });
+        using var releaseAtExit = new ReleaseAtExit(release);
 
         writer.Write(Record("stuck"));
         Assert.True(sink.WriteStarted.Wait(Patience));
@@ -343,9 +356,10 @@ public class BackgroundLogWriterTests
             sink, new BackgroundLogWriterOptions { MaxQueuedRecords = Writers * LinesEach, PromptWriteTimeout = Patience });
 
         using var start = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(start);
         var tasks = Enumerable.Range(0, Writers).Select(w => Task.Run(() =>
         {
-            start.Wait(Patience);
+            start.Wait();
             for (var i = 0; i < LinesEach; i++)
             {
                 // Every hundredth line waits for the disk, the rest only queue.
@@ -400,11 +414,13 @@ public class BackgroundLogWriterTests
             }
         };
 
-        writer = new BackgroundLogWriter(sink, new BackgroundLogWriterOptions { PromptWriteTimeout = Patience });
+        // A write that waited on itself would wait out its prompt bound, so that bound is made far longer than the hang
+        // guard: a correct write returns at once, and one that waits on itself cannot return within Patience.
+        writer = new BackgroundLogWriter(sink, new BackgroundLogWriterOptions { PromptWriteTimeout = TimeSpan.FromMinutes(10) });
         try
         {
             writer.Write(Record("outer"));
-            Assert.True(innerReturned.Wait(TimeSpan.FromSeconds(10)), "a write from inside the sink waited on itself");
+            Assert.True(innerReturned.Wait(Patience), "a write from inside the sink waited on itself");
             Assert.True(writer.Flush(Patience));
             Assert.Equal(["outer", "inner"], sink.Texts);
         }
@@ -439,7 +455,10 @@ public class BackgroundLogWriterTests
 
     /// <summary>
     /// Records what it is handed. With a gate it blocks inside Write until released, which is how the
-    /// tests hold the writer thread "on the disk" without any timing.
+    /// tests hold the writer thread "on the disk" without any timing. It waits for the release and nothing else: the checks
+    /// made while it is held (a flush that reports false, a prompt line that gives up, a Dispose that stops waiting) rest on
+    /// the writer thread still being on the disk (review round 4 of stream TR, A5), and each test's ReleaseAtExit lets it go
+    /// on every way out.
     /// </summary>
     private sealed class GatedSink(ManualResetEventSlim? gate = null) : ILogRecordSink
     {
@@ -460,7 +479,7 @@ public class BackgroundLogWriterTests
         public void Write(IReadOnlyList<LogRecord> batch)
         {
             WriteStarted.Set();
-            gate?.Wait(Patience);
+            gate?.Wait();
             OnWrite?.Invoke(batch);
             if (Failure is { } failure)
             {

@@ -21,6 +21,9 @@ public sealed class MouseButtonRound8Tests
     private const uint PageDown = 0x22;
     private const int BackDebt = 1 << (int)MouseButtons.Back;
 
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private static HotkeyBinding Chord(uint first, uint second) => HotkeyCaptureSession.Build([first, second], HotkeyMode.Hold);
 
     // Astra's A9 sequence, exactly. Left Ctrl and Back are bound; the chord is pressed, so Back's swallowed press owes its
@@ -179,17 +182,17 @@ public sealed class MouseButtonRound8Tests
         using var signal = new HotkeyReconcileSignal(passes.Add);
 
         signal.SignalMouseHookSync();
-        Assert.True(passes.TryTake(out var syncOnly, TimeSpan.FromSeconds(10)), "The sync-only signal ran no pass.");
+        Assert.True(passes.TryTake(out var syncOnly, Bound), "The sync-only signal ran no pass.");
         Assert.Equal(0, syncOnly);
 
         signal.Signal(7);
-        Assert.True(passes.TryTake(out var repair, TimeSpan.FromSeconds(10)), "The repair signal ran no pass.");
+        Assert.True(passes.TryTake(out var repair, Bound), "The repair signal ran no pass.");
         Assert.Equal(7, repair);
 
         signal.SignalMouseHookSync();
         signal.Signal(8);
         long repairedAt = 0;
-        while (repairedAt == 0 && passes.TryTake(out var pass, TimeSpan.FromSeconds(10)))
+        while (repairedAt == 0 && passes.TryTake(out var pass, Bound))
         {
             repairedAt = pass;
         }

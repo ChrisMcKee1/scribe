@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -23,7 +24,8 @@ public sealed class MouseButtonRound9Tests
     private const uint RightCtrl = 0xA3;
     private const uint PageDown = 0x22;
 
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
+    // A hang guard, never the verdict, and the capture admission's wait where the pass is certain to let it in.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     private static HotkeyBinding Chord(uint first, uint second) => HotkeyCaptureSession.Build([first, second], HotkeyMode.Hold);
 
@@ -40,6 +42,7 @@ public sealed class MouseButtonRound9Tests
         using var atRead = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
         using var h = PausedAtFirstRead(Chord(LeftCtrl, Back), null, [LeftCtrl], atRead, resume, injected, events);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         h.Service.CaptureAdmissionWaitForTests = Bound;
         h.Down(LeftCtrl);
         Assert.True(h.ButtonDown(Back).Suppress);
@@ -78,6 +81,7 @@ public sealed class MouseButtonRound9Tests
         using var atRead = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
         using var h = PausedAtFirstRead(Chord(LeftCtrl, Back), null, [LeftCtrl], atRead, resume, injected, events);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         h.Service.CaptureAdmissionWaitForTests = TimeSpan.FromMilliseconds(50);
         h.Down(LeftCtrl);
         Assert.True(h.ButtonDown(Back).Suppress);
@@ -111,6 +115,7 @@ public sealed class MouseButtonRound9Tests
         using var sending = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
         using var h = PausedInFirstKeyUp(sending, resume, injected, events);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         h.Service.CaptureAdmissionWaitForTests = Bound;
 
         var pass = StartPass(h);
@@ -146,6 +151,7 @@ public sealed class MouseButtonRound9Tests
         using var sending = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
         using var h = PausedInFirstKeyUp(sending, resume, injected, events);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         h.Service.CaptureAdmissionWaitForTests = TimeSpan.FromMilliseconds(50);
 
         var pass = StartPass(h);
@@ -232,6 +238,7 @@ public sealed class MouseButtonRound9Tests
         using var atRead = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
         using var h = PausedAtFirstRead(Chord(LeftCtrl, Back), null, [LeftCtrl], atRead, resume, injected, events);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         h.Service.SetCaptureMode(true);
         h.Engine.OnWake();
 
@@ -378,7 +385,7 @@ public sealed class MouseButtonRound9Tests
                 if (Interlocked.Exchange(ref paused, 1) == 0)
                 {
                     atRead.Set();
-                    resume.Wait(Bound);
+                    resume.Wait();
                 }
 
                 return windowsKeys.Contains(key);
@@ -407,7 +414,7 @@ public sealed class MouseButtonRound9Tests
                 if (Interlocked.Exchange(ref paused, 1) == 0)
                 {
                     sending.Set();
-                    resume.Wait(Bound);
+                    resume.Wait();
                 }
 
                 injected.Enqueue(key);

@@ -1,6 +1,7 @@
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
 
 namespace Scribe.Core.Tests.Libraries.Storage;
 
@@ -129,6 +130,7 @@ public sealed class LibraryGateTests : IDisposable
         TwoPermitted();
         using var inside = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var blocking = new BlockingLoads(_fixture.Settings, inside, release);
         var held = _fixture.Service(settings: blocking);
         held.LoadCatalog();
@@ -166,7 +168,10 @@ public sealed class LibraryGateTests : IDisposable
         Assert.Contains(service.Current.Entries, entry => entry.Replacement == "Kubernetes");
     }
 
-    /// <summary>The real repository; once armed, its next load blocks until released, while the caller holds the library lock.</summary>
+    /// <summary>
+    /// The real repository; once armed, its next load blocks until released, and only then, while the caller holds the
+    /// library lock: the test's check that the load is still running rests on it (review round 4 of stream TR, A5).
+    /// </summary>
     private sealed class BlockingLoads(SettingsRepository inner, ManualResetEventSlim inside, ManualResetEventSlim release) : ISettingsRepository
     {
         public bool Armed { get; set; }
@@ -179,7 +184,7 @@ public sealed class LibraryGateTests : IDisposable
             {
                 Armed = false;
                 inside.Set();
-                Assert.True(release.Wait(Bound));
+                release.Wait();
             }
 
             return inner.Load();

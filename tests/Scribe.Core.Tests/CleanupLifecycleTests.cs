@@ -134,25 +134,40 @@ public sealed class CleanupLifecycleTests
     [Fact]
     public async Task An_operation_that_ignores_cancellation_keeps_the_runtime_rather_than_having_it_disposed()
     {
+        // Production's 5 s drain on the test's clock, which the test fires: the drain gives up because its time passed,
+        // never because a loaded machine let a real timer pass first.
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
-        svc.DisposalDrainTimeout = TimeSpan.FromMilliseconds(100);
-        harness.Runtime.EpGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = harness.DrainOnManualClock();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Runtime.EpGate = gate;
         harness.Runtime.IgnoreCancellation = true;
+        try
+        {
+            var listing = svc.ListFoundryModelsAsync();
+            await harness.Runtime.EpStarted.Task.WaitAsync(Bound);
+            var dispose = svc.DisposeAsync().AsTask();
+            var drainTimer = Assert.Single(clock.Timers);
+            Assert.Equal(TimeSpan.FromSeconds(5), drainTimer.DueTime);
+            Assert.False(dispose.IsCompleted, "Disposal gave up on the drain before its time passed.");
 
-        var listing = svc.ListFoundryModelsAsync();
-        await harness.Runtime.EpStarted.Task.WaitAsync(Bound);
-        await svc.DisposeAsync().AsTask().WaitAsync(Bound);
+            drainTimer.Fire();
+            await dispose.WaitAsync(Bound);
 
-        Assert.Equal(CleanupDisposalOutcome.LeftToProcessExit, svc.DisposalOutcome);
-        Assert.Equal(0, harness.Runtime.Disposals);
-        Assert.Contains(harness.Log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("still running"));
+            Assert.Equal(CleanupDisposalOutcome.LeftToProcessExit, svc.DisposalOutcome);
+            Assert.Equal(0, harness.Runtime.Disposals);
+            Assert.Contains(harness.Log.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("still running"));
 
-        // When it does finish, it publishes nothing and still does not have its runtime taken away.
-        harness.Runtime.EpGate.SetResult();
-        Assert.Empty(await listing.WaitAsync(Bound));
-        Assert.Equal(0, harness.Runtime.Disposals);
-        Assert.Empty(await svc.ListFoundryModelsIfInitializedAsync());
+            // When it does finish, it publishes nothing and still does not have its runtime taken away.
+            gate.SetResult();
+            Assert.Empty(await listing.WaitAsync(Bound));
+            Assert.Equal(0, harness.Runtime.Disposals);
+            Assert.Empty(await svc.ListFoundryModelsIfInitializedAsync());
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Hotkeys;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -11,6 +12,11 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public class KeyboardHookPrecedenceTests
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen. A tick, lookup or recovery a
+    // test holds mid-step waits for the test's release and nothing else, since what the test asserts meanwhile rests on it
+    // being held (review round 4 of stream TR, A5); ReleaseAtExit lets it go on every way out.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private const nint RemoteWindow = 0x1111;
     private const nint OtherRemoteWindow = 0x1122;
     private const nint LocalWindow = 0x2222;
@@ -339,12 +345,13 @@ public class KeyboardHookPrecedenceTests
         var rig = new Rig();
         using var atLookup = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         rig.BeforeLookup = window =>
         {
             if (window == LocalWindow)
             {
                 atLookup.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait();
             }
         };
         rig.Foreground = RemoteWindow;
@@ -354,12 +361,12 @@ public class KeyboardHookPrecedenceTests
             IsBackground = true,
         };
         older.Start();
-        Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The older lookup never started.");
+        Assert.True(atLookup.Wait(Bound), "The older lookup never started.");
 
         rig.Notice(RemoteWindow);
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         release.Set();
-        Assert.True(older.Join(TimeSpan.FromSeconds(10)), "The older lookup never finished.");
+        Assert.True(older.Join(Bound), "The older lookup never finished.");
 
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         rig.Time.Timer.Fire();
@@ -393,24 +400,25 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         using var atRead = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         var hold = 1;
         rig.BeforeForegroundRead = () =>
         {
             if (Interlocked.Exchange(ref hold, 0) == 1)
             {
                 atRead.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait();
             }
         };
         var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
         tick.Start();
-        Assert.True(atRead.Wait(TimeSpan.FromSeconds(10)), "The first schedule's tick never looked up what is in front.");
+        Assert.True(atRead.Wait(Bound), "The first schedule's tick never looked up what is in front.");
 
         rig.Foreground = OtherRemoteWindow;
         rig.Notice(OtherRemoteWindow);
         var armedAt = rig.Time.Elapsed;
         release.Set();
-        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+        Assert.True(tick.Join(Bound), "The tick never finished.");
 
         Assert.Empty(rig.Requests);
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
@@ -454,12 +462,12 @@ public class KeyboardHookPrecedenceTests
 
         notice.Notify(RemoteWindow);
         Assert.Equal(1, notice.PublishedRevision); // on the notifying thread, before any handler runs
-        Assert.True(SpinWait.SpinUntil(() => seen.Count == 1, TimeSpan.FromSeconds(10)), "The first notice was not handled.");
+        Assert.True(SpinWait.SpinUntil(() => seen.Count == 1, Bound), "The first notice was not handled.");
         notice.Notify(LocalWindow);
         Assert.Equal(2, notice.PublishedRevision);
-        Assert.True(SpinWait.SpinUntil(() => seen.Count == 2, TimeSpan.FromSeconds(10)), "The second notice was not handled.");
+        Assert.True(SpinWait.SpinUntil(() => seen.Count == 2, Bound), "The second notice was not handled.");
         notice.Notify(LocalWindow);
-        Assert.True(SpinWait.SpinUntil(() => seen.Count == 3, TimeSpan.FromSeconds(10)), "The third notice was not handled.");
+        Assert.True(SpinWait.SpinUntil(() => seen.Count == 3, Bound), "The third notice was not handled.");
 
         Assert.Equal([(RemoteWindow, 1L, 1L), (LocalWindow, 2L, 2L), (LocalWindow, 3L, 2L)], seen.ToArray());
     }
@@ -495,24 +503,25 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         using var atLookup = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         rig.BeforeLookup = window =>
         {
             if (window == LocalWindow)
             {
                 atLookup.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait();
             }
         };
         rig.Foreground = LocalWindow;
         var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
         tick.Start();
-        Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The tick never looked the local window up.");
+        Assert.True(atLookup.Wait(Bound), "The tick never looked the local window up.");
 
         rig.Publish(LocalWindow); // L's notice, coalesced into R's: never handled on its own
         rig.Foreground = RemoteWindow;
         rig.Notice(RemoteWindow);
         release.Set();
-        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+        Assert.True(tick.Join(Bound), "The tick never finished.");
 
         Assert.Empty(rig.Requests);
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
@@ -555,23 +564,24 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(RemoteWindow);
         using var atRead = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         rig.AfterForegroundRead = window =>
         {
             if (window == 0)
             {
                 atRead.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait();
             }
         };
         rig.Foreground = 0;
         var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
         tick.Start();
-        Assert.True(atRead.Wait(TimeSpan.FromSeconds(10)), "The tick never read the window in front.");
+        Assert.True(atRead.Wait(Bound), "The tick never read the window in front.");
 
         rig.Foreground = RemoteWindow;
         rig.Notice(RemoteWindow); // the same window, and nothing else published since: a repeat
         release.Set();
-        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+        Assert.True(tick.Join(Bound), "The tick never finished.");
 
         Assert.Empty(rig.Requests);
         Assert.Equal(TimeSpan.Zero, rig.Time.Timer.Due);
@@ -593,23 +603,24 @@ public class KeyboardHookPrecedenceTests
         Assert.Equal(KeyboardHookPrecedence.RetiredGrace, rig.Time.Timer.Due);
         using var atLookup = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(release);
         var hold = 1;
         rig.BeforeLookup = window =>
         {
             if (window == RemoteWindow && Interlocked.Exchange(ref hold, 0) == 1)
             {
                 atLookup.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                release.Wait();
             }
         };
         var tick = new Thread(rig.Time.Timer.Fire) { IsBackground = true };
         tick.Start();
-        Assert.True(atLookup.Wait(TimeSpan.FromSeconds(10)), "The tick never looked the client up.");
+        Assert.True(atLookup.Wait(Bound), "The tick never looked the client up.");
 
         rig.Foreground = LocalWindow;
         rig.Notice(LocalWindow);
         release.Set();
-        Assert.True(tick.Join(TimeSpan.FromSeconds(10)), "The tick never finished.");
+        Assert.True(tick.Join(Bound), "The tick never finished.");
 
         Assert.Equal(["move", "move"], rig.Requests);
         Assert.Equal(TimeSpan.Zero, rig.Time.Timer.Due);
@@ -686,23 +697,24 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(LocalWindow);
         using var sampled = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.AfterForegroundRead = window =>
         {
             if (ReferenceEquals(Thread.CurrentThread, recovery) && !sampled.IsSet)
             {
                 sampled.Set();
-                resume.Wait(TimeSpan.FromSeconds(10));
+                resume.Wait();
             }
         };
         recovery.Start();
-        Assert.True(sampled.Wait(TimeSpan.FromSeconds(10)), "The recovery never sampled the window in front.");
+        Assert.True(sampled.Wait(Bound), "The recovery never sampled the window in front.");
 
         rig.Foreground = RemoteWindow;
         rig.Notice(RemoteWindow);
         var revision = rig.PublishedRevision;
         resume.Set();
-        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+        Assert.True(recovery.Join(Bound), "The recovery never finished.");
 
         Assert.Equal(revision, rig.PublishedRevision);
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
@@ -723,22 +735,23 @@ public class KeyboardHookPrecedenceTests
         rig.Foreground = RemoteWindow;
         using var looking = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.BeforeLookup = window =>
         {
             if (ReferenceEquals(Thread.CurrentThread, recovery) && window == RemoteWindow && !looking.IsSet)
             {
                 looking.Set();
-                resume.Wait(TimeSpan.FromSeconds(10));
+                resume.Wait();
             }
         };
         recovery.Start();
-        Assert.True(looking.Wait(TimeSpan.FromSeconds(10)), "The recovery never looked the client up.");
+        Assert.True(looking.Wait(Bound), "The recovery never looked the client up.");
 
         rig.Foreground = LocalWindow;
         rig.Notice(LocalWindow);
         resume.Set();
-        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+        Assert.True(recovery.Join(Bound), "The recovery never finished.");
 
         Assert.Null(rig.Time.Timer.Due);
         Assert.Empty(rig.Moves);
@@ -754,24 +767,25 @@ public class KeyboardHookPrecedenceTests
         rig.Notice(LocalWindow);
         using var looking = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var handler = new Thread(rig.Deliver) { IsBackground = true };
         rig.BeforeLookup = window =>
         {
             if (ReferenceEquals(Thread.CurrentThread, handler) && !looking.IsSet)
             {
                 looking.Set();
-                resume.Wait(TimeSpan.FromSeconds(10));
+                resume.Wait();
             }
         };
         rig.Publish(OtherLocalWindow);
         handler.Start();
-        Assert.True(looking.Wait(TimeSpan.FromSeconds(10)), "The notice's handler never looked the window up.");
+        Assert.True(looking.Wait(Bound), "The notice's handler never looked the window up.");
 
         rig.Foreground = RemoteWindow;
         rig.Recover();
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         resume.Set();
-        Assert.True(handler.Join(TimeSpan.FromSeconds(10)), "The notice's handler never finished.");
+        Assert.True(handler.Join(Bound), "The notice's handler never finished.");
 
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         rig.Time.Timer.Fire();
@@ -802,22 +816,23 @@ public class KeyboardHookPrecedenceTests
         rig.Foreground = RemoteWindow;
         using var sampled = new ManualResetEventSlim(false);
         using var resume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.AfterForegroundRead = _ =>
         {
             if (ReferenceEquals(Thread.CurrentThread, recovery) && !sampled.IsSet)
             {
                 sampled.Set();
-                resume.Wait(TimeSpan.FromSeconds(10));
+                resume.Wait();
             }
         };
         recovery.Start();
-        Assert.True(sampled.Wait(TimeSpan.FromSeconds(10)), "The recovery never sampled the window in front.");
+        Assert.True(sampled.Wait(Bound), "The recovery never sampled the window in front.");
 
         rig.Foreground = LocalWindow;
         rig.Notice(LocalWindow);
         resume.Set();
-        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+        Assert.True(recovery.Join(Bound), "The recovery never finished.");
 
         Assert.Null(rig.Time.Timer.Due);
     }
@@ -837,6 +852,7 @@ public class KeyboardHookPrecedenceTests
         using var handlerResume = new ManualResetEventSlim(false);
         using var recoveryLooking = new ManualResetEventSlim(false);
         using var recoveryResume = new ManualResetEventSlim(false);
+        using var releaseAtExit = new ReleaseAtExit(handlerResume, recoveryResume);
         var handler = new Thread(rig.Deliver) { IsBackground = true };
         var recovery = new Thread(rig.Recover) { IsBackground = true };
         rig.BeforeLookup = _ =>
@@ -844,27 +860,27 @@ public class KeyboardHookPrecedenceTests
             if (ReferenceEquals(Thread.CurrentThread, handler) && !handlerLooking.IsSet)
             {
                 handlerLooking.Set();
-                handlerResume.Wait(TimeSpan.FromSeconds(10));
+                handlerResume.Wait();
             }
             else if (ReferenceEquals(Thread.CurrentThread, recovery) && !recoveryLooking.IsSet)
             {
                 recoveryLooking.Set();
-                recoveryResume.Wait(TimeSpan.FromSeconds(10));
+                recoveryResume.Wait();
             }
         };
         rig.Publish(RemoteWindow);
         handler.Start();
-        Assert.True(handlerLooking.Wait(TimeSpan.FromSeconds(10)), "The notice's handler never looked the client up.");
+        Assert.True(handlerLooking.Wait(Bound), "The notice's handler never looked the client up.");
         recovery.Start();
-        Assert.True(recoveryLooking.Wait(TimeSpan.FromSeconds(10)), "The recovery never looked the client up.");
+        Assert.True(recoveryLooking.Wait(Bound), "The recovery never looked the client up.");
 
         handlerResume.Set();
-        Assert.True(handler.Join(TimeSpan.FromSeconds(10)), "The notice's handler never finished.");
+        Assert.True(handler.Join(Bound), "The notice's handler never finished.");
         Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
         rig.Time.Timer.Fire();
         Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
         recoveryResume.Set();
-        Assert.True(recovery.Join(TimeSpan.FromSeconds(10)), "The recovery never finished.");
+        Assert.True(recovery.Join(Bound), "The recovery never finished.");
 
         Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
         Assert.Equal(["move"], rig.Requests);

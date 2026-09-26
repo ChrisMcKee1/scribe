@@ -2,6 +2,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.Tests.StorageTime;
+using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
+using TestThread = Scribe.Core.Tests.Concurrency.TestThread;
 
 namespace Scribe.Core.Tests;
 
@@ -75,6 +77,7 @@ public class StorageMaintenanceSchedulingTests
         var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var settings = new BlockingSettings();
         using var maintenance = Create(db, new HistoryRepository(db), time);
+        using var releaseAtExit = new ReleaseAtExit(settings.Release);
         maintenance.Start(settings.Read);
         var timer = time.SingleTimer;
 
@@ -107,6 +110,7 @@ public class StorageMaintenanceSchedulingTests
         var history = new HistoryRepository(db);
         using var maintenance = new StorageMaintenance(
             db, blocking, failures, NullLogger.Instance, new ManualTimeProvider(DateTimeOffset.UtcNow), Options);
+        using var releaseAtExit = new ReleaseAtExit(blocking.Release);
 
         var pass = Task.Run(() => maintenance.RunOnce(AppSettings.CreateDefault()));
         Assert.True(blocking.Entered.Wait(Generous));
@@ -136,12 +140,13 @@ public class StorageMaintenanceSchedulingTests
         var entry = history.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "rate me", 1, 1));
         using var holding = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var holder = new Thread(() =>
         {
             using (db.EnterWriteScope())
             {
                 holding.Set();
-                release.Wait(Generous);
+                release.Wait();
             }
         });
         holder.Start();
@@ -196,15 +201,16 @@ public class StorageMaintenanceSchedulingTests
         var history = new HistoryRepository(db);
         using var holding = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var heldByHolder = false;
 
-        // The holder never lets go by itself, as if stuck.
+        // The holder never lets go by itself, as if stuck: only the test's release, on every way out, ends its hold.
         var holder = new Thread(() =>
         {
             using var scope = db.EnterWriteScope();
             heldByHolder = scope.Held;
             holding.Set();
-            release.Wait(Generous);
+            release.Wait();
         });
         holder.Start();
         Assert.True(holding.Wait(Generous));
@@ -311,32 +317,51 @@ public class StorageMaintenanceSchedulingTests
     private static TimeSpan Later(TimeSpan a, TimeSpan b) => a >= b ? a : b;
 
     [Fact]
-    public async Task Dispose_waits_for_the_pass_in_flight_and_nothing_runs_after_it()
+    public void Dispose_waits_for_the_pass_in_flight_and_nothing_runs_after_it()
     {
+        // Dispose stops waiting for a pass after the options' shutdown wait, 3 s by default, so an observer held up that long
+        // between the dispose and the check that it still waits would see it done on correct code (stream TR round 5, A9).
+        // Here the wait outlasts every guard in this class, and the pass and the disposal run on threads of their own rather
+        // than the pool, whose starvation once kept the disposal from starting at all. Both are let go and joined before the
+        // database closes, whatever ended the test.
         using var db = ScribeDatabase.CreateInMemory();
         var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var settings = new BlockingSettings();
         var recording = new BlockingHistoryMaintenance(block: false);
-        var maintenance = new StorageMaintenance(db, recording, new CleanupFailureLog(db), NullLogger.Instance, time, Options);
+        var maintenance = new StorageMaintenance(
+            db, recording, new CleanupFailureLog(db), NullLogger.Instance, time, Options with { ShutdownWait = TimeSpan.FromMinutes(10) });
         maintenance.Start(settings.Read);
         var timer = time.SingleTimer;
+        var pass = new TestThread(timer.Fire, "test-maintenance-pass");
+        var dispose = new TestThread(maintenance.Dispose, "test-maintenance-dispose");
+        try
+        {
+            pass.Start();
+            Assert.True(settings.Entered.Wait(Generous));
 
-        var pass = Task.Run(timer.Fire);
-        Assert.True(settings.Entered.Wait(Generous));
+            var activityBeforeDispose = db.ActivityCount;
+            dispose.Start();
 
-        var activityBeforeDispose = db.ActivityCount;
-        var dispose = Task.Run(maintenance.Dispose);
+            // Dispose disposes the timer, then stops and waits: the pass is still blocked, so it cannot
+            // return. The stop counts as activity, so the counter moving proves the stop was requested
+            // before the pass is released; the timer alone is disposed a step earlier.
+            Assert.True(SpinWait.SpinUntil(() => timer.Disposed, Generous));
+            Assert.True(SpinWait.SpinUntil(() => db.ActivityCount != activityBeforeDispose, Generous));
+            Assert.True(dispose.IsAlive, "Dispose stopped waiting for the pass in flight.");
 
-        // Dispose disposes the timer, then stops and waits: the pass is still blocked, so it cannot
-        // return. The stop counts as activity, so the counter moving proves the stop was requested
-        // before the pass is released; the timer alone is disposed a step earlier.
-        Assert.True(SpinWait.SpinUntil(() => timer.Disposed, Generous));
-        Assert.True(SpinWait.SpinUntil(() => db.ActivityCount != activityBeforeDispose, Generous));
-        Assert.False(dispose.IsCompleted);
+            settings.Release.Set();
+            Assert.True(dispose.Join(Generous), "Dispose never returned once the pass was let go.");
+            Assert.True(pass.Join(Generous), "The pass never returned once it was let go.");
+        }
+        finally
+        {
+            settings.Release.Set();
+            pass.Join(Generous);
+            dispose.Join(Generous);
+        }
 
-        settings.Release.Set();
-        await dispose.WaitAsync(Generous);
-        await pass.WaitAsync(Generous);
+        pass.ThrowIfFailed();
+        dispose.ThrowIfFailed();
 
         // The pass saw the stop before its first step and left the database alone.
         Assert.Equal(0, recording.Calls);
@@ -389,7 +414,10 @@ public class StorageMaintenanceSchedulingTests
         }
     }
 
-    /// <summary>Blocks the first read until released, so a pass can be held open deterministically.</summary>
+    /// <summary>
+    /// Blocks the first read until released, and only then, so a pass can be held open deterministically: what a test
+    /// asserts while the pass is open rests on it staying open (review round 4 of stream TR, A5).
+    /// </summary>
     private sealed class BlockingSettings
     {
         private int _calls;
@@ -405,14 +433,16 @@ public class StorageMaintenanceSchedulingTests
             if (Interlocked.Increment(ref _calls) == 1)
             {
                 Entered.Set();
-                Release.Wait(Generous);
+                Release.Wait();
             }
 
             return AppSettings.CreateDefault();
         }
     }
 
-    /// <summary>Holds the pass inside its audio-retention step, which maintenance runs under the gate.</summary>
+    /// <summary>
+    /// Holds the pass inside its audio-retention step, which maintenance runs under the gate, until released and only then.
+    /// </summary>
     private sealed class BlockingHistoryMaintenance(bool block = true) : IHistoryMaintenance
     {
         private int _calls;
@@ -435,7 +465,7 @@ public class StorageMaintenanceSchedulingTests
             if (block)
             {
                 Entered.Set();
-                Release.Wait(Generous);
+                Release.Wait();
             }
 
             return 0;

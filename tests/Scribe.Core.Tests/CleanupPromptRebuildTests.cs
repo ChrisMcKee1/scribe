@@ -4,6 +4,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Settings;
+using Scribe.Core.Tests.Concurrency;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Scribe.Core.Tests;
@@ -387,13 +388,14 @@ public sealed class CleanupPromptRebuildTests
         // but has not returned yet.
         using var paused = new ManualResetEventSlim();
         using var resume = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(resume);
         var pausedOnce = 0;
         svc.StatusChanged += () =>
         {
             if (svc.Status == CleanupStatus.Ready && Interlocked.Exchange(ref pausedOnce, 1) == 0)
             {
                 paused.Set();
-                resume.Wait(Bound);
+                resume.Wait();
             }
         };
         svc.Configure(Remote(CleanupProvider.AzureFoundry) with { Glossary = "Terms: Contoso." });

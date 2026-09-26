@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 
 namespace Scribe.Core.Tests.Concurrency;
@@ -51,10 +53,14 @@ internal static class BlockedThreads
     /// <summary>A safety net against a hung test, never part of what a test asserts.</summary>
     public static readonly TimeSpan SafetyTimeout = TimeSpan.FromSeconds(30);
 
+    // What the work of each thread Start made threw, kept for the test's thread. Weak: a thread's record goes with it.
+    private static readonly ConditionalWeakTable<Thread, StrongBox<Exception?>> Failures = new();
+
     /// <summary>
     /// Returns once <paramref name="thread"/> is blocked. Documented for <see cref="System.Threading.ThreadState.WaitSleepJoin"/>:
     /// a thread requesting a lock with Monitor.Enter or waiting with Monitor.Wait is reported as blocked, so a test that
-    /// parks a thread on exactly one lock can know it is waiting there.
+    /// parks a thread on exactly one lock can know it is waiting there. A thread of <see cref="Start"/> that ends instead,
+    /// because its work threw, has what it threw rethrown here.
     /// </summary>
     public static void WaitUntilBlocked(Thread thread)
     {
@@ -63,6 +69,13 @@ internal static class BlockedThreads
         {
             if (!thread.IsAlive)
             {
+                if ((thread.ThreadState & System.Threading.ThreadState.Unstarted) == 0)
+                {
+                    // It has ended, so this returns at once, and what its work kept is visible after it.
+                    thread.Join(SafetyTimeout);
+                    ThrowIfFailed(thread);
+                }
+
                 throw new InvalidOperationException("The thread finished instead of blocking.");
             }
 
@@ -75,22 +88,122 @@ internal static class BlockedThreads
         }
     }
 
-    /// <summary>Starts a background thread running <paramref name="work"/>.</summary>
+    /// <summary>
+    /// Starts a background thread running <paramref name="work"/>. Nothing the work throws leaves the thread, where it would
+    /// end the test host and hide the failure (stream TR round 6b): it is kept, and <see cref="Join"/> and
+    /// <see cref="WaitUntilBlocked"/> rethrow it on the test's thread. A thread that outlives its join keeps what it throws
+    /// afterwards, on a test that has already failed.
+    /// </summary>
     public static Thread Start(Action work)
     {
-        var thread = new Thread(() => work()) { IsBackground = true };
+        // Made before the thread starts, so keeping a failure is one write, which cannot throw.
+        var failure = new StrongBox<Exception?>();
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref failure.Value, ex);
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        Failures.Add(thread, failure);
         thread.Start();
         return thread;
     }
 
-    /// <summary>Joins with the safety timeout and fails loudly instead of hanging.</summary>
+    /// <summary>
+    /// Joins with the safety timeout and fails loudly instead of hanging, then rethrows, with its own stack, whatever the
+    /// work of a thread of <see cref="Start"/> threw.
+    /// </summary>
     public static void Join(Thread thread)
     {
         if (!thread.Join(SafetyTimeout))
         {
             throw new TimeoutException("The thread did not finish.");
         }
+
+        ThrowIfFailed(thread);
     }
+
+    private static void ThrowIfFailed(Thread thread)
+    {
+        if (Failures.TryGetValue(thread, out var failure) && Volatile.Read(ref failure.Value) is { } thrown)
+        {
+            ExceptionDispatchInfo.Throw(thrown);
+        }
+    }
+}
+
+/// <summary>
+/// Sets a test's gates on every way out of the scope it is declared in (stream TR round 4, A5). A thread a test holds at a
+/// gate (a production thread, a fake's, or one the test started to run production code) waits for its release and for
+/// nothing else, because what the test asserts rests on that thread staying where it is until the test lets it go; so a
+/// test that fails before its own release still releases here, and ends rather than hangs. A using declaration is a
+/// finally over every statement after it, and runs before the ones declared earlier are disposed: declare it after the
+/// gates and after whatever the held thread belongs to.
+/// </summary>
+internal sealed class ReleaseAtExit(params ManualResetEventSlim[] gates) : IDisposable
+{
+    public void Dispose()
+    {
+        foreach (var gate in gates)
+        {
+            gate.Set();
+        }
+    }
+}
+
+/// <summary>
+/// A background thread of a test's own that keeps what its work throws instead of letting it end the test host, which would
+/// hide the failure (stream TR round 5): the test that started it joins it and then calls <see cref="ThrowIfFailed"/>. It
+/// counts as started only once its start returned (round 6), and a join of one not started returns at once, so a finally
+/// can join every thread a test made whatever failed first, a start that threw included.
+/// </summary>
+internal sealed class TestThread
+{
+    private readonly Thread _thread;
+    private ExceptionDispatchInfo? _failure;
+    private bool _started;
+
+    public TestThread(Action work, string name)
+    {
+        _thread = new Thread(() =>
+        {
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _failure, ExceptionDispatchInfo.Capture(ex));
+            }
+        })
+        {
+            IsBackground = true,
+            Name = name,
+        };
+    }
+
+    public bool IsAlive => _thread.IsAlive;
+
+    public void Start()
+    {
+        _thread.Start();
+
+        // Only now: a thread whose start threw is still unstarted, and joining one throws ThreadStateException, which
+        // would replace the failure a finally is unwinding.
+        Volatile.Write(ref _started, true);
+    }
+
+    public bool Join(TimeSpan timeout) => !Volatile.Read(ref _started) || _thread.Join(timeout);
+
+    public void ThrowIfFailed() => Volatile.Read(ref _failure)?.Throw();
 }
 
 /// <summary>A time provider whose clock and timers only move when a test says so.</summary>
