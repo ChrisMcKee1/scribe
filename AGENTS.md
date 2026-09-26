@@ -1663,8 +1663,11 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
       helper is suspended and the next show relaunches it. The app pushes the period with
       `SetKeepWarm(ReleaseModelsAfterIdleMinutes)` at startup, with every state change and when Settings
       saves; 0 keeps the helper resident.
-    - Pausing dictation hides the pill, then sends a stamped `ReleaseWhenIdle`, vetoed like the idle
-      suspend.
+    - Pausing dictation sends a stamped `ReleaseWhenIdle` right after the shell shows the `Paused` change, vetoed
+      like the idle suspend. A pause while idle is that change at once, and hides the pill first. A pause that ends
+      a recording, or comes while a dictation is processing, raises no `Paused` change at once: that dictation is
+      processed as usual, and its return to idle is the `Paused` change, which carries and shows its outcome (or
+      hides a quiet discard); the release then waits until the outcome has hidden (below).
     - Both are re-checked at the commit point: a command stamped after the deadline was armed, or a
       recording or processing pill that must show, vetoes them. Stamps are taken when a command is
       queued, never in the consumer.
@@ -1673,13 +1676,23 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
       latest state and position. A helper lost within 10 s of launching, judged by its process exit
       time, counts as a failed launch; a successful launch resets the backoff.
     - A dictation's outcome keeps the helper while it is on screen: its command passes how long (the hold plus
-      the fade out, `PillOutcome.OnScreen`), timed from its write, or from the launch's end when it had to launch
-      the helper; one that could not be shown keeps nothing. The idle deadline never falls before it has hidden,
-      and a pause release that nothing vetoes waits for it, is judged again once it has hidden, and gives way to
-      a newer request, a newer command or a recording (`OverlayDueWork.Release`). Without this a pause ended the
-      helper under the "Typed" or "Nothing typed" of the very dictation it stopped.
+      the fade out, `PillOutcome.OnScreen`), timed from when its write to the helper returns
+      (`OverlayHelperLifetime.OnShown`, after an existing helper's write and a launch's alike): a write can take
+      up to the client's 1.5 s timeout and still succeed, and the overlay starts its own hold only once it has the
+      line. One whose write failed, or that could not be shown, keeps nothing. The idle deadline never falls
+      before it has hidden, and a pause release that nothing vetoes waits for it, is judged again once it has
+      hidden, and gives way to a newer request, a newer command or a recording (`OverlayDueWork.Release`).
+      Without this a pause ended the helper under the "Typed" or "Nothing typed" of the very dictation it
+      stopped.
     - A lost helper is brought back, by a later command or after a failed write, only while a recording or
       processing pill must show. An outcome is never replayed, so a relaunch for one would show nothing.
+    - A state command that a newer state replaced is never written. Every request publishes a `DesiredState` of
+      its own, compared by reference, and its command carries it. The client judges the command before the
+      lifetime decides, which takes it as `superseded` so the command never launches the helper on its own
+      account, and again right before the write, after any launch, because a launch replays the latest state
+      first. Without this a helper relaunched for dictation A's outcome replayed dictation B's `RECORDING` and
+      then wrote A's `TYPED` over it. The engine's anchor move writes the applied anchor as it stands when it is
+      written, so it never puts back an older one.
 - `OverlayPreviewGate` (Core) drops the commands of a superseded position preview and restores the
   applied position on the first engine command after one.
 - **The pill is drawn in Signal On** (the palette decision's section 5, `OverlayWindow.xaml`): an opaque navy
@@ -1695,9 +1708,11 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   Default and Light hold the same values, and HighContrast draws system colours only, fully opaque, with a 2 DIP
   WindowText edge in every state, Highlight for the bars and dots, and WindowText for the icons. WinUI picks that
   dictionary itself; the window also reads the contrast state in its own process at each show (the state line's
-  `contrast=`). `OverlayPillSourceTests` holds every colour literal in the overlay to the palette in its role, the
-  contrast dictionary to system colours, and every theme resource, storyboard target and icon path the window
-  names to one that exists: a missing theme key throws only when the window loads, which no build catches.
+  `contrast=`). `OverlayPillSourceTests` holds every colour the overlay's XAML writes, read from the parsed
+  document whatever the quotes or syntax, to the palette (Transparent aside) and each brush to its role's
+  colours, the contrast dictionary to system colours, and every theme resource, storyboard target and icon path
+  the window names to one that exists: a missing theme key throws only when the window loads, which no build
+  catches.
 - **Motion follows Windows "Animation effects"**, read with `UISettings.AnimationsEnabled` at each show (the state
   line's `animations=`): with it on, the pill fades in over 120 ms and out over 150 ms and the processing dots
   bounce; with it off there are no fades and the dots stand still. The level bars follow the level either way,
@@ -1709,14 +1724,17 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   the next step: "Copy it from the tray menu" after an insertion that failed, otherwise the failure's own message);
   notices hold 1.3 s. The truth rules: a check only after the whole insertion succeeded, the space after the
   dictation included; a partial insertion or a dictation left for the recovery copy is the error state; a
-  dictation discarded quietly (no speech, or nothing left after the dictionary) shows nothing. The controller
-  hands the outcome on with the Idle change that ends the dictation (`DictationStateChange.Outcome`), under that
-  change's revision, so a late outcome never covers a newer recording and nothing waits for it. A new recording or
-  processing state replaces an outcome at once, and a hide during its hold is ignored. The holds and fades live in
-  `PillTiming`; the overlay keeps copies, which `OverlayPillSourceTests` checks. The shell's `RenderDictationState`
-  shows the change's outcome in place of the hide, and nothing else puts a failure on the pill: the old `FAILED`
-  flash, which fired before the text was typed and for errors alike, is gone with `ShowFailed` and the controller's
-  `CleanupFailed`, and the controller's `Error` reaches only the tray (`OverlayPipeProtocolTests` pins the shell).
+  dictation discarded quietly (the speech detector found no speech in audio that was not digital silence, or
+  nothing was left after the dictionary) shows nothing, while digital silence and a recogniser that returned
+  nothing on real audio are notices ("Nothing typed" and their message). The controller hands the outcome on
+  with the change that ends the dictation, Idle, or Paused when a pause ended it (`DictationStateChange.Outcome`),
+  under that change's revision, so a late outcome never covers a newer recording and nothing waits for it. A new
+  recording or processing state replaces an outcome at once, and a hide during its hold is ignored. The holds and
+  fades live in `PillTiming`; the overlay keeps copies, which `OverlayPillSourceTests` checks. The shell's
+  `RenderDictationState` shows the change's outcome in place of the hide, and nothing else puts a failure on the
+  pill: the old `FAILED` flash, which fired before the text was typed and for errors alike, is gone with
+  `ShowFailed` and the controller's `CleanupFailed`, and the controller's `Error` reaches only the tray
+  (`OverlayPipeProtocolTests` pins the shell).
 - **Never tie the helper to `DictationController.ModelsReleased`.** Releasing the speech models and
   ending the pill are separate decisions; the old wiring could end a newer recording's pill.
 - **The pill never activates itself.** Every show, the first after a launch included, is `AppWindow.Show(activateWindow:
@@ -1745,7 +1763,8 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `PulseStoryboard` never appears. The client's lifetime lines are `Overlay helper suspended
   after N idle minutes`, `Overlay helper released because dictation was paused` (with `, once the outcome on
   screen had hidden` when it waited, after `Overlay release on pause waits N ms for the outcome on screen to hide.`),
-  `Overlay relaunch retry due after a N ms cooldown` and `Overlay command <verb> failed; tearing down for relaunch.`
+  `Overlay relaunch retry due after a N ms cooldown`, `Overlay command <verb> failed; tearing down for relaunch.`
+  and, at Debug, `Overlay command <verb> skipped: a newer state replaced it.`
 
 ## Accent contrast (read before touching theme resources or anything drawn on an accent fill)
 
