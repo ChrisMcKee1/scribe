@@ -45,6 +45,7 @@ internal sealed class TrayIconHost : IDisposable
     private string? _shortcutSentence;
     private HotkeyMode _hotkeyMode = HotkeyMode.Hold;
     private TrayCondition _condition;
+    private TrayNoticeAction _lastNoticeAction;
 
     public event Action? QuitRequested;
     public event Action? SettingsRequested;
@@ -67,6 +68,7 @@ internal sealed class TrayIconHost : IDisposable
     public event Action? RestartToUpdateRequested;
     public event Action? OpenHistoryRequested;
     public event Action? SetUpAiCleanupRequested;
+    public event Action<TrayNoticeAction>? NoticeActionRequested;
 
     public Func<TrayAiCleanupItem>? AiCleanupItemProvider { get; set; }
     public Func<bool>? UpdateReadyProvider { get; set; }
@@ -106,6 +108,7 @@ internal sealed class TrayIconHost : IDisposable
             DoubleClickCommand = _settingsCommand,
         };
 
+        _icon.TrayBalloonTipClicked += (_, _) => RaiseNoticeAction();
         _icon.TrayContextMenuOpen += (_, _) => FocusMenu();
         _icon.ForceCreate(false);
         RebuildMenu();
@@ -595,12 +598,40 @@ internal sealed class TrayIconHost : IDisposable
         if (_menu.IsOpen) RebuildMenu();
     });
 
-    public void ShowError(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
+    public void ShowNotice(TrayNotice notice) => Dispatch(() =>
+    {
+        var delivery = TrayNoticeDelivery.For(notice.Kind);
+        _lastNoticeAction = notice.Action;
+        _icon.ShowNotification(
+            notice.Title,
+            notice.Body,
+            ToNotificationIcon(delivery.Icon),
+            customIconHandle: null,
+            largeIcon: false,
+            sound: !delivery.Silent,
+            respectQuietTime: delivery.RespectQuietTime,
+            realtime: delivery.Realtime,
+            timeout: NoticeTimeout(notice.Kind));
+    });
 
-    public void ShowInfo(string message) => Dispatch(() => _icon.ToolTipText = $"Scribe: {message}");
+    private void RaiseNoticeAction()
+    {
+        var action = _lastNoticeAction;
+        if (action != TrayNoticeAction.None)
+        {
+            NoticeActionRequested?.Invoke(action);
+        }
+    }
 
-    public void ShowNotification(string message, bool isError = false) => Dispatch(() =>
-        _icon.ShowNotification("Scribe", message, isError ? NotificationIcon.Error : NotificationIcon.Info, timeout: TimeSpan.FromSeconds(6)));
+    private static NotificationIcon ToNotificationIcon(TrayNotificationIcon icon) => icon switch
+    {
+        TrayNotificationIcon.Warning => NotificationIcon.Warning,
+        TrayNotificationIcon.Error => NotificationIcon.Error,
+        _ => NotificationIcon.Info,
+    };
+
+    private static TimeSpan? NoticeTimeout(TrayNoticeKind kind) =>
+        kind == TrayNoticeKind.Info ? TimeSpan.FromSeconds(8) : null;
 
     private void RetireIcon(System.Drawing.Icon? replaced)
     {

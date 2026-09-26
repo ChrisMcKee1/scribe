@@ -68,7 +68,8 @@ public partial class QuickAddWindow : FluentWindow
     public readonly record struct QuickAddResult(
         DictionaryEntry Entry,
         string? SourceTranscript,
-        string? CorrectedTranscript);
+        string? CorrectedTranscript,
+        bool CloseAfterSaving);
 
     public event Action<QuickAddResult>? Saved;
 
@@ -201,6 +202,71 @@ public partial class QuickAddWindow : FluentWindow
 
         UpdateFocusedChip();
         UpdateStatus(forceAnnouncement: false);
+    }
+
+    public void ForgetTranscript(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var removedCurrent = string.Equals(_transcript, text, StringComparison.Ordinal);
+        _sources.RemoveAll(source => string.Equals(source.Text, text, StringComparison.Ordinal));
+        RecentPicker.Items.Refresh();
+        if (!removedCurrent)
+        {
+            return;
+        }
+
+        if (HasUnsavedSavableCorrection())
+        {
+            ShowResult(new QuickDictionaryAdd.Plan(
+                QuickDictionaryAdd.PlanKind.NoChange,
+                null,
+                "That dictation is no longer in the tray's recent list. You can still save the word.",
+                QuickDictionaryAdd.PlanSeverity.Info));
+            return;
+        }
+
+        if (_sources.Count > 0)
+        {
+            RecentPicker.SelectedIndex = 0;
+        }
+        else
+        {
+            LoadTranscript(string.Empty);
+        }
+    }
+
+    public void ClearTranscripts()
+    {
+        _sources.Clear();
+        RecentPicker.Items.Refresh();
+        if (HasUnsavedSavableCorrection())
+        {
+            ShowResult(new QuickDictionaryAdd.Plan(
+                QuickDictionaryAdd.PlanKind.NoChange,
+                null,
+                "That dictation is no longer in the tray's recent list. You can still save the word.",
+                QuickDictionaryAdd.PlanSeverity.Info));
+            return;
+        }
+
+        LoadTranscript(string.Empty);
+    }
+
+    public void UseHeardText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        RunWithoutFieldChanged(() => HeardBox.Text = text.Trim());
+        ShouldBeBox.Focus();
+        ShouldBeBox.CaretIndex = ShouldBeBox.Text.Length;
+        UpdateStatus(forceAnnouncement: true);
     }
 
     private void Chip_MouseDown(object sender, MouseButtonEventArgs e)
@@ -855,7 +921,7 @@ public partial class QuickAddWindow : FluentWindow
         var sourceTranscript = _transcript;
         var corrected = QuickDictionaryAdd.Apply(sourceTranscript, saved);
         var fixedTranscript = string.Equals(corrected, sourceTranscript, StringComparison.Ordinal) ? null : corrected;
-        Saved?.Invoke(new QuickAddResult(saved, sourceTranscript, fixedTranscript));
+        Saved?.Invoke(new QuickAddResult(saved, sourceTranscript, fixedTranscript, closeAfterSaving));
         if (closeAfterSaving)
         {
             _allowClose = true;
@@ -1069,8 +1135,6 @@ public partial class QuickAddWindow : FluentWindow
         public override string ToString() => Text;
     }
 }
-
-
 
 
 
