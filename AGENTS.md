@@ -391,7 +391,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     CaptureTriggerBinding, StartupFailureNotice
     Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
                                     OverlayPreviewGate, PillOutcome (what a finished dictation shows on the
-                                    pill), PillTiming, OverlayPipeProtocol (every pipe verb and line)
+                                    pill), PillTiming, OverlayPipeProtocol (every pipe verb and line),
+                                    PillGeometry and PillTextScale (the pill's text-scaled size and place, and
+                                    when a new text scale applies; the overlay compiles both files itself)
     Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
                                     SrgbColor: the foreground on every accent and palette fill, and the lightness
                                     of accent text, links and switch tracks (see Accent contrast); PillPalette,
@@ -419,7 +421,7 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     AccentContrastResources (writes the accent colours), ButtonLabelContrast
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
-    OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110), states, motion
+    OverlayWindow.xaml(.cs)         the pill's visuals (its 264 x 110 DIP layout in a Viewbox), states, motion
     App.xaml                        the pill's theme brushes (Default, Light, HighContrast)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
@@ -1860,6 +1862,15 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   bounce; with it off there are no fades and the dots stand still. The level bars follow the level either way,
   because that is information. Nothing runs while the pill is hidden: hiding stops the dots and both timers, and a
   fade out ends in the hide. `ProcessingStoryboard` is the only repeating animation; `PulseStoryboard` is gone.
+- **The whole pill follows Windows text size, as one unit** (WCAG 1.4.4). No TextBlock scales its own text (each
+  sets `IsTextScaleFactorEnabled="False"`); the window is 264 x 110 DIP times
+  `s = clamp(UISettings.TextScaleFactor, 1, 2.25)` (1 when unreadable), and a `Viewbox` draws the content, laid out
+  at exactly 264 x 110, scaled to fill it, so every line keeps its 100% width budget and its text renders at 12 x s.
+  `PillGeometry` (Core) sizes and anchors the window, keeping the 8 DIP margin and clamping it into the work area;
+  `PillTextScale` applies a new s, read at each show and on `TextScaleFactorChanged` (dispatched to the UI thread),
+  at once on screen, after a running fade in, and at the next show when hidden or fading out. The overlay compiles
+  both files through linked `Compile` items, not a reference to Scribe.Core; `OverlayTextScaleSourceTests` pins the
+  rest from source.
 - **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
   produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and the cleanup's
   diagnostics-safe reason, never its display detail), or Nothing typed / Not all of it was typed (an error icon and
@@ -1895,7 +1906,10 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
   `SystemBackdrop=TransparentBackdrop assigned`, `TransparentBackdrop.OnTargetConnected applied`,
-  `size=462x192`, `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
+  `size=462x192` (at 100% text size and 175% DPI; at other text sizes the size is multiplied by the text scale, which
+  `SizeAndPosition` and the state line log as `textScale=`, and `SizeAndPosition` logs `clamped=True` when it had to
+  move the pill inside the work area; a text size change logs `OverlayWindow.TextScaleChanged textScale=<s>
+  resize=<True|False>`), `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
   stays alive (no teardown) with **zero IOExceptions** after launch (and no `0x80040154` or
   `0x8007007E`, which point to a missing component). The outcome and warning pills log
   `reasonLength=<n>`, never the reason text (`OverlayWindow.ShowOutcome state=<State> hold=<n>ms reasonLength=<n>`),
