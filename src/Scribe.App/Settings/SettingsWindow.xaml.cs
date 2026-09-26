@@ -5204,31 +5204,57 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // The window's draft as a Save stores it, for the Save's check that nothing changed while it waited for its vocabulary
-    // generation: every editor on the pages whose controls a Save reads, the pending hotkeys, the dictionary, snippet,
-    // library and profile rows (by the signatures the Save marks as saved), and whether a grid row edit is in progress.
-    // Hashed, so the copy the check keeps holds no key or secret; compared in memory only, never logged.
+    // What a Save stores, read the way the Save reads it, for the Save's check that nothing it stores changed while it
+    // waited for its vocabulary generation. Values stored straight from an editor come from walking the four pages whose
+    // controls a Save reads; the rest are taken as the Save computes them: the hotkeys with their modes, the AI cleanup
+    // switch and the microphone with any tray change still waiting, the Azure subscription the deployment resolves to, the
+    // profiles and the set of enabled libraries it writes, and whether the dictionary or the snippets differ from what
+    // storage holds (a read that finishes during the wait publishes what storage holds, so it is no change) or a grid row
+    // edit is in progress. The walk leaves out the controls one of those already carries, and the Start with Windows
+    // switch, which Save never stores. Hashed, so the copy the check keeps holds no key or secret; never logged.
     private string SaveDraftSignature()
     {
+        HashSet<DependencyObject> carriedElsewhere =
+        [
+            LaunchCheck, HotkeyBox, ModeCombo, DictationOnlyHotkeyBox, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck,
+            AzureModelBox, AzureSubscriptionBox,
+        ];
         var draft = new StringBuilder();
         foreach (var page in new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi })
         {
-            AppendEditorValues(page, draft);
+            AppendEditorValues(page, carriedElsewhere, draft);
         }
 
-        draft.Append('\u001e').Append(_pendingBinding).Append('\u001f').Append(_pendingDictationOnlyBinding);
-        draft.Append('\u001e').Append(DictionarySignature());
-        draft.Append('\u001e').Append(SnippetSignature());
-        draft.Append('\u001e').Append(LibrarySignature());
-        draft.Append('\u001e').AppendJoin(
-            '\u001f', _profileRows.Select(row => $"{row.Name}|{row.Processes}|{row.WritingStyle}|{row.NewlineHandling}"));
-        draft.Append('\u001e').Append(RowEditInProgress(DictionaryGrid)).Append(RowEditInProgress(LibraryGrid));
+        var subscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
+            _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text);
+        draft.Append('\u001e').Append(_pendingBinding with { Mode = SelectedMode })
+            .Append('\u001f').Append(_pendingDictationOnlyBinding is null
+                ? null
+                : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode });
+        draft.Append('\u001e').Append(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
+            .Append('\u001f').Append(_externalMicrophone.ForSave(ShownMicrophone));
+        draft.Append('\u001e').Append(subscription?.Id).Append('|').Append(subscription?.Name).Append('|').Append(subscription?.TenantId);
+        draft.Append('\u001e').AppendJoin('\u001f', BuildProfiles().Select(profile =>
+            $"{profile.Name}|{string.Join(',', profile.ProcessNames)}|{profile.WritingStyle}|{profile.NewlineHandling}"));
+        draft.Append('\u001e').AppendJoin('\u001f', (_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)
+            .Select(id => id.ToUpperInvariant())
+            .Order(StringComparer.Ordinal));
+        draft.Append('\u001e').Append(_dictionaryLoad.HasChanges(DictionarySignature()))
+            .Append(_snippetLoad.HasChanges(SnippetSignature()))
+            .Append(RowEditInProgress(DictionaryGrid))
+            .Append(RowEditInProgress(LibraryGrid));
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(draft.ToString())));
     }
 
-    // Every editor's value in the page's logical tree, whether shown or not; a grid's rows go by their signatures instead.
-    private static void AppendEditorValues(DependencyObject node, StringBuilder draft)
+    // Every editor's value in the page's logical tree, whether shown or not, as the Save reads it: an editable combo box
+    // by its text, any other by its selection; a grid's rows are compared through their section instead.
+    private static void AppendEditorValues(DependencyObject node, HashSet<DependencyObject> skipped, StringBuilder draft)
     {
+        if (skipped.Contains(node))
+        {
+            return;
+        }
+
         switch (node)
         {
             case DataGrid:
@@ -5248,6 +5274,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             case System.Windows.Controls.Primitives.ToggleButton toggle:
                 draft.Append('\u001f').Append(toggle.IsChecked);
                 break;
+            case ComboBox { IsEditable: true } editable:
+                draft.Append('\u001f').Append(editable.Text);
+                break;
             case ComboBox combo:
                 draft.Append('\u001f').Append(combo.SelectedIndex).Append('|').Append(combo.Text);
                 break;
@@ -5260,7 +5289,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (child is DependencyObject element)
             {
-                AppendEditorValues(element, draft);
+                AppendEditorValues(element, skipped, draft);
             }
         }
     }

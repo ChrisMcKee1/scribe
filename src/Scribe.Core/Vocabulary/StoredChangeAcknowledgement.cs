@@ -29,10 +29,11 @@ public enum StoredChangeOutcome
 /// reported, never saved (<see cref="StoredChangeOutcome.ChangedWhileSaving"/>).
 /// </summary>
 /// <remarks>
-/// The draft is a value that differs whenever what the caller would store differs (the window hashes its editors and rows).
-/// Both reads run on the caller's thread: the first in <see cref="Watch"/>, the second after the answer, on the caller's
-/// synchronization context (the dispatcher, the only thread that may read the window's controls). A read that throws
-/// counts as a change, so a draft that cannot be compared never lets the caller close.
+/// The draft is a value that differs whenever what the caller would store differs (the window hashes what a Save would
+/// store, read the way the Save reads it). Both reads run on the caller's thread: the first in <see cref="Watch"/>, the
+/// second after the answer, on the caller's synchronization context (the dispatcher, the only thread that may read the
+/// window's controls). A read that throws counts as a change, so a draft that cannot be compared never lets the caller
+/// close.
 /// </remarks>
 public sealed class StoredChangeAcknowledgement
 {
