@@ -57,9 +57,10 @@ public sealed class HistoryUsageSourceTests
         var load = Body(history, "private async void LoadHistory()");
         Assert.True(
             load.IndexOf("var selectedId = SelectedHistory?.Id;", StringComparison.Ordinal) <
-            load.IndexOf("_historyRows.Clear();", StringComparison.Ordinal),
+            load.IndexOf("ShowPagedHistoryRows(selectedId);", StringComparison.Ordinal),
             "LoadHistory must read the selection before it replaces the rows.");
-        Assert.Contains("HistoryGrid.SelectedItem = _historyRows[reselectAt];", load, StringComparison.Ordinal);
+        var setRows = Body(history, "private void SetHistoryRows(");
+        Assert.Contains("HistoryGrid.SelectedItem = _historyRows[reselectAt];", setRows, StringComparison.Ordinal);
     }
 
     [Fact]

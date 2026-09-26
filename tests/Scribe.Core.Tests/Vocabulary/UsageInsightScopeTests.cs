@@ -91,6 +91,12 @@ public sealed class UsageInsightScopeTests
 
         public IReadOnlyList<HistoryEntry> GetRecent(int limit = 100) => [.. Entries.Take(limit)];
 
+        public IReadOnlyList<HistoryEntry> GetOlder(DateTimeOffset beforeUtc, long beforeId, int limit) =>
+            GetRecent(limit);
+
+        public IReadOnlyList<HistoryEntry> Search(string query, int limit) =>
+            GetRecent(limit).Where(entry => entry.Text.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+
         public CapturedAudio? GetAudio(long blobId) => throw new NotSupportedException();
 
         public void SetAiRating(long id, AiRating rating) => throw new NotSupportedException();

@@ -41,10 +41,36 @@ public class HistoryRowFormatTests
     }
 
     [Fact]
-    public void Range_line_appears_only_at_the_recent_limit()
+    public void Page_line_changes_after_older_rows_are_loaded()
     {
-        Assert.Null(HistoryRowFormat.RangeLine(199, 200));
-        Assert.Equal("Showing your latest 200 dictations.", HistoryRowFormat.RangeLine(200, 200));
+        Assert.Equal(HistoryPageLine.Hidden, HistoryRowFormat.PageLine(199, 200, loadedOlder: false, mayHaveOlder: false, olderLoadFailed: false));
+        Assert.Equal(
+            new HistoryPageLine("Showing your latest 200 dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Load older"),
+            HistoryRowFormat.PageLine(200, 200, loadedOlder: false, mayHaveOlder: true, olderLoadFailed: false));
+        Assert.Equal(
+            new HistoryPageLine("Showing 400 dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Load older"),
+            HistoryRowFormat.PageLine(400, 200, loadedOlder: true, mayHaveOlder: true, olderLoadFailed: false));
+        Assert.Equal(
+            new HistoryPageLine("Showing 450 dictations.", ShowLoadOlder: false, LoadOlderButtonText: "Load older"),
+            HistoryRowFormat.PageLine(450, 200, loadedOlder: true, mayHaveOlder: false, olderLoadFailed: false));
+    }
+
+    [Fact]
+    public void Failed_older_page_keeps_the_shown_rows_and_offers_retry()
+    {
+        Assert.Equal(
+            new HistoryPageLine("Couldn't load older dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Try again"),
+            HistoryRowFormat.PageLine(200, 200, loadedOlder: false, mayHaveOlder: true, olderLoadFailed: true));
+    }
+
+    [Theory]
+    [InlineData(0, 200, "No dictations match your search.", true)]
+    [InlineData(1, 200, "1 dictation matches.", false)]
+    [InlineData(12, 200, "12 dictations match.", false)]
+    [InlineData(200, 200, "The first 200 matches are shown.", false)]
+    public void Search_line_names_matches_and_the_cap(int count, int cap, string text, bool clear)
+    {
+        Assert.Equal(new HistorySearchLine(text, clear), HistoryRowFormat.SearchLine(count, cap));
     }
 
     [Fact]

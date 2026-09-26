@@ -2168,9 +2168,9 @@
                                                 MinWidth="280"
                                                 HorizontalAlignment="Left"
                                                 Visibility="Collapsed"
-                                                PlaceholderText="Search shown dictations"
+                                                PlaceholderText="Find a dictation"
                                                 ClearButtonEnabled="True"
-                                                AutomationProperties.Name="Search shown dictations"
+                                                AutomationProperties.Name="Find a dictation"
                                                 TextChanged="HistorySearchBox_TextChanged">
                                         <ui:TextBox.Icon>
                                             <ui:SymbolIcon Symbol="Search24"/>
@@ -2266,11 +2266,24 @@
                                                    Click="HistoryClearSearchButton_Click"/>
                                     </StackPanel>
                                 </Grid>
-                                <TextBlock x:Name="HistoryRangeText"
-                                           Grid.Row="3"
-                                           Margin="12,8,12,0"
-                                           Style="{StaticResource CardDescription}"
-                                           Visibility="Collapsed"/>
+                                <Grid x:Name="HistoryRangePanel"
+                                      Grid.Row="3"
+                                      Margin="12,8,12,0"
+                                      Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="HistoryRangeText"
+                                               Style="{StaticResource CardDescription}"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"/>
+                                    <ui:Button x:Name="HistoryLoadOlderButton"
+                                               Grid.Column="1"
+                                               Content="Load older"
+                                               Margin="12,0,0,0"
+                                               Click="HistoryLoadOlderButton_Click"/>
+                                </Grid>
                                 <ui:Card x:Name="HistoryDetailsCard"
                                          Grid.Row="4"
                                          Style="{StaticResource EditorPanelCard}"

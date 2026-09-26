@@ -1617,7 +1617,8 @@ public partial class App : Application
                 services.GetRequiredService<ILibraryVocabularySource>(),
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
-                services.GetRequiredService<SessionDiagnostics>());
+                services.GetRequiredService<SessionDiagnostics>(),
+                services.GetRequiredService<HistoryDeletionNotifier>());
             _settingsWindow.Closed += (_, _) =>
             {
                 audio.InputDevicesChanged -= OnInputDevicesChanged;
