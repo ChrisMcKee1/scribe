@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Scribe.Core.Settings;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
@@ -47,7 +48,8 @@ public static partial class UsageAnalyzer
         IReadOnlyList<AppUsage> TopApps,
         IReadOnlyList<TrendPoint> Trend,
         IReadOnlyList<TermUsage> Terms,
-        TrendGranularity Granularity = TrendGranularity.Daily);
+        TrendGranularity Granularity = TrendGranularity.Daily,
+        TimeSpan LongestDictation = default);
 
     /// <summary>
     /// Computes one internally consistent snapshot. Every metric uses entries on or after
@@ -100,7 +102,7 @@ public static partial class UsageAnalyzer
             .Select(group => new AppUsage(
                 string.IsNullOrWhiteSpace(group.First().TargetApp)
                     ? "Unknown app"
-                    : group.OrderBy(entry => entry.TargetApp, StringComparer.Ordinal).First().TargetApp!.Trim(),
+                    : AppDisplayName.For(group.OrderBy(entry => entry.TargetApp, StringComparer.Ordinal).First().TargetApp!.Trim()),
                 group.Count(),
                 group.Sum(entry => wordCounts[entry.Id])))
             .OrderByDescending(app => app.Dictations)
@@ -118,7 +120,8 @@ public static partial class UsageAnalyzer
             TopApps: apps,
             Trend: trend,
             Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare),
-            Granularity: granularity);
+            Granularity: granularity,
+            LongestDictation: TimeSpan.FromMilliseconds(selected.Count == 0 ? 0 : selected.Max(entry => Math.Max(0, entry.AudioMilliseconds))));
     }
 
     /// <summary>Counts Unicode letter/number words without assuming a particular language.</summary>

@@ -13,6 +13,7 @@ using Scribe.Core.Feedback;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -130,7 +131,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string _libraryDetailEmptyText = string.Empty;
     private string _statsSummaryEmptyText = string.Empty;
 
+    private ICollectionView? _historyView;
     private UsageAnalyzer.Snapshot? _usageSnapshot;
+    private UsagePeriodChoice? _usageShownPeriod;
 
     // The library scope of the usage report the shown snapshot came from (UsageReport.Result.LibraryScope), set and
     // cleared with the snapshot: the usage insight is handed over only under it, so its library labels never go once
@@ -2229,9 +2232,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void InitializeReadOnlySections()
     {
         HistoryGrid.ItemsSource = _historyRows;
+        _historyView = CollectionViewSource.GetDefaultView(_historyRows);
+        _historyView.Filter = FilterHistoryRow;
         _historyEmptyText = HistoryEmptyHint.Text;
         HistoryEmptyHint.Text = "Loading history...";
-        HistoryEmptyHint.Visibility = Visibility.Visible;
+        HistoryStatusPanel.Visibility = Visibility.Visible;
         HistoryClearButton.IsEnabled = false;
 
         FailuresGrid.ItemsSource = _failures;
@@ -4794,7 +4799,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// The clipboard helper returns false when another process holds the clipboard open, which is common and
     /// transient. Losing the report is bad; taking the Settings window down over it is worse.
     /// </remarks>
-    private void CopyReportToClipboard(string report)
+    private bool CopyReportToClipboard(string report)
     {
         try
         {
@@ -4802,10 +4807,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 throw new InvalidOperationException("Clipboard busy.");
             }
+
+            return true;
         }
         catch (Exception ex)
         {
             _log.LogWarning("Could not copy the AI report to the clipboard ({Failure}).", FailureShape.Describe(ex));
+            return false;
         }
     }
 
@@ -4830,61 +4838,86 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// is the most sensitive part and the output alone is usually enough to judge.
     /// </para>
     /// </remarks>
-    private async void ShowAiReportDialog(string output)
+    private async void ShowAiReportDialog(string output, bool useCurrentAttribution = true)
     {
         var version = UpdateService.RunningVersion;
-        var provider = _settings.AiCleanupProvider.ToString();
-        var model = string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
-            ? "(default)"
-            : _settings.AiCleanupModel.Trim();
+        var provider = useCurrentAttribution ? _settings.AiCleanupProvider.ToString() : null;
+        var model = useCurrentAttribution
+            ? string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
+                ? "(default)"
+                : _settings.AiCleanupModel.Trim()
+            : null;
 
         var report = AiContentReport.Build(output, provider, model, version, DateTimeOffset.UtcNow);
+        var copyFailureText = string.Empty;
 
-        var dialog = new Wpf.Ui.Controls.MessageBox
+        while (true)
         {
-            Title = "Report this AI result",
-            Content =
-                $"This sends a report to {AiContentReport.SupportAddress}.\n\n" +
-                "Scribe does not send anything by itself. Your mail app opens with the report " +
-                "below and you decide whether to send it. This is not a Microsoft Store review.\n\n" +
-                "The report contains the AI result, the model that produced it, and your Scribe " +
-                "version. It does not include what you originally said, your audio, or any other " +
-                "dictation.\n\n" +
-                "----------------------------------------\n" +
-                report,
-            PrimaryButtonText = "Open email",
-            SecondaryButtonText = "Copy report",
-            CloseButtonText = "Cancel",
-            Owner = this,
-        };
+            var dialog = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = "Report this AI result",
+                Content =
+                    $"This sends a report to {AiContentReport.SupportAddress}.\n\n" +
+                    "Scribe does not send anything by itself. Your mail app opens with the report " +
+                    "below and you decide whether to send it. This is not a Microsoft Store review.\n\n" +
+                    "The report contains the AI result, the model recorded for this dictation when Scribe has it, and your Scribe " +
+                    "version. It does not include what you originally said, your audio, or any other " +
+                    "dictation.\n\n" +
+                    copyFailureText +
+                    "----------------------------------------\n" +
+                    report,
+                PrimaryButtonText = "Open email",
+                SecondaryButtonText = "Copy report",
+                CloseButtonText = "Cancel",
+                Owner = this,
+            };
 
-        var choice = await dialog.ShowDialogAsync();
-        if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
-        {
-            var uri = AiContentReport.BuildMailtoUri(AiContentReport.BuildSubject(version), report);
-            try
+            var choice = await dialog.ShowDialogAsync();
+            if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
             {
-                Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+                var uri = AiContentReport.BuildMailtoUri(AiContentReport.BuildSubject(version), report);
+                try
+                {
+                    Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    // No mail client, or the shell refused the handler. Falling back to the clipboard
+                    // keeps the report recoverable instead of losing the user's effort to a dead end.
+                    // By shape: a failed launch's message quotes the mailto: it was given, report and all.
+                    _log.LogWarning("Could not open a mail client for the AI report ({Failure}).", FailureShape.Describe(ex));
+                    if (CopyReportToClipboard(report))
+                    {
+                        ShowThemedMessage(
+                            "Report copied",
+                            "Scribe could not open your mail app, so the report was copied to your " +
+                            $"clipboard instead. Please paste it into an email to {AiContentReport.SupportAddress}.");
+                    }
+                    else
+                    {
+                        ShowThemedMessage("Couldn't copy the report", "Couldn't copy the report. Select the text and copy it yourself.");
+                    }
+
+                    return;
+                }
             }
-            catch (Exception ex)
+
+            if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary)
             {
-                // No mail client, or the shell refused the handler. Falling back to the clipboard
-                // keeps the report recoverable instead of losing the user's effort to a dead end.
-                // By shape: a failed launch's message quotes the mailto: it was given, report and all.
-                _log.LogWarning("Could not open a mail client for the AI report ({Failure}).", FailureShape.Describe(ex));
-                CopyReportToClipboard(report);
-                ShowThemedMessage(
-                    "Report copied",
-                    "Scribe could not open your mail app, so the report was copied to your " +
-                    $"clipboard instead. Please paste it into an email to {AiContentReport.SupportAddress}.");
+                if (CopyReportToClipboard(report))
+                {
+                    ShowThemedMessage(
+                        "Report copied",
+                        $"The report is on your clipboard. Please paste it into an email to {AiContentReport.SupportAddress}.");
+                    return;
+                }
+
+                copyFailureText = "Couldn't copy the report. Select the text and copy it yourself.\n\n";
+                continue;
             }
-        }
-        else if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary)
-        {
-            CopyReportToClipboard(report);
-            ShowThemedMessage(
-                "Report copied",
-                $"The report is on your clipboard. Please paste it into an email to {AiContentReport.SupportAddress}.");
+
+            return;
         }
     }
 
@@ -6283,8 +6316,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_historyLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load dictation history for Settings.");
-                HistoryEmptyHint.Text = "Couldn't load your history. Close Settings and open it again to retry.";
-                HistoryEmptyHint.Visibility = Visibility.Visible;
+                HistoryEmptyHint.Text = "Couldn't load your history.";
+                HistoryRetryButton.Visibility = Visibility.Visible;
+                HistoryStatusPanel.Visibility = Visibility.Visible;
             }
 
             return;
@@ -6308,8 +6342,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         var hasRows = _historyRows.Count > 0;
         HistoryEmptyHint.Text = _historyEmptyText;
-        HistoryEmptyHint.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
+        HistoryRetryButton.Visibility = Visibility.Collapsed;
+        HistoryStatusPanel.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
+        HistorySearchBox.Visibility = hasRows ? Visibility.Visible : Visibility.Collapsed;
         HistoryClearButton.IsEnabled = hasRows;
+        HistoryRangeText.Text = _historyRows.Count >= 200 ? "Showing your latest 200 dictations." : string.Empty;
+        HistoryRangeText.Visibility = _historyRows.Count >= 200 ? Visibility.Visible : Visibility.Collapsed;
+        _historyView?.Refresh();
         UpdateHistorySelection();
     }
 
@@ -6324,6 +6363,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     private void UsageRefreshButton_Click(object sender, RoutedEventArgs e) => LoadUsage();
+    private void UsageRetryButton_Click(object sender, RoutedEventArgs e) => LoadUsage();
 
     /// <summary>
     /// Recomputes the usage page for the selected period.
@@ -6343,7 +6383,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var period = UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1];
-        UsageCoverageText.Text = "Calculating from local history…";
+        var shownPeriod = _usageShownPeriod ?? period;
+        UsageCoverageText.Text = _usageSnapshot is null
+            ? "Counting your dictations..."
+            : UsagePeriodState.Describe(ToUsagePeriod(shownPeriod), ToUsagePeriod(period), loadFailed: false).StatusText;
+        UsageRetryButton.Visibility = Visibility.Collapsed;
 
         // The shown snapshot no longer matches the request, so the insight button must not send it.
         _usageSnapshot = null;
@@ -6433,6 +6477,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
         UsageSpeechText.Text = FormatDuration(snapshot.Speech);
         UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
+        UsageLongestText.Text = FormatDuration(snapshot.LongestDictation);
         UsageAppsGrid.ItemsSource = snapshot.TopApps.Select(app => new UsageAppRow(app)).ToList();
 
         var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
@@ -6449,7 +6494,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var covered = snapshot.Terms.Where(term => term.Covered).ToList();
         var novel = snapshot.Terms.Where(term => !term.Covered).ToList();
         UsageKnownTerms.ItemsSource = covered.Count == 0
-            ? ["No recognized technologies in this period."]
+            ? ["None of your dictionary words came up in this period."]
             : covered.Select(FormatUsageTerm).ToList();
         UsageNovelEmptyHint.Visibility = novel.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         UsageNovelTerms.Visibility = novel.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -6457,9 +6502,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Select(term => new UsageTermRow(term.Text, term.Dictations))
             .ToList();
 
-        UsageInsightText.Text = snapshot.Dictations == 0
-            ? "Record a dictation to make usage insight available."
-            : "Generate a short summary. Only totals and dictionary term labels are sent.";
+        UsageInsightText.Text = UsageInsightAvailability.Describe(
+            _settings.EnableAiCleanup,
+            _cleanup.Status == CleanupStatus.Ready,
+            _settings.AiCleanupProvider).Description;
+        UsageDataPanel.Visibility = snapshot.Dictations == 0 ? Visibility.Collapsed : Visibility.Visible;
+        UsageEmptyText.Visibility = snapshot.Dictations == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UsageRetryButton.Visibility = Visibility.Collapsed;
+        _usageShownPeriod = period;
         RefreshUsageInsightAvailability();
 
         static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
@@ -6474,8 +6524,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         _usageSnapshot = null;
         _usageLibraryScope = AiVocabularyScope.None;
-        UsageCoverageText.Text = "Usage is temporarily unavailable.";
-        UsageInsightText.Text = failure.Message;
+        var shown = _usageShownPeriod ?? (UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1]);
+        UsageCoverageText.Text = UsagePeriodState.Describe(ToUsagePeriod(shown), null, loadFailed: true).StatusText;
+        UsageRetryButton.Visibility = Visibility.Visible;
         UsageInsightButton.IsEnabled = false;
     }
 
@@ -6514,12 +6565,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (refresh.Applied)
             {
-                ShowInfo($"Added \"{term.Text}\" to your dictionary.");
+                ShowInfo($"Added {term.Text} to your dictionary. This is already saved.");
             }
             else
             {
                 ShowInfo(
-                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied($"Added \"{term.Text}\" to your dictionary"),
+                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied($"Added {term.Text} to your dictionary"),
                     Wpf.Ui.Controls.InfoBarSeverity.Warning);
             }
 
@@ -6528,9 +6579,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             button.IsEnabled = true;
-            ShowInfo(
-                $"Couldn't add \"{term.Text}\" to your dictionary: {ex.Message}",
-                Wpf.Ui.Controls.InfoBarSeverity.Error);
+            _log.LogWarning("Could not add a usage term to the dictionary ({Failure}).", FailureShape.Describe(ex));
+            ShowInfo("Couldn't add that word to your dictionary. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -6541,9 +6591,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        var state = UsageInsightAvailability.Describe(
+            _settings.EnableAiCleanup,
+            _cleanup.Status == CleanupStatus.Ready,
+            _settings.AiCleanupProvider);
+        UsageInsightCard.Visibility = state.IsVisible ? Visibility.Visible : Visibility.Collapsed;
+        UsageInsightDisabledText.Text = state.DisabledReason ?? string.Empty;
+        UsageInsightDisabledText.Visibility = state.DisabledReason is null ? Visibility.Collapsed : Visibility.Visible;
         UsageInsightButton.IsEnabled = !_usageInsightRunning &&
             _usageSnapshot is { Dictations: > 0 } &&
-            _cleanup.Status == CleanupStatus.Ready;
+            state.IsEnabled;
     }
 
     private async void UsageInsightButton_Click(object sender, RoutedEventArgs e)
@@ -6639,11 +6696,43 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void HistoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateHistorySelection();
 
+    private void HistorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _historyView?.Refresh();
+        UpdateHistorySelection();
+    }
+
+    private void HistoryRetryButton_Click(object sender, RoutedEventArgs e)
+    {
+        HistoryRetryButton.Visibility = Visibility.Collapsed;
+        HistoryEmptyHint.Text = "Loading history...";
+        HistoryStatusPanel.Visibility = Visibility.Visible;
+        LoadHistory();
+    }
+
+    private bool FilterHistoryRow(object item) =>
+        item is not HistoryRow row ||
+        TextFilter.Matches(HistorySearchBox?.Text, row.When, row.App, row.Text, row.Cleanup);
+
     private void UpdateHistorySelection()
     {
         var hasSelection = SelectedHistory is not null;
         HistoryCopyButton.IsEnabled = hasSelection;
         HistoryDeleteButton.IsEnabled = hasSelection;
+        HistoryDetailsCard.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
+        if (SelectedHistory is not { } row)
+        {
+            return;
+        }
+
+        HistoryDetailsText.Text = row.Text;
+        HistoryDetailsTimingText.Text = row.Details;
+        HistoryUsefulButton.Tag = row.Id;
+        HistoryNotUsefulButton.Tag = row.Id;
+        HistoryReportButton.Tag = row.Id;
+        HistoryUsefulButton.IsEnabled = row.CanRate;
+        HistoryNotUsefulButton.IsEnabled = row.CanRate;
+        HistoryReportButton.Visibility = row.CanReport ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void HistoryGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e) => CopyHistoryText();
@@ -6748,7 +6837,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        ShowAiReportDialog(_historyRows[index].Text);
+        ShowAiReportDialog(_historyRows[index].Text, useCurrentAttribution: false);
     }
 
     private int IndexOfHistoryRow(long id)
@@ -6793,6 +6882,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        if (!await ConfirmRiskyAsync("Delete this dictation?", "This can't be undone.", "Delete dictation"))
+        {
+            return;
+        }
+
         HistoryDeleteButton.IsEnabled = false;
         try
         {
@@ -6821,9 +6915,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (_historyRows.Count == 0 ||
             !await ConfirmRiskyAsync(
-                "Clear history",
-                "Delete all dictation history and stored audio? This cannot be undone.",
-                "Clear all"))
+                "Delete all history?",
+                "This deletes every saved dictation and recording now, including ones not shown here. Your dictionary, snippets and settings are kept. This can't be undone.",
+                "Delete all history"))
         {
             return;
         }
@@ -7063,9 +7157,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             new(7, "Last 7 days"),
             new(30, "Last 30 days"),
             new(90, "Last 90 days"),
-            new(null, "All retained history"),
+            new(null, "All kept history"),
         ];
     }
+
+    private static UsagePeriod ToUsagePeriod(UsagePeriodChoice choice) => choice.Days switch
+    {
+        7 => UsagePeriod.Last7Days,
+        30 => UsagePeriod.Last30Days,
+        90 => UsagePeriod.Last90Days,
+        null => UsagePeriod.AllKeptHistory,
+        _ => UsagePeriod.Last30Days,
+    };
 
     // Every DataGrid row type in this window compares by reference, never by value, which is why the records
     // below override Equals and the Core records are copied into the row classes after them. When a grid's
@@ -7239,7 +7342,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     private sealed record HistoryRow(
-        long Id, string When, string Text, string App, string Audio, string Decode, string Cleanup)
+        long Id, string When, string Text, string App, string Audio, string Decode, string Cleanup, string Details)
     {
         /// <summary>
         /// Whether AI cleanup actually ran for this dictation. The thumbs and the report only apply
@@ -7264,13 +7367,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // The thumbs draw only a glyph, so these name them for UI Automation: each says what its ToolTip says,
         // and adds whether it is the rating given, which the filled glyph shows.
         public string ThumbUpName =>
-            Rating == AiRating.Useful ? "This rewrite was useful, selected" : "This rewrite was useful";
+            Rating == AiRating.Useful ? "Useful, selected" : "Useful";
 
         public string ThumbDownName =>
-            Rating == AiRating.NotUseful ? "This rewrite was not useful, selected" : "This rewrite was not useful";
+            Rating == AiRating.NotUseful ? "Not useful, selected" : "Not useful";
 
-        /// <summary>The report path opens only on a thumbs-down, which is where it is wanted.</summary>
-        public bool CanReport => ProducedByAi && Rating == AiRating.NotUseful;
+        public bool CanReport => ProducedByAi;
 
         // UI Automation names the row after ToString(), and so the Result cell too, which holds buttons rather
         // than text. A record's ToString lists every field.
@@ -7285,12 +7387,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             entry.Id,
             entry.TimestampUtc.ToLocalTime().ToString("MMM d, h:mm tt"),
             entry.Text,
-            string.IsNullOrWhiteSpace(entry.TargetApp) ? HistoryRowFormat.NotApplicable : entry.TargetApp!,
+            string.IsNullOrWhiteSpace(entry.TargetApp) ? HistoryRowFormat.NotApplicable : AppDisplayName.For(entry.TargetApp!),
             HistoryRowFormat.Audio(entry.AudioMilliseconds),
             HistoryRowFormat.Latency(entry.DecodeMilliseconds),
-            HistoryRowFormat.Latency(entry.CleanupMilliseconds))
+            HistoryRowFormat.CleanupTime(entry.CleanupMilliseconds),
+            HistoryRowFormat.Details(entry.AudioMilliseconds, entry.DecodeMilliseconds, entry.CleanupMilliseconds))
         {
-            ProducedByAi = entry.CleanupMilliseconds is > 0,
+            ProducedByAi = entry.CleanupMilliseconds is >= 0,
             Rating = entry.AiRating,
         };
     }

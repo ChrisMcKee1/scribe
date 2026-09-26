@@ -53,7 +53,7 @@ public sealed class VocabularyApplicationSourceTests
         var add = Body(window, "private async void UsageNovelTermAddButton_Click(");
         var reapply = add.IndexOf("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);", StringComparison.Ordinal);
         var refreshed = add.IndexOf("var refresh = await reapplied.Vocabulary;", StringComparison.Ordinal);
-        var added = add.IndexOf("to your dictionary.\"", StringComparison.Ordinal);
+        var added = add.IndexOf("This is already saved.", StringComparison.Ordinal);
         Assert.True(reapply > 0 && reapply < refreshed && refreshed < added, "The Usage page's Add is reported before dictation can use it.");
         Assert.Contains("VocabularyNotice.SavedButNotApplied(", add, StringComparison.Ordinal);
 

@@ -31,6 +31,15 @@ public class HistoryRowFormatTests
         Assert.Equal(HistoryRowFormat.NotApplicable, HistoryRowFormat.Latency(-4));
     }
 
+    [Fact]
+    public void Cleanup_column_uses_seconds_or_not_recorded()
+    {
+        using var _ = new CultureScope("en-US");
+
+        Assert.Equal("0.9 s", HistoryRowFormat.CleanupTime(900));
+        Assert.Equal("Not recorded", HistoryRowFormat.CleanupTime(null));
+    }
+
     [Theory]
     [InlineData(412, "412 ms")]
     [InlineData(3412, "3,412 ms")]
@@ -77,12 +86,12 @@ public class HistoryRowFormatTests
     }
 
     [Fact]
-    public void Details_line_uses_attempted_wording_for_cleanup_time()
+    public void Details_line_reports_the_recorded_cleanup_time()
     {
         using var _ = new CultureScope("en-US");
 
         Assert.Equal(
-            "Recorded 12.0 s. Recognized in 0.4 s. AI cleanup was attempted for 0.9 s.",
+            "Recorded 12.0 s. Recognized in 0.4 s. AI cleanup took 0.9 s.",
             HistoryRowFormat.Details(12_000, 400, 900));
     }
 

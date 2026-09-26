@@ -58,6 +58,17 @@ public class AiContentReportTests
     }
 
     [Fact]
+    public void The_report_says_when_attribution_was_not_recorded()
+    {
+        var report = AiContentReport.Build(
+            "out", provider: null, model: null, "0.3.14", When);
+
+        Assert.Contains(AiContentReport.UnrecordedAttribution, report, StringComparison.Ordinal);
+        Assert.DoesNotContain("Provider       :", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("Model          :", report, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_mailto_escapes_the_body_so_a_client_cannot_truncate_it()
     {
         // An unescaped newline or ampersand ends the URI early, and the failure is silent: the user

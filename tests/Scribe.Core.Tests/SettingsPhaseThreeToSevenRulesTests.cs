@@ -224,6 +224,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     public void Usage_period_state_keeps_old_period_while_loading_or_failed()
     {
         Assert.Equal("Showing Last 7 days. Loading Last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);
+        Assert.Equal("All kept history", UsagePeriodState.Label(UsagePeriod.AllKeptHistory));
         var failed = UsagePeriodState.Describe(UsagePeriod.Last90Days, null, true);
         Assert.Equal("Showing Last 90 days. Usage isn't available right now.", failed.StatusText);
         Assert.True(failed.ShowRetry);

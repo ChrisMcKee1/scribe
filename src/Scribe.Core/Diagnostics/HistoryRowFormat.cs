@@ -14,6 +14,7 @@ public static class HistoryRowFormat
 {
     /// <summary>Shown when a value does not apply, matching the target-app column's convention.</summary>
     public const string NotApplicable = "n/a";
+    public const string NotRecorded = "Not recorded";
 
     /// <summary>
     /// Spoken length, in seconds to one decimal. Sub-100 ms clips would render as "0.0 s", so they
@@ -41,13 +42,15 @@ public static class HistoryRowFormat
     /// </param>
     public static string Latency(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? $"{value:N0} ms" : NotApplicable;
+    public static string CleanupTime(int? milliseconds) =>
+        milliseconds is { } value && value >= 0 ? Seconds(value) : NotRecorded;
 
     public static string Details(int audioMilliseconds, int decodeMilliseconds, int? cleanupMilliseconds)
     {
         var recorded = Audio(audioMilliseconds);
         var recognized = Seconds(decodeMilliseconds);
         var cleanup = cleanupMilliseconds is { } value and >= 0
-            ? $"AI cleanup was attempted for {Seconds(value)}."
+            ? $"AI cleanup took {Seconds(value)}."
             : "No AI cleanup time was recorded.";
         return $"Recorded {recorded}. Recognized in {recognized}. {cleanup}";
     }
