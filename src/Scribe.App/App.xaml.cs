@@ -1361,6 +1361,12 @@ public partial class App : Application
 
     private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
     {
+        // Posted from the dictation path, so it can run after shutdown began; nobody is left to read a notice then.
+        if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
+        {
+            return;
+        }
+
         var settings = _controller?.CurrentSettings;
         var mode = report.ShortcutMode;
 
@@ -1372,7 +1378,13 @@ public partial class App : Application
         var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
         if (routing == DictationProblemSurface.PillAndNotice)
         {
-            _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            // Only a notice that offers Copy last dictation binds the entry it copies: a no-model notice (Open Settings)
+            // must not rebind a Copy notice still on screen to whatever is newest now.
+            if (notice.Action == TrayNoticeAction.CopyLastDictation)
+            {
+                _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+            }
+
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
             return;
         }

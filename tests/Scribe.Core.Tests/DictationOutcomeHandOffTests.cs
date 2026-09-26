@@ -67,6 +67,21 @@ public sealed class DictationOutcomeHandOffTests
     }
 
     [Fact]
+    public void Only_a_Copy_notice_binds_the_entry_it_copies()
+    {
+        // A no-model notice (Open Settings) rebound a Copy last dictation notice still on screen to whatever was newest.
+        var app = ReadSource("src", "Scribe.App", "App.xaml.cs");
+        var show = Body(app, "private void ShowDictationProblem(");
+        var both = show.IndexOf("routing == DictationProblemSurface.PillAndNotice", StringComparison.Ordinal);
+        Assert.True(both >= 0);
+        var branch = show[both..show.IndexOf("return;", both, StringComparison.Ordinal)];
+        Assert.True(
+            branch.IndexOf("if (notice.Action == TrayNoticeAction.CopyLastDictation)", StringComparison.Ordinal) <
+            branch.IndexOf("_noticeCopyEntryId =", StringComparison.Ordinal),
+            "The copy target is bound only for a notice that offers Copy last dictation.");
+    }
+
+    [Fact]
     public void Only_a_missing_speech_model_reports_no_speech_model()
     {
         var process = Body(Controller, "private async Task ProcessAsync(");
