@@ -45,7 +45,7 @@ public static class DictationProblemRouting
 {
     public static DictationProblemSurface Decide(DictationProblem problem, bool recordingIndicatorOn) => problem switch
     {
-        DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
+        DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
         DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
         DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone =>
             recordingIndicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
@@ -97,20 +97,20 @@ public static class DictationProblemText
     public static string? PillLine(DictationProblem problem, HotkeyMode mode = HotkeyMode.Hold, int minutes = 10) => problem switch
     {
         DictationProblem.TooQuick => mode == HotkeyMode.Toggle
-            ? "Press, speak, then press again"
-            : "Hold the shortcut while you speak",
-        DictationProblem.NoAudio => "No sound, check your microphone",
-        DictationProblem.NoAudioFromDevice => "No sound, try another microphone",
-        DictationProblem.OnlySilence or DictationProblem.OnlySilenceFromDevice => "Your microphone may be muted",
+            ? "Press, speak, press again"
+            : "Hold the shortcut to speak",
+        DictationProblem.NoAudio => "Check your microphone",
+        DictationProblem.NoAudioFromDevice => "Try another microphone",
+        DictationProblem.OnlySilence or DictationProblem.OnlySilenceFromDevice => "Microphone may be muted",
         DictationProblem.MicrophoneMuted => "Microphone muted",
-        DictationProblem.MicrophoneUnavailable => "Couldn't open your microphone",
-        DictationProblem.DurationLimit => $"Stopped at the {minutes}-minute limit",
-        DictationProblem.NothingRecognized => "Didn't catch any words, try again",
+        DictationProblem.MicrophoneUnavailable => "Microphone unavailable",
+        DictationProblem.DurationLimit => $"Stopped at {minutes} minutes",
+        DictationProblem.NothingRecognized => "No words heard, try again",
         DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => "Copy it from the tray menu",
-        DictationProblem.NoSpeechModel => "Choose a speech model in Advanced",
-        DictationProblem.RecognitionFailed => "Something went wrong, try again",
-        DictationProblem.ModelLoadFailed => "The speech model didn't load",
-        DictationProblem.FallbackMicrophone => "Using the default microphone",
+        DictationProblem.NoSpeechModel => "No speech model",
+        DictationProblem.RecognitionFailed => "Something went wrong",
+        DictationProblem.ModelLoadFailed => "Speech model didn't load",
+        DictationProblem.FallbackMicrophone => "Using the default mic",
         DictationProblem.MicrophoneDisconnected => null,
         _ => null,
     };

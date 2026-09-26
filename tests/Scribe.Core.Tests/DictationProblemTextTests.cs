@@ -1,4 +1,8 @@
 using System.Reflection;
+using System.Globalization;
+using System.Windows;
+using System.Windows.Media;
+using Scribe.Core.Overlay;
 using Scribe.Core.Models;
 using Scribe.Core.Tray;
 
@@ -30,22 +34,22 @@ public sealed class DictationProblemTextTests
 
     public static IEnumerable<object?[]> PillRows()
     {
-        yield return Pill(DictationProblem.TooQuick, HotkeyMode.Hold, 10, "Hold the shortcut while you speak");
-        yield return Pill(DictationProblem.TooQuick, HotkeyMode.Toggle, 10, "Press, speak, then press again");
-        yield return Pill(DictationProblem.NoAudio, HotkeyMode.Hold, 10, "No sound, check your microphone");
-        yield return Pill(DictationProblem.NoAudioFromDevice, HotkeyMode.Hold, 10, "No sound, try another microphone");
-        yield return Pill(DictationProblem.OnlySilence, HotkeyMode.Hold, 10, "Your microphone may be muted");
-        yield return Pill(DictationProblem.OnlySilenceFromDevice, HotkeyMode.Hold, 10, "Your microphone may be muted");
+        yield return Pill(DictationProblem.TooQuick, HotkeyMode.Hold, 10, "Hold the shortcut to speak");
+        yield return Pill(DictationProblem.TooQuick, HotkeyMode.Toggle, 10, "Press, speak, press again");
+        yield return Pill(DictationProblem.NoAudio, HotkeyMode.Hold, 10, "Check your microphone");
+        yield return Pill(DictationProblem.NoAudioFromDevice, HotkeyMode.Hold, 10, "Try another microphone");
+        yield return Pill(DictationProblem.OnlySilence, HotkeyMode.Hold, 10, "Microphone may be muted");
+        yield return Pill(DictationProblem.OnlySilenceFromDevice, HotkeyMode.Hold, 10, "Microphone may be muted");
         yield return Pill(DictationProblem.MicrophoneMuted, HotkeyMode.Hold, 10, "Microphone muted");
-        yield return Pill(DictationProblem.MicrophoneUnavailable, HotkeyMode.Hold, 10, "Couldn't open your microphone");
-        yield return Pill(DictationProblem.DurationLimit, HotkeyMode.Hold, 10, "Stopped at the 10-minute limit");
-        yield return Pill(DictationProblem.NothingRecognized, HotkeyMode.Hold, 10, "Didn't catch any words, try again");
+        yield return Pill(DictationProblem.MicrophoneUnavailable, HotkeyMode.Hold, 10, "Microphone unavailable");
+        yield return Pill(DictationProblem.DurationLimit, HotkeyMode.Hold, 10, "Stopped at 10 minutes");
+        yield return Pill(DictationProblem.NothingRecognized, HotkeyMode.Hold, 10, "No words heard, try again");
         yield return Pill(DictationProblem.FocusChanged, HotkeyMode.Hold, 10, "Copy it from the tray menu");
         yield return Pill(DictationProblem.TypingIncomplete, HotkeyMode.Hold, 10, "Copy it from the tray menu");
-        yield return Pill(DictationProblem.NoSpeechModel, HotkeyMode.Hold, 10, "Choose a speech model in Advanced");
-        yield return Pill(DictationProblem.RecognitionFailed, HotkeyMode.Hold, 10, "Something went wrong, try again");
-        yield return Pill(DictationProblem.ModelLoadFailed, HotkeyMode.Hold, 10, "The speech model didn't load");
-        yield return Pill(DictationProblem.FallbackMicrophone, HotkeyMode.Hold, 10, "Using the default microphone");
+        yield return Pill(DictationProblem.NoSpeechModel, HotkeyMode.Hold, 10, "No speech model");
+        yield return Pill(DictationProblem.RecognitionFailed, HotkeyMode.Hold, 10, "Something went wrong");
+        yield return Pill(DictationProblem.ModelLoadFailed, HotkeyMode.Hold, 10, "Speech model didn't load");
+        yield return Pill(DictationProblem.FallbackMicrophone, HotkeyMode.Hold, 10, "Using the default mic");
         yield return Pill(DictationProblem.MicrophoneDisconnected, HotkeyMode.Hold, 10, null);
     }
 
@@ -80,7 +84,14 @@ public sealed class DictationProblemTextTests
                 {
                     var line = DictationProblemText.PillLine(problem, mode, minutes);
                     if (line is null) continue;
-                    Assert.True(line.Length <= 34, $"{problem} {mode} {minutes}: {line.Length} {line}");
+                    var budget = problem is DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone
+                        ? 134
+                        : 150;
+                    var weight = problem is DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone
+                        ? FontWeights.SemiBold
+                        : FontWeights.Normal;
+                    var width = Measure(line, weight);
+                    Assert.True(width <= budget, $"{problem} {mode} {minutes}: {width:F1} DIP > {budget} DIP: {line}");
                     Assert.DoesNotContain('\u2013', line);
                     Assert.DoesNotContain('\u2014', line);
                     Assert.DoesNotContain("recognised", line, StringComparison.OrdinalIgnoreCase);
@@ -90,6 +101,18 @@ public sealed class DictationProblemTextTests
                 }
             }
         }
+    }
+
+    [Fact]
+    public void Outcome_AI_cleanup_line_and_status_lines_fit_the_measured_pill_budgets()
+    {
+        Assert.Equal("See Settings, AI cleanup", PillOutcome.CleanupDidNotRun);
+        Assert.Equal("Microphone muted", DictationProblemText.PillLine(DictationProblem.MicrophoneMuted));
+        Assert.Equal("Using the default mic", DictationProblemText.PillLine(DictationProblem.FallbackMicrophone));
+
+        Assert.True(Measure(PillOutcome.CleanupDidNotRun, FontWeights.Normal) <= 150);
+        Assert.True(Measure("Microphone muted", FontWeights.SemiBold) <= 134);
+        Assert.True(Measure("Using the default mic", FontWeights.SemiBold) <= 134);
     }
 
     [Fact]
@@ -114,7 +137,7 @@ public sealed class DictationProblemTextTests
 
         static DictationProblemSurface Expected(DictationProblem problem, bool indicatorOn) => problem switch
         {
-            DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
+            DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
             DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
             DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone =>
                 indicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
@@ -179,6 +202,16 @@ public sealed class DictationProblemTextTests
 
     private static object?[] Pill(DictationProblem problem, HotkeyMode mode, int minutes, string? line) =>
         [problem, mode, minutes, line];
+
+    private static double Measure(string text, FontWeight weight) =>
+        new FormattedText(
+            text,
+            CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, weight, FontStretches.Normal),
+            12,
+            Brushes.Black,
+            pixelsPerDip: 1).WidthIncludingTrailingWhitespace;
 
     private static string RepositoryRoot()
     {

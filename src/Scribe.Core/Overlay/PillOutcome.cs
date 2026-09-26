@@ -46,8 +46,8 @@ public sealed record PillOutcome
     /// </summary>
     public const string RecoveryStep = "Copy it from the tray menu";
 
-    /// <summary>The reason shown when AI cleanup did not clean the text and gave no reason of its own.</summary>
-    public const string CleanupDidNotRun = "AI cleanup did not run.";
+    /// <summary>The fixed pill line shown when AI cleanup did not clean text that still got typed.</summary>
+    public const string CleanupDidNotRun = "See Settings, AI cleanup";
 
     private PillOutcome(PillOutcomeKind kind, string detail)
     {
@@ -116,18 +116,8 @@ public sealed record PillOutcome
     // cleaned the text) or skipped on purpose (nothing to clean, or nothing handed over for a withdrawn library scope).
     private static string? MissingCleanupReason(CleanupResult? cleanup) => cleanup switch
     {
-        { Outcome: CleanupOutcome.Failed } => ReasonOrFallback(cleanup.FailureReason),
-        { SkippedUnexpectedly: true } => ReasonOrFallback(cleanup.SkipReason),
+        { Outcome: CleanupOutcome.Failed } => CleanupDidNotRun,
+        { SkippedUnexpectedly: true } => CleanupDidNotRun,
         _ => null,
     };
-
-    private static string ReasonOrFallback(string? reason)
-    {
-        var line = OneLine(reason);
-        return line.Length == 0 ? CleanupDidNotRun : line;
-    }
-
-    // The pipe carries one line per command, and the pill shows one line of detail.
-    private static string OneLine(string? text) =>
-        (text ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
 }

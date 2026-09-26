@@ -73,7 +73,7 @@ public sealed class TrayCoreRedesignT0Tests
     {
         var press = DictationProblemText.Describe(DictationProblem.TooQuick, HotkeyMode.Toggle, "Page Down");
         Assert.Equal("That was too quick. Press Page Down, speak, then press it again.", press.Body);
-        Assert.Equal("Press, speak, then press again", DictationProblemText.PillLine(DictationProblem.TooQuick, HotkeyMode.Toggle));
+        Assert.Equal("Press, speak, press again", DictationProblemText.PillLine(DictationProblem.TooQuick, HotkeyMode.Toggle));
     }
 
     [Fact]

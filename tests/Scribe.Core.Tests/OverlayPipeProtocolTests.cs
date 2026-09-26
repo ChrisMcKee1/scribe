@@ -64,7 +64,7 @@ public sealed class OverlayPipeProtocolTests
     {
         Assert.Equal("TYPED", OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.Typed)));
         Assert.Equal(
-            "TYPEDWITHOUTCLEANUP AI cleanup timed out.",
+            "TYPEDWITHOUTCLEANUP See Settings, AI cleanup",
             OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.TypedWithoutCleanup)));
         Assert.Equal(
             "NOTHINGTYPED Copy it from the tray menu",
@@ -73,7 +73,7 @@ public sealed class OverlayPipeProtocolTests
             "PARTLYTYPED Copy it from the tray menu",
             OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.PartlyTyped)));
         Assert.Equal(
-            "NOTHINGTYPED Didn't catch any words, try again",
+            "NOTHINGTYPED No words heard, try again",
             OverlayPipeProtocol.OutcomeLine(PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.NothingRecognized))!));
     }
 

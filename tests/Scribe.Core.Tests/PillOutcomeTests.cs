@@ -53,7 +53,7 @@ public sealed class PillOutcomeTests
     }
 
     [Fact]
-    public void A_failed_cleanup_with_the_text_typed_whole_is_Typed_without_AI_cleanup_and_its_safe_reason()
+    public void A_failed_cleanup_with_the_text_typed_whole_is_Typed_without_AI_cleanup_and_the_fixed_settings_line()
     {
         var failed = new CleanupResult("raw text", CleanupOutcome.Failed, FailureReason: "AI cleanup timed out.")
         {
@@ -63,7 +63,7 @@ public sealed class PillOutcomeTests
         var outcome = PillOutcome.Of(Whole, cleanupRequested: true, failed, problem: null);
 
         Assert.Equal(PillOutcomeKind.TypedWithoutCleanup, outcome!.Kind);
-        Assert.Equal("AI cleanup timed out.", outcome.Detail);
+        Assert.Equal(PillOutcome.CleanupDidNotRun, outcome.Detail);
         Assert.DoesNotContain("contoso", outcome.Detail, StringComparison.Ordinal);
     }
 
@@ -78,7 +78,7 @@ public sealed class PillOutcomeTests
         var outcome = PillOutcome.Of(Whole, cleanupRequested: true, notReady, problem: null);
 
         Assert.Equal(PillOutcomeKind.TypedWithoutCleanup, outcome!.Kind);
-        Assert.Equal("AI cleanup is enabled but Initializing (Loading the model.).", outcome.Detail);
+        Assert.Equal(PillOutcome.CleanupDidNotRun, outcome.Detail);
     }
 
     [Theory]
@@ -174,7 +174,7 @@ public sealed class PillOutcomeTests
         var outcome = PillOutcome.Of(insertion: null, cleanupRequested: true, cleanup: null, new DictationProblemReport(DictationProblem.NothingRecognized));
 
         Assert.Equal(PillOutcomeKind.NothingTyped, outcome!.Kind);
-        Assert.Equal("Didn't catch any words, try again", outcome.Detail);
+        Assert.Equal("No words heard, try again", outcome.Detail);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public sealed class PillOutcomeTests
     {
         var outcome = PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.NoAudioFromDevice, Device: "USB Mic"));
 
-        Assert.Equal("No sound, try another microphone", outcome!.Detail);
+        Assert.Equal("Try another microphone", outcome!.Detail);
     }
 
     [Fact]
@@ -206,8 +206,8 @@ public sealed class PillOutcomeTests
 
         var outcome = PillOutcome.Of(Whole, true, failed, null);
 
-        Assert.Equal("AI cleanup failed.  Try again.", outcome!.Detail);
-        Assert.Equal("Couldn't open your microphone", PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.MicrophoneUnavailable))!.Detail);
+        Assert.Equal(PillOutcome.CleanupDidNotRun, outcome!.Detail);
+        Assert.Equal("Microphone unavailable", PillOutcome.Of(null, false, null, new DictationProblemReport(DictationProblem.MicrophoneUnavailable))!.Detail);
     }
 
     [Fact]
