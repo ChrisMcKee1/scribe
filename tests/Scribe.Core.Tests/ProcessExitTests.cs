@@ -6,6 +6,11 @@ namespace Scribe.Core.Tests;
 
 public sealed class ProcessExitTests
 {
+    // Only a hang guard. Each line is handed over by System.Diagnostics.Process's reader on the thread pool, which the
+    // rest of a parallel test run can hold up past a 2 s output limit (loaded local full runs have seen stderr still
+    // empty when the wait returned), so a test that needs a line waits for it rather than racing the limit.
+    private static readonly TimeSpan Generous = TimeSpan.FromSeconds(30);
+
     // What an az invocation looks like when something it started keeps its output open: cmd's start passes the
     // redirected pipe on to the ping it starts, which runs on for 30 s after cmd has written its output and exited.
     [Fact]
@@ -18,12 +23,22 @@ public sealed class ProcessExitTests
             var clock = Stopwatch.StartNew();
             await ProcessExit.WaitAsync(run.Process, TimeSpan.FromSeconds(2), CancellationToken.None);
 
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the wait lasted {clock.Elapsed.TotalSeconds:0.0} s");
+            // The wait it replaces, WaitForExitAsync, has not finished: the ping still holds the output, so the wait
+            // above did not wait for its end.
+            Assert.False(
+                run.Process.WaitForExitAsync().IsCompleted,
+                $"the wait lasted until the end of the output ({clock.Elapsed.TotalSeconds:0.0} s)");
             Assert.Equal(3, run.Process.ExitCode);
-            Assert.Contains("written to stdout", run.StandardOutput);
-            Assert.Contains("written to stderr", run.StandardError);
 
-            // The wait it replaces: after the exit it goes on waiting for the end of the output, which the ping holds.
+            // What cmd wrote before it exited is kept, however late the reader hands it over.
+            Assert.True(
+                SpinWait.SpinUntil(() => run.StandardOutput.Contains("written to stdout", StringComparison.Ordinal), Generous),
+                $"stdout: \"{run.StandardOutput}\"");
+            Assert.True(
+                SpinWait.SpinUntil(() => run.StandardError.Contains("written to stderr", StringComparison.Ordinal), Generous),
+                $"stderr: \"{run.StandardError}\"");
+
+            // And it goes on waiting for the end of the output, which the ping holds.
             using var old = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.Process.WaitForExitAsync(old.Token));
         }
@@ -33,12 +48,14 @@ public sealed class ProcessExitTests
         }
     }
 
+    // The limit is the hang guard here: with nothing holding the output its end comes at the exit, and a limit as short
+    // as production's 2 s would race the reader's hand-over of the last line, which comes only with that end.
     [Fact]
     public async Task With_nothing_holding_the_output_it_is_read_to_the_end()
     {
         using var run = Run.Start("echo first & echo second & <nul set /p =last line without a break& exit /b 0");
 
-        await ProcessExit.WaitAsync(run.Process, TimeSpan.FromSeconds(2), CancellationToken.None);
+        await ProcessExit.WaitAsync(run.Process, Generous, CancellationToken.None);
 
         Assert.Equal(0, run.Process.ExitCode);
         Assert.Equal(["first ", "second ", "last line without a break"], run.StandardOutputLines);
