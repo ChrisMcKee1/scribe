@@ -31,6 +31,55 @@
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="12,8"/>
         </Style>
+        <Style TargetType="CheckBox" x:Key="QuickAddCheckBox">
+            <Setter Property="Padding" Value="0,5,0,6"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Background="Transparent" SnapsToDevicePixels="True">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="18"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="Box"
+                                    Width="18"
+                                    Height="18"
+                                    CornerRadius="3"
+                                    VerticalAlignment="Center"
+                                    Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                    BorderBrush="{DynamicResource ControlStrongStrokeColorDefaultBrush}"
+                                    BorderThickness="1"/>
+                            <TextBlock x:Name="CheckGlyph"
+                                       Text="✓"
+                                       Visibility="Collapsed"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+                            <ContentPresenter Grid.Column="1"
+                                              Margin="10,0,0,0"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+                                <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource TextFillColorDisabledBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style TargetType="ToggleButton" x:Key="WordChip">
             <Setter Property="Margin" Value="0,0,4,4"/>
             <Setter Property="Padding" Value="8,4"/>
@@ -59,12 +108,10 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Chip" Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
                             </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                <Setter TargetName="Chip" Property="BorderThickness" Value="2"/>
                             </Trigger>
-                            <DataTrigger Binding="{Binding IsFocusedChip}" Value="True">
-                                <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
-                            </DataTrigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Chip" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/>
                                 <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
@@ -90,6 +137,13 @@
                 <ui:SymbolIcon Symbol="BookAdd24"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
+
+        <TextBlock x:Name="AnnouncementText"
+                   Width="0"
+                   Height="0"
+                   Opacity="0"
+                   IsHitTestVisible="False"
+                   AutomationProperties.LiveSetting="Polite"/>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="24,8,24,16">
@@ -135,8 +189,9 @@
                             BorderThickness="1">
                         <ScrollViewer x:Name="TranscriptScroll" VerticalScrollBarVisibility="Auto" Padding="10,10,10,6">
                             <ItemsControl x:Name="WordsList"
-                                          Focusable="True"
-                                          IsTabStop="True"
+                                          Focusable="False"
+                                          IsTabStop="False"
+                                          KeyboardNavigation.TabNavigation="Once"
                                           AutomationProperties.Name="Words in this dictation"
                                           AutomationProperties.HelpText="Arrow keys move between words. Space selects a word. Shift and an arrow key select several."
                                           PreviewKeyDown="WordsList_PreviewKeyDown"
@@ -156,8 +211,8 @@
                                                       AutomationProperties.Name="{Binding Text}"
                                                       AutomationProperties.PositionInSet="{Binding PositionInSet}"
                                                       AutomationProperties.SizeOfSet="{Binding SizeOfSet}"
-                                                      Focusable="False"
-                                                      IsTabStop="False"
+                                                      Focusable="True"
+                                                      IsTabStop="{Binding IsFocusedChip}"
                                                       PreviewMouseLeftButtonDown="Chip_MouseDown"
                                                       MouseEnter="Chip_MouseEnter"
                                                       Checked="Chip_Toggled"
@@ -194,12 +249,16 @@
                             PreviewKeyDown="TextBox_PreviewKeyDown"/>
 
                 <CheckBox x:Name="RemoveBox"
+                          Style="{StaticResource QuickAddCheckBox}"
+                          IsThreeState="False"
                           Margin="0,12,0,0"
                           Content="Remove these words instead"
                           AutomationProperties.HelpText="Scribe types nothing where it hears these words."
                           Checked="Field_Changed"
                           Unchecked="Field_Changed"/>
                 <CheckBox x:Name="WholeWordBox"
+                          Style="{StaticResource QuickAddCheckBox}"
+                          IsThreeState="False"
                           Margin="0,8,0,0"
                           IsChecked="True"
                           Content="Whole words only"
@@ -244,8 +303,10 @@
         <Border Grid.Row="2" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="24,12,24,18">
             <WrapPanel HorizontalAlignment="Right">
                 <ui:Button x:Name="SaveButton" Content="_Save" Appearance="Primary" MinWidth="96"
+                           KeyboardNavigation.AcceptsReturn="False"
                            Margin="0,0,8,8" Click="SaveButton_Click"/>
                 <ui:Button x:Name="SaveCloseButton" Content="Save _and close" MinWidth="132"
+                           KeyboardNavigation.AcceptsReturn="False"
                            Margin="0,0,8,8" Click="SaveCloseButton_Click"/>
                 <ui:Button x:Name="CloseButton" Content="_Close" MinWidth="96" Margin="0,0,0,8"
                            Click="CloseButton_Click"/>
@@ -253,4 +314,5 @@
         </Border>
     </Grid>
 </ui:FluentWindow>
+
 

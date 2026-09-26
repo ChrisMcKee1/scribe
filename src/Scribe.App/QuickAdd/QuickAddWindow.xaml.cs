@@ -48,7 +48,9 @@ public partial class QuickAddWindow : FluentWindow
     private bool _allowClose;
     private bool _closePromptActive;
     private bool _dirtySinceSave;
+    private bool _suppressFieldChanged;
     private string? _fixedTranscript;
+    private string? _pendingAnnouncementText;
     private QuickDictionaryAdd.Plan? _lastPlan;
     private QuickDictionaryAdd.Plan _currentPlan;
 
@@ -94,7 +96,9 @@ public partial class QuickAddWindow : FluentWindow
         _announcementTimer.Tick += (_, _) =>
         {
             _announcementTimer.Stop();
-            Announce(StatusText, StatusText.Text);
+            var text = _pendingAnnouncementText;
+            _pendingAnnouncementText = null;
+            Announce(StatusText, text);
         };
 
         WordsList.ItemsSource = _chips;
@@ -146,8 +150,8 @@ public partial class QuickAddWindow : FluentWindow
 
     private void ApplyWindowFit()
     {
-        var area = SystemParameters.WorkArea;
-        var fit = WindowFit.Compute(560, 640, 440, 460, new WorkArea(area.Left, area.Top, area.Width, area.Height), Left, Top);
+        var area = WindowPlacement.WorkAreaFor(this);
+        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top);
         MinWidth = fit.MinWidth;
         MinHeight = fit.MinHeight;
         Width = fit.Width;
@@ -174,8 +178,15 @@ public partial class QuickAddWindow : FluentWindow
         _focusIndex = _tokens.Count > 0 ? 0 : -1;
         _dragging = false;
         _fixedTranscript = null;
-        SavedDetailText.Visibility = Visibility.Collapsed;
-        CopyFixedButton.Visibility = Visibility.Collapsed;
+        if (SavedDetailText is not null)
+        {
+            SavedDetailText.Visibility = Visibility.Collapsed;
+        }
+
+        if (CopyFixedButton is not null)
+        {
+            CopyFixedButton.Visibility = Visibility.Collapsed;
+        }
 
         _chips.Clear();
         for (var i = 0; i < _tokens.Count; i++)
@@ -185,7 +196,7 @@ public partial class QuickAddWindow : FluentWindow
 
         if (HeardBox is not null)
         {
-            HeardBox.Text = string.Empty;
+            RunWithoutFieldChanged(() => HeardBox.Text = string.Empty);
         }
 
         UpdateFocusedChip();
@@ -306,6 +317,8 @@ public partial class QuickAddWindow : FluentWindow
         if (!WordsList.IsKeyboardFocusWithin)
         {
             _keyboardFocusInWords = false;
+            _focusIndex = -1;
+            UpdateFocusedChip();
             UpdateHint();
         }
     }
@@ -319,9 +332,33 @@ public partial class QuickAddWindow : FluentWindow
         }
 
         _keyboardFocusInWords = true;
-        WordsList.Focus();
+        _focusIndex = CurrentRange.IsEmpty ? 0 : CurrentRange.First;
+        _anchor = _focusIndex;
         UpdateFocusedChip();
+        Dispatcher.BeginInvoke(() => FindChipButton(_focusIndex)?.Focus());
         UpdateHint();
+    }
+
+    private void Chip_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ToggleButton { Tag: int index })
+        {
+            _keyboardFocusInWords = true;
+            _focusIndex = index;
+            UpdateFocusedChip();
+            UpdateHint();
+        }
+    }
+
+    private void Chip_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!WordsList.IsKeyboardFocusWithin)
+        {
+            _keyboardFocusInWords = false;
+            _focusIndex = -1;
+            UpdateFocusedChip();
+            UpdateHint();
+        }
     }
 
     private void WordsList_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -357,6 +394,7 @@ public partial class QuickAddWindow : FluentWindow
         }
 
         UpdateFocusedChip();
+        FindChipButton(_focusIndex)?.Focus();
         BringFocusedChipIntoView();
     }
 
@@ -512,6 +550,11 @@ public partial class QuickAddWindow : FluentWindow
 
     private void Field_Changed(object sender, RoutedEventArgs e)
     {
+        if (_suppressFieldChanged)
+        {
+            return;
+        }
+
         if (RemoveBox is not null && ShouldBeBox is not null)
         {
             ShouldBeBox.IsEnabled = RemoveBox.IsChecked != true;
@@ -557,6 +600,19 @@ public partial class QuickAddWindow : FluentWindow
     }
 
 
+    private void RunWithoutFieldChanged(Action action)
+    {
+        _suppressFieldChanged = true;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            _suppressFieldChanged = false;
+        }
+    }
+
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.S && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
@@ -566,6 +622,20 @@ public partial class QuickAddWindow : FluentWindow
             {
                 Save(closeAfterSaving: false);
             }
+
+            return;
+        }
+
+        if (e.Key == Key.Escape && !IsOpenDropDown(e.OriginalSource))
+        {
+            e.Handled = true;
+            Close();
+            return;
+        }
+
+        if (e.Key == Key.Enter && IsSaveButtonSource(e.OriginalSource))
+        {
+            e.Handled = true;
         }
     }
     private void TextBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -573,14 +643,6 @@ public partial class QuickAddWindow : FluentWindow
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-        }
-        else if (e.Key == Key.S && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
-        {
-            e.Handled = true;
-            if (SaveButton.IsEnabled)
-            {
-                Save(closeAfterSaving: false);
-            }
         }
     }
 
@@ -615,13 +677,29 @@ public partial class QuickAddWindow : FluentWindow
         if (timing == QuickAddAnnouncementTiming.Immediate)
         {
             _announcementTimer.Stop();
+            _pendingAnnouncementText = null;
             Announce(StatusText, plan.Message);
         }
         else if (timing == QuickAddAnnouncementTiming.Delayed)
         {
-            _announcementTimer.Stop();
-            _announcementTimer.Start();
+            ScheduleStatusAnnouncement(plan.Message);
         }
+        else if (_announcementTimer.IsEnabled)
+        {
+            ScheduleStatusAnnouncement(_pendingAnnouncementText ?? plan.Message);
+        }
+    }
+
+    private void ScheduleStatusAnnouncement(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _pendingAnnouncementText = text;
+        _announcementTimer.Stop();
+        _announcementTimer.Start();
     }
 
     private void UpdateHint()
@@ -701,6 +779,46 @@ public partial class QuickAddWindow : FluentWindow
         }
     }
 
+
+    private static bool IsOpenDropDown(object originalSource) =>
+        FindAncestor<ComboBox>(originalSource as DependencyObject) is { IsDropDownOpen: true };
+
+    private bool IsSaveButtonSource(object originalSource)
+    {
+        var button = FindAncestor<System.Windows.Controls.Button>(originalSource as DependencyObject);
+        return ReferenceEquals(button, SaveButton) || ReferenceEquals(button, SaveCloseButton);
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
+    {
+        while (node is not null)
+        {
+            if (node is T match)
+            {
+                return match;
+            }
+
+            node = System.Windows.Media.VisualTreeHelper.GetParent(node);
+        }
+
+        return null;
+    }
+
+    private static void MakeKeepEditingDefault(Wpf.Ui.Controls.MessageBox dialog)
+    {
+        var primary = MessageBoxTemplate.FindButton(dialog, Wpf.Ui.Controls.MessageBoxButton.Primary);
+        var close = MessageBoxTemplate.FindButton(dialog, Wpf.Ui.Controls.MessageBoxButton.Close);
+        if (primary is null || close is null)
+        {
+            return;
+        }
+
+        primary.IsDefault = false;
+        close.IsDefault = true;
+        close.IsCancel = true;
+        close.Focus();
+    }
+
     private void SaveButton_Click(object sender, RoutedEventArgs e) => Save(closeAfterSaving: false);
 
     private void SaveCloseButton_Click(object sender, RoutedEventArgs e) => Save(closeAfterSaving: true);
@@ -727,9 +845,11 @@ public partial class QuickAddWindow : FluentWindow
             return;
         }
 
-        var corrected = QuickDictionaryAdd.Apply(_transcript, saved);
-        _fixedTranscript = string.Equals(corrected, _transcript, StringComparison.Ordinal) ? null : corrected;
-        Saved?.Invoke(new QuickAddResult(saved, _transcript, _fixedTranscript));
+        var savedRequest = CurrentRequest();
+        var sourceTranscript = _transcript;
+        var corrected = QuickDictionaryAdd.Apply(sourceTranscript, saved);
+        var fixedTranscript = string.Equals(corrected, sourceTranscript, StringComparison.Ordinal) ? null : corrected;
+        Saved?.Invoke(new QuickAddResult(saved, sourceTranscript, fixedTranscript));
         if (closeAfterSaving)
         {
             _allowClose = true;
@@ -739,19 +859,26 @@ public partial class QuickAddWindow : FluentWindow
 
         foreach (var source in _sources)
         {
-            if (string.Equals(source.Text, _transcript, StringComparison.Ordinal))
+            if (string.Equals(source.Text, sourceTranscript, StringComparison.Ordinal))
             {
                 source.Update(corrected);
             }
         }
 
         _vocabulary = ReadVocabulary();
+        var scrollOffset = TranscriptScroll.VerticalOffset;
+        LoadTranscript(corrected);
+        RunWithoutFieldChanged(() =>
+        {
+            ShouldBeBox.Clear();
+            RemoveBox.IsChecked = false;
+        });
+        _fixedTranscript = fixedTranscript;
         _dirtySinceSave = false;
-        ShouldBeBox.Clear();
-        RemoveBox.IsChecked = false;
-        ShowResult(QuickDictionaryAdd.Saved(CurrentRequest()));
-        SavedDetailText.Visibility = _fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
-        CopyFixedButton.Visibility = _fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
+        SavedDetailText.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
+        CopyFixedButton.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
+        TranscriptScroll.ScrollToVerticalOffset(scrollOffset);
+        ShowResult(QuickDictionaryAdd.Saved(savedRequest));
         FocusWordsAtInitialWord();
     }
 
@@ -788,6 +915,8 @@ public partial class QuickAddWindow : FluentWindow
 
     private void QuickAddWindow_Closing(object? sender, CancelEventArgs e)
     {
+        _announcementTimer.Stop();
+        _pendingAnnouncementText = null;
         if (_allowClose || _closePromptActive || !HasUnsavedSavableCorrection())
         {
             return;
@@ -810,6 +939,7 @@ public partial class QuickAddWindow : FluentWindow
                     PrimaryButtonAppearance = ControlAppearance.Primary,
                     CloseButtonAppearance = ControlAppearance.Secondary,
                 };
+                dialog.Loaded += (_, _) => MakeKeepEditingDefault(dialog);
                 var choice = await dialog.ShowDialogAsync();
                 if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
                 {
@@ -853,23 +983,19 @@ public partial class QuickAddWindow : FluentWindow
 
     private QuickDictionaryAdd.WordRange CurrentRange => _first < 0 ? QuickDictionaryAdd.WordRange.None : new QuickDictionaryAdd.WordRange(_first, _last);
 
-    private static void Announce(UIElement source, string? text)
+    private void Announce(UIElement source, string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
+        AnnouncementText.Text = text;
         try
         {
-            if (UIElementAutomationPeer.FromElement(source) is { } peer)
-            {
-                peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
-            }
-            else
-            {
-                UIElementAutomationPeer.CreatePeerForElement(source)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
-            }
+            var peer = UIElementAutomationPeer.FromElement(AnnouncementText)
+                ?? UIElementAutomationPeer.CreatePeerForElement(AnnouncementText);
+            peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }
         catch
         {
@@ -929,6 +1055,7 @@ public partial class QuickAddWindow : FluentWindow
         public override string ToString() => Text;
     }
 }
+
 
 
 
