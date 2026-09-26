@@ -165,7 +165,7 @@ public sealed class VocabularyApplicationSourceTests
 
         // The draft is what a Save stores, read the way the Save reads it: the editors of the pages whose controls it reads,
         // and everything it computes beyond a plain editor as it computes it, each value framed. Hashed, never logged.
-        var draft = Body(window, "private string SaveDraftSignature()");
+        var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         foreach (var part in new[]
         {
             "new FrameworkElement[] { SectionDictation, SectionAi, SectionAdvanced, HistorySettingsCard }",
@@ -179,10 +179,7 @@ public sealed class VocabularyApplicationSourceTests
             ".Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(",
             "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));",
             ".Profiles(BuildProfiles())",
-            ".LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds)",
-            ".Text(DictionarySignature())",
-            ".Text(SnippetSignature())",
-            "WordPackDraftSignature.Write(draft, _wordPackWorkspace);",
+            "sections.Write(draft.Part(\"async-sections\"), capture);",
             ".Flag(RowEditInProgress(DictionaryGrid))",
             ".Flag(RowEditInProgress(LibraryGrid))",
             "return draft.Hash();",
@@ -194,8 +191,7 @@ public sealed class VocabularyApplicationSourceTests
         // A row read that finishes during the wait publishes what storage holds, which is no change: the dictionary and the
         // snippets go by whether they differ from storage, never by their raw signatures, and the libraries by the set a
         // Save writes, never by the rows' signature (the library snapshot is not updated by a Save).
-        Assert.Contains(".Text(DictionarySignature())", draft, StringComparison.Ordinal);
-        Assert.Contains(".Text(SnippetSignature())", draft, StringComparison.Ordinal);
+        Assert.Contains("sections.Write(draft.Part(\"async-sections\"), capture);", draft, StringComparison.Ordinal);
         Assert.DoesNotContain("LibrarySignature()", draft, StringComparison.Ordinal);
         Assert.DoesNotContain("_log.", draft, StringComparison.Ordinal);
 
@@ -285,7 +281,7 @@ public sealed class VocabularyApplicationSourceTests
         // model picker is walked, not skipped (round 4, A7): its typed text applies only when it loses focus, so the
         // subscription it resolves to cannot stand in for it. So are the hotkey boxes, where a capture still in progress
         // (applied only when its keys are released) shows.
-        var draft = Body(window, "private string SaveDraftSignature()");
+        var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
         Assert.True(skippedList.Success, "The draft's list of controls the walk skips was not found.");
         var skipped = skippedList.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

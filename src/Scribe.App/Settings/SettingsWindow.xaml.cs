@@ -290,12 +290,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _committedSettings = _settings.Clone();
         _wordPackSaveProtocol = new WordPackSaveProtocol(new WordPackSaveStore(
             _libraryStore,
-            payload => _settingsRepository.SaveBundle(
-                _settings,
-                dictionaryEntries: null,
-                snippets: null,
-                new ExternalIntents(0, 0),
-                payload)));
+            payload => _settingsRepository.CommitLibraryState(payload)));
         _savedAiProvider = _settings.AiCleanupProvider;
         _settingsRecovered = settingsRepository.LastLoadFailed;
         _startupToggle = new StartupToggle(
@@ -5768,6 +5763,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         var savedAiIntent = intents?.AiCleanup ?? 0;
         var savedMicrophoneIntent = intents?.Microphone ?? 0;
+        SaveDraftSections.Capture? savedSections = null;
         return new WordPackSaveProtocolRequest(
             _wordPackWorkspace,
             payload => _settingsRepository.SaveBundle(
@@ -5777,8 +5773,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 intents ?? new ExternalIntents(0, 0),
                 payload),
             useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings),
-            SaveDraftSignature,
-            SaveDraftSignature,
+            () =>
+            {
+                var sections = BuildSaveDraftSections();
+                savedSections = sections.CaptureNow();
+                return SaveDraftSignature(sections, savedSections);
+            },
+            () => SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             Validate: null,
             OnSettingsCommitted,
             OnWordPacksChanged);
@@ -6162,7 +6163,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // word-pack draft content itself. No dirty flag or revision stands in for content, because Save moves those flags while
     // storing. Every value is framed by DraftSnapshot and hashed, so the copy the check keeps holds no key or secret; never
     // logged.
-    private string SaveDraftSignature()
+    private SaveDraftSections BuildSaveDraftSections()
+    {
+        var dictionarySignature = DictionarySignature();
+        var snippetSignature = SnippetSignature();
+        var wordPackDraft = new Scribe.Core.Vocabulary.DraftSnapshot();
+        var wordPackSignature = WordPackDraftSignature.Write(wordPackDraft, _wordPackWorkspace).Hash();
+        return new SaveDraftSections(
+            new SaveDraftSections.Section(_dictionaryLoad.IsLoaded, _dictionaryLoad.HasChanges(dictionarySignature), dictionarySignature),
+            new SaveDraftSections.Section(_snippetLoad.IsLoaded, _snippetLoad.HasChanges(snippetSignature), snippetSignature),
+            new SaveDraftSections.Section(_wordPackWorkspace is not null, _wordPackWorkspace?.EditRevision > 0, wordPackSignature));
+    }
+
+    private string SaveDraftSignature() => SaveDraftSignature(BuildSaveDraftSections(), capture: null);
+
+    private string SaveDraftSignature(SaveDraftSections sections, SaveDraftSections.Capture? capture)
     {
         HashSet<DependencyObject> carriedElsewhere =
         [
@@ -6188,11 +6203,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
         draft.Part("profiles").Profiles(BuildProfiles());
-        draft.Part("libraries").LibrarySet(_libraryLoad.IsLoaded ? CollectEnabledLibraryIds() : _settings.EnabledDictionaryLibraryIds);
-        WordPackDraftSignature.Write(draft, _wordPackWorkspace);
+        sections.Write(draft.Part("async-sections"), capture);
         draft.Part("rows")
-            .Text(DictionarySignature())
-            .Text(SnippetSignature())
             .Flag(RowEditInProgress(DictionaryGrid))
             .Flag(RowEditInProgress(LibraryGrid));
         return draft.Hash();

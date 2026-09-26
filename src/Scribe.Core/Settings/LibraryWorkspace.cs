@@ -208,8 +208,11 @@ public sealed class LibraryWorkspace
         _state = _base;
     }
 
-    /// <summary>The draft's revision; every change, undo and redo moves it forward, and it never goes back.</summary>
+    /// <summary>The draft's internal revision; captures advance it too, so it is not an edit signal.</summary>
     public long Revision => _revision;
+
+    /// <summary>The user's edit revision; Save and load-side operations never advance it.</summary>
+    public long EditRevision { get; private set; }
 
     /// <summary>The draft at <see cref="Revision"/>, for previews. A new instance whenever the revision moves.</summary>
     public LibraryDraft Draft => _draft ??= BuildDraft();
@@ -1169,6 +1172,7 @@ public sealed class LibraryWorkspace
         var entry = _undo[index];
         _undo.RemoveRange(index, _undo.Count - index);
         Commit(Merge(_state, entry.After, entry.Before));
+        EditRevision++;
         _redo.Add(entry);
     }
 
@@ -1185,6 +1189,7 @@ public sealed class LibraryWorkspace
         var entry = _redo[index];
         _redo.RemoveRange(index, _redo.Count - index);
         Commit(Merge(_state, entry.Before, entry.After));
+        EditRevision++;
         _undo.Add(entry);
     }
 
@@ -1976,6 +1981,7 @@ public sealed class LibraryWorkspace
         }
 
         Commit(next);
+        EditRevision++;
         _redo.Clear();
     }
 
@@ -1988,6 +1994,7 @@ public sealed class LibraryWorkspace
 
         var entry = new UndoEntry(label, _state, next);
         Commit(next);
+        EditRevision++;
         _undo.Add(entry);
         _redo.Clear();
     }

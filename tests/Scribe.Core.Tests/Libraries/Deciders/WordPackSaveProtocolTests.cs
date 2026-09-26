@@ -59,9 +59,87 @@ public sealed class WordPackSaveProtocolTests
         { "toggle", true },
         { "delete", false },
         { "delete", true },
+        { "restore", false },
+        { "restore", true },
+        { "permanent-delete", false },
+        { "permanent-delete", true },
+        { "edit-revert", true },
         { "first-load", false },
         { "first-load", true },
     };
+
+    [Fact]
+    public void SaveDraftSections_treat_first_load_without_edits_as_the_capture()
+    {
+        var unloaded = new SaveDraftSections(
+            new SaveDraftSections.Section(false, false, "dictionary-empty"),
+            new SaveDraftSections.Section(false, false, "snippets-empty"),
+            new SaveDraftSections.Section(false, false, "wordpacks-empty"));
+        var capture = unloaded.CaptureNow();
+        var loadedClean = new SaveDraftSections(
+            new SaveDraftSections.Section(true, false, "dictionary-loaded"),
+            new SaveDraftSections.Section(true, false, "snippets-loaded"),
+            new SaveDraftSections.Section(true, false, "wordpacks-loaded"));
+        var loadedDirty = new SaveDraftSections(
+            new SaveDraftSections.Section(true, true, "dictionary-edited"),
+            new SaveDraftSections.Section(true, false, "snippets-loaded"),
+            new SaveDraftSections.Section(true, false, "wordpacks-loaded"));
+
+        Assert.Equal(Sign(unloaded, capture), Sign(loadedClean, capture));
+        Assert.NotEqual(Sign(unloaded, capture), Sign(loadedDirty, capture));
+
+        static string Sign(SaveDraftSections sections, SaveDraftSections.Capture capture)
+        {
+            var draft = new DraftSnapshot();
+            return sections.Write(draft, capture).Hash();
+        }
+    }
+
+    [Fact]
+    public void Library_workspace_edit_revision_tracks_user_edits_only()
+    {
+        var workspace = DeciderFixture.Workspace(DeciderFixture.Standard());
+        Assert.Equal(0, workspace.EditRevision);
+
+        workspace.SetEnabled(DeciderFixture.AzureId, true);
+        Assert.Equal(1, workspace.EditRevision);
+        workspace.SetEnabled(DeciderFixture.AzureId, true);
+        Assert.Equal(1, workspace.EditRevision);
+
+        var changes = DeciderFixture.Capture(workspace);
+        Assert.Equal(1, workspace.EditRevision);
+        workspace.MarkSaved(changes, DeciderFixture.Apply(DeciderFixture.Standard(), changes));
+        Assert.Equal(1, workspace.EditRevision);
+        workspace.Reload(DeciderFixture.Standard());
+        Assert.Equal(1, workspace.EditRevision);
+        workspace.Rebase(DeciderFixture.Standard());
+        Assert.Equal(1, workspace.EditRevision);
+
+        workspace.SetEnabled(DeciderFixture.AzureId, true);
+        Assert.Equal(2, workspace.EditRevision);
+        workspace.Undo();
+        Assert.Equal(3, workspace.EditRevision);
+        workspace.Redo();
+        Assert.Equal(4, workspace.EditRevision);
+    }
+
+    [Fact]
+    public void Window_repair_commits_use_library_only_commit()
+    {
+        var root = Directory.GetCurrentDirectory();
+        while (!File.Exists(Path.Combine(root, "Scribe.slnx")))
+        {
+            root = Directory.GetParent(root)!.FullName;
+        }
+
+        var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var constructorStart = window.IndexOf("_wordPackSaveProtocol = new WordPackSaveProtocol", StringComparison.Ordinal);
+        var constructorEnd = window.IndexOf("_savedAiProvider = _settings.AiCleanupProvider;", constructorStart, StringComparison.Ordinal);
+        var constructor = window[constructorStart..constructorEnd];
+
+        Assert.Contains("_settingsRepository.CommitLibraryState(payload)", constructor, StringComparison.Ordinal);
+        Assert.DoesNotContain("_settingsRepository.SaveBundle", constructor, StringComparison.Ordinal);
+    }
 
     [Theory]
     [MemberData(nameof(ValidationFailures))]
@@ -138,14 +216,31 @@ public sealed class WordPackSaveProtocolTests
             if (operation == "restore")
             {
                 var deleted = DeciderFixture.Deleted("20260901T100000Z.custom-restored.csv", "custom-restored", "Restored", new TermValues("restore me", "Restore me"));
-                harness.Catalog = DeciderFixture.Catalog(harness.Catalog.Libraries, recentlyDeleted: [deleted.Entry]);
+                harness.Catalog = DeciderFixture.Catalog(
+                    harness.Catalog.Libraries,
+                    enabled: harness.Catalog.LocalState.EnabledIds,
+                    recentlyDeleted: [deleted.Entry]);
                 harness.Workspace = DeciderFixture.Workspace(harness.Catalog);
+                harness.Store.Current = harness.Catalog;
+                harness.Store.Deleted[deleted.Entry.EntryName] = deleted;
                 var restored = harness.Workspace.RestoreDeleted(deleted);
                 harness.Workspace.SetEnabled(restored, true);
             }
             else if (operation == "delete")
             {
                 harness.Workspace.DeleteLibrary("team-terms");
+            }
+            else if (operation == "permanent-delete")
+            {
+                var deleted = DeciderFixture.Deleted("20260901T100000Z.custom-purge.csv", "custom-purge", "Purge", new TermValues("purge me", "Purge me"));
+                harness.Catalog = DeciderFixture.Catalog(
+                    harness.Catalog.Libraries,
+                    enabled: harness.Catalog.LocalState.EnabledIds,
+                    recentlyDeleted: [deleted.Entry]);
+                harness.Workspace = DeciderFixture.Workspace(harness.Catalog);
+                harness.Store.Current = harness.Catalog;
+                harness.Store.Deleted[deleted.Entry.EntryName] = deleted;
+                harness.Workspace.DeletePermanently(deleted.Entry);
             }
             else
             {
@@ -155,7 +250,12 @@ public sealed class WordPackSaveProtocolTests
             harness.Hold("publication");
             var save = harness.SaveAsync();
             await harness.WaitForHoldAsync("publication");
-            if (editWhileWaiting)
+            if (operation == "edit-revert")
+            {
+                harness.Workspace.SetEnabled(DeciderFixture.GitHubId, false);
+                harness.Workspace.SetEnabled(DeciderFixture.GitHubId, true);
+            }
+            else if (editWhileWaiting)
             {
                 harness.Workspace.SetEnabled(DeciderFixture.GitHubId, false);
             }
@@ -168,6 +268,49 @@ public sealed class WordPackSaveProtocolTests
             {
                 Assert.Contains("changed while saving", result.Message, StringComparison.OrdinalIgnoreCase);
             }
+        });
+    }
+
+    [Fact]
+    public async Task Single_flight_refuses_settlement_while_save_runs()
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Hold("complete");
+            var save = harness.SaveAsync();
+            await harness.WaitForHoldAsync("complete");
+
+            var settlement = await harness.Protocol.TrySettlePendingAsync(harness.Request());
+
+            Assert.False(settlement.Success);
+            Assert.Contains("still finishing", settlement.Message, StringComparison.Ordinal);
+            harness.Release("complete");
+            Assert.True((await save).Success);
+        });
+    }
+
+    [Fact]
+    public async Task Single_flight_refuses_save_while_settlement_runs()
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Store.Status = LibrarySaveStatus.CommitUnknown;
+            Assert.False((await harness.SaveAsync()).Success);
+            harness.Store.Current = DeciderFixture.Apply(harness.Catalog, harness.Store.Prepared.Single());
+            harness.Hold("load");
+            var settlement = harness.Protocol.TrySettlePendingAsync(harness.Request());
+            await harness.WaitForHoldAsync("load");
+
+            var save = await harness.SaveAsync();
+
+            Assert.False(save.Success);
+            Assert.Contains("still finishing", save.Message, StringComparison.Ordinal);
+            harness.Release("load");
+            Assert.True((await settlement).Success);
         });
     }
 
@@ -323,21 +466,20 @@ public sealed class WordPackSaveProtocolTests
             var copy = harness.Workspace.Duplicate(original);
             var keptAs = original + "-7";
             harness.Store.PrimaryOutcomes.Add(new DeciderFixture.StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")]));
-            harness.Hold("complete");
-            var save = harness.SaveAsync();
-            await harness.WaitForHoldAsync("complete");
-            harness.Workspace.SetEnabled(DeciderFixture.GitHubId, false);
-            harness.Release("complete");
-
             harness.Store.RepairPrepareStatus = repairCase == "prepare-refused" ? LibraryPrepareStatus.PreviousSaveUnfinished : LibraryPrepareStatus.Prepared;
             harness.Store.RepairStatus = repairCase switch
             {
-                "not-committed" => LibrarySaveStatus.NotCommitted,
+                "not-committed" or "transaction-exception" => LibrarySaveStatus.NotCommitted,
                 "unknown" => LibrarySaveStatus.CommitUnknown,
                 _ => LibrarySaveStatus.Applied,
             };
             harness.ThrowRepairCommit = repairCase == "transaction-exception";
             harness.Store.Status = repairCase == "delayed-success" ? LibrarySaveStatus.CommitUnknown : LibrarySaveStatus.Applied;
+            harness.Hold("complete");
+            var save = harness.SaveAsync();
+            await harness.WaitForHoldAsync("complete");
+            harness.Workspace.SetEnabled(DeciderFixture.GitHubId, false);
+            harness.Release("complete");
 
             var result = await save;
             if (repairCase == "delayed-success" && harness.Protocol.HasPendingSave)
@@ -352,10 +494,25 @@ public sealed class WordPackSaveProtocolTests
                 Assert.False(harness.Workspace.HasPendingReferenceRepairs);
                 Assert.Contains(harness.Store.Prepared, change => change.Writes.Count == 1 && change.Writes[0].LibraryId == copy);
                 Assert.Contains(keptAs, harness.Workspace.Draft.Find(copy)!.Content.BasedOn, StringComparison.Ordinal);
+                Assert.Single(harness.Store.RepairPayloads);
             }
             else
             {
-                Assert.True(repairCase == "transaction-exception" || result.Success || harness.Workspace.HasPendingReferenceRepairs || harness.Protocol.HasPendingSave);
+                Assert.False(result.Success);
+                Assert.Equal(WordPackSaveProtocolSeverity.Warning, result.Severity);
+                Assert.Contains("reference", result.Message, StringComparison.OrdinalIgnoreCase);
+                if (repairCase == "prepare-refused")
+                {
+                    Assert.DoesNotContain(harness.Store.Prepared, change => change.Writes.Count == 1 && change.Writes[0].LibraryId == copy);
+                    Assert.Empty(harness.Store.RepairPayloads);
+                }
+                else
+                {
+                    Assert.Contains(harness.Store.Prepared, change => change.Writes.Count == 1 && change.Writes[0].LibraryId == copy);
+                    Assert.Single(harness.Store.RepairPayloads);
+                }
+
+                Assert.True(harness.Workspace.HasPendingReferenceRepairs || harness.Protocol.HasPendingSave);
             }
         });
     }
@@ -545,9 +702,11 @@ public sealed class WordPackSaveProtocolTests
         public LibraryPrepareStatus RepairPrepareStatus { get; set; } = LibraryPrepareStatus.Prepared;
         public bool ThrowOnLoad { get; set; }
         public LibraryCatalog Current { get; set; }
+        public Dictionary<string, RecentlyDeletedContent> Deleted { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<DeciderFixture.StoreOutcome> PrimaryOutcomes { get; } = [];
         public List<LibraryChangeSet> Prepared { get; } = [];
         public List<PreparedLibrarySave> Completed { get; } = [];
+        public List<LibrarySavePayload> RepairPayloads { get; } = [];
 
         public Task<LibraryPrepareResult> PrepareAsync(LibraryChangeSet changes) => Task.Run(async () =>
         {
@@ -577,7 +736,7 @@ public sealed class WordPackSaveProtocolTests
             var status = repair ? RepairStatus : Status;
             if (status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
             {
-                Current = DeciderFixture.Apply(Current, changes, outcomes: repair ? [] : PrimaryOutcomes);
+                Current = DeciderFixture.Apply(Current, changes, Deleted, outcomes: repair ? [] : PrimaryOutcomes);
             }
 
             return new LibrarySaveOutcome(status, status is LibrarySaveStatus.CommitUnknown ? changes.BaseGeneration : Current.Generation, 0, [], LibraryIoFailure.None);
@@ -587,6 +746,7 @@ public sealed class WordPackSaveProtocolTests
         {
             _harness.AssertWorker();
             _harness.Trace.Add("load");
+            _harness.Gate("load").GetAwaiter().GetResult();
             if (ThrowOnLoad)
             {
                 throw new InvalidOperationException("load");
@@ -599,6 +759,7 @@ public sealed class WordPackSaveProtocolTests
         {
             _harness.AssertOwner();
             _harness.Trace.Add("repair-commit");
+            RepairPayloads.Add(payload);
             if (_harness.ThrowRepairCommit)
             {
                 throw new InvalidOperationException("repair");

@@ -111,9 +111,10 @@ public sealed class SaveDraftCoverageTests
         Assert.Contains("snippets", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
         Assert.Contains("intents ?? new ExternalIntents(0, 0)", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
         Assert.Contains("payload", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
-        Assert.Contains(".Text(DictionarySignature())", draft, StringComparison.Ordinal);
+        Assert.Contains("sections.Write(draft.Part(\"async-sections\"), capture);", draft, StringComparison.Ordinal);
+        Assert.Contains("DictionarySignature()", window, StringComparison.Ordinal);
         Assert.Contains("RowEditInProgress(DictionaryGrid)", draft, StringComparison.Ordinal);
-        Assert.Contains(".Text(SnippetSignature())", draft, StringComparison.Ordinal);
+        Assert.Contains("SnippetSignature()", window, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -220,7 +221,7 @@ public sealed class SaveDraftCoverageTests
         Assert.Contains("var draft = new Scribe.Core.Vocabulary.DraftSnapshot();", draft, StringComparison.Ordinal);
         Assert.Contains("return draft.Hash();", draft, StringComparison.Ordinal);
         Assert.Contains("Scribe.Core.Vocabulary.DraftSnapshot draft)", editors, StringComparison.Ordinal);
-        foreach (var component in new[] { ".Binding(", ".Microphone(", ".Subscription(", ".Profiles(BuildProfiles())", ".LibrarySet(" })
+        foreach (var component in new[] { ".Binding(", ".Microphone(", ".Subscription(", ".Profiles(BuildProfiles())", "sections.Write(" })
         {
             Assert.Contains(component, draft, StringComparison.Ordinal);
         }
@@ -239,7 +240,9 @@ public sealed class SaveDraftCoverageTests
         foreach (var name in signatures)
         {
             var expression = Regex.Match(window, $@"private string {name}\(\)\s*=>\s*(?<body>[^;]+);");
-            var body = expression.Success ? expression.Groups["body"].Value : Body(window, $"private string {name}()");
+            var body = name == "SaveDraftSignature"
+                ? Body(window, "private string SaveDraftSignature(SaveDraftSections sections")
+                : expression.Success ? expression.Groups["body"].Value : Body(window, $"private string {name}()");
             Assert.Contains("new Scribe.Core.Vocabulary.DraftSnapshot()", body, StringComparison.Ordinal);
             Assert.Contains(".Hash()", body, StringComparison.Ordinal);
             AssertNoJoining(body, name);
@@ -407,7 +410,7 @@ public sealed class SaveDraftCoverageTests
     {
         var window = File.ReadAllText(Path.Combine(Root(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
-        var draft = Body(window, "private string SaveDraftSignature()");
+        var draft = Body(window, "private string SaveDraftSignature(SaveDraftSections sections");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
         Assert.True(skippedList.Success, "The draft's list of controls the walk skips was not found.");
         var skipped = skippedList.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
