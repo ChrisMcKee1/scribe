@@ -159,7 +159,8 @@ internal sealed class KeyboardHookPrecedence : IDisposable
             if (remote)
             {
                 _logger.LogInformation(
-                    "Remote desktop client {App} is in front; the keyboard hook moves ahead of its hook and is kept there.",
+                    "Remote desktop client {App} came to the front; a move of the keyboard hook ahead of its hook is " +
+                    "scheduled, and repeated while it stays in front.",
                     name);
             }
         }

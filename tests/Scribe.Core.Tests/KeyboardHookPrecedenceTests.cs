@@ -101,7 +101,7 @@ public class KeyboardHookPrecedenceTests
     }
 
     [Fact]
-    public void The_move_is_logged_by_the_client_s_process_name_and_nothing_else()
+    public void The_scheduled_move_is_logged_by_the_client_s_process_name_and_nothing_else()
     {
         var rig = new Rig();
         rig.Foreground = RemoteWindow;
@@ -110,7 +110,8 @@ public class KeyboardHookPrecedenceTests
 
         var line = Assert.Single(rig.Log.Entries);
         Assert.StartsWith(
-            "Information: Remote desktop client msrdc is in front; the keyboard hook moves ahead of its hook and is kept there.",
+            "Information: Remote desktop client msrdc came to the front; a move of the keyboard hook ahead of its hook is " +
+            "scheduled, and repeated while it stays in front.",
             line);
     }
 
@@ -282,7 +283,7 @@ public class KeyboardHookPrecedenceTests
         rig.Time.Timer.Fire();
         Assert.Equal(["move", "move", "move", "move", "release"], rig.Requests);
         Assert.Equal(2, rig.Log.Entries.Count);
-        Assert.Contains("Remote desktop client vmconnect is in front", rig.Log.Entries[1]);
+        Assert.Contains("Remote desktop client vmconnect came to the front", rig.Log.Entries[1]);
     }
 
     [Fact]
