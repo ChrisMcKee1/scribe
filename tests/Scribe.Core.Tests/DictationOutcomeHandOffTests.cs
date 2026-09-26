@@ -51,6 +51,32 @@ public sealed class DictationOutcomeHandOffTests
     }
 
     [Fact]
+    public void A_queued_recording_warning_judges_the_indicator_when_its_turn_comes()
+    {
+        // A Save can turn the indicator off between the warning's routing and its queued delivery; the pill must not show
+        // it then, and the notice must.
+        var app = ReadSource("src", "Scribe.App", "App.xaml.cs");
+        var warning = Body(app, "private void ShowRecordingWarningOrNotice(");
+        var delivery = warning.IndexOf("relay.PublishIfCurrent(", StringComparison.Ordinal);
+        Assert.True(delivery >= 0);
+        var work = warning[delivery..];
+        Assert.True(
+            work.IndexOf("if (_controller?.CurrentSettings.ShowOverlay == true)", StringComparison.Ordinal) <
+            work.IndexOf("_overlay?.ShowRecordingWarning(reason);", StringComparison.Ordinal),
+            "The pill shows the warning only if the indicator is still on when the warning is delivered.");
+    }
+
+    [Fact]
+    public void Only_a_missing_speech_model_reports_no_speech_model()
+    {
+        var process = Body(Controller, "private async Task ProcessAsync(");
+        Assert.Contains(
+            "catch (FileNotFoundException ex) when (currentStage == TryDictationReportClassifier.StageSpeechRecognition)",
+            process,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Speech_recognition_exceptions_only_report_model_load_when_the_recognizer_was_not_resident()
     {
         var process = Body(Controller, "private async Task ProcessAsync(");

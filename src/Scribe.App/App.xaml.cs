@@ -995,9 +995,21 @@ public partial class App : Application
             return;
         }
 
+        // The indicator is judged again when the warning's turn comes: a Save can turn it off between here and there, and
+        // then the notice is the one place the warning shows.
         relay.PublishIfCurrent(
             report.RecordingRevision,
-            () => _overlay?.ShowRecordingWarning(reason),
+            () =>
+            {
+                if (_controller?.CurrentSettings.ShowOverlay == true)
+                {
+                    _overlay?.ShowRecordingWarning(reason);
+                }
+                else
+                {
+                    ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+                }
+            },
             () => ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action)));
     }
 

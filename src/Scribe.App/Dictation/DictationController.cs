@@ -1419,7 +1419,7 @@ internal sealed class DictationController : IDisposable
                 "#{Id} dictation processing stopped during shutdown: a service it used was already disposed.",
                 session.Id));
         }
-        catch (FileNotFoundException ex)
+        catch (FileNotFoundException ex) when (currentStage == TryDictationReportClassifier.StageSpeechRecognition)
         {
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
 
