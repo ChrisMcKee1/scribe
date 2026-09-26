@@ -200,9 +200,7 @@ public partial class SettingsWindow
     /// </summary>
     // What Save stores for the snippets, and exactly which rows it stored. Validation has already blocked every changed
     // incomplete row, so the incomplete rows left are untouched placeholders, which are dropped and stay new, and stored
-    // rows validation calls unchanged, which are kept exactly as stored so saving another snippet can't delete them. A
-    // complete row always saves its current text verbatim: validation's trimmed comparison would call a line break added
-    // at the start or end of the text unchanged, and a snippet types its text exactly.
+    // rows validation calls unchanged, which saving another snippet must neither delete nor turn into a conflict.
     private List<Snippet> BuildSnippets(out SnippetRow? duplicate, out IReadOnlyList<SnippetSubmission> submission)
     {
         var rows = _snippetRows.ToList();
@@ -216,10 +214,21 @@ public partial class SettingsWindow
         return [.. result.Snippets];
     }
 
-    private static SnippetBuilder.Row ToBuilderRow(SnippetRow row) =>
-        IsIncomplete(row) && SettingsDraftValidator.IsUnchanged(ToDraftRow(row))
-            ? new SnippetBuilder.Row(row.Id, row.LoadedPhrase, row.LoadedTemplate, row.LoadedEnabled, KeepAsStored: true)
-            : new SnippetBuilder.Row(row.Id, row.Phrase, row.Template, row.Enabled);
+    private static SnippetBuilder.Row ToBuilderRow(SnippetRow row)
+    {
+        if (!SettingsDraftValidator.IsUnchanged(ToDraftRow(row)))
+        {
+            return new SnippetBuilder.Row(row.Id, row.Phrase, row.Template, row.Enabled);
+        }
+
+        // An unchanged stored row keeps its stored phrase, the key storage already holds beside the other stored rows, so it
+        // never collides with another unchanged row (validation only warns about such a pair). Its text is the current
+        // text, verbatim, when complete: a line break added at its start or end is a real edit even though validation
+        // compares trimmed text, and a snippet types its text exactly. When incomplete it keeps the stored text, so it is
+        // kept rather than dropped.
+        var template = IsIncomplete(row) ? row.LoadedTemplate : row.Template;
+        return new SnippetBuilder.Row(row.Id, row.LoadedPhrase, template, row.LoadedEnabled, KeepAsStored: true);
+    }
 
     private static bool IsIncomplete(SnippetRow row) =>
         string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template);

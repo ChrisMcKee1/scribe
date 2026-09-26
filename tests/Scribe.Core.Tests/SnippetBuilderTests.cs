@@ -72,6 +72,24 @@ public class SnippetBuilderTests
     }
 
     [Fact]
+    public void Kept_complete_rows_whose_phrases_differ_only_in_case_or_spacing_never_block_a_save()
+    {
+        // Storage holds " sig ", "sig" and "Sig" side by side (its unique index compares them as different strings);
+        // validation warns about such pairs, and saving an unrelated snippet must not turn them into a blocking conflict.
+        var result = SnippetBuilder.Build(new[]
+        {
+            new SnippetBuilder.Row(1, " sig ", "A", Enabled: true, KeepAsStored: true),
+            new SnippetBuilder.Row(2, "sig", "B", Enabled: true, KeepAsStored: true),
+            new SnippetBuilder.Row(3, "Sig", "\r\nC\r\n", Enabled: true, KeepAsStored: true),
+            Row(0, "new", "text"),
+        });
+
+        Assert.False(result.HasDuplicate);
+        Assert.Equal([" sig ", "sig", "Sig", "new"], result.Snippets.Select(snippet => snippet.Phrase));
+        Assert.Equal("\r\nC\r\n", result.Snippets[2].Template);
+    }
+
+    [Fact]
     public void A_new_row_is_still_checked_against_kept_rows()
     {
         var result = SnippetBuilder.Build(new[]

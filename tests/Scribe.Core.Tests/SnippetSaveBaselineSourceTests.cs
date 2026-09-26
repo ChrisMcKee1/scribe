@@ -32,11 +32,13 @@ public sealed class SnippetSaveBaselineSourceTests
     }
 
     [Fact]
-    public void Only_an_incomplete_unchanged_row_is_kept_as_stored_so_complete_text_saves_verbatim()
+    public void An_unchanged_row_keeps_its_stored_phrase_and_saves_complete_text_verbatim()
     {
         var snippets = Read("SettingsWindow.Snippets.cs");
         var toRow = Body(snippets, "private static SnippetBuilder.Row ToBuilderRow(");
-        Assert.Contains("IsIncomplete(row) && SettingsDraftValidator.IsUnchanged(ToDraftRow(row))", toRow, StringComparison.Ordinal);
+        Assert.Contains("SettingsDraftValidator.IsUnchanged(ToDraftRow(row))", toRow, StringComparison.Ordinal);
+        Assert.Contains("var template = IsIncomplete(row) ? row.LoadedTemplate : row.Template;", toRow, StringComparison.Ordinal);
+        Assert.Contains("row.LoadedPhrase, template, row.LoadedEnabled, KeepAsStored: true", toRow, StringComparison.Ordinal);
 
         // A complete row goes to the builder with its current text, which the builder stores verbatim.
         var built = Scribe.Core.Settings.SnippetBuilder.Build([new(4, "sig", "\r\nRegards\r\n", true)]);
