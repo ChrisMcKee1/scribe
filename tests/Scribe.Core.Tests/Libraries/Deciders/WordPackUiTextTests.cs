@@ -83,6 +83,29 @@ public sealed class WordPackUiTextTests
         }
     }
 
+    [Theory]
+    [InlineData("word details edits in place", "ApplyWordDetailsEdit", "UpdateSelectedLibraryDirtyState")]
+    [InlineData("rename failure keeps selection", "FinishPendingLibraryRename", "LibraryDetailRenameBox.Focus")]
+    [InlineData("word pack AI uses current switch and saved provider", "AiCleanupCheck.IsChecked == true", "_savedAiProvider == CleanupProvider.FoundryLocal")]
+    [InlineData("short details is a subpage", "ApplyWordDetailsComposition", "WordDetailsBackButton.Visibility")]
+    [InlineData("stacked back is on visible card", "WordPacksCardBackButton.Visibility = Visibility.Visible", "WordPacksListColumn.MinWidth = 0")]
+    [InlineData("search add recomputes search", "ApplyLibrarySearch();", "RefreshTermRows(_selectedLibraryId);")]
+    [InlineData("word use goes through workspace command", "_wordPackWorkspace.SetTermEnabled", "nameof(LibraryTermRow.Enabled)")]
+    [InlineData("list and header stay in sync", "SyncWordPackHeader", "LibraryUseCheck.IsChecked")]
+    [InlineData("built-in add asks for spoken first", "AskForWordPackSpokenFormAsync", "Scribe hears")]
+    [InlineData("preview keys catch handled grid keys", "LibraryTermsGrid_PreviewKeyDown", "LibraryGrid_PreviewKeyDown")]
+    [InlineData("word grid checkbox gets first click", "DataGridCheckBoxClick.Attach(LibraryTermsGrid)", "DataGridTypingTab.Attach(LibraryTermsGrid)")]
+    [InlineData("word details text boxes are named", "AutomationProperties.LabeledBy=\"{Binding ElementName=WordDetailsSpokenTitle}\"", "AutomationProperties.LabeledBy=\"{Binding ElementName=WordDetailsWrittenTitle}\"")]
+    public void Astra_review_wiring_items_stay_fixed(string item, string first, string second)
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.WordPacks.cs"));
+        var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        var combined = source + Environment.NewLine + xaml;
+
+        Assert.True(combined.Contains(first, StringComparison.Ordinal), item);
+        Assert.True(combined.Contains(second, StringComparison.Ordinal), item);
+    }
+
     private static string Body(string source, string signature)
     {
         var start = source.IndexOf(signature, StringComparison.Ordinal);

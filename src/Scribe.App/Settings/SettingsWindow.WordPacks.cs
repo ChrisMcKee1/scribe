@@ -57,7 +57,7 @@ public partial class SettingsWindow
 
         if (DictionaryTabs.SelectedItem == WordPacksTab &&
             Keyboard.Modifiers == ModifierKeys.Alt &&
-            e.Key == Key.Left &&
+            (e.Key == Key.Left || e.SystemKey == Key.Left) &&
             _wordPackLayout?.SideBySide == false)
         {
             e.Handled = true;
@@ -89,7 +89,7 @@ public partial class SettingsWindow
                 LibrarySearchBox.SelectAll();
                 break;
             case SettingsAccelerator.AddTerm:
-                AddWordPackTerm();
+                _ = AddWordPackTermAsync();
                 break;
             case SettingsAccelerator.NewLibrary:
                 LibraryNewButton_Click(this, new RoutedEventArgs());
@@ -111,6 +111,7 @@ public partial class SettingsWindow
         _libraryDetailEmptyText = LibraryDetailEmpty.Text;
         LibraryDetailEmpty.Text = "Loading word packs...";
         LibraryTermsGrid.ItemsSource = _libraryTermRows;
+        DataGridCheckBoxClick.Attach(LibraryTermsGrid);
         SetLibrariesEditable(false);
         UpdateLibraryDetail(null);
     }
@@ -143,6 +144,11 @@ public partial class SettingsWindow
         else if (e.PropertyName == nameof(LibraryRow.AiCleanup))
         {
             _wordPackWorkspace?.SetAiPermission(row.Id, row.AiCleanup);
+        }
+
+        if (string.Equals(row.Id, _selectedLibraryId, StringComparison.OrdinalIgnoreCase))
+        {
+            SyncWordPackHeader(row.Id);
         }
     }
 
@@ -182,7 +188,7 @@ public partial class SettingsWindow
             return;
         }
 
-        LibraryAiHelpText.Text = WordPackUiText.AiHelp(permitted, _settings.AiCleanupProvider == CleanupProvider.FoundryLocal);
+        LibraryAiHelpText.Text = WordPackUiText.AiHelp(permitted, _savedAiProvider == CleanupProvider.FoundryLocal);
         RefreshWordPackList(_selectedLibraryId);
     }
 
@@ -269,6 +275,16 @@ public partial class SettingsWindow
 
     private void LibraryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_updatingLibraryRows)
+        {
+            return;
+        }
+
+        if (!FinishPendingLibraryRename())
+        {
+            return;
+        }
+
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
         if (_wordPackLayout?.SideBySide == false && _wordPackStackedCardOpen)
         {
@@ -346,7 +362,7 @@ public partial class SettingsWindow
         }
     }
 
-    private void LibraryAddWordButton_Click(object sender, RoutedEventArgs e) => AddWordPackTerm();
+    private async void LibraryAddWordButton_Click(object sender, RoutedEventArgs e) => await AddWordPackTermAsync();
 
     private void LibraryEmptyActionButton_Click(object sender, RoutedEventArgs e)
     {
@@ -356,7 +372,7 @@ public partial class SettingsWindow
             return;
         }
 
-        AddWordPackTerm(_librarySearchResult?.IsActive == true ? _librarySearchResult.Query : null);
+        _ = AddWordPackTermAsync(_librarySearchResult?.IsActive == true ? _librarySearchResult.Query : null);
     }
 
     private void WordPacksBackButton_Click(object sender, RoutedEventArgs e) => ShowWordPackListPage();
@@ -365,6 +381,15 @@ public partial class SettingsWindow
     {
         if (_wordPackLayout?.SideBySide == false && LibraryGrid.SelectedItem is LibraryRow)
         {
+            ShowWordPackCardPage();
+        }
+    }
+
+    private void LibraryGrid_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && _wordPackLayout?.SideBySide == false && LibraryGrid.SelectedItem is LibraryRow)
+        {
+            e.Handled = true;
             ShowWordPackCardPage();
         }
     }
@@ -538,7 +563,8 @@ public partial class SettingsWindow
             return;
         }
 
-        _wordPackWorkspace.EditTerm(_selectedLibraryId, row.RowId, new TermValues(row.Pattern, row.Replacement, row.WholeWord, enabled), removalIntent: false);
+        _wordPackWorkspace.SetTermEnabled(_selectedLibraryId, row.RowId, enabled);
+        row.SetValues(row.Pattern, row.Replacement, row.WholeWord, enabled);
         RefreshTermRows(_selectedLibraryId);
         RefreshWordPackList(_selectedLibraryId);
         RefreshDictionaryStatus();
@@ -626,6 +652,7 @@ public partial class SettingsWindow
         _wordDetailsRowId = row.RowId;
         WordDetailsPanel.Visibility = Visibility.Visible;
         RefreshWordDetails();
+        ApplyWordPackLayout();
     }
 
     private void RefreshWordDetails()
@@ -713,8 +740,7 @@ public partial class SettingsWindow
             return;
         }
 
-        row.Pattern = WordDetailsSpokenBox.Text;
-        row.Replacement = WordDetailsWrittenBox.Text;
+        ApplyWordDetailsEdit(row, WordDetailsSpokenBox.Text, WordDetailsWrittenBox.Text, row.WholeWord);
     }
 
     private void WordDetailsWholeWordCheck_Changed(object sender, RoutedEventArgs e)
@@ -726,14 +752,43 @@ public partial class SettingsWindow
 
         if (_libraryTermRows.FirstOrDefault(item => item.RowId == _wordDetailsRowId.Value) is { } row)
         {
-            row.WholeWord = WordDetailsWholeWordCheck.IsChecked == true;
+            ApplyWordDetailsEdit(row, row.Pattern, row.Replacement, WordDetailsWholeWordCheck.IsChecked == true);
         }
+    }
+
+    private void ApplyWordDetailsEdit(LibraryTermRow row, string spoken, string written, bool wholeWord)
+    {
+        if (_selectedLibraryId is null || _wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        var result = _wordPackWorkspace.EditTerm(
+            _selectedLibraryId,
+            row.RowId,
+            new TermValues(spoken, written, wholeWord, row.Enabled),
+            removalIntent: false);
+        if (!result.Applied && result.Issue is { } issue)
+        {
+            var message = LibraryEditor.Message(issue, spoken);
+            ShowInfo(message, Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            AnnounceFrom(WordDetailsPanel, message);
+            return;
+        }
+
+        _updatingLibraryTerms = true;
+        row.SetValues(spoken, written, wholeWord, row.Enabled);
+        _updatingLibraryTerms = false;
+        UpdateSelectedLibraryDirtyState();
+        RefreshDictionaryStatus();
+        WordDetailsDictionaryButton.Visibility = FindDictionaryRow(spoken) is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void WordDetailsBackButton_Click(object sender, RoutedEventArgs e)
     {
         WordDetailsPanel.Visibility = Visibility.Collapsed;
         _wordDetailsRowId = null;
+        ApplyWordPackLayout();
         LibraryTermsGrid.Focus();
     }
 
@@ -768,7 +823,7 @@ public partial class SettingsWindow
             LibraryTermKey.AreSame(row.Pattern, spoken));
     }
 
-    private void AddWordPackTerm(string? spoken = null)
+    private async Task AddWordPackTermAsync(string? spoken = null)
     {
         if (_selectedLibraryId is null || _wordPackWorkspace is null)
         {
@@ -781,6 +836,16 @@ public partial class SettingsWindow
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(spoken) &&
+            _wordPackWorkspace.Draft.Find(_selectedLibraryId)?.Content.BuiltIn == true)
+        {
+            spoken = await AskForWordPackSpokenFormAsync();
+            if (string.IsNullOrWhiteSpace(spoken))
+            {
+                return;
+            }
+        }
+
         var result = _wordPackWorkspace.AddTerm(_selectedLibraryId, new TermValues(spoken ?? string.Empty, string.Empty), removalIntent: false);
         if (!result.Applied)
         {
@@ -788,8 +853,13 @@ public partial class SettingsWindow
             return;
         }
 
+        if (_librarySearchResult?.IsActive == true)
+        {
+            ApplyLibrarySearch();
+        }
+
         RefreshTermRows(_selectedLibraryId);
-        RefreshWordPackList(_selectedLibraryId);
+        UpdateSelectedLibraryDirtyState();
         if (_libraryTermRows.LastOrDefault() is { } row)
         {
             LibraryTermsGrid.SelectedItem = row;
@@ -800,6 +870,41 @@ public partial class SettingsWindow
                 WordDetailsWrittenBox.Focus();
             }
         }
+    }
+
+    private Task<string?> AskForWordPackSpokenFormAsync()
+    {
+        var box = new TextBox { MinWidth = 280, Margin = new Thickness(0, 8, 0, 0) };
+        var dialog = new Wpf.Ui.Controls.FluentWindow
+        {
+            Title = "Add word",
+            Owner = this,
+            Width = 420,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        var add = new Button { Content = "Next", IsDefault = true, MinWidth = 90 };
+        var cancel = new Button { Content = "Cancel", IsCancel = true, MinWidth = 90, Margin = new Thickness(0, 0, 8, 0) };
+        add.Click += (_, _) => dialog.DialogResult = true;
+        dialog.Content = new StackPanel
+        {
+            Margin = new Thickness(16),
+            Children =
+            {
+                new TextBlock { Text = "Scribe hears", Style = (Style)FindResource("CardTitle") },
+                box,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Margin = new Thickness(0, 16, 0, 0),
+                    Children = { cancel, add },
+                },
+            },
+        };
+
+        box.Focus();
+        return Task.FromResult(dialog.ShowDialog() == true ? box.Text : null);
     }
 
     private void ShowRecentlyDeletedDialog()
@@ -890,11 +995,11 @@ public partial class SettingsWindow
         LibraryDetailRenameBox.SelectAll();
     }
 
-    private void CommitLibraryRename()
+    private bool CommitLibraryRename()
     {
         if (_renamingLibraryId is null || _wordPackWorkspace is null)
         {
-            return;
+            return true;
         }
 
         var result = _wordPackWorkspace.Rename(_renamingLibraryId, LibraryDetailRenameBox.Text);
@@ -903,7 +1008,12 @@ public partial class SettingsWindow
             LibraryRenameValidation.Text = LibraryEditor.Message(issue);
             LibraryRenameValidation.Visibility = Visibility.Visible;
             AnnounceFrom(LibraryDetailRenameBox, LibraryRenameValidation.Text);
-            return;
+            Dispatcher.BeginInvoke(() =>
+            {
+                LibraryDetailRenameBox.Focus();
+                LibraryDetailRenameBox.SelectAll();
+            });
+            return false;
         }
 
         var renamed = _renamingLibraryId;
@@ -912,6 +1022,7 @@ public partial class SettingsWindow
         LibraryDetailName.Visibility = Visibility.Visible;
         RefreshWordPackList(renamed);
         RefreshDictionaryStatus();
+        return true;
     }
 
     private void CancelLibraryRename()
@@ -936,7 +1047,25 @@ public partial class SettingsWindow
         }
     }
 
-    private void LibraryDetailRenameBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitLibraryRename();
+    private void LibraryDetailRenameBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) => FinishPendingLibraryRename();
+
+    private bool FinishPendingLibraryRename()
+    {
+        if (_renamingLibraryId is null)
+        {
+            return true;
+        }
+
+        if (CommitLibraryRename())
+        {
+            return true;
+        }
+
+        _updatingLibraryRows = true;
+        LibraryGrid.SelectedItem = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, _renamingLibraryId, StringComparison.OrdinalIgnoreCase));
+        _updatingLibraryRows = false;
+        return false;
+    }
 
     private async Task RestoreAllBuiltInValuesAsync(LibraryRow row)
     {
@@ -1004,10 +1133,11 @@ public partial class SettingsWindow
         LibraryUseCheck.IsChecked = _wordPackWorkspace.Draft.LocalState.EnabledIds.Contains(content.Id);
         LibraryUseCheck.SetValue(AutomationProperties.NameProperty, $"Use the {content.Name} word pack");
         LibraryAiCheck.IsChecked = _wordPackWorkspace.ShowsAiPermission(content.Id);
-        LibraryAiCheck.Visibility = _settings.EnableAiCleanup ? Visibility.Visible : Visibility.Collapsed;
+        var shownAiCleanup = AiCleanupCheck.IsChecked == true;
+        LibraryAiCheck.Visibility = shownAiCleanup ? Visibility.Visible : Visibility.Collapsed;
         LibraryAiCheck.SetValue(AutomationProperties.NameProperty, $"Use {content.Name} in AI cleanup");
-        LibraryAiHelpText.Text = WordPackUiText.AiHelp(LibraryAiCheck.IsChecked == true, _settings.AiCleanupProvider == CleanupProvider.FoundryLocal);
-        LibraryAiHelpText.Visibility = _settings.EnableAiCleanup ? Visibility.Visible : Visibility.Collapsed;
+        LibraryAiHelpText.Text = WordPackUiText.AiHelp(LibraryAiCheck.IsChecked == true, _savedAiProvider == CleanupProvider.FoundryLocal);
+        LibraryAiHelpText.Visibility = shownAiCleanup ? Visibility.Visible : Visibility.Collapsed;
         _updatingWordPackHeader = false;
 
         RefreshTermRows(library.Content.Id);
@@ -1017,6 +1147,59 @@ public partial class SettingsWindow
         LibraryDetailMoreButton.IsEnabled = true;
         LibraryOffLine.Visibility = LibraryUseCheck.IsChecked == true ? Visibility.Collapsed : Visibility.Visible;
         ApplyWordPackLayout();
+    }
+
+    private void SyncWordPackHeader(string libraryId)
+    {
+        if (_wordPackWorkspace is null || !string.Equals(libraryId, _selectedLibraryId, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _updatingWordPackHeader = true;
+        LibraryUseCheck.IsChecked = _wordPackWorkspace.Draft.LocalState.EnabledIds.Contains(libraryId);
+        LibraryAiCheck.IsChecked = _wordPackWorkspace.ShowsAiPermission(libraryId);
+        LibraryAiHelpText.Text = WordPackUiText.AiHelp(LibraryAiCheck.IsChecked == true, _savedAiProvider == CleanupProvider.FoundryLocal);
+        _updatingWordPackHeader = false;
+        LibraryOffLine.Visibility = LibraryUseCheck.IsChecked == true ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void RefreshWordPackAiPermissionState()
+    {
+        if (LibraryAiCheck is null)
+        {
+            return;
+        }
+
+        var shownAiCleanup = AiCleanupCheck?.IsChecked == true;
+        LibraryAiCheck.Visibility = shownAiCleanup ? Visibility.Visible : Visibility.Collapsed;
+        LibraryAiHelpText.Visibility = shownAiCleanup ? Visibility.Visible : Visibility.Collapsed;
+        if (_selectedLibraryId is not null)
+        {
+            SyncWordPackHeader(_selectedLibraryId);
+        }
+    }
+
+    private void UpdateSelectedLibraryDirtyState()
+    {
+        if (_selectedLibraryId is null || _wordPackWorkspace is null)
+        {
+            return;
+        }
+
+        if (_libraryRows.FirstOrDefault(row => string.Equals(row.Id, _selectedLibraryId, StringComparison.OrdinalIgnoreCase)) is { } listRow)
+        {
+            listRow.Unsaved = _wordPackWorkspace.UnsavedLibraryIds.Contains(_selectedLibraryId);
+        }
+
+        if (_wordPackWorkspace.Draft.Find(_selectedLibraryId) is { } library)
+        {
+            LibraryDetailMeta.Text = WordPackUiText.HeaderMeta(
+                library.Content.BuiltIn,
+                library.Content.Category,
+                library.Content.Rows.Count,
+                _wordPackWorkspace.UnsavedLibraryIds.Contains(_selectedLibraryId));
+        }
     }
 
     // The enabled-set persisted in settings: the ids of every ticked library still in the list, in precedence order, so
@@ -1098,6 +1281,7 @@ public partial class SettingsWindow
         RefreshSearchLinks(libraryId);
         UpdateLibraryTermCount(rows.Count);
         RefreshWordDetails();
+        ApplyWordDetailsComposition();
     }
 
     private void RefreshSearchLinks(string libraryId)
@@ -1171,11 +1355,21 @@ public partial class SettingsWindow
             return;
         }
 
-        var result = _wordPackWorkspace.EditTerm(
-            _selectedLibraryId,
-            row.RowId,
-            new TermValues(row.Pattern, row.Replacement, row.WholeWord, row.Enabled),
-            removalIntent: false);
+        LibraryEditResult result;
+        if (e.PropertyName == nameof(LibraryTermRow.Enabled))
+        {
+            _wordPackWorkspace.SetTermEnabled(_selectedLibraryId, row.RowId, row.Enabled);
+            result = new LibraryEditResult(true, null);
+        }
+        else
+        {
+            result = _wordPackWorkspace.EditTerm(
+                _selectedLibraryId,
+                row.RowId,
+                new TermValues(row.Pattern, row.Replacement, row.WholeWord, row.Enabled),
+                removalIntent: false);
+        }
+
         if (!result.Applied && result.Issue is { } issue)
         {
             var message = LibraryEditor.Message(issue, row.Pattern);
@@ -1183,7 +1377,7 @@ public partial class SettingsWindow
             AnnounceFrom(LibraryTermsGrid, message);
         }
 
-        RefreshWordPackList(_selectedLibraryId);
+        UpdateSelectedLibraryDirtyState();
         RefreshDictionaryStatus();
     }
 
@@ -1228,6 +1422,7 @@ public partial class SettingsWindow
                 {
                     RefreshTermRows(_selectedLibraryId);
                 }
+
                 ShowWordPackNotice("Undo", "Undid the latest word pack change.", Wpf.Ui.Controls.InfoBarSeverity.Informational);
             }
 
@@ -1275,6 +1470,36 @@ public partial class SettingsWindow
 
     private static bool IsTextEditingKeyboardFocus() =>
         Keyboard.FocusedElement is TextBox or RichTextBox;
+
+private void LibraryTermsGrid_PreviewKeyDown(object sender, KeyEventArgs e)
+{
+    if (IsTextEditingKeyboardFocus() || LibraryTermsGrid.SelectedItem is not LibraryTermRow row)
+    {
+        return;
+    }
+
+    if (e.Key == Key.Enter)
+    {
+        e.Handled = true;
+        OpenWordDetails(row);
+    }
+    else if (e.Key == Key.Delete && CanDeleteWordPackTerm(row))
+    {
+        e.Handled = true;
+        DeleteWordPackTerm(row);
+    }
+}
+
+private bool CanDeleteWordPackTerm(LibraryTermRow row)
+{
+    if (_selectedLibraryId is null || _wordPackWorkspace is null)
+    {
+        return false;
+    }
+
+    var draft = _wordPackWorkspace.RowsOf(_selectedLibraryId).FirstOrDefault(item => item.RowId == row.RowId);
+    return draft is not null && LibraryEditor.AvailableCommands(draft.Row, editingText: false).HasFlag(TermCommands.Delete);
+}
 
     private void LibrarySortButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1338,14 +1563,18 @@ public partial class SettingsWindow
         WordPacksIntroText.Visibility = _wordPackLayout.Short ? Visibility.Collapsed : Visibility.Visible;
         WordPacksIntroInfoButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
         WordDetailsBackButton.Visibility = _wordPackLayout.Short ? Visibility.Visible : Visibility.Collapsed;
+        ApplyWordDetailsComposition();
 
         if (_wordPackLayout.SideBySide)
         {
+            WordPacksListColumn.MinWidth = 220;
+            WordPacksCardColumn.MinWidth = 0;
             WordPacksListCard.Visibility = Visibility.Visible;
             WordPacksPaneGap.Width = new GridLength(12);
             WordPacksCard.Visibility = Visibility.Visible;
             WordPacksCardColumn.Width = new GridLength(1, GridUnitType.Star);
             WordPacksBackButton.Visibility = Visibility.Collapsed;
+            WordPacksCardBackButton.Visibility = Visibility.Collapsed;
         }
         else if (_wordPackStackedCardOpen)
         {
@@ -1357,27 +1586,43 @@ public partial class SettingsWindow
         }
     }
 
+    private void ApplyWordDetailsComposition()
+    {
+        var detailsSubpage = _wordPackLayout?.Short == true && WordDetailsPanel.Visibility == Visibility.Visible;
+        LibraryTermsGrid.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryDetailEmptyPanel.Visibility = detailsSubpage || _libraryTermRows.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+        LibraryAddWordButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibrarySortButton.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+        LibraryTermCountText.Visibility = detailsSubpage ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     private void ShowWordPackListPage()
     {
         _wordPackStackedCardOpen = false;
+        WordPacksListColumn.MinWidth = 0;
+        WordPacksCardColumn.MinWidth = 0;
         WordPacksListCard.Visibility = Visibility.Visible;
         WordPacksCard.Visibility = Visibility.Collapsed;
         WordPacksPaneGap.Width = new GridLength(0);
         WordPacksListColumn.Width = new GridLength(1, GridUnitType.Star);
         WordPacksCardColumn.Width = new GridLength(0);
         WordPacksBackButton.Visibility = Visibility.Collapsed;
+        WordPacksCardBackButton.Visibility = Visibility.Collapsed;
         LibraryGrid.Focus();
     }
 
     private void ShowWordPackCardPage()
     {
         _wordPackStackedCardOpen = true;
+        WordPacksListColumn.MinWidth = 0;
+        WordPacksCardColumn.MinWidth = 0;
         WordPacksListCard.Visibility = Visibility.Collapsed;
         WordPacksCard.Visibility = Visibility.Visible;
         WordPacksPaneGap.Width = new GridLength(0);
         WordPacksListColumn.Width = new GridLength(0);
         WordPacksCardColumn.Width = new GridLength(1, GridUnitType.Star);
         WordPacksBackButton.Visibility = Visibility.Visible;
+        WordPacksCardBackButton.Visibility = Visibility.Visible;
         WordPacksCard.Focus();
     }
 
@@ -2129,6 +2374,19 @@ public partial class SettingsWindow
         public Visibility MarkerVisibility => string.IsNullOrEmpty(MarkerLabel) ? Visibility.Collapsed : Visibility.Visible;
 
         public string MoreActionName => string.IsNullOrWhiteSpace(Pattern) ? "More actions for new word" : $"More actions for {Pattern}";
+
+        public void SetValues(string pattern, string replacement, bool wholeWord, bool enabled)
+        {
+            _pattern = pattern ?? string.Empty;
+            _replacement = replacement ?? string.Empty;
+            _wholeWord = wholeWord;
+            _enabled = enabled;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Pattern)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Replacement)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WholeWord)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Enabled)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MoreActionName)));
+        }
 
         public override string ToString() => $"Spoken {Pattern}, written {Replacement}";
 

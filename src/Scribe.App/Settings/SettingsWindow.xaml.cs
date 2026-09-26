@@ -4418,6 +4418,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderSummaryText.Text = CleanupDisclosure.SummaryFor(SelectedProvider);
         UpdateAiWritingStyleSummary();
         RefreshAiStatus();
+        RefreshWordPackAiPermissionState();
     }
 
     private void ApplyAiPageDescription(AiCleanupPageDescription page)
