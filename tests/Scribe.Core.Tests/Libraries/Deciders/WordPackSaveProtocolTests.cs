@@ -374,6 +374,23 @@ public sealed class WordPackSaveProtocolTests
         });
     }
 
+    [Fact]
+    public async Task Outside_edit_result_carries_the_conflicted_pack_id()
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Store.PrepareStatus = LibraryPrepareStatus.OutsideEdit;
+            harness.Store.OutsideEditIds.Add(DeciderFixture.AzureId);
+
+            var result = await harness.SaveAsync();
+
+            Assert.False(result.Success);
+            Assert.Equal([DeciderFixture.AzureId], result.TargetLibraryIds);
+        });
+    }
+
     [Theory]
     [InlineData(LibrarySaveStatus.NotCommitted, true)]
     [InlineData(LibrarySaveStatus.Applied, false)]
@@ -706,6 +723,7 @@ public sealed class WordPackSaveProtocolTests
         public LibrarySaveStatus RepairStatus { get; set; } = LibrarySaveStatus.Applied;
         public LibraryPrepareStatus PrepareStatus { get; set; } = LibraryPrepareStatus.Prepared;
         public LibraryPrepareStatus RepairPrepareStatus { get; set; } = LibraryPrepareStatus.Prepared;
+        public List<string> OutsideEditIds { get; } = [];
         public bool ThrowOnLoad { get; set; }
         public LibraryCatalog Current { get; set; }
         public Dictionary<string, RecentlyDeletedContent> Deleted { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -723,7 +741,7 @@ public sealed class WordPackSaveProtocolTests
             var status = repair ? RepairPrepareStatus : PrepareStatus;
             if (status != LibraryPrepareStatus.Prepared)
             {
-                return new LibraryPrepareResult(status, null, [], LibraryIoFailure.None);
+                return new LibraryPrepareResult(status, null, OutsideEditIds, LibraryIoFailure.None);
             }
 
             Prepared.Add(changes);
