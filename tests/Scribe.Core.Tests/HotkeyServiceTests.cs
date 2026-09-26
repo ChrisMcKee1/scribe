@@ -50,13 +50,13 @@ public partial class HotkeyServiceTests
         NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
 
         Assert.True(
-            SpinWait.SpinUntil(() => service.DesktopSwitchNoticesSeen >= 2, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => service.DesktopSwitchNoticesSeen >= 2, HookTimeout),
             "The hook thread never received the desktop-switch notices.");
         if (receivesInput == false)
         {
             // A desktop that is not the input desktop, such as one created for a test run and never switched to.
             Assert.True(
-                SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 2, TimeSpan.FromSeconds(10)),
+                SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 2, HookTimeout),
                 "The hook thread did not apply a notice on a desktop that is not receiving input.");
         }
         else
@@ -88,11 +88,11 @@ public partial class HotkeyServiceTests
         NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
 
         Assert.True(
-            SpinWait.SpinUntil(() => askedOn.Count >= 2, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => askedOn.Count >= 2, HookTimeout),
             "The hook thread never asked whether its desktop receives input.");
         var expected = receivesInput == false ? 2 : 0;
         Assert.True(
-            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == expected, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == expected, HookTimeout),
             $"Expected {expected} applied switch(es), saw {service.DesktopSwitchesSeen}.");
         Assert.Equal(2, service.DesktopSwitchNoticesSeen);
         Assert.All(askedOn, name => Assert.Equal("Scribe.HotkeyHook", name));

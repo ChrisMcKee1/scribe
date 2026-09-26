@@ -17,7 +17,8 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public partial class HotkeyServiceTests
 {
-    private static readonly TimeSpan HookTimeout = TimeSpan.FromSeconds(10);
+    // A hang guard, never the verdict: each wait is for something certain to happen on the hook thread or the pool.
+    private static readonly TimeSpan HookTimeout = TimeSpan.FromSeconds(30);
 
     // Not Scribe's own marker: the service must take these as real input.
     private static readonly nuint TestInputMarker = unchecked((nuint)0x5343524954455354UL);

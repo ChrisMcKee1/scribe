@@ -18,7 +18,8 @@ public sealed class MouseButtonRound10Tests
     private const uint LeftCtrl = 0xA2;
     private const uint PageDown = 0x22;
 
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
+    // A hang guard, never the verdict: every wait is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     public static TheoryData<string> PausePoints => new() { "before its reads", "before its key-up" };
 

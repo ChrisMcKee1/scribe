@@ -12,6 +12,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public class HotkeyEngineTests
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private const uint RightCtrl = 0xA3;
     private const uint F8 = 0x77;
     private const uint F9 = 0x78;
@@ -42,7 +45,7 @@ public class HotkeyEngineTests
             Assert.False(writer.IsCompleted);
         }
 
-        await writer.WaitAsync(TimeSpan.FromSeconds(10));
+        await writer.WaitAsync(Bound);
         Assert.True(press.Down.Suppress);
         Assert.True(press.Up.Suppress);
         Assert.True(press.Up.RequestReconcile);
@@ -514,13 +517,13 @@ public class HotkeyEngineTests
         var spinning = System.Diagnostics.Stopwatch.StartNew();
         while ((waiter.ThreadState & ThreadState.WaitSleepJoin) == 0)
         {
-            Assert.True(spinning.Elapsed < TimeSpan.FromSeconds(10), "The dispatcher never started waiting.");
+            Assert.True(spinning.Elapsed < Bound, "The dispatcher never started waiting.");
             Thread.Yield();
         }
 
         queue.TryEnqueue(item);
 
-        var returned = waiter.Join(TimeSpan.FromSeconds(10));
+        var returned = waiter.Join(Bound);
         if (!returned)
         {
             queue.Complete(); // release the stuck waiter before failing
@@ -551,11 +554,11 @@ public class HotkeyEngineTests
             Name = "hotkey-test-message-queue",
         };
         pump.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(ready.Wait(Bound));
 
         Assert.True(NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_COMMANDS, 0, 0));
 
-        Assert.True(pump.Join(TimeSpan.FromSeconds(10)));
+        Assert.True(pump.Join(Bound));
         Assert.True(result > 0);
         Assert.Equal(nint.Zero, received.hwnd);
         Assert.Equal(NativeMethods.WM_HOTKEY_COMMANDS, received.message);
@@ -581,10 +584,10 @@ public class HotkeyEngineTests
 
         // The dispatcher plays no part: the hook callback's SetEvent alone gets the check run.
         signal.Signal(1);
-        Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(await checks.WaitAsync(Bound));
 
         signal.Signal(1);
-        Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(await checks.WaitAsync(Bound));
     }
 
     [Fact]

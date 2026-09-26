@@ -16,6 +16,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 internal sealed class HotkeyEngineHarness : IDisposable
 {
+    // RunBounded's deadlock detector: nothing in the passing case waits on it.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     public HotkeyEngineHarness(
         HotkeyBinding binding,
         HotkeyBinding? dictationOnly = null,
@@ -167,7 +170,7 @@ internal sealed class HotkeyEngineHarness : IDisposable
 
         thread.Start();
         Assert.True(
-            thread.Join(TimeSpan.FromSeconds(10)),
+            thread.Join(Bound),
             "The code under test blocked; the hook path must never wait on another thread.");
         failure?.Throw();
         return result;

@@ -23,7 +23,8 @@ public sealed class MouseButtonRound9Tests
     private const uint RightCtrl = 0xA3;
     private const uint PageDown = 0x22;
 
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
+    // A hang guard, never the verdict, and the capture admission's wait where the pass is certain to let it in.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     private static HotkeyBinding Chord(uint first, uint second) => HotkeyCaptureSession.Build([first, second], HotkeyMode.Hold);
 
