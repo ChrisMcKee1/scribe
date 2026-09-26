@@ -105,12 +105,14 @@ public static class TrayIconGenerator
             }
         }
 
-        if (size == 16 || size == 20)
+        if (size == 16 || size == 20 || size == 24)
         {
             ClearRecordingWaveform(output, idle, size);
+            SymmetrizeHorizontal(output);
         }
-        else if (size == 24 || size == 32 || size == 40)
+        else if (size == 32 || size == 40)
         {
+            SymmetrizeHorizontal(output);
             TuneRecordingWaveform(output, idle, size);
         }
 
@@ -134,29 +136,42 @@ public static class TrayIconGenerator
     private static void TuneRecordingWaveform(Bitmap output, Bitmap idle, int size)
     {
         ClearRecordingWaveform(output, idle, size);
-        if (!TryFindWaveformBounds(idle, out var bounds))
+        if (size == 32)
         {
+            DrawRecordingWaveform(output, idle, new[] { 12, 14, 17, 19 }, 8, 15, new[] { (13, 10, 13), (15, 8, 15), (16, 8, 15), (18, 10, 13) });
+            SymmetrizeHorizontal(output);
+            DrawRecordingWaveform(output, idle, new[] { 12, 14, 17, 19 }, 8, 15, new[] { (13, 10, 13), (15, 8, 15), (16, 8, 15), (18, 10, 13) });
             return;
         }
 
-        int centreX = (bounds.Left + bounds.Right) / 2;
-        int centreY = (bounds.Top + bounds.Bottom) / 2;
-        int tallest = bounds.Bottom - bounds.Top + 1;
-        double[] ratios = size == 40
-            ? new[] { 0.26, 0.56, 1.0, 0.56, 0.26 }
-            : new[] { 0.56, 1.0, 0.56 };
-        int startX = centreX - (ratios.Length - 1);
-        for (int i = 0; i < ratios.Length; i++)
+        if (size == 40)
         {
-            int x = startX + i * 2;
-            int height = Math.Max(1, (int)Math.Round(tallest * ratios[i]));
-            int top = centreY - (height - 1) / 2;
-            int bottom = top + height - 1;
-            for (int y = top; y <= bottom; y++)
+            DrawRecordingWaveform(output, idle, new[] { 14, 16, 18, 21, 23, 25 }, 10, 19, new[] { (15, 14, 15), (17, 12, 17), (19, 10, 19), (20, 10, 19), (22, 12, 17), (24, 14, 15) });
+            SymmetrizeHorizontal(output);
+            DrawRecordingWaveform(output, idle, new[] { 14, 16, 18, 21, 23, 25 }, 10, 19, new[] { (15, 14, 15), (17, 12, 17), (19, 10, 19), (20, 10, 19), (22, 12, 17), (24, 14, 15) });
+        }
+    }
+
+    private static void DrawRecordingWaveform(Bitmap output, Bitmap idle, int[] paperColumns, int paperTop, int paperBottom, (int X, int Top, int Bottom)[] inkColumns)
+    {
+        foreach (int x in paperColumns)
+        {
+            for (int y = paperTop; y <= paperBottom; y++)
             {
                 if (IsCapsuleSource(idle.GetPixel(x, y)))
                 {
-                    SetIfVisible(output, idle, x, y, Ink);
+                    SetIfVisible(output, idle, x, y, Paper);
+                }
+            }
+        }
+
+        foreach (var bar in inkColumns)
+        {
+            for (int y = bar.Top; y <= bar.Bottom; y++)
+            {
+                if (IsCapsuleSource(idle.GetPixel(bar.X, y)))
+                {
+                    SetIfVisible(output, idle, bar.X, y, Ink);
                 }
             }
         }
@@ -170,9 +185,9 @@ public static class TrayIconGenerator
         using var brush = new SolidBrush(ProcessingDots.ToColor());
         if (size == 16)
         {
-            DrawDotGrid(output, 1, 6, 3, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
-            DrawDotGrid(output, 6, 6, 3, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
-            DrawDotGrid(output, 11, 6, 3, ProcessingDots, Blend(ProcessingDots, Ink, 0.4));
+            DrawDotGrid(output, 3, 7, 2, ProcessingDots, ProcessingDots);
+            DrawDotGrid(output, 7, 7, 2, ProcessingDots, ProcessingDots);
+            DrawDotGrid(output, 11, 7, 2, ProcessingDots, ProcessingDots);
         }
         else if (size == 20)
         {
@@ -182,6 +197,7 @@ public static class TrayIconGenerator
         }
         else
         {
+            g.PixelOffsetMode = PixelOffsetMode.Half;
             float scale = size / 512f;
             float radius = 44f * scale;
             foreach (float cx in new[] { 126f * scale, 256f * scale, 386f * scale })
@@ -189,6 +205,7 @@ public static class TrayIconGenerator
                 float cy = 256f * scale;
                 g.FillEllipse(brush, cx - radius, cy - radius, radius * 2f, radius * 2f);
             }
+            SymmetrizeBoth(output);
         }
 
         return output;
@@ -212,6 +229,7 @@ public static class TrayIconGenerator
         }
         else
         {
+            g.PixelOffsetMode = PixelOffsetMode.Half;
             float scale = size / 512f;
             float barWidth = 70f * scale;
             float gap = 64f * scale;
@@ -221,6 +239,7 @@ public static class TrayIconGenerator
             float right = 256f * scale + gap / 2f;
             FillRoundBar(g, brush, left, y, barWidth, height, barWidth / 2f);
             FillRoundBar(g, brush, right, y, barWidth, height, barWidth / 2f);
+            SymmetrizeBoth(output);
         }
 
         return output;
@@ -328,6 +347,58 @@ public static class TrayIconGenerator
     }
 
     private static bool IsWaveformSource(Color color) => color.A > 0 && Decompose(color).Signal >= 0.18;
+
+    private static void SymmetrizeHorizontal(Bitmap bitmap)
+    {
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width / 2; x++)
+            {
+                int mirrorX = bitmap.Width - 1 - x;
+                var average = Average(bitmap.GetPixel(x, y), bitmap.GetPixel(mirrorX, y));
+                bitmap.SetPixel(x, y, average);
+                bitmap.SetPixel(mirrorX, y, average);
+            }
+        }
+    }
+
+    private static void SymmetrizeBoth(Bitmap bitmap)
+    {
+        for (int y = 0; y < (bitmap.Height + 1) / 2; y++)
+        {
+            int mirrorY = bitmap.Height - 1 - y;
+            for (int x = 0; x < (bitmap.Width + 1) / 2; x++)
+            {
+                int mirrorX = bitmap.Width - 1 - x;
+                var average = Average(bitmap.GetPixel(x, y), bitmap.GetPixel(mirrorX, y), bitmap.GetPixel(x, mirrorY), bitmap.GetPixel(mirrorX, mirrorY));
+                bitmap.SetPixel(x, y, average);
+                bitmap.SetPixel(mirrorX, y, average);
+                bitmap.SetPixel(x, mirrorY, average);
+                bitmap.SetPixel(mirrorX, mirrorY, average);
+            }
+        }
+    }
+
+    private static Color Average(params Color[] colors)
+    {
+        int alpha = 0;
+        int red = 0;
+        int green = 0;
+        int blue = 0;
+        foreach (var color in colors)
+        {
+            alpha += color.A;
+            red += color.R;
+            green += color.G;
+            blue += color.B;
+        }
+
+        return Color.FromArgb(
+            ClampByte(alpha / (double)colors.Length),
+            ClampByte(red / (double)colors.Length),
+            ClampByte(green / (double)colors.Length),
+            ClampByte(blue / (double)colors.Length));
+    }
 
     private static bool IsCapsuleSource(Color color)
     {
@@ -600,5 +671,3 @@ public static class TrayIconGenerator
 
 Add-Type -TypeDefinition $source -ReferencedAssemblies System.Runtime,System.Collections,System.Drawing.Common,System.Drawing.Primitives,System.Private.Windows.GdiPlus,System.Private.Windows.Core
 [TrayIconGenerator]::Generate($root)
-
-

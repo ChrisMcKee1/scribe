@@ -111,7 +111,8 @@ public sealed partial class TrayIconAssetTests
     [Theory]
     [InlineData(16)]
     [InlineData(20)]
-    public void Recording_small_frames_have_no_ink_inside_the_capsule_box(int size)
+    [InlineData(24)]
+    public void Recording_frames_without_native_waveforms_have_no_ink_inside_the_capsule_box(int size)
     {
         using var idle = IconFile.Read(AssetPath("scribe.ico")).Frame(size).Decode();
         using var recording = IconFile.Read(AssetPath("scribe-recording.ico")).Frame(size).Decode();
@@ -128,33 +129,48 @@ public sealed partial class TrayIconAssetTests
     }
 
     [Theory]
-    [InlineData(24, 3)]
-    [InlineData(32, 3)]
-    [InlineData(40, 5)]
-    public void Recording_native_waveform_is_one_pixel_columns_with_paper_gaps(int size, int expectedColumns)
+    [InlineData(32)]
+    [InlineData(40)]
+    public void Recording_native_waveform_matches_the_hand_tuned_columns(int size)
     {
-        using var idle = IconFile.Read(AssetPath("scribe.ico")).Frame(size).Decode();
         using var recording = IconFile.Read(AssetPath("scribe-recording.ico")).Frame(size).Decode();
-        var sourceWaveform = FindSourceWaveformBox(idle);
         var ink = ToColor(ScribeBrand.Ink);
-        var columns = new SortedSet<int>();
+        var paper = ToColor(ScribeBrand.Paper);
+        var inkBars = size == 32
+            ? new[] { new PixelRect(13, 10, 1, 4), new PixelRect(15, 8, 2, 8), new PixelRect(18, 10, 1, 4) }
+            : [new PixelRect(15, 14, 1, 2), new PixelRect(17, 12, 1, 6), new PixelRect(19, 10, 2, 10), new PixelRect(22, 12, 1, 6), new PixelRect(24, 14, 1, 2)];
+        var paperColumns = size == 32
+            ? new[] { 12, 14, 17, 19 }
+            : [14, 16, 18, 21, 23, 25];
+        var paperTop = size == 32 ? 8 : 10;
+        var paperBottom = size == 32 ? 15 : 19;
 
-        for (var y = sourceWaveform.Top; y <= sourceWaveform.Bottom; y++)
+        foreach (var bar in inkBars)
         {
-            for (var x = sourceWaveform.Left - 2; x <= sourceWaveform.Right + 2; x++)
+            for (var y = bar.Top; y <= bar.Bottom; y++)
             {
-                if (x >= 0 && x < recording.Width && IsClose(ink, recording.GetPixel(x, y)))
+                for (var x = bar.Left; x <= bar.Right; x++)
                 {
-                    columns.Add(x);
+                    Assert.True(IsClose(ink, recording.GetPixel(x, y)), $"Expected ink at {x},{y} in {size} px frame.");
                 }
             }
         }
 
-        Assert.Equal(expectedColumns, columns.Count);
-        var ordered = columns.ToArray();
-        for (var i = 1; i < ordered.Length; i++)
+        foreach (var x in paperColumns)
         {
-            Assert.True(ordered[i] - ordered[i - 1] >= 2, $"Waveform columns {ordered[i - 1]} and {ordered[i]} touch in {size} px frame.");
+            for (var y = paperTop; y <= paperBottom; y++)
+            {
+                Assert.True(IsClose(paper, recording.GetPixel(x, y)), $"Expected paper at {x},{y} in {size} px frame.");
+            }
+        }
+
+        for (var y = paperTop; y <= paperBottom; y++)
+        {
+            for (var x = paperColumns.Min(); x <= paperColumns.Max(); x++)
+            {
+                var shouldBeInk = inkBars.Any(bar => bar.Contains(x, y));
+                Assert.Equal(shouldBeInk, IsClose(ink, recording.GetPixel(x, y)));
+            }
         }
     }
 
@@ -166,9 +182,9 @@ public sealed partial class TrayIconAssetTests
         using var bitmap = IconFile.Read(AssetPath("scribe-processing.ico")).Frame(size).Decode();
         var ink = ToColor(ScribeBrand.Ink);
         var dot = ToColor(ScribeBrand.ProcessingDots);
-        var corner = Blend(dot, ink, 0.4);
+        var corner = size == 16 ? dot : Blend(dot, ink, 0.4);
         var dots = size == 16
-            ? new[] { new PixelRect(1, 6, 3, 3), new PixelRect(6, 6, 3, 3), new PixelRect(11, 6, 3, 3) }
+            ? new[] { new PixelRect(3, 7, 2, 2), new PixelRect(7, 7, 2, 2), new PixelRect(11, 7, 2, 2) }
             : new[] { new PixelRect(3, 8, 4, 4), new PixelRect(8, 8, 4, 4), new PixelRect(13, 8, 4, 4) };
 
         AssertSmallGrid(bitmap, ink, dots, dot, corner);
@@ -189,6 +205,60 @@ public sealed partial class TrayIconAssetTests
 
         AssertSmallGrid(bitmap, slate, bars, paper, corner);
     }
+
+    [Theory]
+    [InlineData("scribe-recording.ico", 16, 40)]
+    [InlineData("scribe-recording.ico", 20, 40)]
+    [InlineData("scribe-recording.ico", 24, 40)]
+    [InlineData("scribe-recording.ico", 32, 40)]
+    [InlineData("scribe-recording.ico", 40, 40)]
+    [InlineData("scribe-processing.ico", 16, 40)]
+    [InlineData("scribe-processing.ico", 20, 40)]
+    [InlineData("scribe-processing.ico", 24, 12)]
+    [InlineData("scribe-processing.ico", 32, 12)]
+    [InlineData("scribe-processing.ico", 40, 12)]
+    [InlineData("scribe-processing.ico", 48, 12)]
+    [InlineData("scribe-processing.ico", 64, 12)]
+    [InlineData("scribe-processing.ico", 128, 12)]
+    [InlineData("scribe-processing.ico", 256, 12)]
+    [InlineData("scribe-paused.ico", 16, 40)]
+    [InlineData("scribe-paused.ico", 20, 40)]
+    [InlineData("scribe-paused.ico", 24, 12)]
+    [InlineData("scribe-paused.ico", 32, 12)]
+    [InlineData("scribe-paused.ico", 40, 12)]
+    [InlineData("scribe-paused.ico", 48, 12)]
+    [InlineData("scribe-paused.ico", 64, 12)]
+    [InlineData("scribe-paused.ico", 128, 12)]
+    [InlineData("scribe-paused.ico", 256, 12)]
+    public void State_frames_are_mirrored_left_to_right(string fileName, int size, int threshold)
+    {
+        using var bitmap = IconFile.Read(AssetPath(fileName)).Frame(size).Decode();
+
+        AssertMirrorWithin(bitmap, threshold, horizontal: true);
+    }
+
+    [Theory]
+    [InlineData("scribe-processing.ico", 24)]
+    [InlineData("scribe-processing.ico", 32)]
+    [InlineData("scribe-processing.ico", 40)]
+    [InlineData("scribe-processing.ico", 48)]
+    [InlineData("scribe-processing.ico", 64)]
+    [InlineData("scribe-processing.ico", 128)]
+    [InlineData("scribe-processing.ico", 256)]
+    [InlineData("scribe-paused.ico", 24)]
+    [InlineData("scribe-paused.ico", 32)]
+    [InlineData("scribe-paused.ico", 40)]
+    [InlineData("scribe-paused.ico", 48)]
+    [InlineData("scribe-paused.ico", 64)]
+    [InlineData("scribe-paused.ico", 128)]
+    [InlineData("scribe-paused.ico", 256)]
+    public void Processing_and_paused_large_frames_are_mirrored_top_to_bottom(string fileName, int size)
+    {
+        using var bitmap = IconFile.Read(AssetPath(fileName)).Frame(size).Decode();
+
+        AssertMirrorWithin(bitmap, 12, horizontal: false);
+    }
+
     [Fact]
     public void Generator_brand_literals_match_scribe_brand()
     {
@@ -305,6 +375,27 @@ public sealed partial class TrayIconAssetTests
         Math.Abs(expected.R - actual.R) <= 2 &&
         Math.Abs(expected.G - actual.G) <= 2 &&
         Math.Abs(expected.B - actual.B) <= 2;
+
+    private static void AssertMirrorWithin(Bitmap bitmap, int threshold, bool horizontal)
+    {
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var mirrorX = horizontal ? bitmap.Width - 1 - x : x;
+                var mirrorY = horizontal ? y : bitmap.Height - 1 - y;
+                var left = bitmap.GetPixel(x, y);
+                var right = bitmap.GetPixel(mirrorX, mirrorY);
+                Assert.True(
+                    ChannelDifference(left, right) <= threshold,
+                    $"Mirror difference exceeded {threshold} at {x},{y} vs {mirrorX},{mirrorY}: {left} vs {right}.");
+            }
+        }
+    }
+
+    private static int ChannelDifference(Color left, Color right) => Math.Max(
+        Math.Max(Math.Abs(left.R - right.R), Math.Abs(left.G - right.G)),
+        Math.Max(Math.Abs(left.B - right.B), Math.Abs(left.A - right.A)));
 
     private static bool IsSourceWaveform(Color color) => color.A > 0 && color.B > color.R + 40 && color.B > 150;
 
@@ -432,6 +523,4 @@ public sealed partial class TrayIconAssetTests
         }
     }
 }
-
-
 
