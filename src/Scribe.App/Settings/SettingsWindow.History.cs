@@ -19,11 +19,22 @@ public partial class SettingsWindow
 {
     // --- History --------------------------------------------------------------------------
 
-    private async void LoadHistory()
+    private async void LoadHistory(int retry = 0)
     {
         if (!_historyLoad.TryBegin(null, out var ticket))
         {
             return;
+        }
+
+        if (retry > 0)
+        {
+            // Wait out the burst of deletions that made the last read stale, and read again only if History is still
+            // the page on screen and nothing newer replaced this request.
+            await Task.Delay(HistoryReadGeneration.RetryDelay(retry));
+            if (!_historyLoad.CanPublish(ticket) || !IsHistoryPageShown())
+            {
+                return;
+            }
         }
 
         var generation = _historyMutationGeneration.Capture();
@@ -37,21 +48,30 @@ public partial class SettingsWindow
             if (_historyLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load dictation history for Settings.");
-                HistoryEmptyHint.Text = HistoryRowFormat.LoadFailedText;
-                HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
-                ApplyHistoryLoadState(loadFailed: true);
+                ShowHistoryLoadFailed();
             }
 
             return;
         }
 
-        var requestStillCurrent = _historyLoad.CanPublish(ticket);
+        var requestStillCurrent = _historyLoad.CanPublish(ticket) && IsHistoryPageShown();
         var retryIfStale = _historyPagedRows.Count == 0 && _historyRows.Count == 0;
-        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryIfStale);
+        var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryIfStale, retry);
         if (completion == HistoryReadCompletion.Retry)
         {
             _historyLoad.Fail(ticket);
-            LoadHistory();
+            LoadHistory(retry + 1);
+            return;
+        }
+
+        if (completion == HistoryReadCompletion.GiveUp)
+        {
+            if (_historyLoad.Fail(ticket))
+            {
+                LogHistoryReadGaveUp("load", retry);
+                ShowHistoryLoadFailed();
+            }
+
             return;
         }
 
@@ -83,6 +103,31 @@ public partial class SettingsWindow
     }
 
     private HistoryRow? SelectedHistory => HistoryGrid.SelectedItem as HistoryRow;
+
+    // Visibility, not IsVisible: the offscreen render harness has no presentation source, where IsVisible is always false.
+    private bool IsHistoryPageShown() => !_closed && SectionHistory.Visibility == Visibility.Visible;
+
+    private void ShowHistoryLoadFailed()
+    {
+        HistoryEmptyHint.Text = HistoryRowFormat.LoadFailedText;
+        HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
+        ApplyHistoryLoadState(loadFailed: true);
+    }
+
+    private void LogHistoryReadGaveUp(string read, int retries)
+    {
+        try
+        {
+            _log.LogInformation(
+                "History {Read} stayed stale after {Retries} automatic retries while dictations were deleted or rated; showing Try again.",
+                read,
+                retries);
+        }
+        catch
+        {
+            // Diagnostics must never disrupt the settings window.
+        }
+    }
 
     private void HistoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateHistorySelection();
@@ -177,7 +222,7 @@ public partial class SettingsWindow
 
     private bool IsHistorySearchActive() => !string.IsNullOrWhiteSpace(HistorySearchBox?.Text);
 
-    private void StartHistorySearch(bool debounce)
+    private void StartHistorySearch(bool debounce, int retry = 0)
     {
         var query = HistorySearchBox.Text;
         _historySearchDelay?.Cancel();
@@ -185,29 +230,50 @@ public partial class SettingsWindow
         var source = new CancellationTokenSource();
         _historySearchDelay = source;
         var ticket = Interlocked.Increment(ref _historySearchTicket);
-        var generation = _historyMutationGeneration.Capture();
-        _ = RunHistorySearchAsync(query, ticket, generation, debounce, source.Token);
+        _ = RunHistorySearchAsync(query, ticket, debounce, retry, source.Token);
     }
 
-    private async Task RunHistorySearchAsync(string query, long ticket, long generation, bool debounce, CancellationToken cancellationToken)
+    private bool IsCurrentHistorySearch(string query, long ticket, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested &&
+        IsHistoryPageShown() &&
+        ticket == Interlocked.Read(ref _historySearchTicket) &&
+        string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal);
+
+    private async Task RunHistorySearchAsync(string query, long ticket, bool debounce, int retry, CancellationToken cancellationToken)
     {
+        // Captured after any wait, so a deletion during the debounce or a retry's wait doesn't make this read stale.
+        var generation = 0L;
         try
         {
             if (debounce)
             {
                 await Task.Delay(250, cancellationToken);
             }
+            else if (retry > 0)
+            {
+                await Task.Delay(HistoryReadGeneration.RetryDelay(retry), cancellationToken);
+            }
 
+            if (!IsCurrentHistorySearch(query, ticket, cancellationToken))
+            {
+                return;
+            }
+
+            generation = _historyMutationGeneration.Capture();
             var entries = await Task.Run(() => _history.Search(query, HistoryRowFormat.RecentLimit), cancellationToken);
-            var requestStillCurrent =
-                !cancellationToken.IsCancellationRequested &&
-                !_closed &&
-                ticket == Interlocked.Read(ref _historySearchTicket) &&
-                string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal);
-            var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: true);
+            var completion = _historyMutationGeneration.CompleteRead(
+                generation, IsCurrentHistorySearch(query, ticket, cancellationToken), retryWhenStale: true, retry);
             if (completion == HistoryReadCompletion.Retry)
             {
-                StartHistorySearch(debounce: false);
+                StartHistorySearch(debounce: false, retry + 1);
+                return;
+            }
+
+            if (completion == HistoryReadCompletion.GiveUp)
+            {
+                LogHistoryReadGaveUp("search", retry);
+                HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
+                ApplyHistoryLoadState(loadFailed: true);
                 return;
             }
 
@@ -227,18 +293,15 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            var requestStillCurrent =
-                !_closed &&
-                ticket == Interlocked.Read(ref _historySearchTicket) &&
-                string.Equals(query, HistorySearchBox.Text, StringComparison.Ordinal);
-            var completion = _historyMutationGeneration.CompleteRead(generation, requestStillCurrent, retryWhenStale: true);
+            var completion = _historyMutationGeneration.CompleteRead(
+                generation, IsCurrentHistorySearch(query, ticket, CancellationToken.None), retryWhenStale: true, retry);
             if (completion == HistoryReadCompletion.Retry)
             {
-                StartHistorySearch(debounce: false);
+                StartHistorySearch(debounce: false, retry + 1);
                 return;
             }
 
-            if (completion == HistoryReadCompletion.Drop)
+            if (completion is HistoryReadCompletion.Drop)
             {
                 return;
             }

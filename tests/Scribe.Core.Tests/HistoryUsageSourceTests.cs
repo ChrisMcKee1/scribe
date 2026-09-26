@@ -54,7 +54,7 @@ public sealed class HistoryUsageSourceTests
         Assert.Contains("ReferenceEquals(HistoryGrid.SelectedItem, _historyRows[index])", replace, StringComparison.Ordinal);
         Assert.Contains("HistoryGrid.SelectedItem = replacement;", replace, StringComparison.Ordinal);
 
-        var load = Body(history, "private async void LoadHistory()");
+        var load = Body(history, "private async void LoadHistory(int retry = 0)");
         Assert.True(
             load.IndexOf("var selectedId = SelectedHistory?.Id;", StringComparison.Ordinal) <
             load.IndexOf("ShowPagedHistoryRows(selectedId);", StringComparison.Ordinal),
@@ -105,22 +105,42 @@ public sealed class HistoryUsageSourceTests
     {
         var history = Read("SettingsWindow.History.cs");
         var search = Body(history, "private async Task RunHistorySearchAsync(");
-        Assert.Contains("CompleteRead(generation, requestStillCurrent, retryWhenStale: true)", search, StringComparison.Ordinal);
-        Assert.Contains("StartHistorySearch(debounce: false);", search, StringComparison.Ordinal);
+        Assert.Contains("generation, IsCurrentHistorySearch(query, ticket, cancellationToken), retryWhenStale: true, retry);", search, StringComparison.Ordinal);
+        Assert.Contains("StartHistorySearch(debounce: false, retry + 1);", search, StringComparison.Ordinal);
 
-        var load = Body(history, "private async void LoadHistory()");
+        var load = Body(history, "private async void LoadHistory(int retry = 0)");
         Assert.True(
-            load.IndexOf("CompleteRead(generation, requestStillCurrent, retryIfStale)", StringComparison.Ordinal) <
+            load.IndexOf("CompleteRead(generation, requestStillCurrent, retryIfStale, retry)", StringComparison.Ordinal) <
             load.IndexOf("_historyLoad.Publish(ticket, string.Empty)", StringComparison.Ordinal),
             "The generation must be checked before a recent load is marked published.");
-        Assert.Contains("LoadHistory();", load, StringComparison.Ordinal);
+        Assert.Contains("LoadHistory(retry + 1);", load, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Automatic_retries_are_bounded_and_stop_once_History_is_not_shown()
+    {
+        // Deletions arriving during every read retried forever, and a read made stale after the user left History
+        // started another read on a page nobody saw.
+        var history = Read("SettingsWindow.History.cs");
+        var load = Body(history, "private async void LoadHistory(int retry = 0)");
+        Assert.Contains("completion == HistoryReadCompletion.GiveUp", load, StringComparison.Ordinal);
+        Assert.Contains("var requestStillCurrent = _historyLoad.CanPublish(ticket) && IsHistoryPageShown();", load, StringComparison.Ordinal);
+        Assert.Contains("if (!_historyLoad.CanPublish(ticket) || !IsHistoryPageShown())", load, StringComparison.Ordinal);
+
+        var search = Body(history, "private async Task RunHistorySearchAsync(");
+        Assert.Contains("completion == HistoryReadCompletion.GiveUp", search, StringComparison.Ordinal);
+        Assert.True(
+            search.IndexOf("if (!IsCurrentHistorySearch(query, ticket, cancellationToken))", StringComparison.Ordinal) <
+            search.IndexOf("_history.Search(query", StringComparison.Ordinal),
+            "A search that waited (debounce or retry) must check it is still current before it reads.");
+        Assert.Matches(new Regex(@"private bool IsCurrentHistorySearch\([^)]*\) =>[^;]*IsHistoryPageShown\(\) &&"), history);
     }
 
     [Fact]
     public void Replacing_the_page_cache_invalidates_older_page_tickets()
     {
         var history = Read("SettingsWindow.History.cs");
-        var load = Body(history, "private async void LoadHistory()");
+        var load = Body(history, "private async void LoadHistory(int retry = 0)");
         Assert.Contains("Interlocked.Increment(ref _historyOlderTicket);", load, StringComparison.Ordinal);
 
         var loadOlder = Body(history, "private async void HistoryLoadOlderButton_Click(");

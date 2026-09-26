@@ -77,6 +77,56 @@ public sealed class HistoryReadGenerationTests
     }
 
     [Fact]
+    public void A_read_kept_stale_by_every_retry_gives_up_after_the_budget()
+    {
+        var generation = new HistoryReadGeneration();
+        for (var retries = 0; retries < HistoryReadGeneration.MaxAutomaticRetries; retries++)
+        {
+            var ticket = generation.Capture();
+            generation.AdvanceForDeletion();
+            Assert.Equal(HistoryReadCompletion.Retry, generation.CompleteRead(ticket, requestStillCurrent: true, retryWhenStale: true, retries));
+        }
+
+        var last = generation.Capture();
+        generation.AdvanceForDeletion();
+
+        Assert.Equal(
+            HistoryReadCompletion.GiveUp,
+            generation.CompleteRead(last, requestStillCurrent: true, retryWhenStale: true, HistoryReadGeneration.MaxAutomaticRetries));
+    }
+
+    [Fact]
+    public void An_older_page_never_gives_up_or_retries_it_drops()
+    {
+        var generation = new HistoryReadGeneration();
+        var ticket = generation.Capture();
+        generation.AdvanceForDeletion();
+
+        Assert.Equal(
+            HistoryReadCompletion.Drop,
+            generation.CompleteRead(ticket, requestStillCurrent: true, retryWhenStale: false, HistoryReadGeneration.MaxAutomaticRetries));
+    }
+
+    [Fact]
+    public void A_request_no_longer_current_drops_whatever_its_budget()
+    {
+        var generation = new HistoryReadGeneration();
+        var ticket = generation.Capture();
+        generation.AdvanceForDeletion();
+
+        Assert.Equal(HistoryReadCompletion.Drop, generation.CompleteRead(ticket, requestStillCurrent: false, retryWhenStale: true, 0));
+    }
+
+    [Fact]
+    public void Each_retry_waits_longer_than_the_last()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(150), HistoryReadGeneration.RetryDelay(1));
+        Assert.Equal(TimeSpan.FromMilliseconds(300), HistoryReadGeneration.RetryDelay(2));
+        Assert.Equal(TimeSpan.FromMilliseconds(600), HistoryReadGeneration.RetryDelay(3));
+        Assert.Equal(TimeSpan.FromMilliseconds(600), HistoryReadGeneration.RetryDelay(9));
+    }
+
+    [Fact]
     public void Current_unchanged_read_publishes()
     {
         var generation = new HistoryReadGeneration();
