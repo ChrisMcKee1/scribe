@@ -372,6 +372,9 @@ public sealed class DefaultHotkeyTests
     {
         var hint = DefaultHotkeyRestore.Hint;
 
+        Assert.Equal(
+            "Restores hold Page Down for dictation and hold Page Up for the shortcut without AI cleanup.",
+            DefaultHotkeyRestore.Caption);
         Assert.Contains("hold Page Down for dictation with AI cleanup and hold Page Up for dictation only", hint);
         Assert.Contains("Page Down and Page Up pressed on their own no longer reach other apps", hint);
         Assert.Contains("a presentation remote stops changing slides", hint);

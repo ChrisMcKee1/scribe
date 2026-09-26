@@ -530,7 +530,8 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(code, @"if \(step\.Handled\)\s*\{\s*e\.Handled = true;").Count);
         Assert.Contains("AddHook(CaptureNonClientMouseButtons)", code);
         Assert.Contains("x:Name=\"MouseButtonsHintText\"", xaml);
-        Assert.Contains("MouseButtonsHintText.Text = string.Empty;", code);
+        Assert.Contains("MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;", code);
+        Assert.Contains("MouseButtonsHintText.Visibility = Visibility.Collapsed;", code);
     }
 
     [Fact]

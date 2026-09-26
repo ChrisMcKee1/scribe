@@ -605,7 +605,16 @@
                                        Text="Your microphone, your shortcuts, and what you see while you dictate."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel Width="960" MaxWidth="1000" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                <StackPanel x:Name="FirstRunHintHost" Visibility="Collapsed" Margin="0,0,0,12">
+                                    <ui:InfoBar x:Name="FirstRunHintBar" Title="Ready to dictate" Message="Click in any text box, hold Page Down and speak. Let go to type." IsOpen="False" Severity="Informational" IsClosable="False"/>
+                                    <ui:Button Content="Try it here" Margin="0,8,0,0" HorizontalAlignment="Left" Click="TryDictationLink_Click"/>
+                                </StackPanel>
+
                                 <TextBlock Text="Microphone" Style="{StaticResource SectionHeader}" Margin="1,4,0,8"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -617,9 +626,10 @@
                                                   SelectionChanged="DeviceCombo_SelectionChanged"
                                                   DropDownClosed="DeviceCombo_DropDownClosed"
                                                   Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
-                                        <ui:Button Content="Sound settings"
-                                                   HorizontalAlignment="Left" Margin="0,8,0,0"
-                                                   Click="SoundSettings_Click"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <ui:Button Content="Sound settings" HorizontalAlignment="Left" Click="SoundSettings_Click"/>
+                                            <ui:Button Content="Try dictation" HorizontalAlignment="Left" Margin="8,0,0,0" Click="TryDictationLink_Click"/>
+                                        </StackPanel>
                                     </StackPanel>
                                 </ui:Card>
 
@@ -629,49 +639,51 @@
                                         <TextBlock x:Name="HotkeyTitle" Text="Dictation shortcut" Style="{StaticResource CardTitle}"/>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" IsReadOnly="True"
+                                            <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" Width="200" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="Choose Change, then press a key, two keys or a mouse button"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=HotkeyTitle}"/>
                                             <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Change"
                                                        Margin="8,0,0,0" MinWidth="72"
                                                        Click="CaptureButton_Click"/>
-                                            <ComboBox x:Name="ModeCombo" Grid.Column="2" MinWidth="220" Margin="8,0,0,0"
+                                            <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="210" Margin="8,0,0,0"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Dictation shortcut, hold or toggle"/>
                                         </Grid>
-                                        <TextBlock Style="{StaticResource CardDescription}"
+                                        <TextBlock x:Name="HotkeyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Types your words with AI cleanup."/>
+                                        <TextBlock x:Name="HotkeyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
                                         <TextBlock x:Name="DictationOnlyTitle" Text="Shortcut without AI cleanup" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" IsReadOnly="True"
+                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" Width="200" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="None"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=DictationOnlyTitle}"/>
                                             <ui:Button Grid.Column="1" Content="Change" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyCaptureButton_Click"/>
-                                            <ui:Button Grid.Column="2" Content="Remove" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button x:Name="DictationOnlyClearButton" Grid.Column="2" Content="Remove" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyClearButton_Click"/>
-                                            <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" MinWidth="220" Margin="8,0,0,0"
+                                            <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="210" Margin="8,0,0,0"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Shortcut without AI cleanup, hold or toggle"/>
                                         </Grid>
-                                        <TextBlock Style="{StaticResource CardDescription}"
+                                        <TextBlock x:Name="DictationOnlyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Optional. Types exactly what Scribe hears, with your dictionary and snippets."/>
+                                        <TextBlock x:Name="DictationOnlyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
                                         <!-- Text comes from HotkeyCaptureSession.MouseButtonsHint: which buttons, how to set one,
                                              and what binding one costs in other apps. -->
                                         <TextBlock x:Name="MouseButtonsHintText" Style="{StaticResource CardDescription}"
-                                                   Margin="0,16,0,0"/>
+                                                   Visibility="Collapsed"/>
                                         <!-- Text comes from DefaultHotkeyRestore.Hint so it names the keys the button
                                              actually restores, and what binding them costs in other apps. -->
                                         <TextBlock x:Name="DefaultHotkeysHintText" Style="{StaticResource CardDescription}"
@@ -702,6 +714,7 @@
                                                 <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
                                         <TextBlock Margin="28,2,0,0" x:Name="SpaceAfterDictationHint" Style="{StaticResource CardDescription}" Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
+                                        <ui:Button Content="More typing options are on the Advanced page." Margin="28,8,0,0" HorizontalAlignment="Left" Click="AdvancedTypingLink_Click"/>
                                     </StackPanel>
                                 </ui:Card>
 
@@ -790,10 +803,10 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock Text="Start with Windows" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock Text="Start Scribe when you sign in to Windows" Style="{StaticResource CardTitle}"/>
                                             <TextBlock x:Name="LaunchStatusText" Style="{StaticResource CardDescription}"
                                                        Text="Checking the Windows startup setting..."/>
-                                            <ui:Button Content="Open Windows startup settings"
+                                            <ui:Button Content="Windows startup settings"
                                                        HorizontalAlignment="Left" Margin="0,8,0,0"
                                                        Click="StartupSettings_Click"/>
                                         </StackPanel>
@@ -808,7 +821,8 @@
                                         </StackPanel>
                                     </Grid>
                                 </ui:Card>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>
 
@@ -824,8 +838,41 @@
                                        Text="Settings most people never need to change. The defaults suit most PCs."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
                                 <TextBlock x:Name="AdvancedSpeechHeader" Text="Speech recognition" Style="{StaticResource SectionHeader}" Margin="1,4,0,8"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <TextBlock x:Name="TranscriptionModelTitle" Text="Speech model" Style="{StaticResource CardTitle}"/>
+                                        <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
+                                                  Width="320" HorizontalAlignment="Left"
+                                                  DisplayMemberPath="Label"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=TranscriptionModelTitle}"
+                                                  SelectionChanged="TranscriptionModelCombo_SelectionChanged">
+                                            <!-- DisplayMemberPath only controls what is drawn; UI Automation falls
+                                                 back to ToString(), which on this Core record dumps every field. -->
+                                            <ComboBox.ItemContainerStyle>
+                                                <Style TargetType="ComboBoxItem">
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding Label}"/>
+                                                </Style>
+                                            </ComboBox.ItemContainerStyle>
+                                        </ComboBox>
+                                        <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource CardDescription}"
+                                                   Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Download"
+                                                       MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>
+                                            <ProgressBar x:Name="TranscriptionModelProgress" Width="220" Height="8"
+                                                         Margin="12,0,0,0" VerticalAlignment="Center"
+                                                         Minimum="0" Maximum="100" Visibility="Collapsed"
+                                                         AutomationProperties.Name="Speech model download progress"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ui:Card>
+
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -844,38 +891,30 @@
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <TextBlock x:Name="TranscriptionModelTitle" Text="Speech model" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}"
-                                                   Text="Changes to the speech model and processor threads take effect after you restart Scribe."/>
-                                        <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
-                                                  HorizontalAlignment="Stretch"
-                                                  DisplayMemberPath="DisplayName"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=TranscriptionModelTitle}"
-                                                  SelectionChanged="TranscriptionModelCombo_SelectionChanged">
-                                            <!-- DisplayMemberPath only controls what is drawn; UI Automation falls
-                                                 back to ToString(), which on this Core record dumps every field. -->
-                                            <ComboBox.ItemContainerStyle>
-                                                <Style TargetType="ComboBoxItem">
-                                                    <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}"/>
-                                                </Style>
-                                            </ComboBox.ItemContainerStyle>
-                                        </ComboBox>
-                                        <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource CardDescription}"
-                                                   Margin="0,6,0,0" TextWrapping="Wrap"/>
-                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Download"
-                                                       MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>
-                                            <ProgressBar x:Name="TranscriptionModelProgress" Width="220" Height="8"
-                                                         Margin="12,0,0,0" VerticalAlignment="Center"
-                                                         Minimum="0" Maximum="100" Visibility="Collapsed"
-                                                         AutomationProperties.Name="Speech model download progress"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Free memory when Scribe isn't used" Style="{StaticResource CardTitle}"/>
+                                            <TextBlock Style="{StaticResource CardDescription}"
+                                                       Text="Unloads the speech model after this long without a dictation, freeing memory. The next dictation takes a second or two longer to start."/>
                                         </StackPanel>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                   Text="Changing the speech model takes effect after restarting Scribe. If the selected model is unavailable, Scribe falls back to Parakeet when it is installed."/>
-                                    </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ComboBox x:Name="IdleReleaseCombo" Width="240" DisplayMemberPath="Label"
+                                                      SelectionChanged="DurationCombo_SelectionChanged"
+                                                      AutomationProperties.Name="Free memory when Scribe isn't used"/>
+                                            <ui:NumberBox x:Name="IdleReleaseCustomBox" Width="96" Margin="8,0,0,0"
+                                                          Minimum="1" Maximum="120" SmallChange="1"
+                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
+                                                          SpinButtonPlacementMode="Inline"
+                                                          Visibility="Collapsed"
+                                                          AutomationProperties.Name="Free memory custom minutes"/>
+                                        </StackPanel>
+                                    </Grid>
                                 </ui:Card>
-
+                                <TextBlock x:Name="AdvancedSpeechCaptionText" Style="{StaticResource CardDescription}" Margin="0,6,0,0" Text="Changes to the speech model and processor threads take effect after you restart Scribe."/>
                                 <TextBlock x:Name="AdvancedRecordingHeader" Text="Recording" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -911,42 +950,6 @@
                                         </StackPanel>
                                     </Grid>
                                 </ui:Card>
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock Text="Free memory when Scribe isn't used" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock Style="{StaticResource CardDescription}"
-                                                       Text="Unloads the speech model after this long without a dictation, freeing memory. The next dictation takes a second or two longer to start."/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <ComboBox x:Name="IdleReleaseCombo" Width="240" DisplayMemberPath="Label"
-                                                      SelectionChanged="DurationCombo_SelectionChanged"
-                                                      AutomationProperties.Name="Free memory when Scribe isn't used"/>
-                                            <ui:NumberBox x:Name="IdleReleaseCustomBox" Width="96" Margin="8,0,0,0"
-                                                          Minimum="1" Maximum="120" SmallChange="1"
-                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
-                                                          SpinButtonPlacementMode="Inline"
-                                                          Visibility="Collapsed"
-                                                          AutomationProperties.Name="Free memory custom minutes"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </ui:Card>
-                                <TextBlock x:Name="AdvancedTextChangesHeader" Text="Text changes" Style="{StaticResource SectionHeader}"/>
-                                <ui:Card Style="{StaticResource SettingsCard}">
-                                    <StackPanel>
-                                        <CheckBox x:Name="PostCheck" Style="{StaticResource SettingCheckBox}"
-                                                  AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
-                                                  AutomationProperties.HelpText="{Binding Text, ElementName=PostDescription}"
-                                                  Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled">
-                                                <TextBlock x:Name="PostTitle" Text="Apply your dictionary and snippets" Style="{StaticResource CardTitle}"/>
-                                        </CheckBox>
-                                        <TextBlock Margin="28,2,0,0" x:Name="PostDescription" Style="{StaticResource CardDescription}" Text="Applies your dictionary, snippets and spacing fixes to what Scribe hears. AI cleanup still receives your vocabulary when this is off."/>
-                                    </StackPanel>
-                                </ui:Card>
 
                                 <TextBlock x:Name="AdvancedTypingHeader" Text="Typing into apps" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
@@ -978,6 +981,19 @@
                                     </StackPanel>
                                 </ui:Card>
 
+                                <TextBlock x:Name="AdvancedTextChangesHeader" Text="Text changes" Style="{StaticResource SectionHeader}"/>
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <CheckBox x:Name="PostCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=PostDescription}"
+                                                  Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled">
+                                                <TextBlock x:Name="PostTitle" Text="Apply your dictionary and snippets" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="PostDescription" Style="{StaticResource CardDescription}" Text="Applies your dictionary, snippets and spacing fixes to what Scribe hears. AI cleanup still receives your vocabulary when this is off."/>
+                                    </StackPanel>
+                                </ui:Card>
+
                                 <TextBlock x:Name="AdvancedAppearanceHeader" Text="Appearance" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -994,7 +1010,8 @@
                                 <ui:Button x:Name="RestoreAdvancedDefaultsButton" Content="Restore advanced defaults"
                                            HorizontalAlignment="Left" Margin="0,10,0,8"
                                            Click="RestoreAdvancedDefaultsButton_Click"/>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>
 
@@ -1010,7 +1027,11 @@
                                        Text="Polish punctuation, grammar and structure with a language model before the text is inserted. Optional: dictation always works without it."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <CheckBox x:Name="AiCleanupCheck" Style="{StaticResource SettingCheckBox}"
@@ -1387,7 +1408,8 @@
                                         </ui:CardExpander>
                                     </StackPanel>
                                 </ui:Card>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>
 
@@ -1800,7 +1822,11 @@
                         </StackPanel>
 
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock x:Name="PlaygroundInputTitle" Text="Dictation playground" Style="{StaticResource CardTitle}"/>
@@ -1913,7 +1939,8 @@
                                                    Margin="0,8,0,0"/>
                                     </Grid>
                                 </ui:Card>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>
 
@@ -2110,7 +2137,11 @@
                         </Grid>
 
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
                                 <TextBlock x:Name="UsageCoverageText" Style="{StaticResource CardDescription}"
                                            Margin="0,0,0,10"/>
 
@@ -2291,7 +2322,8 @@
                                                    Click="UsageInsightButton_Click"/>
                                     </Grid>
                                 </ui:Card>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>
 
@@ -2303,7 +2335,11 @@
                             <TextBlock Style="{StaticResource PageSubtitle}" Text="Get help, see what went wrong, and check how fast dictation runs."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
                                 <TextBlock Text="Get help" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -2328,10 +2364,9 @@
                                 <TextBlock Text="Logs folder" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <TextBlock x:Name="AboutLogsTitle" Text="Logs folder" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" TextWrapping="Wrap" Text="One file per day, kept for 7 days, recording app events, timings and errors. Logs never contain your dictations, but they do name the app you dictated into, your microphone, and error details. Read one before sharing it."/>
+                                                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0" TextWrapping="Wrap" Text="One file per day, kept for 7 days, recording app events, timings and errors. Logs never contain your dictations, but they do name the app you dictated into, your microphone, and error details. Read one before sharing it."/>
                                         <Grid Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="AboutLogsPathBox" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0" VerticalContentAlignment="Center" FontFamily="Consolas" AutomationProperties.LabeledBy="{Binding ElementName=AboutLogsTitle}"/>
+                                            <ui:TextBox x:Name="AboutLogsPathBox" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0" VerticalContentAlignment="Center" FontFamily="Consolas" AutomationProperties.Name="Logs folder"/>
                                             <StackPanel Grid.Column="1" Orientation="Horizontal">
                                                 <ui:Button x:Name="AboutCopyLogsButton" Content="Copy" MinWidth="76" Margin="0,0,8,0" Click="AboutCopyLogsPath_Click" ToolTip="Copy this path to the clipboard."/>
                                                 <ui:Button Content="Open" MinWidth="76" Click="AboutOpenLogsFolder_Click" ToolTip="Open this folder in File Explorer."/>
@@ -2344,8 +2379,7 @@
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="AI cleanup problems" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Times AI cleanup couldn't finish in the last 7 days, so Scribe typed what it heard instead."/>
+                                                                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Times AI cleanup couldn't finish in the last 7 days, so Scribe typed what it heard instead."/>
                                             <TextBlock x:Name="FailuresCountText" Style="{StaticResource CardDescription}" Margin="0,4,0,0"/>
                                         </StackPanel>
                                         <ui:Button x:Name="ClearFailuresButton" Grid.Column="1" Content="Clear this list..." MinWidth="130" VerticalAlignment="Center" Click="ClearFailuresButton_Click"/>
@@ -2411,13 +2445,12 @@
                                 </ui:CardExpander>
 
                                 <TextBlock Text="This PC" Style="{StaticResource SectionHeader}"/>
-                                <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><TextBlock Text="This PC" Style="{StaticResource CardTitle}"/><TextBlock x:Name="SystemCapabilityText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Checking hardware..."/><TextBlock x:Name="SystemCapabilityAdviceText" Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed" Foreground="{DynamicResource SystemFillColorCautionBrush}"/></StackPanel></ui:Card>
+                                <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><TextBlock x:Name="SystemCapabilityText" Style="{StaticResource CardDescription}" Margin="0,2,0,0" Text="Checking hardware..."/><TextBlock x:Name="SystemCapabilityAdviceText" Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed" Foreground="{DynamicResource SystemFillColorCautionBrush}"/></StackPanel></ui:Card>
 
                                 <TextBlock Text="Where Scribe keeps your data" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <TextBlock Text="Where Scribe keeps your data" Style="{StaticResource CardTitle}"/>
-                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}" TextWrapping="Wrap" Text="Never send or share this file. It holds everything you've dictated and your saved keys. To delete dictations, use History."/>
+                                                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}" TextWrapping="Wrap" Text="Never send or share this file. It holds everything you've dictated and your saved keys. To delete dictations, use History."/>
                                         <TextBlock x:Name="AboutDataPathWarning" Style="{StaticResource CardDescription}" Margin="0,8,0,0" Foreground="{DynamicResource SystemFillColorCautionBrush}" TextWrapping="Wrap" Visibility="Collapsed"/>
                                         <TextBlock x:Name="AboutDataFileTitle" Text="Scribe data file" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                         <TextBlock x:Name="AboutDataFileHintText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
@@ -2430,7 +2463,8 @@
                                         </Grid>
                                     </StackPanel>
                                 </ui:Card>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>
 
@@ -2442,7 +2476,11 @@
                             <TextBlock Style="{StaticResource PageSubtitle}" Text="Version, updates, help, privacy and feedback."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
-                            <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                            <Grid HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MaxWidth="1000"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                         <Image Grid.Column="0" Source="pack://application:,,,/Assets/scribe-mark.png" Width="72" Height="72" Margin="0,0,18,0" RenderOptions.BitmapScalingMode="HighQuality" AutomationProperties.Name="Scribe"/>
@@ -2464,7 +2502,7 @@
                                 <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><TextBlock Text="Having a problem? Save diagnostics and attach the file when you report it." Style="{StaticResource CardDescription}"/><WrapPanel Margin="0,12,0,0"><ui:Button Content="Report a problem" MinWidth="130" Margin="0,0,8,8" Click="GitHubIssueButton_Click"/><ui:Button Content="Save diagnostics..." MinWidth="150" Margin="0,0,8,8" Click="AboutSaveDiagnostics_Click"/><ui:Button Content="Open Diagnostics" MinWidth="140" Margin="0,0,8,8" Click="AboutOpenDiagnostics_Click"/><ui:Button Content="Show the welcome again" MinWidth="180" Margin="0,0,8,8" Click="AboutShowWelcomeButton_Click"/></WrapPanel></StackPanel></ui:Card>
 
                                 <TextBlock Text="Privacy" Style="{StaticResource SectionHeader}"/>
-                                <ui:Card Style="{StaticResource SettingsCard}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Privacy" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Speech recognition runs on this PC, and your audio never leaves it. AI cleanup is optional, and online services receive text only while you use them."/></StackPanel><ui:Button Grid.Column="1" Content="Read the privacy policy" MinWidth="170" VerticalAlignment="Center" Click="PrivacyPolicyButton_Click"/></Grid></ui:Card>
+                                <ui:Card Style="{StaticResource SettingsCard}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Speech recognition runs on this PC, and your audio never leaves it. AI cleanup is optional, and online services receive text only while you use them."/></StackPanel><ui:Button Grid.Column="1" Content="Read the privacy policy" MinWidth="170" VerticalAlignment="Center" Click="PrivacyPolicyButton_Click"/></Grid></ui:Card>
 
                                 <TextBlock Text="Feedback" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Report an AI result..." Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it first. Scribe sends nothing by itself. You can also report a result from History."/></StackPanel><ui:Button Grid.Column="1" Content="Report an AI result..." VerticalAlignment="Center" MinWidth="150" Click="AboutReportAiContent_Click"/></Grid><Border Height="1" Margin="0,12,0,12" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Rate Scribe in the Microsoft Store" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" Text="Ratings and reviews are handled by the Microsoft Store."/></StackPanel><ui:Button Grid.Column="1" Content="Rate" VerticalAlignment="Center" MinWidth="100" Click="AboutRateInStore_Click"/></Grid></StackPanel></ui:Card>
@@ -2473,8 +2511,9 @@
                                 <ui:Card Style="{StaticResource SettingsCard}"><StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Star Scribe on GitHub" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="A GitHub star helps other people discover private, offline dictation."/></StackPanel><ui:Button Grid.Column="1" Content="Open GitHub" MinWidth="130" VerticalAlignment="Center" Click="GitHubStarButton_Click"/></Grid><Border Height="1" Margin="0,12,0,12" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/><TextBlock Text="Share Scribe" Style="{StaticResource CardTitle}"/><TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0" TextWrapping="Wrap" Text="Send this link to anyone who wants private, offline dictation. It opens the Scribe listing in the Microsoft Store."/><Grid Margin="0,12,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ui:TextBox x:Name="AboutStoreLinkBox" Grid.Column="0" IsReadOnly="True" VerticalAlignment="Center" AutomationProperties.Name="Microsoft Store link"/><ui:Button Grid.Column="1" Content="Copy link" MinWidth="100" Margin="8,0,0,0" Click="AboutCopyStoreLink_Click" ToolTip="Copy the Store link to the clipboard."/></Grid></StackPanel></ui:Card>
 
                                 <TextBlock Text="Source" Style="{StaticResource SectionHeader}"/>
-                                <ui:Card Style="{StaticResource SettingsCard}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Source" Style="{StaticResource CardTitle}"/><TextBlock Text="Scribe is open source under the MIT License." Style="{StaticResource CardDescription}" Margin="0,4,0,0"/></StackPanel><ui:Button Grid.Column="1" Content="View source" MinWidth="110" VerticalAlignment="Center" Click="GitHubSourceButton_Click"/></Grid></ui:Card>
-                            </StackPanel>
+                                <ui:Card Style="{StaticResource SettingsCard}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,20,0"><TextBlock Text="Scribe is open source under the MIT License." Style="{StaticResource CardDescription}" Margin="0,4,0,0"/></StackPanel><ui:Button Grid.Column="1" Content="View source" MinWidth="110" VerticalAlignment="Center" Click="GitHubSourceButton_Click"/></Grid></ui:Card>
+                                </StackPanel>
+                            </Grid>
                         </ScrollViewer>
                     </Grid>                </Grid>
 

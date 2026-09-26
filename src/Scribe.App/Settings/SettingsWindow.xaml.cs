@@ -343,14 +343,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 // Packaged but sideloaded: the Store has no record of this install, so offering a
                 // check would only ever fail.
                 UpdateStatusText.Text =
-                    $"Scribe {UpdateService.RunningVersion} was installed from a package. Updates are managed outside the app.";
+                    "Updates are managed outside the app for this package install.";
                 UpdateCheckButton.Visibility = Visibility.Collapsed;
                 UpdateApplyButton.Visibility = Visibility.Collapsed;
                 return;
             }
 
             UpdateStatusText.Text =
-                $"Scribe {UpdateService.RunningVersion} is installed from Microsoft Store. Scribe does not look for updates until you ask.";
+                "Scribe does not look for updates until you ask.";
             UpdateCheckButton.Visibility = Visibility.Visible;
             UpdateApplyButton.Content = "Install update";
             UpdateApplyButton.Visibility = Visibility.Collapsed;
@@ -358,8 +358,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateStatusText.Text = _updates?.PendingVersion is { } pending
-            ? $"Scribe {UpdateService.RunningVersion}. {pending} is downloaded and ready to install."
-            : $"Scribe {UpdateService.RunningVersion}. Scribe does not look for updates until you ask.";
+            ? $"{pending} is downloaded and ready to install."
+            : "Scribe does not look for updates until you ask.";
         UpdateApplyButton.Visibility = _updates?.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
         if (_updates is not null)
         {
@@ -580,7 +580,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (_updates is null)
         {
-            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} (dev build, updates apply to installed builds only).";
+            UpdateStatusText.Text = "Dev build. Updates apply to installed builds only.";
             return;
         }
 
@@ -613,7 +613,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // deliberately does not name one rather than risk showing the wrong number.
             UpdateStatusText.Text = available
                 ? "An update is available from Microsoft Store."
-                : $"Scribe {UpdateService.RunningVersion} is up to date.";
+                : "Scribe is up to date.";
             UpdateApplyButton.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
         }
         finally
@@ -657,7 +657,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 StoreUpdateOutcome.Completed => "The update is installed. Restart Scribe to use the new version.",
                 StoreUpdateOutcome.Canceled => "The update was canceled.",
-                StoreUpdateOutcome.NothingToDo => $"Scribe {UpdateService.RunningVersion} is up to date.",
+                StoreUpdateOutcome.NothingToDo => "Scribe is up to date.",
                 _ => "Couldn't install the update. Try again from the Microsoft Store app.",
             };
             UpdateApplyButton.Visibility = outcome == StoreUpdateOutcome.Completed
@@ -1026,7 +1026,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         ModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
         DictationOnlyModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
-        TranscriptionModelCombo.ItemsSource = TranscriptionModelCatalog.Curated;
+        TranscriptionModelCombo.DisplayMemberPath = nameof(TranscriptionModelChoice.Label);
 
         InjectionCombo.DisplayMemberPath = nameof(InjectionChoice.Label);
         InjectionCombo.ItemsSource = new[]
@@ -1055,8 +1055,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
             DictationOnlyModeCombo.SelectedIndex = ModeIndex(_pendingDictationOnlyBinding?.Mode ?? HotkeyMode.Hold);
-            DefaultHotkeysHintText.Text = "Restores hold Page Down for dictation and hold Page Up for the shortcut without AI cleanup.";
-            MouseButtonsHintText.Text = string.Empty;
+            DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Caption;
+            HideMouseButtonsHint();
+            UpdateShortcutRows();
+            UpdateFirstRunHint();
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
@@ -1084,8 +1086,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ThreadsCombo.ItemsSource = ThreadChoices.Build(_settings.DecodeThreads);
             ThreadsCombo.SelectedValuePath = nameof(ThreadChoice.Value);
             ThreadsCombo.SelectedValue = _settings.DecodeThreads;
-            TranscriptionModelCombo.SelectedItem =
-                TranscriptionModelCatalog.Resolve(_settings.TranscriptionModelId);
+            LoadTranscriptionModelChoices(_settings.TranscriptionModelId);
             UpdateTranscriptionModelUi();
 
             LoadAiSettings();
@@ -1109,6 +1110,85 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         var suffix = AdvancedDefaults.SectionHeader(section, _settings);
         return string.IsNullOrEmpty(suffix) ? title : $"{title}  {suffix}";
+    }
+
+    private void UpdateFirstRunHint()
+    {
+        var state = FirstRunHint.ShouldShow(
+            SettingsLoadState.Loaded,
+            _history.GetRecent(1).Count,
+            dismissed: false,
+            ShortcutInstruction(_pendingBinding));
+        FirstRunHintBar.Title = state.Title;
+        FirstRunHintBar.Message = state.Message;
+        FirstRunHintBar.IsOpen = state.Show;
+        FirstRunHintHost.Visibility = state.Show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static string ShortcutInstruction(HotkeyBinding binding)
+    {
+        var shortcut = HotkeyText.SentenceName(binding);
+        return binding.Mode == HotkeyMode.Toggle
+            ? $"Click in any text box, press {shortcut} and speak. Press it again to type."
+            : $"Click in any text box, hold {shortcut} and speak. Let go to type.";
+    }
+
+    private void UpdateShortcutRows()
+    {
+        HotkeyDescriptionText.Text = _settings.EnableAiCleanup
+            ? "Types your words with AI cleanup."
+            : "Types your words. AI cleanup is off.";
+        SetCaveat(HotkeyCaveatText, ShortcutCaveats.For(_pendingBinding));
+
+        var hasSecondShortcut = _pendingDictationOnlyBinding is not null;
+        DictationOnlyClearButton.IsEnabled = hasSecondShortcut;
+        DictationOnlyModeCombo.IsEnabled = hasSecondShortcut;
+        DictationOnlyDescriptionText.Text = hasSecondShortcut
+            ? _settings.EnableAiCleanup
+                ? "Optional. Types exactly what Scribe hears, with your dictionary and snippets."
+                : "AI cleanup is off, so this works like the dictation shortcut."
+            : "Set a shortcut first.";
+        SetCaveat(DictationOnlyCaveatText, ShortcutCaveats.For(_pendingDictationOnlyBinding));
+    }
+
+    private static void SetCaveat(TextBlock textBlock, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            textBlock.Text = string.Empty;
+            textBlock.Margin = new Thickness(0);
+            textBlock.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        textBlock.Text = text;
+        textBlock.Margin = new Thickness(0, 6, 0, 0);
+        textBlock.Visibility = Visibility.Visible;
+    }
+
+    private void ShowMouseButtonsHint()
+    {
+        MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;
+        MouseButtonsHintText.Margin = new Thickness(0, 16, 0, 0);
+        MouseButtonsHintText.Visibility = Visibility.Visible;
+    }
+
+    private void HideMouseButtonsHint()
+    {
+        MouseButtonsHintText.Text = string.Empty;
+        MouseButtonsHintText.Margin = new Thickness(0);
+        MouseButtonsHintText.Visibility = Visibility.Collapsed;
+    }
+
+    private void LoadTranscriptionModelChoices(string? selectedModelId)
+    {
+        var installed = TranscriptionModelCatalog.Curated
+            .Where(model => _transcriptionModelInstaller.IsInstalled(model))
+            .Select(model => model.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var choices = TranscriptionModelChoices.Build(selectedModelId, installed);
+        TranscriptionModelCombo.ItemsSource = choices;
+        TranscriptionModelCombo.SelectedItem = choices.FirstOrDefault(choice => choice.IsSelected) ?? choices[0];
     }
 
     // Runs on Loaded and on every activation, so coming back from Windows Settings > Apps > Startup
@@ -2289,6 +2369,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         _pendingDictationOnlyBinding = null;
         DictationOnlyHotkeyBox.Text = string.Empty;
+        UpdateShortcutRows();
     }
 
     // Stages the shipped hotkeys like any other edit on this page: nothing is stored until Save, and Cancel discards
@@ -2313,6 +2394,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ModeCombo.SelectedIndex = ModeIndex(restored.Dictation.Mode);
         DictationOnlyHotkeyBox.Text = HotkeyCapture.Describe(restored.DictationOnly);
         DictationOnlyModeCombo.SelectedIndex = ModeIndex(restored.DictationOnly.Mode);
+        UpdateShortcutRows();
+        UpdateFirstRunHint();
 
         // The default severity, as for the other "done, now Save" notices here: the bar floats over the page title, and
         // WPF-UI fills the informational one almost transparently (#08FFFFFF in the dark theme), so the title would
@@ -2350,6 +2433,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturing = true;
         _finalized = false;
         _capture = HotkeyCapture.NewSession();
+        ShowMouseButtonsHint();
 
         // Put the global hook into pass-through first: the current push-to-talk key must reach
         // this capture box as an ordinary key instead of being suppressed or starting a recording.
@@ -2497,6 +2581,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _setHotkeyCaptureMode(false);
         ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = HotkeyCapture.Describe(binding);
+        HideMouseButtonsHint();
+        UpdateShortcutRows();
+        UpdateFirstRunHint();
         Keyboard.ClearFocus();
 
         var risk = HotkeyCapture.AccessibilityRisk(binding);
@@ -2523,6 +2610,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _setHotkeyCaptureMode(false);
         ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = CurrentHotkeyDescription();
+        HideMouseButtonsHint();
+        UpdateShortcutRows();
         Keyboard.ClearFocus();
     }
 
@@ -2576,26 +2665,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UpdateTranscriptionModelUi()
     {
-        if (TranscriptionModelCombo.SelectedItem is not TranscriptionModel model)
+        if (TranscriptionModelCombo.SelectedItem is not TranscriptionModelChoice choice)
         {
             return;
         }
 
-        var installed = _transcriptionModelInstaller.IsInstalled(model);
-        var size = model.IsBundled ? "Bundled" : $"{model.DownloadSize / 1_000_000} MB download";
-        TranscriptionModelHint.Text =
-            $"{model.Description} Languages: {model.Languages}. {size}. " +
-            (installed ? "Ready." : "Not installed.");
-        TranscriptionModelInstallButton.Visibility = model.IsBundled ? Visibility.Collapsed : Visibility.Visible;
-        TranscriptionModelInstallButton.IsEnabled = !installed && !_transcriptionModelOp;
-        TranscriptionModelInstallButton.Content = installed ? "Downloaded" : "Download";
+        TranscriptionModelHint.Text = choice.Hint;
+        TranscriptionModelInstallButton.Visibility = choice.ShowInstall ? Visibility.Visible : Visibility.Collapsed;
+        TranscriptionModelInstallButton.IsEnabled = choice.ShowInstall && !_transcriptionModelOp;
+        TranscriptionModelInstallButton.Content = choice.IsInstalled ? "Downloaded" : "Download";
     }
 
     private async void TranscriptionModelInstallButton_Click(object sender, RoutedEventArgs e)
     {
         if (_transcriptionModelOp ||
-            TranscriptionModelCombo.SelectedItem is not TranscriptionModel model ||
-            model.IsBundled)
+            TranscriptionModelCombo.SelectedItem is not TranscriptionModelChoice choice)
+        {
+            return;
+        }
+
+        var model = TranscriptionModelCatalog.Resolve(choice.Id);
+        if (model.IsBundled)
         {
             return;
         }
@@ -2608,7 +2698,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             await _transcriptionModelInstaller.InstallAsync(model, progress);
-            ShowInfo($"{model.DisplayName} is installed. Restart Scribe after saving to use it.");
+            ShowInfo($"{model.DisplayName} is downloaded. Save, then restart Scribe to use it.");
+            LoadTranscriptionModelChoices(model.Id);
         }
         catch (Exception ex)
         {
@@ -5154,7 +5245,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
-                ((TranscriptionModel?)TranscriptionModelCombo.SelectedItem)?.Id ??
+                ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
                 TranscriptionModelCatalog.DefaultId;
 
             _settings.EnableAiCleanup = aiCleanupEnabled;

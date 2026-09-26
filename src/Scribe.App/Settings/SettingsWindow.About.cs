@@ -11,6 +11,12 @@ public partial class SettingsWindow
     private void AboutOpenDiagnostics_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage.Diagnostics);
 
+    private void TryDictationLink_Click(object sender, RoutedEventArgs e) =>
+        ShowPage(SettingsPage.TryDictation);
+
+    private void AdvancedTypingLink_Click(object sender, RoutedEventArgs e) =>
+        ShowPage(SettingsPage.Advanced, nameof(InjectionCombo));
+
     private void AboutShowWelcomeButton_Click(object sender, RoutedEventArgs e) =>
         ShowWelcomeRequested?.Invoke(this, EventArgs.Empty);
 }
