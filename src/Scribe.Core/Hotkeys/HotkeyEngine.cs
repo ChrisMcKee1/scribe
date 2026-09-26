@@ -597,12 +597,19 @@ internal sealed class HotkeyEngine
             return default;
         }
 
+        // Commands requested before this event take effect before it, once, and before anything about the event is judged
+        // (review round 3, item 1): whether it is uncertain is decided on the key view the machines are about to use. Judged
+        // before the commands applied, a capture start and end (or new bindings) queued between two repeats of a key whose
+        // press a hook ahead of Scribe's may have kept let the repeat be judged held, so certain, and then be processed as a
+        // fresh press on the view the commands had just cleared: swallowed, with its release. Nothing drains again until the
+        // machines have processed the event.
+        ApplyPendingCommands();
         if (_uncertaintyArmed && IsUncertain(virtualKey, isDown, eventTime))
         {
             mayBeSwallowed = false;
         }
 
-        return OnInput(virtualKey, isDown, mayBeSwallowed);
+        return ProcessInput(virtualKey, isDown, mayBeSwallowed);
     }
 
     /// <summary>
@@ -666,12 +673,19 @@ internal sealed class HotkeyEngine
             RequestMouseHookSync: owed);
     }
 
-    private HookDecision OnInput(uint virtualKey, bool isDown, bool mayBeSwallowed = true)
+    // The mouse path: commands first, then the machines, exactly as it has always been (OnMouseButtonEvent settles a
+    // button's debt before this).
+    private HookDecision OnInput(uint virtualKey, bool isDown)
     {
         // Commands requested before this event took effect before it, exactly as if they had
         // been applied synchronously on the requesting thread.
         ApplyPendingCommands();
+        return ProcessInput(virtualKey, isDown, mayBeSwallowed: true);
+    }
 
+    // Owner thread, once the pending commands are applied: both machines judge the event.
+    private HookDecision ProcessInput(uint virtualKey, bool isDown, bool mayBeSwallowed)
+    {
         var primary = _standard.Process(virtualKey, isDown, mayBeSwallowed);
         var secondary = _dictationOnly?.Process(virtualKey, isDown, mayBeSwallowed);
         EmitKeyTransition(primary.Transition, HotkeyTrigger.Standard);
