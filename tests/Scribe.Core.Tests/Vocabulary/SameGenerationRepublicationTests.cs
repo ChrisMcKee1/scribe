@@ -6,6 +6,7 @@ using Scribe.Core.PostProcessing;
 using Scribe.Core.Tests.CleanupLogging;
 using Scribe.Core.Vocabulary;
 using static Scribe.Core.Tests.Vocabulary.TestVocabularies;
+using ManualClock = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
 
 namespace Scribe.Core.Tests.Vocabulary;
 
@@ -105,8 +106,10 @@ public sealed class SameGenerationRepublicationTests
         var source = new TestVocabularySource(heldBack);
         var dictionary = new VocabularyPublisherTests.ScriptedDictionary([Entry("lan tern ridge", "Lanternridge")]);
         var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance);
+        // The deadlines on a clock only the test moves: the build this test holds must answer its request, not the 15 s
+        // refresh deadline a loaded machine could reach first.
         using var publisher = new VocabularyPublisher(
-            source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, work => _ = Task.Run(work));
+            source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, work => _ = Task.Run(work), new ManualClock());
         Assert.Same(heldBack, (await publisher.StartAsync().WaitAsync(Bound)).Generation.Libraries);
 
         var restored = Whole();

@@ -9,6 +9,7 @@ using Scribe.Core.Settings;
 using Scribe.Core.Tests.CleanupLogging;
 using Scribe.Core.Vocabulary;
 using static Scribe.Core.Tests.Vocabulary.TestVocabularies;
+using ManualClock = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
 
 namespace Scribe.Core.Tests.Vocabulary;
 
@@ -582,9 +583,12 @@ public sealed class VocabularyPublisherTests
         Assert.Throws<ArgumentException>(() => VocabularyNotice.SavedButNotApplied(" "));
     }
 
+    // The deadlines run on a clock only the test moves. Every test here expects a build to answer, and a build held across
+    // real time on a loaded machine was once answered by the 15 s refresh deadline first (stream TR's loops); the deadlines
+    // themselves are VocabularyPublicationDeadlineTests'.
     private static VocabularyPublisher Publisher(
         ILibraryVocabularySource source, IDictionaryRepository dictionary, ITextPostProcessor processor, Action<Action> schedule) =>
-        new(source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, schedule);
+        new(source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, schedule, new ManualClock());
 
     // Starts a publisher whose builds the test runs: the first build is queued like any other, run here, and its generation
     // returned with the queue left empty.
