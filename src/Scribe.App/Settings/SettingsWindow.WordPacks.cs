@@ -1576,8 +1576,9 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             return;
         }
 
+        var contentWidth = SectionWordPacks.ActualWidth > 0 ? SectionWordPacks.ActualWidth : root.ActualWidth;
         _wordPackLayout = LibraryLayoutPlanner.Plan(new LibraryLayoutInput(
-            root.ActualWidth,
+            contentWidth,
             root.ActualHeight,
             TextScaleService.CurrentFactor,
             WordPackNoticeBar.IsOpen,

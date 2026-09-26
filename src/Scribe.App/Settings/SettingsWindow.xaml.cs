@@ -336,6 +336,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 ApplyRailWidth(rootContent.ActualWidth);
                 ApplyWordPackLayout();
+                UpdateTextSizeAdaptiveLayouts();
             };
         }
 
@@ -384,10 +385,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         Closed += OnClosed;
         Loaded += RefreshStartupStatus;
-        Loaded += (_, _) => UpdateProfileLayout();
+        Loaded += (_, _) =>
+        {
+            UpdateProfileLayout();
+            UpdateTextSizeAdaptiveLayouts();
+        };
         Activated += RefreshStartupStatus;
         SectionAppProfiles.SizeChanged += (_, _) => UpdateProfileLayout();
         ProfileBodyGrid.SizeChanged += (_, _) => UpdateProfileLayout();
+        SectionVoiceSnippets.SizeChanged += (_, _) => ApplyListPaneWidths();
+        ProfileMainGrid.SizeChanged += (_, _) => ApplyListPaneWidths();
 
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>
@@ -977,6 +984,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         selected.BringIntoView();
+        UpdateTextSizeAdaptiveLayouts();
         if (page == SettingsPage.History)
         {
             LoadHistory();

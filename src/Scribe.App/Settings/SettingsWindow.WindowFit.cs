@@ -39,7 +39,7 @@ public partial class SettingsWindow
         }
 
         UpdateProfileLayout();
-        UpdateUsageMetricLayout();
+        UpdateTextSizeAdaptiveLayouts();
         ApplyWordPackLayout();
     }
 
