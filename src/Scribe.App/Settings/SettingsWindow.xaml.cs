@@ -3562,6 +3562,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDiscoveryPanel.Visibility = cliMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
         AzureEndpointPanel.Visibility = access.ShowEndpointPanel ? Visibility.Visible : Visibility.Collapsed;
         AzureManualToggleButton.Visibility = access.ShowManualToggleButton ? Visibility.Visible : Visibility.Collapsed;
+        RetireAzureSignInHintIfSignedIn();
 
         var manualOpen = access.ShowEndpointPanel && cliMode;
         AzureManualToggleText.Text = manualOpen ? "Hide manual details" : "Enter details manually";

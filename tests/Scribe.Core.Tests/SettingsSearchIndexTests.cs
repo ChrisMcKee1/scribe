@@ -385,6 +385,44 @@ public sealed class SettingsSearchIndexTests
         return XDocument.Load(path, LoadOptions.PreserveWhitespace | LoadOptions.SetLineInfo);
     }
 
+    [Fact]
+    public void Closing_the_list_on_purpose_keeps_focus_in_the_box()
+    {
+        // Focus left on the window cancelled the wait for a target inside an opening expander, and made the next Escape
+        // close Settings.
+        var source = SettingsSearchSource();
+        var open = source[source.IndexOf("private void OpenSettingsSearchResult(", StringComparison.Ordinal)..];
+        open = open[..open.IndexOf("ShowPage(result.Page);", StringComparison.Ordinal)];
+        Assert.Contains("SettingsSearchBox.Focus();", open, StringComparison.Ordinal);
+
+        var escape = source[source.IndexOf("private void SettingsSearchBox_PreviewKeyDown(", StringComparison.Ordinal)..];
+        escape = escape[..escape.IndexOf("if (!string.IsNullOrEmpty(SettingsSearchBox.Text))", StringComparison.Ordinal)];
+        Assert.Contains("SettingsSearchBox.Focus();", escape, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_manual_details_step_counts_as_met_only_when_the_endpoint_shows()
+    {
+        // Signed out with the Azure CLI, neither the endpoint nor the manual toggle shows; that must route to signing in.
+        var source = SettingsSearchSource();
+        Assert.Contains("CurrentAzureSettingsAccess.ShowEndpointPanel;", source, StringComparison.Ordinal);
+        Assert.Contains("FocusAzureSignInRequirement(requirement with { Kind = SettingsSearchRequirementKind.Action });", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_sign_in_hint_goes_once_signed_in_and_content_elements_are_walked_logically()
+    {
+        var source = SettingsSearchSource();
+        Assert.Contains("private void RetireAzureSignInHintIfSignedIn()", source, StringComparison.Ordinal);
+        var window = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var apply = window[window.IndexOf("private void ApplyAzureSettingsAccess()", StringComparison.Ordinal)..];
+        apply = apply[..apply.IndexOf("\n    }", StringComparison.Ordinal)];
+        Assert.Contains("RetireAzureSignInHintIfSignedIn();", apply, StringComparison.Ordinal);
+
+        // A Hyperlink has no visual parent; VisualTreeHelper.GetParent throws for it.
+        Assert.Contains(": LogicalTreeHelper.GetParent(current))", source, StringComparison.Ordinal);
+    }
+
     private static string SettingsSearchSource() =>
         File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.Search.cs"));
 

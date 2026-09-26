@@ -121,6 +121,10 @@ public partial class SettingsWindow
         if (SettingsSearchBox.IsSuggestionListOpen)
         {
             DismissSettingsSearchSuggestions(clearText: false);
+
+            // Escape from inside the list would otherwise leave focus on the window, and the next Escape would close
+            // Settings instead of clearing the text.
+            SettingsSearchBox.Focus();
             e.Handled = true;
             return;
         }
@@ -206,6 +210,10 @@ public partial class SettingsWindow
         var generation = ++_settingsSearchGeneration;
         SettingsSearchBox.IsSuggestionListOpen = false;
         _highlightedSettingsSearchResult = null;
+
+        // Closing the list from inside it moves focus to the window, and the lost-focus dismissal would then cancel the
+        // wait for a target inside an expander that is still opening. Focus stays in the box until the target takes it.
+        SettingsSearchBox.Focus();
         ShowPage(result.Page);
         SelectDictionarySearchTab(result);
         ExpandSearchContainers(result.ControlName);
@@ -259,7 +267,9 @@ public partial class SettingsWindow
                     continue;
                 }
 
-                continue;
+                // Signed out with the Azure CLI, the manual details can't open either: signing in is the way there.
+                FocusAzureSignInRequirement(requirement with { Kind = SettingsSearchRequirementKind.Action });
+                return true;
             }
 
             if (requirement.Kind == SettingsSearchRequirementKind.Action)
@@ -284,7 +294,8 @@ public partial class SettingsWindow
     {
         if (requirement.Kind == SettingsSearchRequirementKind.View)
         {
-            return !NeedsAzureManualDetails(requirement);
+            return !string.Equals(requirement.ControlName, "AzureManualToggleButton", StringComparison.Ordinal) ||
+                CurrentAzureSettingsAccess.ShowEndpointPanel;
         }
 
         if (requirement.Kind == SettingsSearchRequirementKind.Action)
@@ -420,6 +431,18 @@ public partial class SettingsWindow
 
     private void SettingsSearchHiddenParent_Changed(object sender, RoutedEventArgs e) => ClearSettingsSearchHiddenHint();
 
+    // Called when the Azure settings view is republished: once signing in shows the discovery settings, the sign-in hint
+    // no longer applies.
+    private void RetireAzureSignInHintIfSignedIn()
+    {
+        if (_settingsSearchHiddenHint is not null &&
+            ReferenceEquals(_settingsSearchHiddenHintPanel, AzureSignInStatusRow.Parent) &&
+            CurrentAzureSettingsAccess.ShowDiscovery)
+        {
+            ClearSettingsSearchHiddenHint();
+        }
+    }
+
     private void ClearSettingsSearchHiddenHint()
     {
         if (_settingsSearchHiddenToggleParent is not null)
@@ -454,7 +477,11 @@ public partial class SettingsWindow
 
     private static bool IsWithin(DependencyObject? root, DependencyObject? value)
     {
-        for (var current = value; current is not null; current = VisualTreeHelper.GetParent(current))
+        // A Hyperlink, like any content element, has no visual parent: VisualTreeHelper throws for it.
+        for (var current = value; current is not null;
+             current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                 ? VisualTreeHelper.GetParent(current)
+                 : LogicalTreeHelper.GetParent(current))
         {
             if (ReferenceEquals(current, root))
             {
@@ -465,4 +492,3 @@ public partial class SettingsWindow
         return false;
     }
 }
-
