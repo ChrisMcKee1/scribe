@@ -189,36 +189,66 @@ public sealed class MouseButtonRound6Tests
 
     // The decision in the callback allocates nothing, for a release still owed and for one a gap dropped, with a view that
     // allocates nothing itself (the production one, cold, is measured in MouseButtonRound7Tests).
-    [Fact]
-    public void Deciding_an_owed_release_allocates_nothing()
+    // In the collection that runs alone (stream TR, item 1): nothing else in the process runs while it measures.
+    [Collection(AllocationMeasurementCollection.Name)]
+    public sealed class Allocations
     {
-        using var h = new HotkeyEngineHarness(Bare(Back), buttonDownInWindows: static _ => false);
-        for (var i = 0; i < 3; i++)
+        [Fact]
+        public void Deciding_an_owed_release_allocates_nothing()
         {
+            using var h = new HotkeyEngineHarness(Bare(Back), buttonDownInWindows: static _ => false);
+            for (var i = 0; i < 3; i++)
+            {
+                Assert.True(h.ButtonDown(Back).Suppress);
+                h.Engine.OnDesktopSwitchNotice(() => false);
+                Assert.True(h.ButtonUp(Back).Suppress);
+                Assert.True(h.ButtonDown(Back).Suppress);
+                h.Engine.OnMouseHookLost();
+                Assert.False(h.ButtonUp(Back).Suppress);
+                h.TakeTransitions();
+            }
+
+            _ = RuntimeWork.Now().Since(RuntimeWork.Now());
             Assert.True(h.ButtonDown(Back).Suppress);
             h.Engine.OnDesktopSwitchNotice(() => false);
-            Assert.True(h.ButtonUp(Back).Suppress);
+            var work = RuntimeWork.Now();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var owed = h.ButtonUp(Back);
+            var afterOwed = GC.GetAllocatedBytesForCurrentThread();
+            var owedWork = RuntimeWork.Now().Since(work);
             Assert.True(h.ButtonDown(Back).Suppress);
             h.Engine.OnMouseHookLost();
-            Assert.False(h.ButtonUp(Back).Suppress);
-            h.TakeTransitions();
+            work = RuntimeWork.Now();
+            var beforeDropped = GC.GetAllocatedBytesForCurrentThread();
+            var dropped = h.ButtonUp(Back);
+            var afterDropped = GC.GetAllocatedBytesForCurrentThread();
+            var droppedWork = RuntimeWork.Now().Since(work);
+
+            Assert.True(owed.Suppress);
+            Assert.False(dropped.Suppress);
+            AllocationMeasurement.AssertZero(
+                afterOwed - before,
+                owedWork,
+                "Deciding a release still owed",
+                rerun: () => h.ButtonUp(Back),
+                prepare: () =>
+                {
+                    h.TakeTransitions();
+                    h.ButtonDown(Back);
+                    h.Engine.OnDesktopSwitchNotice(() => false);
+                });
+            AllocationMeasurement.AssertZero(
+                afterDropped - beforeDropped,
+                droppedWork,
+                "Deciding a release a gap dropped",
+                rerun: () => h.ButtonUp(Back),
+                prepare: () =>
+                {
+                    h.TakeTransitions();
+                    h.ButtonDown(Back);
+                    h.Engine.OnMouseHookLost();
+                });
         }
-
-        Assert.True(h.ButtonDown(Back).Suppress);
-        h.Engine.OnDesktopSwitchNotice(() => false);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var owed = h.ButtonUp(Back);
-        var afterOwed = GC.GetAllocatedBytesForCurrentThread();
-        Assert.True(h.ButtonDown(Back).Suppress);
-        h.Engine.OnMouseHookLost();
-        var beforeDropped = GC.GetAllocatedBytesForCurrentThread();
-        var dropped = h.ButtonUp(Back);
-        var afterDropped = GC.GetAllocatedBytesForCurrentThread();
-
-        Assert.True(owed.Suppress);
-        Assert.False(dropped.Suppress);
-        Assert.Equal(0, afterOwed - before);
-        Assert.Equal(0, afterDropped - beforeDropped);
     }
 
     [Fact]

@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Runtime.Loader;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.TextInjection;
 
@@ -98,20 +97,28 @@ public sealed class RemoteDesktopHookPathTests
         }
     }
 
-    // In the shared test host other tests warm what this measures, so, as MouseButtonRound8Tests does for the mouse, the
-    // scenario runs in a load context of its own with fresh copies of this assembly and Scribe.Core.
-    [Fact]
-    public void The_keyboard_callback_s_new_path_allocates_nothing_cold()
+    /// <summary>
+    /// The measurements of this class, in the collection that runs alone (stream TR, item 1): nothing else in the process runs
+    /// while they measure.
+    /// </summary>
+    [Collection(AllocationMeasurementCollection.Name)]
+    public sealed class Allocations
     {
-        var folder = Path.GetDirectoryName(typeof(RemoteDesktopHookPathTests).Assembly.Location)!;
-        var context = new FreshCopies(folder);
-        var tests = context.LoadFromAssemblyName(typeof(RemoteDesktopHookPathTests).Assembly.GetName());
-        var scenario = tests.GetType(typeof(KeyboardColdPathScenario).FullName!, throwOnError: true)!;
+        // In the shared test host other tests warm what this measures, so, as MouseButtonRound8Tests does for the mouse, the
+        // scenario runs in a load context of its own with fresh copies of this assembly and Scribe.Core.
+        [Fact]
+        public void The_keyboard_callback_s_new_path_allocates_nothing_cold()
+        {
+            var (result, _) = ColdPathMeasurement.RunFresh("keyboard-cold-path", typeof(KeyboardColdPathScenario));
 
-        var measured = (long[])scenario.GetMethod(nameof(KeyboardColdPathScenario.Run))!.Invoke(null, null)!;
-
-        Assert.NotSame(typeof(RemoteDesktopHookPathTests).Assembly, tests);
-        Assert.Equal(new long[] { 0, 0, 0, 0, 0, 0, 1, 1, 1, 1 }, measured);
+            ColdPathMeasurement.AssertAsExpected(
+                [0, 0, 0, 0, 0, 0, 1, 1, 1, 1],
+                result,
+                ["the identity and probe reads", "the echo check and a pass", "the foreground notice's hop",
+                    "an unbound key's route", "an echo's route", "an uncertain key's route"],
+                "keyboard-cold-path",
+                typeof(KeyboardColdPathScenario));
+        }
     }
 
     // The warning no longer asserts a missed deadline: a Remote Desktop client's hook, called first, can keep every key.
@@ -201,12 +208,4 @@ public sealed class RemoteDesktopHookPathTests
     }
 
     private static string Name(MethodBase method) => $"{method.DeclaringType!.Name}.{method.Name}";
-
-    private sealed class FreshCopies(string folder) : AssemblyLoadContext("keyboard-cold-path")
-    {
-        protected override Assembly? Load(AssemblyName name) =>
-            name.Name is "Scribe.Core" or "Scribe.Core.Tests"
-                ? LoadFromAssemblyPath(Path.Combine(folder, name.Name + ".dll"))
-                : null;
-    }
 }

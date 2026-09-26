@@ -573,42 +573,52 @@ public sealed class MouseButtonHotkeyTests
         Assert.Empty(h.TakeTransitions());
     }
 
-    [Fact]
-    public void The_fast_path_and_an_unbound_button_allocate_nothing()
+    // In the collection that runs alone (stream TR, item 1): nothing else in the process runs while it measures.
+    [Collection(AllocationMeasurementCollection.Name)]
+    public sealed class Allocations
     {
-        using var h = new HotkeyEngineHarness(Bare(Back));
-        using var message = new HookMessage();
-        message.Set(mouseData: 0);
-
-        // Warm up every path first, so a first-call cost cannot be mistaken for a per-event one.
-        MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
-        MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
-        MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
-        h.Engine.OnKeyEvent(0x41, isDown: true);
-        h.Engine.OnKeyEvent(0x41, isDown: false);
-
-        // Then the same loop once, unmeasured (review round 4, item 5): what the runtime does once on this thread as the loop
-        // runs hot, tier promotion or on-stack replacement, lands here and not in the measurement (a one-time 7,672 bytes did,
-        // once, on x64 CI). It hides nothing the measurement is for: a per-event allocation allocates in the measured loop
-        // too, and so does any branch the loop takes that the warm-up did not.
-        RunEvents();
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        RunEvents();
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-        Assert.Empty(h.TakeTransitions());
-
-        void RunEvents()
+        [Fact]
+        public void The_fast_path_and_an_unbound_button_allocate_nothing()
         {
-            for (var i = 0; i < 10_000; i++)
+            using var h = new HotkeyEngineHarness(Bare(Back));
+            using var message = new HookMessage();
+            message.Set(mouseData: 0);
+
+            // Warm up every path first, so a first-call cost cannot be mistaken for a per-event one, and the readings
+            // around the window.
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
+            h.Engine.OnKeyEvent(0x41, isDown: true);
+            h.Engine.OnKeyEvent(0x41, isDown: false);
+            _ = RuntimeWork.Now().Since(RuntimeWork.Now());
+
+            // Then the same loop once, unmeasured (review round 4, item 5): what the runtime does once on this thread as the
+            // loop runs hot, tier promotion or on-stack replacement, lands here and not in the measurement (a one-time 7,672
+            // bytes did, once, on x64 CI). It hides nothing the measurement is for: a per-event allocation allocates in the
+            // measured loop too, and so does any branch the loop takes that the warm-up did not.
+            RunEvents();
+
+            var work = RuntimeWork.Now();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            RunEvents();
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            var during = RuntimeWork.Now().Since(work);
+
+            AllocationMeasurement.AssertZero(allocated, during, "10,000 rounds of the fast path, an unbound button and an unused key", RunEvents);
+            Assert.Empty(h.TakeTransitions());
+
+            void RunEvents()
             {
-                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
-                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
-                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
-                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
-                h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
-                h.Engine.OnKeyEvent(0x41, isDown: false);
+                for (var i = 0; i < 10_000; i++)
+                {
+                    MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
+                    MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
+                    MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
+                    MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
+                    h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
+                    h.Engine.OnKeyEvent(0x41, isDown: false);
+                }
             }
         }
     }
