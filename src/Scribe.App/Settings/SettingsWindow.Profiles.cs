@@ -395,31 +395,41 @@ public partial class SettingsWindow
             _profileRows.Select(r => new ProfileBuilder.Row(
                 r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
 
-    private void MarkProfileRowsSaved()
+    // What a Save stored for each profile row, read in the same moment as the rows BuildProfiles turned into the stored
+    // profiles. A word pack Save awaits its preparation between reading the rows and committing, so an edit made meanwhile
+    // isn't in what was stored and must stay unsaved (review of 7b722fe), as the snippets' submission does.
+    private sealed record ProfileSubmission(
+        ProfileRow Row, string? Name, string? Processes, string? WritingStyle, NewlineInjectionMode? NewlineHandling);
 
+    private IReadOnlyList<ProfileSubmission> CaptureProfileSubmission() =>
+        [.. _profileRows.Select(row => new ProfileSubmission(row, row.Name, row.Processes, row.WritingStyle, row.NewlineHandling))];
+
+    // Each submitted row still in the list takes what was submitted as its saved baseline, in memory. A row edited since it
+    // was submitted keeps its edit, now unsaved against that baseline, and stays touched.
+    private void MarkProfileRowsSaved(IReadOnlyList<ProfileSubmission> submission)
     {
-
-        foreach (var row in _profileRows)
-
+        foreach (var submitted in submission)
         {
+            var row = submitted.Row;
+            if (!_profileRows.Contains(row))
+            {
+                continue;
+            }
 
             row.Origin = DraftRowOrigin.Saved;
-
-            row.LoadedName = row.Name;
-
-            row.LoadedProcesses = row.Processes;
-
-            row.LoadedWritingStyle = row.WritingStyle;
-
-            row.LoadedNewlineHandling = row.NewlineHandling;
-
-            row.Touched = false;
-
+            row.LoadedName = submitted.Name;
+            row.LoadedProcesses = submitted.Processes;
+            row.LoadedWritingStyle = submitted.WritingStyle;
+            row.LoadedNewlineHandling = submitted.NewlineHandling;
+            if (string.Equals(row.Name, submitted.Name, StringComparison.Ordinal) &&
+                string.Equals(row.Processes, submitted.Processes, StringComparison.Ordinal) &&
+                string.Equals(row.WritingStyle, submitted.WritingStyle, StringComparison.Ordinal) &&
+                row.NewlineHandling == submitted.NewlineHandling)
+            {
+                row.Touched = false;
+            }
         }
-
     }
-
-
 
     private IReadOnlyList<ProfileDraftRow> ProfileDraftRows() =>
         _profileRows.Select(row => new ProfileDraftRow(

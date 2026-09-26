@@ -5759,7 +5759,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         string? snippetSignature,
         StartupRegistrationStatus? observedStartup = null,
         bool useVocabularyReload = false,
-        IReadOnlyList<SnippetSubmission>? snippetSubmission = null)
+        IReadOnlyList<SnippetSubmission>? snippetSubmission = null,
+        IReadOnlyList<ProfileSubmission>? profileSubmission = null)
     {
         var savedAiIntent = intents?.AiCleanup ?? 0;
         var savedMicrophoneIntent = intents?.Microphone ?? 0;
@@ -5831,7 +5832,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 MarkSnippetRowsSaved(snippetSubmission ?? []);
             }
 
-            MarkProfileRowsSaved();
+            MarkProfileRowsSaved(profileSubmission ?? []);
 
             if (observedStartup is not null)
             {
@@ -6053,6 +6054,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.Profiles = BuildProfiles();
+            var profileSubmission = CaptureProfileSubmission();
             _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
                 ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
@@ -6121,7 +6123,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // the settings no longer hold.
             var intents = new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision);
             var result = await _wordPackSaveProtocol.SaveAsync(
-                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission));
+                BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission));
             if (_closed)
             {
                 return false;
