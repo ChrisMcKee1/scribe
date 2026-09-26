@@ -332,8 +332,9 @@ public sealed class TranscriptionServiceLifecycleTests
     public void A_cold_load_is_reported_apart_from_the_decode_it_delayed()
     {
         // A guaranteed minimum load time, measured rather than slept, so the claim below is about attribution and not
-        // about how fast this machine is.
+        // about how fast this machine is. The fake adds up what it spins, and the test times each whole call.
         var minimumLoad = TimeSpan.FromMilliseconds(400);
+        var spunTicks = 0L;
         var logger = new CapturingLogger<TranscriptionService>();
         var engine = new FakeEngine
         {
@@ -344,21 +345,44 @@ public sealed class TranscriptionServiceLifecycleTests
                 {
                     Thread.SpinWait(1_000);
                 }
+
+                Interlocked.Add(ref spunTicks, Stopwatch.GetElapsedTime(started).Ticks);
             },
         };
         using var service = new TranscriptionService(engine.Load, logger);
 
-        var cold = service.Transcribe(Speech(seconds: 1));
-        var warm = service.Transcribe(Speech(seconds: 1));
+        var (cold, coldCall, coldSpun) = TimedTranscribe(service, () => Interlocked.Read(ref spunTicks));
+        var (warm, warmCall, warmSpun) = TimedTranscribe(service, () => Interlocked.Read(ref spunTicks));
 
+        // The decode is timed inside the call and after the load, so it is at most the call less what the load spun: a
+        // stall of this machine lands in both clocks, never in one alone (review round 4 of stream TR). All three readings
+        // come from the one performance counter; the slack covers only their conversion to TimeSpan ticks. A decode that
+        // took the load in is longer than that by the load itself, 400 ms or more on the cold call.
+        var slack = TimeSpan.FromMilliseconds(1);
+        Assert.True(coldSpun >= minimumLoad);
         Assert.True(
-            cold.DecodeDuration < minimumLoad,
-            $"The decode duration ({cold.DecodeDuration.TotalMilliseconds} ms) must not include the model load.");
+            cold.DecodeDuration <= coldCall - coldSpun + slack,
+            $"The decode duration ({cold.DecodeDuration.TotalMilliseconds} ms) must not include the model load: the call took " +
+            $"{coldCall.TotalMilliseconds} ms, of which the load spun {coldSpun.TotalMilliseconds} ms.");
         var decodes = logger.Entries.Where(entry => entry.Message.StartsWith("Decoded ", StringComparison.Ordinal)).ToList();
         Assert.Equal(2, decodes.Count);
         Assert.True(Convert.ToInt64(decodes[0].Value("LoadMs")) >= (long)minimumLoad.TotalMilliseconds);
         Assert.Equal(0L, Convert.ToInt64(decodes[1].Value("LoadMs")));
-        Assert.True(warm.DecodeDuration < minimumLoad);
+        Assert.Equal(TimeSpan.Zero, warmSpun);
+        Assert.True(
+            warm.DecodeDuration <= warmCall - warmSpun + slack,
+            $"The warm decode ({warm.DecodeDuration.TotalMilliseconds} ms) outlasted its call ({warmCall.TotalMilliseconds} ms).");
+    }
+
+    // One call, timed whole, and what the fake's load spun during it.
+    private static (TranscriptionResult Result, TimeSpan Call, TimeSpan Spun) TimedTranscribe(
+        TranscriptionService service, Func<long> spunTicks)
+    {
+        var spunBefore = spunTicks();
+        var started = Stopwatch.GetTimestamp();
+        var result = service.Transcribe(Speech(seconds: 1));
+        var call = Stopwatch.GetElapsedTime(started);
+        return (result, call, TimeSpan.FromTicks(spunTicks() - spunBefore));
     }
 
     [Fact]
