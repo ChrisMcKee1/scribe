@@ -119,6 +119,17 @@ public partial class SettingsWindow
             column.Width = new DataGridLength(0);
             column.Width = DataGridLength.Auto;
         }
+
+        // The grid hands the width it frees to its star columns and takes some from the fixed ones in the process (Your
+        // words' 160 DIP word pack column and 44 DIP delete column came back at 69 and 20); their declared widths, set
+        // again once the Auto columns have measured, restore them.
+        grid.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            foreach (var column in grid.Columns.Where(column => column.Width.IsAbsolute))
+            {
+                column.Width = new DataGridLength(column.Width.Value);
+            }
+        });
     }
 
     // Above 100% each of Your words' text columns keeps room for a few words, and the grid scrolls sideways instead of
