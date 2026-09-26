@@ -3,6 +3,7 @@ using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
+using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
 
 namespace Scribe.Core.Tests;
 
@@ -62,17 +63,22 @@ public sealed class HistoryDeletionNotifierTests
         using var releaseStorageCallback = new ManualResetEventSlim();
         using var releaseDeletionDelivery = new ManualResetEventSlim();
         using var deletionDelivered = new ManualResetEventSlim();
+
+        // Both callbacks hold their thread until the test lets it go, and for nothing else, so neither can let go by itself
+        // while the test still judges the order; declared after the database and the gates, so a failure first releases
+        // both before either is disposed (stream TR round 7).
+        using var releaseAtExit = new ReleaseAtExit(releaseStorageCallback, releaseDeletionDelivery);
         database.StorageChanged += change =>
         {
             if (change == StorageChange.HistoryCleared)
             {
                 storageCallbackEntered.Set();
-                Assert.True(releaseStorageCallback.Wait(Bound));
+                releaseStorageCallback.Wait();
             }
         };
         notifier.Deleted += deletion =>
         {
-            Assert.True(releaseDeletionDelivery.Wait(Bound));
+            releaseDeletionDelivery.Wait();
             store.ApplyDeletion(deletion);
             deletionDelivered.Set();
         };
