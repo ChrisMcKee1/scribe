@@ -165,6 +165,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
     private bool _azureApiKeyVerified;
+    private CancellationTokenSource? _cleanupConnectionTestCts;
+    private CleanupConnectionTestState? _cleanupConnectionTest;
     private bool _transcriptionModelOp;
 
     private HotkeyBinding _pendingBinding;
@@ -186,6 +188,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _capturing;
     private bool _finalized;
     private bool _loadingUi;
+
+    private sealed record CleanupConnectionTestState(
+        CleanupProvider Provider,
+        CleanupRecipient Recipient,
+        CleanupTestOutcome? Outcome,
+        string? SafeReason);
 
     // The tray's AI cleanup switch, held while a hotkey capture keeps the window's switch from showing it.
     private readonly ExternalSwitchSync _externalAiCleanup = new();
@@ -2743,6 +2751,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        CancelCleanupConnectionTest();
         UpdateAiProviderPanels();
         UpdateAiEnabledState();
         RefreshAiStatus();
@@ -2805,6 +2814,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupCustomApiKey = CustomApiKeyBox?.Password;
         draft.AiCleanupCopilotModel = CopilotModelCombo?.Text;
         return draft;
+    }
+
+    private CleanupOptions BuildAiCleanupCandidateOptions()
+    {
+        var draft = CurrentAiDraftSettings();
+        return new CleanupOptions(
+            true,
+            draft.AiCleanupProvider,
+            draft.AiCleanupModel,
+            draft.AiCleanupAzureEndpoint,
+            draft.AiCleanupAzureDeployment,
+            draft.AiCleanupAzureApiKey,
+            draft.AiCleanupAzureTenantId,
+            draft.AiCleanupWritingStyle,
+            Glossary: null,
+            draft.AiCleanupCustomEndpoint,
+            draft.AiCleanupCustomModel,
+            draft.AiCleanupCustomApiKey,
+            draft.AiCleanupPromptStyle,
+            draft.AiCleanupFrontierPrompt,
+            draft.AiCleanupLocalPrompt,
+            draft.AiCleanupAzureSubscriptionId,
+            draft.AiCleanupAzureAuthMode,
+            draft.AiCleanupAzureClientId,
+            draft.AiCleanupAzureClientSecret,
+            draft.AiCleanupCopilotModel);
     }
 
     // --- Filterable model dropdowns --------------------------------------------------------
@@ -3155,13 +3190,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (IsAzureApiKeySelected)
         {
-            await VerifyAzureApiKeyAsync();
+            await RunCleanupConnectionTestAsync(CleanupProvider.AzureFoundry);
             return;
         }
 
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
-            await VerifyServicePrincipalAsync();
+            await RunCleanupConnectionTestAsync(CleanupProvider.AzureFoundry);
             return;
         }
 
@@ -3179,7 +3214,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        InvalidateAzureApiKeyVerification("The endpoint changed. Verify the API key again.");
+        CancelCleanupConnectionTest();
+        InvalidateAzureApiKeyVerification("Changed since the last test. Choose Test connection.");
         ApplyAzureSettingsAccess();
         UpdateAzureProjectApiKeyHint();
     }
@@ -3191,7 +3227,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        InvalidateAzureApiKeyVerification("The deployment changed. Verify the API key again.");
+        CancelCleanupConnectionTest();
+        InvalidateAzureApiKeyVerification("Changed since the last test. Choose Test connection.");
         ApplyAzureSettingsAccess();
     }
 
@@ -3202,8 +3239,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        CancelCleanupConnectionTest();
         _azureManualConfiguration = true;
-        InvalidateAzureApiKeyVerification("The API key changed. Verify it again.");
+        InvalidateAzureApiKeyVerification("Changed since the last test. Choose Test connection.");
         ApplyAzureSettingsAccess();
         UpdateAzureDeploymentHint();
         UpdateAzureProjectApiKeyHint();
@@ -3250,6 +3288,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        CancelCleanupConnectionTest();
         // A different tenant means a different sign-in, so the verified state goes and the page returns
         // to its signed-out form until the user signs in again. It deliberately does not request manual
         // setup (_azureManualConfiguration): that would open the endpoint fields and hide "Use endpoint
@@ -3279,7 +3318,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (IsAzureApiKeySelected)
         {
-            _azureStatusMessage = "Fill in the details above, then choose Verify.";
+            _azureStatusMessage = "Fill in the details above, then choose Test connection.";
 
             ApplyAzureSettingsAccess();
             return Task.CompletedTask;
@@ -3288,20 +3327,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             _azureConnectionKnown = true;
-            var principal = CurrentServicePrincipal;
-            if (principal is null)
-            {
-                _azureStatusMessage = "Fill in the details above, then choose Verify.";
-
-                ApplyAzureSettingsAccess();
-                return Task.CompletedTask;
-            }
-
-            // A saved service principal verifies itself on open, exactly as the Azure CLI path
-            // probes its sign-in. Making the user press a button to re-confirm credentials Scribe
-            // already has, on every visit, is busywork: the details cannot have changed since they
-            // were saved, and cleanup has usually already authenticated with them in the background.
-            return VerifyServicePrincipalAsync(automatic: true);
+            _azureStatusMessage = "Not tested yet.";
+            ApplyAzureSettingsAccess();
+            return Task.CompletedTask;
         }
 
         return RefreshAzureConnectionAsync(allowInteractiveLogin: false, listModels: true);
@@ -3637,6 +3665,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        CancelCleanupConnectionTest();
         if (!IsAzureApiKeySelected)
         {
             // Both Entra modes ultimately write one tenant setting, so carry the current value across
@@ -3670,9 +3699,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureCredentialInvalidation.Invalidate();
         ApplyAzureSettingsAccess();
         _azureStatusMessage = IsAzureApiKeySelected
-            ? "Fill in the details above, then choose Verify."
+            ? "Fill in the details above, then choose Test connection."
             : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-                ? "Fill in the details above, then choose Verify."
+                ? "Fill in the details above, then choose Test connection."
                 : "Not checked yet.";
 
         ApplyAzureSettingsAccess();
@@ -3685,6 +3714,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        CancelCleanupConnectionTest();
         // Editing the identity retires any verification, in flight or already applied. Retiring
         // unconditionally matters: a verification started against the previous details must not be
         // allowed to land on the new ones just because nothing was verified yet. Retiring also ends the
@@ -3702,7 +3732,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // Also replaces "Verifying the service principal…", which nothing would replace any more.
             _azureSignInStatus = new AzureSignInStatus(false, null);
-            _azureStatusMessage = "Changed since the last check. Choose Verify.";
+            _azureStatusMessage = "Changed since the last test. Choose Test connection.";
         }
 
         AzureCredentialInvalidation.Invalidate();
@@ -4699,6 +4729,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true);
             }
 
+            var candidate = BuildAiCleanupCandidateOptions();
+            if (AzureConnectionTestApplies(candidate))
+            {
+                var testResult = _cleanupConnectionTest!.Outcome switch
+                {
+                    null => AzureSetupResult.Verifying,
+                    CleanupTestOutcome.Connected => AzureSetupResult.ApiKeyVerified,
+                    CleanupTestOutcome.Failed => AzureSetupResult.ApiKeyVerificationFailed,
+                    _ => AzureSetupResult.ApiKeyComplete,
+                };
+                return new(testResult, ApiKeySelected: true, SafeReason: _cleanupConnectionTest.SafeReason);
+            }
+
             var result = _azureApiKeyOutcome.ToApiKeyResult(complete: true);
             return new(result, ApiKeySelected: true, SafeReason: _azureApiKeyOutcome.SafeMessage);
         }
@@ -4708,6 +4751,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (CurrentServicePrincipal is null)
             {
                 return new(AzureSetupResult.ServicePrincipalIncomplete, AuthMode: AzureAuthMode.ServicePrincipal);
+            }
+
+            var candidate = BuildAiCleanupCandidateOptions();
+            if (AzureConnectionTestApplies(candidate))
+            {
+                var testResult = _cleanupConnectionTest!.Outcome switch
+                {
+                    null => AzureSetupResult.Verifying,
+                    CleanupTestOutcome.Connected => AzureSetupResult.ServicePrincipalVerified,
+                    CleanupTestOutcome.Failed => AzureSetupResult.ServicePrincipalVerificationFailed,
+                    _ => AzureSetupResult.ServicePrincipalComplete,
+                };
+                return new(testResult, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _cleanupConnectionTest.SafeReason);
             }
 
             var result = _servicePrincipalOutcome.ToServicePrincipalResult(complete: true);
@@ -4744,7 +4800,127 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return _copilotModelsLoaded ? new(CopilotSetupResult.ModelsListed) : new(CopilotSetupResult.Installed);
     }
 
-    private static CustomEndpointSetupState CurrentCustomSetup() => new(CustomEndpointTestResult.NotTested);
+    private CustomEndpointSetupState CurrentCustomSetup()
+    {
+        var candidate = BuildAiCleanupCandidateOptions();
+        var canTest = candidate.IsActionable;
+        if (SelectedProvider != CleanupProvider.OpenAiCompatible)
+        {
+            return new(CustomEndpointTestResult.NotTested, CanTest: canTest);
+        }
+
+        if (_cleanupConnectionTest is not { Provider: CleanupProvider.OpenAiCompatible } test ||
+            !test.Recipient.Matches(candidate))
+        {
+            return new(CustomEndpointTestResult.NotTested, candidate.CustomModel, CanTest: canTest);
+        }
+
+        return test.Outcome switch
+        {
+            null => new(CustomEndpointTestResult.Testing, candidate.CustomModel, CanTest: false),
+            CleanupTestOutcome.Connected => new(CustomEndpointTestResult.Connected, candidate.CustomModel, CanTest: canTest),
+            CleanupTestOutcome.Failed => new(CustomEndpointTestResult.Failed, candidate.CustomModel, test.SafeReason, CanTest: canTest),
+            _ => new(CustomEndpointTestResult.NotTested, candidate.CustomModel, CanTest: canTest),
+        };
+    }
+
+    private bool AzureConnectionTestApplies(CleanupOptions candidate) =>
+        _cleanupConnectionTest is { Provider: CleanupProvider.AzureFoundry } test &&
+        test.Recipient.Matches(candidate);
+
+    private void CancelCleanupConnectionTest()
+    {
+        _cleanupConnectionTestCts?.Cancel();
+        _cleanupConnectionTestCts?.Dispose();
+        _cleanupConnectionTestCts = null;
+        _cleanupConnectionTest = null;
+    }
+
+    private async Task RunCleanupConnectionTestAsync(CleanupProvider provider)
+    {
+        var candidate = BuildAiCleanupCandidateOptions();
+        if (candidate.Provider != provider || !candidate.IsActionable)
+        {
+            RefreshAiStatus();
+            return;
+        }
+
+        CancelCleanupConnectionTest();
+        var cts = new CancellationTokenSource();
+        _cleanupConnectionTestCts = cts;
+        var recipient = CleanupRecipient.ForCandidate(candidate);
+        _cleanupConnectionTest = new(provider, recipient, Outcome: null, SafeReason: null);
+        RefreshAiStatus();
+
+        try
+        {
+            var result = await _cleanup.TestAsync(candidate, cts.Token);
+            if (_closed || _cleanupConnectionTestCts != cts || !result.Recipient.Matches(BuildAiCleanupCandidateOptions()))
+            {
+                return;
+            }
+
+            _cleanupConnectionTest = new(provider, result.Recipient, result.Outcome, result.SafeReason);
+            if (provider == CleanupProvider.AzureFoundry)
+            {
+                ApplyAzureConnectionTestResult(result);
+            }
+
+            RefreshAiStatus();
+            var message = result.Outcome == CleanupTestOutcome.Connected
+                ? "Connected."
+                : result.SafeReason ?? "Couldn't connect.";
+            AnnounceFrom(provider == CleanupProvider.AzureFoundry ? AzureVerifyStatusRow : CustomStatusRow, message);
+        }
+        catch (OperationCanceledException)
+        {
+            if (_cleanupConnectionTestCts == cts)
+            {
+                _cleanupConnectionTest = null;
+                RefreshAiStatus();
+            }
+        }
+        finally
+        {
+            if (_cleanupConnectionTestCts == cts)
+            {
+                _cleanupConnectionTestCts = null;
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private void ApplyAzureConnectionTestResult(CleanupTestResult result)
+    {
+        var outcome = result.Outcome switch
+        {
+            CleanupTestOutcome.Connected => AzureVerificationOutcome.Succeeded("Connected."),
+            CleanupTestOutcome.Failed => AzureVerificationOutcome.Failed(result.SafeReason ?? "Couldn't connect."),
+            _ => AzureVerificationOutcome.NotRun,
+        };
+
+        if (IsAzureApiKeySelected)
+        {
+            _azureApiKeyOutcome = outcome;
+            _azureApiKeyVerified = result.Outcome == CleanupTestOutcome.Connected;
+        }
+        else if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            _servicePrincipalOutcome = outcome;
+        }
+    }
+
+    private void CustomConnectionField_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        CancelCleanupConnectionTest();
+        RefreshAiStatus();
+    }
 
     private AiCleanupPageDescription BuildAiPageDescription() =>
         AiCleanupPageState.Describe(
@@ -4963,6 +5139,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             case AiCleanupActionId.CheckSignIn:
             case AiCleanupActionId.SignIn:
             case AiCleanupActionId.RefreshModels:
+            case AiCleanupActionId.TestConnection:
+            case AiCleanupActionId.TryAgain:
             case AiCleanupActionId.Verify:
                 await RunAzurePrimaryActionAsync(action);
                 break;
@@ -4976,6 +5154,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 UpdateAzureProjectApiKeyHint();
                 AzureEndpointBox.Focus();
                 break;
+        }
+    }
+
+    private async void CustomStatusRow_PrimaryActionInvoked(object? sender, AiCleanupActionId e)
+    {
+        if (e is AiCleanupActionId.TestConnection or AiCleanupActionId.TryAgain)
+        {
+            await RunCleanupConnectionTestAsync(CleanupProvider.OpenAiCompatible);
         }
     }
 
@@ -5006,6 +5192,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // or owning a dialog with a closed window, throws from an async void continuation, which
         // takes the process down rather than surfacing anywhere useful.
         _closed = true;
+        CancelCleanupConnectionTest();
 
         // Closing mid-capture must never leave the global hook in pass-through, or the
         // push-to-talk key would stay dead until the app restarts.

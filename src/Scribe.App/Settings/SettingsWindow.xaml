@@ -1305,7 +1305,8 @@
                                             <ui:TextBox x:Name="CustomEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="http://localhost:11434/v1"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomEndpointTitle}"/>
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomEndpointTitle}"
+                                                        TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="The service's OpenAI-compatible address, usually ending in /v1. Ollama: http://localhost:11434/v1. LM Studio: http://localhost:1234/v1. OpenRouter: https://openrouter.ai/api/v1."/>
 
@@ -1313,7 +1314,8 @@
                                             <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="For example, qwen3:4b"
-                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomModelTitle}"/>
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=CustomModelTitle}"
+                                                        TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="The name exactly as the service lists it. For Ollama, the command ollama list shows it."/>
 
@@ -1321,10 +1323,11 @@
                                             <ui:PasswordBox x:Name="CustomApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                             VerticalContentAlignment="Center"
                                                             PlaceholderText="Not needed for Ollama or LM Studio"
-                                                            AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"/>
+                                                            AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"
+                                                            PasswordChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Enter a key if your service needs one. Saved encrypted on this PC with your Windows account."/>
-                                            <settings:SettingsStatusRow x:Name="CustomStatusRow"/>
+                                            <settings:SettingsStatusRow x:Name="CustomStatusRow" PrimaryActionInvoked="CustomStatusRow_PrimaryActionInvoked"/>
                                         </StackPanel>
 
                                         <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">

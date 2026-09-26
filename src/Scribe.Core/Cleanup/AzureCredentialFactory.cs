@@ -57,6 +57,9 @@ internal static class AzureCredentialFactory
         }
     }
 
+    internal static TokenCredential CreateUncached(AzureCredentialRequest request) =>
+        Build(Normalize(request));
+
     /// <summary>
     /// Drops the cached credential. Called when settings change so a re-entered secret or a fresh
     /// <c>az login</c> is picked up instead of serving a credential built from the old identity.

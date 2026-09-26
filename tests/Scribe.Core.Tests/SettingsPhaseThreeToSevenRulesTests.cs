@@ -1062,8 +1062,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             azureSetup: new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true));
 
         Assert.Equal("Save to start AI cleanup.", state.StatusLine);
-        Assert.Equal("Azure accepted the key.", state.StatusRow!.Text);
-        Assert.Equal("Verify", state.StatusRow.ActionText);
+        Assert.Equal("Connected.", state.StatusRow!.Text);
+        Assert.Equal("Test connection", state.StatusRow.ActionText);
     }
 
     [Fact]
@@ -1123,17 +1123,17 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { AzureSetupResult.SignedIn, AiCleanupStatusKind.Success, "Signed in.", "Refresh models", true, null },
         { AzureSetupResult.ListingModels, AiCleanupStatusKind.Busy, "Finding your models...", null, false, null },
         { AzureSetupResult.ListingFailed, AiCleanupStatusKind.Error, "Couldn't list your models. no access", "Try again", true, null },
-        { AzureSetupResult.Verifying, AiCleanupStatusKind.Busy, "Verifying...", null, false, null },
-        { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
-        { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Verify", true, null },
-        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
-        { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Verified.", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Verify", true, null },
-        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last check. Choose Verify.", "Verify", true, null },
+        { AzureSetupResult.Verifying, AiCleanupStatusKind.Busy, "Testing the connection...", null, false, null },
+        { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Test connection.", "Test connection", false, null },
+        { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection", true, null },
+        { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Connected.", "Test connection", true, null },
+        { AzureSetupResult.ApiKeyVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the resource key and its access settings. (403)", "Try again", true, null },
+        { AzureSetupResult.ApiKeyVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last test. Choose Test connection.", "Test connection", true, null },
+        { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Test connection.", "Test connection", false, null },
+        { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection", true, null },
+        { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Connected.", "Test connection", true, null },
+        { AzureSetupResult.ServicePrincipalVerificationFailed, AiCleanupStatusKind.Error, "Azure denied access. Check the app registration and resource role. (403)", "Try again", true, null },
+        { AzureSetupResult.ServicePrincipalVerifyAgain, AiCleanupStatusKind.Info, "Changed since the last test. Choose Test connection.", "Test connection", true, null },
     };
 
     [Theory]
@@ -1190,8 +1190,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     }
 
     [Theory]
-    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", null)]
-    [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing...", null)]
+    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection")]
+    [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing the connection...", null)]
     [InlineData(CustomEndpointTestResult.Connected, AiCleanupStatusKind.Success, "Connected. qwen answered.", "Test connection")]
     [InlineData(CustomEndpointTestResult.Failed, AiCleanupStatusKind.Error, "Connection refused.", "Try again")]
     public void Ai_cleanup_custom_rows_have_provider_specific_actions(
@@ -1205,6 +1205,15 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(kind, state.StatusRow!.Kind);
         Assert.Equal(text, state.StatusRow.Text);
         Assert.Equal(action, state.StatusRow.ActionText);
+    }
+
+    [Fact]
+    public void Ai_cleanup_custom_test_connection_is_disabled_until_required_fields_are_valid()
+    {
+        var state = ActiveCustom(new CustomEndpointSetupState(CustomEndpointTestResult.NotTested, CanTest: false));
+
+        Assert.Equal("Test connection", state.StatusRow!.ActionText);
+        Assert.False(state.StatusRow.ActionEnabled);
     }
 
     public static TheoryData<CleanupProvider, CleanupStatus, string?, string> RemoteStatusLines => new()

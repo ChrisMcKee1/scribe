@@ -19,6 +19,9 @@ public sealed class CleanupRecipient
 
     internal CleanupRecipient(CleanupOptions configuration) => _configuration = configuration;
 
+    /// <summary>Describes where a candidate settings-page test would send its probe.</summary>
+    public static CleanupRecipient ForCandidate(CleanupOptions configuration) => new(configuration);
+
     /// <summary>The provider the request goes to.</summary>
     public CleanupProvider Provider => _configuration.Provider;
 
@@ -26,7 +29,7 @@ public sealed class CleanupRecipient
     public bool IsOnDevice => Provider == CleanupProvider.FoundryLocal;
 
     /// <summary>Whether a service serving <paramref name="serving"/> is this recipient.</summary>
-    internal bool Matches(CleanupOptions serving) => _configuration.MatchesIgnoringPrompt(serving);
+    public bool Matches(CleanupOptions serving) => _configuration.MatchesIgnoringPrompt(serving);
 }
 
 /// <summary>What <see cref="ITextCleanupService.CompleteAsync"/> did.</summary>
