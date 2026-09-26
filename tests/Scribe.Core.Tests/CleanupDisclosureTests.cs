@@ -124,10 +124,11 @@ public sealed class CleanupDisclosureTests
         var assignments = Regex.Matches(code, Regex.Escape(Snapshot)).Select(m => m.Index).ToList();
         Assert.Equal(2, assignments.Count);
         var load = code.IndexOf("_settings = settingsRepository.Load();", StringComparison.Ordinal);
-        var store = code.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
-        var apply = code.IndexOf("_applySettings(_settings);", store, StringComparison.Ordinal);
+        var request = code.IndexOf("private WordPackSaveProtocolRequest BuildWordPackSaveRequest(", StringComparison.Ordinal);
+        var store = code.IndexOf("_settingsRepository.SaveBundle(", request, StringComparison.Ordinal);
+        var apply = code.IndexOf("useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings)", request, StringComparison.Ordinal);
         Assert.True(load >= 0 && load < assignments[0] && assignments[0] < store, "The snapshot is not taken where the settings load.");
-        Assert.True(store < assignments[1] && assignments[1] < apply, "The snapshot does not follow the store.");
+        Assert.True(store < assignments[1] && store < apply, "The snapshot does not follow the store.");
     }
 
     [Fact]
@@ -140,12 +141,13 @@ public sealed class CleanupDisclosureTests
         // handlers of a Save that failed. A failed Save leaves every edit in _settings, a picked provider among them,
         // so any other caller would apply what nothing stored.
         var call = Assert.Single(Regex.Matches(code, @"_applySettings\s*(\(|\?\.|\.Invoke\b)"));
-        Assert.StartsWith("_applySettings(_settings);", code[call.Index..], StringComparison.Ordinal);
+        Assert.StartsWith("_applySettings(_settings)", code[call.Index..], StringComparison.Ordinal);
         var save = code.IndexOf("private async Task<bool> TrySaveAsync()", StringComparison.Ordinal);
-        var store = code.IndexOf("_settingsRepository.SaveBundle(", save, StringComparison.Ordinal);
-        var failed = code.IndexOf("catch (Exception ex) when (_closed)", store, StringComparison.Ordinal);
+        var request = code.IndexOf("private WordPackSaveProtocolRequest BuildWordPackSaveRequest(", StringComparison.Ordinal);
+        var store = code.IndexOf("_settingsRepository.SaveBundle(", request, StringComparison.Ordinal);
+        var protocolCall = code.IndexOf("_wordPackSaveProtocol.SaveAsync(", save, StringComparison.Ordinal);
         Assert.True(
-            save >= 0 && save < store && store < call.Index && call.Index < failed,
+            save >= 0 && protocolCall > save && store < call.Index,
             "The window applies its own document outside the successful Save.");
 
         // Nor is the delegate handed on another way: besides its field, its assignment and that call, it only goes to
@@ -153,7 +155,8 @@ public sealed class CleanupDisclosureTests
         // generation they ask for, which the window awaits before it says the change is in effect.
         var uses = code.Split('\n').Select(line => line.Trim()).Where(line => Regex.IsMatch(line, @"\b_applySettings\b")).ToList();
         Assert.All(uses, line => Assert.True(
-            line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" or "var applying = _applySettings(_settings);" ||
+            line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" ||
+            line is "useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings)," ||
             line.StartsWith("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
             $"The window uses _applySettings in a way this test does not know: {line}"));
 

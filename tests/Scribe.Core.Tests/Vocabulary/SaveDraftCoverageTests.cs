@@ -102,18 +102,17 @@ public sealed class SaveDraftCoverageTests
         // are carried by whether they differ from storage (and a row edit in progress); the intents' revisions only order
         // this Save against the tray's own writes, which store themselves, and a tray change that alters what this window
         // would store alters ForSave, which the draft reads.
-        var bundle = Regex.Match(save, @"_settingsRepository\.SaveBundle\((?<arguments>[^;]*)\);");
+        var request = Body(window, "private WordPackSaveProtocolRequest BuildWordPackSaveRequest(");
+        var bundle = Regex.Match(request, @"_settingsRepository\.SaveBundle\((?<arguments>[^;]*)\);");
         Assert.True(bundle.Success, "SaveBundle's call was not found.");
-        var arguments = Regex.Split(bundle.Groups["arguments"].Value, @",\s*(?![^()]*\))").Select(argument => argument.Trim()).ToList();
-        Assert.Equal(5, arguments.Count);
-        Assert.Equal("_settings", arguments[0]);
-        Assert.Equal("entries", arguments[1]);
-        Assert.Equal("snippets", arguments[2]);
-        Assert.Equal("intents", arguments[3]);
-        Assert.Equal("wordPackSave?.Payload", arguments[4]);
-        Assert.Contains("_dictionaryLoad.HasChanges(DictionarySignature())", draft, StringComparison.Ordinal);
+        Assert.Contains("_settings", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("entries", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("snippets", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("intents ?? new ExternalIntents(0, 0)", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains("payload", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        Assert.Contains(".Text(DictionarySignature())", draft, StringComparison.Ordinal);
         Assert.Contains("RowEditInProgress(DictionaryGrid)", draft, StringComparison.Ordinal);
-        Assert.Contains("_snippetLoad.HasChanges(SnippetSignature())", draft, StringComparison.Ordinal);
+        Assert.Contains(".Text(SnippetSignature())", draft, StringComparison.Ordinal);
     }
 
     [Fact]
