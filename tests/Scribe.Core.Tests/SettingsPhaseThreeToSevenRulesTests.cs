@@ -1111,6 +1111,56 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(expected, state.StatusLine);
     }
 
+
+    [Theory]
+    [InlineData("Azure rejected the API key (401). Check that the key belongs to this resource.")]
+    [InlineData("Azure could not find the deployment 'gpt-4o' (404). Check the endpoint and exact deployment name.")]
+    [InlineData("Azure is throttling requests (429). The deployment is reachable but over quota. Wait and retry.")]
+    [InlineData("Azure returned a server error (500). This is usually transient; try again shortly.")]
+    [InlineData("The service principal secret was rejected. Check the secret's Value.")]
+    [InlineData("The service principal secret has expired. Create a new secret and paste its Value.")]
+    [InlineData("The app registration was not found. Check the application ID and tenant ID.")]
+    public void Azure_verification_failures_are_typed_errors_not_message_parsing(string reason)
+    {
+        var outcome = AzureVerificationOutcome.Failed(reason);
+
+        var apiRow = ActiveAzure(new AzureAiSetupState(outcome.ToApiKeyResult(complete: true), ApiKeySelected: true, SafeReason: outcome.SafeMessage)).StatusRow!;
+        Assert.Equal(AiCleanupStatusKind.Error, apiRow.Kind);
+        Assert.Equal(reason, apiRow.Text);
+
+        var spRow = ActiveAzure(new AzureAiSetupState(outcome.ToServicePrincipalResult(complete: true), AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: outcome.SafeMessage)).StatusRow!;
+        Assert.Equal(AiCleanupStatusKind.Error, spRow.Kind);
+        Assert.Equal(reason, spRow.Text);
+    }
+
+    [Fact]
+    public void Azure_verification_changed_since_maps_to_verify_again()
+    {
+        var outcome = AzureVerificationOutcome.ChangedSince;
+
+        Assert.Equal(AzureSetupResult.ApiKeyVerifyAgain, outcome.ToApiKeyResult(complete: true));
+        Assert.Equal(AzureSetupResult.ServicePrincipalVerifyAgain, outcome.ToServicePrincipalResult(complete: true));
+        Assert.Equal(AzureSetupResult.ApiKeyIncomplete, outcome.ToApiKeyResult(complete: false));
+    }
+
+    [Fact]
+    public void Reapplying_the_same_off_page_projection_keeps_configured_provider_summary()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        saved.AiCleanupCustomEndpoint = "http://localhost:11434/v1";
+        saved.AiCleanupCustomModel = "synthetic-model";
+        var draft = saved.Clone();
+        draft.EnableAiCleanup = false;
+        var setup = AiCleanupPageState.SavedSetupState(saved);
+        var summary = AiCleanupPageState.ProviderSetupSummary(saved);
+
+        var first = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, savedSetupState: setup, providerSummary: summary);
+        var second = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, savedSetupState: setup, providerSummary: summary);
+
+        Assert.Equal("Set up to use Another AI service (synthetic-model).", first.OffHelperText);
+        Assert.Equal(first, second);
+    }
     private static AiCleanupPageDescription ActiveAzure(AzureAiSetupState setup, CleanupStatus status = CleanupStatus.Ready, string? safeReason = null)
     {
         var saved = AppSettings.CreateDefault();

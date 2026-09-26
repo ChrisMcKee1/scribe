@@ -157,6 +157,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _azureConnectionKnown;
     private bool _azureManualConfiguration;
     private string? _azureStatusMessage;
+    private AzureVerificationOutcome _azureApiKeyOutcome = AzureVerificationOutcome.NotRun;
+    private AzureVerificationOutcome _servicePrincipalOutcome = AzureVerificationOutcome.NotRun;
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
     private bool _azureApiKeyVerified;
@@ -1329,7 +1331,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
         }
-        else if (RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen) &&
+        else if (RemoteActivityPolicy.MayContact(_committedSettings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen) &&
                  SelectedProvider == CleanupProvider.AzureFoundry)
         {
             _ = ProbeAzureSignInAsync();
@@ -2682,7 +2684,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
         }
         else if (SelectedProvider == CleanupProvider.AzureFoundry &&
-                 RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), trigger))
+                 RemoteActivityPolicy.MayContact(_committedSettings, CurrentAiDraftSettings(), trigger))
         {
             _ = ProbeAzureSignInAsync();
         }
@@ -3116,6 +3118,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // verification no longer can, so editing the endpoint mid-probe leaves the Verify button usable.
         _azureSignInAttempts.Retire();
         _azureApiKeyVerified = false;
+        _azureApiKeyOutcome = AzureVerificationOutcome.ChangedSince;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         ApplyAzureSettingsAccess();
 
@@ -3559,6 +3562,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _azureSignInAttempts.Retire();
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
+        _azureApiKeyOutcome = AzureVerificationOutcome.NotRun;
+        _servicePrincipalOutcome = AzureVerificationOutcome.NotRun;
         _azureAutoListed = false;
         AzureCredentialInvalidation.Invalidate();
         ApplyAzureSettingsAccess();
@@ -3806,6 +3811,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _azureApiKeyVerified = result.Success;
+            _azureApiKeyOutcome = result.Success
+                ? AzureVerificationOutcome.Succeeded(result.Message)
+                : AzureVerificationOutcome.Failed(result.Message);
             _azureSignInStatus = result.Success
                 ? new AzureSignInStatus(true, null)
                 : new AzureSignInStatus(false, result.Message);
@@ -3816,8 +3824,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureApiKeyVerified = false;
+                _azureApiKeyOutcome = AzureVerificationOutcome.Failed("Verifying the API key timed out. Check the endpoint host and try again.");
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                _azureStatusMessage = "Verifying the API key timed out. Check the endpoint host and try again.";
+                _azureStatusMessage = _azureApiKeyOutcome.SafeMessage;
             }
         }
         catch (Exception ex)
@@ -3826,8 +3835,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureApiKeyVerified = false;
+                _azureApiKeyOutcome = AzureVerificationOutcome.Failed("The API key could not be verified. Check the endpoint, deployment name, and key.");
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                _azureStatusMessage = "The API key could not be verified. Check the endpoint, deployment name, and key.";
+                _azureStatusMessage = _azureApiKeyOutcome.SafeMessage;
             }
         }
         finally
@@ -4018,16 +4028,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _azureSignInStatus = status;
-            _azureStatusMessage = status.IsSignedIn
-                ? DescribeServicePrincipalReady(status)
-                : status.FailureReason ?? AzureSignInDiagnostics.Generic;
+            _servicePrincipalOutcome = status.IsSignedIn
+                ? AzureVerificationOutcome.Succeeded(DescribeServicePrincipalReady(status))
+                : AzureVerificationOutcome.Failed(status.FailureReason ?? AzureSignInDiagnostics.Generic);
+            _azureStatusMessage = _servicePrincipalOutcome.SafeMessage;
         }
         catch (OperationCanceledException)
         {
             if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
+                _servicePrincipalOutcome = AzureVerificationOutcome.Failed("Verifying the service principal timed out. Please try again.");
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                _azureStatusMessage = "Verifying the service principal timed out. Please try again.";
+                _azureStatusMessage = _servicePrincipalOutcome.SafeMessage;
             }
         }
         catch (Exception ex)
@@ -4037,8 +4049,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TryLog(ex, "Could not verify the Azure service principal.");
             if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
+                _servicePrincipalOutcome = AzureVerificationOutcome.Failed("The service principal could not be verified. Check the details and try again.");
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                _azureStatusMessage = "The service principal could not be verified. Check the details and try again.";
+                _azureStatusMessage = _servicePrincipalOutcome.SafeMessage;
             }
         }
         finally
@@ -4529,7 +4542,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CopilotPanel.Visibility = provider == CleanupProvider.GitHubCopilot ? Visibility.Visible : Visibility.Collapsed;
         if (provider == CleanupProvider.GitHubCopilot)
         {
-            var savedActive = RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen);
+            var savedActive = RemoteActivityPolicy.MayContact(_committedSettings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen);
             RefreshCopilotCliStatus(runVersionProbe: savedActive, allowModelList: savedActive);
         }
     }
@@ -4552,10 +4565,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     private bool SavedActiveFoundryModelMatches(string alias) =>
-        _settings.EnableAiCleanup &&
-        _settings.AiCleanupProvider == CleanupProvider.FoundryLocal &&
+        _committedSettings.EnableAiCleanup &&
+        _committedSettings.AiCleanupProvider == CleanupProvider.FoundryLocal &&
         string.Equals(
-            string.IsNullOrWhiteSpace(_settings.AiCleanupModel) ? CleanupModelCatalog.DefaultAlias : _settings.AiCleanupModel.Trim(),
+            string.IsNullOrWhiteSpace(_committedSettings.AiCleanupModel) ? CleanupModelCatalog.DefaultAlias : _committedSettings.AiCleanupModel.Trim(),
             alias,
             StringComparison.OrdinalIgnoreCase);
 
@@ -4573,14 +4586,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true);
             }
 
-            if (_azureApiKeyVerified)
-            {
-                return new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true);
-            }
-
-            return AzureMessageIsFailure(_azureStatusMessage)
-                ? new(AzureSetupResult.ApiKeyVerificationFailed, ApiKeySelected: true, SafeReason: _azureStatusMessage)
-                : new(AzureSetupResult.ApiKeyComplete, ApiKeySelected: true);
+            var result = _azureApiKeyOutcome.ToApiKeyResult(complete: true);
+            return new(result, ApiKeySelected: true, SafeReason: _azureApiKeyOutcome.SafeMessage);
         }
 
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
@@ -4590,14 +4597,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(AzureSetupResult.ServicePrincipalIncomplete, AuthMode: AzureAuthMode.ServicePrincipal);
             }
 
-            if (_azureSignInStatus.IsSignedIn)
-            {
-                return new(AzureSetupResult.ServicePrincipalVerified, AuthMode: AzureAuthMode.ServicePrincipal);
-            }
-
-            return AzureMessageIsFailure(_azureStatusMessage)
-                ? new(AzureSetupResult.ServicePrincipalVerificationFailed, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _azureStatusMessage)
-                : new(AzureSetupResult.ServicePrincipalComplete, AuthMode: AzureAuthMode.ServicePrincipal);
+            var result = _servicePrincipalOutcome.ToServicePrincipalResult(complete: true);
+            return new(result, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _servicePrincipalOutcome.SafeMessage);
         }
 
         if (!_azureConnectionKnown)
@@ -4614,14 +4615,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ? new(AzureSetupResult.SignedIn, Account: _azureSignInStatus.Account)
             : new(AzureSetupResult.NotSignedIn);
     }
-
-    private static bool AzureMessageIsFailure(string? message) =>
-        !string.IsNullOrWhiteSpace(message) &&
-        (message.StartsWith("Couldn't", StringComparison.Ordinal) ||
-         message.StartsWith("The API key could not", StringComparison.Ordinal) ||
-         message.StartsWith("The service principal could not", StringComparison.Ordinal) ||
-         message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
-         message.Contains("denied", StringComparison.OrdinalIgnoreCase));
 
     private CopilotSetupState CurrentCopilotSetup()
     {
@@ -4640,26 +4633,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private static CustomEndpointSetupState CurrentCustomSetup() => new(CustomEndpointTestResult.NotTested);
 
-    private void UpdateAiEnabledState()
-    {
-        var draft = CurrentAiDraftSettings();
-        var providerSummary = CleanupDisclosure.SummaryFor(SelectedProvider);
-        var offProviderSummary = AiCleanupPageState.ProviderSetupSummary(_settings);
-        var savedSetup = AiCleanupPageState.SavedSetupState(_settings);
-        var page = AiCleanupPageState.Describe(
-            _settings,
-            draft,
+    private AiCleanupPageDescription BuildAiPageDescription() =>
+        AiCleanupPageState.Describe(
+            _committedSettings,
+            CurrentAiDraftSettings(),
             _cleanup.Status,
             foundrySetup: CurrentFoundrySetup(),
             azureSetup: CurrentAzureSetup(),
             copilotSetup: CurrentCopilotSetup(),
             customSetup: CurrentCustomSetup(),
-            savedSetupState: savedSetup,
-            providerSummary: offProviderSummary,
-            modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias));
+            savedSetupState: AiCleanupPageState.SavedSetupState(_committedSettings),
+            providerSummary: AiCleanupPageState.ProviderSetupSummary(_committedSettings),
+            modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias),
+            safeReason: _cleanup.StatusDetail);
 
+    private void UpdateAiEnabledState()
+    {
+        var page = BuildAiPageDescription();
         ApplyAiPageDescription(page);
-        AiProviderSummaryText.Text = providerSummary;
+        AiProviderSummaryText.Text = CleanupDisclosure.SummaryFor(SelectedProvider);
         UpdateAiWritingStyleSummary();
         RefreshAiStatus();
     }
@@ -4815,17 +4807,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var draft = CurrentAiDraftSettings();
-        var page = AiCleanupPageState.Describe(
-            _settings,
-            draft,
-            _cleanup.Status,
-            foundrySetup: CurrentFoundrySetup(),
-            azureSetup: CurrentAzureSetup(),
-            copilotSetup: CurrentCopilotSetup(),
-            customSetup: CurrentCustomSetup(),
-            modelName: DisplayNameForFoundryAlias(SelectedFoundryModelAlias),
-            safeReason: _cleanup.StatusDetail);
+        var page = BuildAiPageDescription();
 
         ApplyAiPageDescription(page);
         FoundryStatusRow.Show(SelectedProvider == CleanupProvider.FoundryLocal ? page.StatusRow : null);
@@ -5463,11 +5445,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureApiKey = NullIfBlank(SelectedAzureApiKey);
             _settings.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
             // One tenant setting, edited from whichever box the active mode shows.
-            _settings.AiCleanupAzureTenantId = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-                ? NullIfBlank(SpTenantBox.Text)
-                : NullIfBlank(AzureTenantBox.Text);
-            _settings.AiCleanupAzureClientId = NullIfBlank(SpClientIdBox.Text);
-            _settings.AiCleanupAzureClientSecret = NullIfBlank(SpClientSecretBox.Password);
+            _settings.AiCleanupAzureTenantId = IsAzureApiKeySelected
+                ? null
+                : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
+                    ? NullIfBlank(SpTenantBox.Text)
+                    : NullIfBlank(AzureTenantBox.Text);
+            _settings.AiCleanupAzureClientId = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal && !IsAzureApiKeySelected ? NullIfBlank(SpClientIdBox.Text) : null;
+            _settings.AiCleanupAzureClientSecret = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal && !IsAzureApiKeySelected ? NullIfBlank(SpClientSecretBox.Password) : null;
             // The credential is cached for token reuse, so a changed identity has to drop it or the
             // next dictation would keep authenticating as the previous one.
             AzureCredentialInvalidation.Invalidate();

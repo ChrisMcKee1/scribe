@@ -54,6 +54,51 @@ public sealed record AiCleanupStatusRow(
     public bool SecondaryActionEnabled => Secondary?.IsEnabled ?? false;
 }
 
+public enum AzureVerificationOutcomeKind
+{
+    NotRun,
+    Succeeded,
+    Failed,
+    ChangedSince,
+}
+
+public sealed record AzureVerificationOutcome(AzureVerificationOutcomeKind Kind, string? SafeMessage = null)
+{
+    public static AzureVerificationOutcome NotRun { get; } = new(AzureVerificationOutcomeKind.NotRun);
+
+    public static AzureVerificationOutcome Succeeded(string? safeMessage = null) => new(AzureVerificationOutcomeKind.Succeeded, safeMessage);
+
+    public static AzureVerificationOutcome Failed(string safeReason) => new(AzureVerificationOutcomeKind.Failed, safeReason);
+
+    public static AzureVerificationOutcome ChangedSince { get; } = new(AzureVerificationOutcomeKind.ChangedSince);
+
+    public AzureSetupResult ToApiKeyResult(bool complete) => ToResult(complete, AzureSetupResult.ApiKeyComplete, AzureSetupResult.ApiKeyVerified, AzureSetupResult.ApiKeyVerificationFailed, AzureSetupResult.ApiKeyVerifyAgain, AzureSetupResult.ApiKeyIncomplete);
+
+    public AzureSetupResult ToServicePrincipalResult(bool complete) => ToResult(complete, AzureSetupResult.ServicePrincipalComplete, AzureSetupResult.ServicePrincipalVerified, AzureSetupResult.ServicePrincipalVerificationFailed, AzureSetupResult.ServicePrincipalVerifyAgain, AzureSetupResult.ServicePrincipalIncomplete);
+
+    private AzureSetupResult ToResult(
+        bool complete,
+        AzureSetupResult completeResult,
+        AzureSetupResult succeeded,
+        AzureSetupResult failed,
+        AzureSetupResult changed,
+        AzureSetupResult incomplete)
+    {
+        if (!complete)
+        {
+            return incomplete;
+        }
+
+        return Kind switch
+        {
+            AzureVerificationOutcomeKind.Succeeded => succeeded,
+            AzureVerificationOutcomeKind.Failed => failed,
+            AzureVerificationOutcomeKind.ChangedSince => changed,
+            _ => completeResult,
+        };
+    }
+}
+
 public enum AzureSetupResult
 {
     NotChecked,

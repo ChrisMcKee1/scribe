@@ -54,6 +54,8 @@ public partial class SettingsWindow
         _copilotChecked = false;
         CopilotLoadModelsButton.IsEnabled = false;
         UpdateAiEnabledState();
+        var authorizedSettings = _committedSettings.Clone();
+        var authorizedDraft = CurrentAiDraftSettings();
 
         _ = Task.Run(() => runVersionProbe ? GitHubCopilotCli.Detect() : GitHubCopilotCli.Locate()).ContinueWith(
             task =>
@@ -74,8 +76,11 @@ public partial class SettingsWindow
                     CopilotLoadModelsButton.IsEnabled = status.Found;
                     UpdateAiEnabledState();
 
-                    if (status.Found && !_copilotModelsLoaded && allowModelList &&
-                        RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen))
+                    var authorization = status.Found && allowModelList
+                        ? RemoteActivityPolicy.CaptureAutomaticContact(authorizedSettings, authorizedDraft, RemoteActivityTrigger.WindowOpen, status.Path)
+                        : null;
+                    if (status.Found && !_copilotModelsLoaded &&
+                        RemoteActivityPolicy.IsStillAuthorized(authorization, _committedSettings, SelectedProvider, status.Path))
                     {
                         LoadCopilotModels();
                     }
