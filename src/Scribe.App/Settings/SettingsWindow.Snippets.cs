@@ -200,7 +200,9 @@ public partial class SettingsWindow
     /// </summary>
     // What Save stores for the snippets, and exactly which rows it stored. Validation has already blocked every changed
     // incomplete row, so the incomplete rows left are untouched placeholders, which are dropped and stay new, and stored
-    // rows validation calls unchanged, which are kept exactly as stored so saving another snippet can't delete them.
+    // rows validation calls unchanged, which are kept exactly as stored so saving another snippet can't delete them. A
+    // complete row always saves its current text verbatim: validation's trimmed comparison would call a line break added
+    // at the start or end of the text unchanged, and a snippet types its text exactly.
     private List<Snippet> BuildSnippets(out SnippetRow? duplicate, out IReadOnlyList<SnippetSubmission> submission)
     {
         var rows = _snippetRows.ToList();
@@ -215,9 +217,12 @@ public partial class SettingsWindow
     }
 
     private static SnippetBuilder.Row ToBuilderRow(SnippetRow row) =>
-        SettingsDraftValidator.IsUnchanged(ToDraftRow(row))
+        IsIncomplete(row) && SettingsDraftValidator.IsUnchanged(ToDraftRow(row))
             ? new SnippetBuilder.Row(row.Id, row.LoadedPhrase, row.LoadedTemplate, row.LoadedEnabled, KeepAsStored: true)
             : new SnippetBuilder.Row(row.Id, row.Phrase, row.Template, row.Enabled);
+
+    private static bool IsIncomplete(SnippetRow row) =>
+        string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template);
 
     private void RefreshSnippetEmptyState()
     {
