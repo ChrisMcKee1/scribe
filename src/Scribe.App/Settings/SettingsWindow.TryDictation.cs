@@ -3,7 +3,6 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Documents;
-using System.Windows.Interop;
 using System.Windows.Media;
 using Scribe.App.Dictation;
 using Scribe.Core.Cleanup;
@@ -18,9 +17,6 @@ namespace Scribe.App.Settings;
 
 public partial class SettingsWindow
 {
-    private string? _tryDictationRunningModelId;
-    private int? _tryDictationRunningDecodeThreads;
-
     private void TryDictationSection_Loaded(object sender, RoutedEventArgs e) =>
         UpdateTryDictationPage();
 
@@ -65,6 +61,18 @@ public partial class SettingsWindow
 
     private void UpdateTryDictationPage()
     {
+        try
+        {
+            UpdateTryDictationPageCore();
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not refresh the Try dictation page.");
+        }
+    }
+
+    private void UpdateTryDictationPageCore()
+    {
         if (TryDictationPrimaryInstruction is null)
         {
             return;
@@ -73,7 +81,7 @@ public partial class SettingsWindow
         var primary = _pendingBinding with { Mode = SelectedMode };
         TryDictationPrimaryInstruction.Text = TryDictationInstruction(primary, primaryShortcut: true);
 
-        var secondary = _settings.EnableAiCleanup && _pendingDictationOnlyBinding is not null
+        var secondary = _committedSettings.EnableAiCleanup && _pendingDictationOnlyBinding is not null
             ? _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }
             : null;
         if (secondary is null)
@@ -87,7 +95,7 @@ public partial class SettingsWindow
             TryDictationSecondaryInstruction.Visibility = Visibility.Visible;
         }
 
-        var samples = TryDictationSample.For(CurrentDictionaryEntries());
+        var samples = TryDictationSample.For(TryDictationSampleDictionaryEntries());
         TryDictationSampleText.Text = samples[0];
         if (samples.Count > 1)
         {
@@ -100,9 +108,12 @@ public partial class SettingsWindow
             TryDictationSecondSampleText.Visibility = Visibility.Collapsed;
         }
 
-        RememberTryDictationRunningSpeechSettings();
         var changes = CurrentTryDictationChanges();
-        var restartNeeded = !changes.IsDirty && TryDictationNeedsRestart();
+        var restartNeeded = !changes.IsDirty && TryDictationRestartNotice.Needed(
+            _committedSettings.TranscriptionModelId,
+            _committedSettings.DecodeThreads,
+            _runningTranscription.ModelId,
+            _runningTranscription.NumThreads);
         TryDictationUnsavedBar.Message = SettingsChangeTracker.TryDictationUnsavedNotice;
         TryDictationUnsavedBar.IsOpen = changes.IsDirty;
         TryDictationUnsavedHost.Visibility = changes.IsDirty ? Visibility.Visible : Visibility.Collapsed;
@@ -112,19 +123,14 @@ public partial class SettingsWindow
         TryDictationRestartBar.Visibility = restartNeeded ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void RememberTryDictationRunningSpeechSettings()
-    {
-        _tryDictationRunningModelId ??= _settings.TranscriptionModelId;
-        _tryDictationRunningDecodeThreads ??= _settings.DecodeThreads;
-    }
-
-    private bool TryDictationNeedsRestart() =>
-        !string.Equals(_tryDictationRunningModelId, _settings.TranscriptionModelId, StringComparison.Ordinal) ||
-        _tryDictationRunningDecodeThreads != _settings.DecodeThreads;
+    private IReadOnlyList<DictionaryEntry> TryDictationSampleDictionaryEntries() =>
+        _dictionaryLoad.IsLoaded
+            ? _rows.Select(row => new DictionaryEntry(row.Id, row.Pattern, row.Replacement, row.WholeWord, row.Enabled)).ToList()
+            : [];
 
     private SettingsChangeSet CurrentTryDictationChanges()
     {
-        var pages = new SortedSet<SettingsPage>(SettingsChangeTracker.Compare(_settings, TryDictationDraft(), recoveredMode: _settingsRecovered).Pages);
+        var pages = new SortedSet<SettingsPage>(SettingsChangeTracker.Compare(_committedSettings, TryDictationDraft(), recoveredMode: _settingsRecovered).Pages);
         if (_dictionaryLoad.HasChanges(DictionarySignature()) || _libraryLoad.HasChanges(LibrarySignature()))
         {
             pages.Add(SettingsPage.Dictionary);
@@ -140,7 +146,7 @@ public partial class SettingsWindow
 
     private AppSettings TryDictationDraft()
     {
-        var draft = _settings.Clone();
+        var draft = _committedSettings.Clone();
         draft.Hotkey = _pendingBinding with { Mode = SelectedMode };
         draft.DictationOnlyHotkey = _pendingDictationOnlyBinding is null
             ? null
@@ -177,7 +183,7 @@ public partial class SettingsWindow
         draft.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
         draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
         draft.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
-        var writingStyle = NormalizePrompt(AiWritingStyleBox.Text);
+        var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
         draft.AiCleanupWritingStyle = writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
             ? string.Empty
             : writingStyle;
@@ -217,7 +223,19 @@ public partial class SettingsWindow
 
     private void RenderTryDictationReport(DictationPipelineReport report)
     {
-        UpdateTryDictationPage();
+        try
+        {
+            RenderTryDictationReportCore(report);
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not render the Try dictation result.");
+        }
+    }
+
+    private void RenderTryDictationReportCore(DictationPipelineReport report)
+    {
+UpdateTryDictationPage();
         TryDictationEmptyText.Visibility = Visibility.Collapsed;
         TryDictationResultPanel.Visibility = Visibility.Visible;
 
@@ -269,7 +287,7 @@ public partial class SettingsWindow
 
         var cleanupChanged = report.Cleanup?.Changed == true ||
             (report.CleanedText is { } cleaned && report.RawText is { } raw && !string.Equals(cleaned, raw, StringComparison.Ordinal));
-        var changes = TryDictationChangeList.Describe(displayedResult.Replacements, cleanupChanged);
+        var changes = TryDictationChangeList.Describe(report.PostProcessing?.Replacements ?? [], cleanupChanged);
         TryDictationChangesSection.Visibility = view.ShowChanges ? Visibility.Visible : Visibility.Collapsed;
         TryDictationChangesTitle.Text = changes.Count == 0 ? "Changes" : $"Changes ({changes.Count})";
         TryDictationChangesList.ItemsSource = changes.Count == 0 ? ["No changes."] : changes;
@@ -301,20 +319,20 @@ public partial class SettingsWindow
     }
 
     private CleanupOptions BuildTryDictationCleanupOptions() => new(
-        _settings.EnableAiCleanup,
-        _settings.AiCleanupProvider,
-        _settings.AiCleanupModel,
-        _settings.AiCleanupAzureEndpoint,
-        _settings.AiCleanupAzureDeployment,
-        _settings.AiCleanupAzureApiKey,
-        _settings.AiCleanupAzureTenantId,
-        CustomEndpoint: _settings.AiCleanupCustomEndpoint,
-        CustomModel: _settings.AiCleanupCustomModel,
-        CustomApiKey: _settings.AiCleanupCustomApiKey,
-        AzureAuthMode: _settings.AiCleanupAzureAuthMode,
-        AzureClientId: _settings.AiCleanupAzureClientId,
-        AzureClientSecret: _settings.AiCleanupAzureClientSecret,
-        CopilotModel: _settings.AiCleanupCopilotModel);
+        _committedSettings.EnableAiCleanup,
+        _committedSettings.AiCleanupProvider,
+        _committedSettings.AiCleanupModel,
+        _committedSettings.AiCleanupAzureEndpoint,
+        _committedSettings.AiCleanupAzureDeployment,
+        _committedSettings.AiCleanupAzureApiKey,
+        _committedSettings.AiCleanupAzureTenantId,
+        CustomEndpoint: _committedSettings.AiCleanupCustomEndpoint,
+        CustomModel: _committedSettings.AiCleanupCustomModel,
+        CustomApiKey: _committedSettings.AiCleanupCustomApiKey,
+        AzureAuthMode: _committedSettings.AiCleanupAzureAuthMode,
+        AzureClientId: _committedSettings.AiCleanupAzureClientId,
+        AzureClientSecret: _committedSettings.AiCleanupAzureClientSecret,
+        CopilotModel: _committedSettings.AiCleanupCopilotModel);
 
     private static string TryFormatDuration(TimeSpan elapsed) =>
         elapsed.TotalMilliseconds < 1 ? "<1 ms" : $"{elapsed.TotalMilliseconds:N0} ms";

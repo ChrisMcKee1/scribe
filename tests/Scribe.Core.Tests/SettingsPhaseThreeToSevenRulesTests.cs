@@ -397,14 +397,139 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     public void Dictation_controller_pipeline_stage_strings_stay_in_sync_with_try_dictation_classifier()
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Dictation", "DictationController.cs"));
+        var calls = ExtractReportFailCalls(source);
 
-        Assert.Contains("report.Fail(\"Voice activity detection\", \"No speech was detected.\")", source, StringComparison.Ordinal);
-        Assert.Contains("report.Fail(\"Speech recognition\", \"No speech was recognized.\")", source, StringComparison.Ordinal);
-        Assert.Contains("report.Fail(\"Audio capture\"", source, StringComparison.Ordinal);
-        Assert.Contains("report.Fail(\"Voice activity detection\"", source, StringComparison.Ordinal);
-        Assert.Contains("report.Fail(\"Speech recognition\"", source, StringComparison.Ordinal);
-        Assert.Contains("report.Fail(\"Dictionary and snippets\"", source, StringComparison.Ordinal);
-        Assert.Contains("report.Fail(\"Text insertion\"", source, StringComparison.Ordinal);
+        Assert.Equal(1, calls.Count(call =>
+            call.Stage == TryDictationReportClassifier.StageVoiceActivityDetection &&
+            call.Reason == TryDictationReportClassifier.NoSpeechDetected));
+        Assert.Equal(1, calls.Count(call =>
+            call.Stage == TryDictationReportClassifier.StageSpeechRecognition &&
+            call.Reason == TryDictationReportClassifier.NoSpeechRecognized));
+        Assert.Contains(calls, call => call.Stage == TryDictationReportClassifier.StageAudioCapture);
+        Assert.Contains(calls, call => call.Stage == TryDictationReportClassifier.StageVoiceActivityDetection);
+        Assert.Contains(calls, call => call.Stage == TryDictationReportClassifier.StageSpeechRecognition);
+        Assert.Contains(calls, call => call.Stage == TryDictationReportClassifier.StageDictionaryAndSnippets);
+        Assert.Contains(calls, call => call.Stage == TryDictationReportClassifier.StageTextInsertion);
+    }
+
+    [Fact]
+    public void Dictation_controller_stage_scan_ignores_commented_out_calls()
+    {
+        var source = "// report.Fail(\"Voice activity detection\", \"No speech was detected.\")" + Environment.NewLine +
+                     "/* report.Fail(\"Speech recognition\", \"No speech was recognized.\") */";
+
+        Assert.Empty(ExtractReportFailCalls(source));
+    }
+
+    [Fact]
+    public void Settings_window_tracks_committed_settings_for_try_dictation()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var tryDictation = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs"));
+
+        Assert.Contains("_committedSettings = _settings.Clone();", source, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(source, "_committedSettings = _settings.Clone();"));
+        Assert.Contains("SettingsChangeTracker.Compare(_committedSettings, TryDictationDraft()", tryDictation, StringComparison.Ordinal);
+        Assert.Contains("_committedSettings.AiCleanupProvider", tryDictation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Try_dictation_draft_keeps_multiline_writing_style_clean()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.AiCleanupWritingStyle = "First rule.\r\nSecond rule.";
+        var draft = saved.Clone();
+        draft.AiCleanupWritingStyle = "First rule.\r\nSecond rule.";
+
+        Assert.False(SettingsChangeTracker.Compare(saved, draft).IsDirty);
+    }
+
+    private static IReadOnlyList<(string Stage, string Reason)> ExtractReportFailCalls(string source)
+    {
+        var stripped = StripComments(source);
+        var calls = new List<(string Stage, string Reason)>();
+        const string prefix = "report.Fail(\"";
+        var index = 0;
+        while ((index = stripped.IndexOf(prefix, index, StringComparison.Ordinal)) >= 0)
+        {
+            var stageStart = index + prefix.Length;
+            var stageEnd = stripped.IndexOf("\"", stageStart, StringComparison.Ordinal);
+            if (stageEnd < 0)
+            {
+                break;
+            }
+
+            var middle = stripped.IndexOf(", \"", stageEnd, StringComparison.Ordinal);
+            if (middle < 0)
+            {
+                index = stageEnd + 1;
+                continue;
+            }
+
+            var reasonStart = middle + 3;
+            var reasonEnd = stripped.IndexOf("\"", reasonStart, StringComparison.Ordinal);
+            if (reasonEnd < 0)
+            {
+                break;
+            }
+
+            calls.Add((stripped[stageStart..stageEnd], stripped[reasonStart..reasonEnd]));
+            index = reasonEnd + 1;
+        }
+
+        return calls;
+    }
+
+    private static string StripComments(string source)
+    {
+        var result = new System.Text.StringBuilder(source.Length);
+        for (var i = 0; i < source.Length; i++)
+        {
+            if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '/')
+            {
+                i += 2;
+                while (i < source.Length && source[i] is not ('\r' or '\n'))
+                {
+                    i++;
+                }
+
+                if (i < source.Length)
+                {
+                    result.Append(source[i]);
+                }
+
+                continue;
+            }
+
+            if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < source.Length && (source[i] != '*' || source[i + 1] != '/'))
+                {
+                    i++;
+                }
+
+                i++;
+                continue;
+            }
+
+            result.Append(source[i]);
+        }
+
+        return result.ToString();
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static string RepositoryRoot()

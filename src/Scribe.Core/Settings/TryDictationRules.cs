@@ -74,6 +74,17 @@ public static class TryDictationTiming
     }
 }
 
+public static class TryDictationRestartNotice
+{
+    public static bool Needed(
+        string? committedModelId,
+        int committedDecodeThreads,
+        string? runningModelId,
+        int runningDecodeThreads) =>
+        !string.Equals(committedModelId, runningModelId, StringComparison.Ordinal) ||
+        committedDecodeThreads != runningDecodeThreads;
+}
+
 public static class TryDictationChangeList
 {
     public const string DictionaryOrWordPackSource = "your dictionary or a word pack";
@@ -131,6 +142,16 @@ public sealed record TryDictationResultView(
             return new(new(false, MicrophoneProblem: true), false, false, false, true, TryDictationSummaryAction.OpenSoundSettings);
         }
 
+        if (TryDictationReportClassifier.StageFrom(input.FailureStage) is { } stopped)
+        {
+            return new(new(false, StoppedAt: stopped, Reason: input.FailureReason), !string.IsNullOrWhiteSpace(input.RawText), false, false, true, TryDictationSummaryAction.None);
+        }
+
+        if (input.InjectionSucceeded != true)
+        {
+            return new(new(false, StoppedAt: FailureStage.TextInsertion), !string.IsNullOrWhiteSpace(input.RawText), false, false, true, TryDictationSummaryAction.None);
+        }
+
         if (input.CleanupFailed)
         {
             return new(new(false, CleanupFailed: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenAiCleanup);
@@ -141,17 +162,6 @@ public sealed record TryDictationResultView(
             return new(new(false, CleanupNotReady: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenAiCleanup);
         }
 
-        if (TryDictationReportClassifier.StageFrom(input.FailureStage) is { } stopped)
-        {
-            return new(new(false, StoppedAt: stopped, Reason: input.FailureReason), !string.IsNullOrWhiteSpace(input.RawText), false, false, true, TryDictationSummaryAction.None);
-        }
-
-        var success = input.InjectionSucceeded == true;
-        if (!success)
-        {
-            return new(new(false, StoppedAt: FailureStage.TextInsertion), !string.IsNullOrWhiteSpace(input.RawText), false, false, true, TryDictationSummaryAction.None);
-        }
-
         return new(
             new(true, input.ProcessingSeconds, input.AiCleanupEnabled, input.CleanupPhrase),
             true,
@@ -160,6 +170,7 @@ public sealed record TryDictationResultView(
             true,
             TryDictationSummaryAction.None);
     }
+
 }
 
 public sealed record TryDictationResultViewInput(

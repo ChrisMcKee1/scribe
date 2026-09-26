@@ -5,6 +5,7 @@ using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
@@ -1238,6 +1239,7 @@ public partial class App : Application
                 services.GetRequiredService<ITranscriptionModelInstaller>(),
                 services.GetRequiredService<AppPaths>(),
                 services.GetRequiredService<StartupRegistration>(),
+                services.GetRequiredService<IOptions<TranscriptionOptions>>(),
                 position => _overlay?.Preview(position),
                 settings =>
                 {

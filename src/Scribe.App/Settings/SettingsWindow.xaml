@@ -1876,8 +1876,8 @@
                                     </ui:Card>
 
                                     <TextBlock Text="Result" Style="{StaticResource SectionHeader}"/>
-                                    <ui:Card Style="{StaticResource PanelCard}">
-                                        <StackPanel Margin="16,12">
+                                    <ui:Card Style="{StaticResource SettingsCard}">
+                                        <StackPanel>
                                             <TextBlock x:Name="TryDictationEmptyText"
                                                        Style="{StaticResource CardDescription}"
                                                        Text="Your result appears here after you dictate into the box."/>

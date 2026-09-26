@@ -18,6 +18,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
@@ -86,8 +87,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
     private readonly ILogger<SettingsWindow> _log;
+    private readonly TranscriptionOptions _runningTranscription;
 
     private readonly AppSettings _settings;
+    private AppSettings _committedSettings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     // Cached snapshot of the loaded libraries (built-in + custom) so the preview panel resolves a
@@ -194,6 +197,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ITranscriptionModelInstaller transcriptionModelInstaller,
         AppPaths paths,
         StartupRegistration startup,
+        IOptions<TranscriptionOptions> runningTranscription,
         Action<OverlayPosition> previewOverlay,
         Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> applySettings,
         Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> reloadVocabulary,
@@ -215,6 +219,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _transcriptionModelInstaller = transcriptionModelInstaller;
         _paths = paths;
         _startup = startup;
+        _runningTranscription = runningTranscription.Value;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
@@ -225,6 +230,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _log = log;
 
         _settings = settingsRepository.Load();
+        _committedSettings = _settings.Clone();
         _savedAiProvider = _settings.AiCleanupProvider;
         _settingsRecovered = settingsRepository.LastLoadFailed;
         _startupToggle = new StartupToggle(
@@ -5168,6 +5174,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 entries,
                 snippets,
                 new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
+            _committedSettings = _settings.Clone();
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
