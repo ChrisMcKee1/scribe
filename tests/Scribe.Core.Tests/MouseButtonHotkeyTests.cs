@@ -587,19 +587,30 @@ public sealed class MouseButtonHotkeyTests
         h.Engine.OnKeyEvent(0x41, isDown: true);
         h.Engine.OnKeyEvent(0x41, isDown: false);
 
+        // Then the same loop once, unmeasured (review round 4, item 5): what the runtime does once on this thread as the loop
+        // runs hot, tier promotion or on-stack replacement, lands here and not in the measurement (a one-time 7,672 bytes did,
+        // once, on x64 CI). It hides nothing the measurement is for: a per-event allocation allocates in the measured loop
+        // too, and so does any branch the loop takes that the warm-up did not.
+        RunEvents();
+
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 10_000; i++)
-        {
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
-            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
-            h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
-            h.Engine.OnKeyEvent(0x41, isDown: false);
-        }
+        RunEvents();
 
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
         Assert.Empty(h.TakeTransitions());
+
+        void RunEvents()
+        {
+            for (var i = 0; i < 10_000; i++)
+            {
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
+                MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
+                h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
+                h.Engine.OnKeyEvent(0x41, isDown: false);
+            }
+        }
     }
 
     [Theory]
