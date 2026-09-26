@@ -70,6 +70,7 @@ public sealed class UserFacingErrorTests
     [InlineData(FailureStage.AudioCapture, "Recording")]
     [InlineData(FailureStage.VoiceActivityDetection, "Trimming silence")]
     [InlineData(FailureStage.SpeechRecognition, "Speech recognition")]
+    [InlineData(FailureStage.AiCleanup, "AI cleanup")]
     [InlineData(FailureStage.DictionaryAndSnippets, "Dictionary and snippets")]
     [InlineData(FailureStage.TextInsertion, "Typing")]
     public void Try_dictation_stage_names_are_timing_labels(FailureStage stage, string expected)
@@ -80,6 +81,7 @@ public sealed class UserFacingErrorTests
     [Theory]
     [InlineData(FailureStage.VoiceActivityDetection, "Stopped at Trimming silence. Scribe couldn't finish trimming silence. Try again.")]
     [InlineData(FailureStage.SpeechRecognition, "Stopped at Speech recognition. Scribe couldn't turn the recording into text. Try again.")]
+    [InlineData(FailureStage.AiCleanup, "Stopped at AI cleanup. Scribe couldn't finish AI cleanup. Try again, or turn AI cleanup off.")]
     [InlineData(FailureStage.DictionaryAndSnippets, "Stopped at Dictionary and snippets. Scribe couldn't apply your dictionary and snippets. Try again.")]
     [InlineData(FailureStage.TextInsertion, "Stopped at Typing. Scribe couldn't type the text. Click in the box, then try again.")]
     public void Try_dictation_summary_uses_plain_stage_advice(FailureStage stage, string expected)

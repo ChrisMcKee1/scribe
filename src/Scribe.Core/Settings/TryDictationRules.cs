@@ -190,6 +190,7 @@ public static class TryDictationReportClassifier
     public const string StageAudioCapture = "Audio capture";
     public const string StageVoiceActivityDetection = "Voice activity detection";
     public const string StageSpeechRecognition = "Speech recognition";
+    public const string StageAiCleanup = "AI cleanup";
     public const string StageDictionaryAndSnippets = "Dictionary and snippets";
     public const string StageTextInsertion = "Text insertion";
     public const string NoSpeechDetected = "No speech was detected.";
@@ -200,6 +201,7 @@ public static class TryDictationReportClassifier
         StageAudioCapture => FailureStage.AudioCapture,
         StageVoiceActivityDetection => FailureStage.VoiceActivityDetection,
         StageSpeechRecognition => FailureStage.SpeechRecognition,
+        StageAiCleanup => FailureStage.AiCleanup,
         StageDictionaryAndSnippets => FailureStage.DictionaryAndSnippets,
         StageTextInsertion => FailureStage.TextInsertion,
         _ => null,

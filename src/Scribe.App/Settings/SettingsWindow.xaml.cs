@@ -412,6 +412,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    /// <summary>
+    /// Takes the settings as stored after a tray change the settings lane confirmed as the baseline Try dictation compares
+    /// with and describes, since they are what dictation now runs on. The lane never hands back a document older than one
+    /// this window saved and applied before (<see cref="SettingsWriteLane"/>), so this can't move the baseline back. The
+    /// optimistic word of a tray change (<see cref="AdoptExternalAiCleanup"/>, <see cref="AdoptExternalMicrophone"/>)
+    /// changes only the draft, because that change may still fail.
+    /// </summary>
+    public void AdoptStoredSettings(AppSettings stored)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        _committedSettings = stored.Clone();
+        try
+        {
+            UpdateTryDictationPage();
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not refresh Try dictation after a tray change was saved.");
+        }
+    }
+
     // A hotkey recording has ended, so a tray change that arrived during it can be shown now.
     private void ShowWaitingExternalAiCleanup()
     {

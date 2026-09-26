@@ -1012,6 +1012,7 @@ public partial class App : Application
             _settingsWindow?.AdoptExternalAiCleanup(stored.EnableAiCleanup, revision);
         }
 
+        _settingsWindow?.AdoptStoredSettings(stored);
         _tray?.SetAiCleanupChecked(stored.EnableAiCleanup);
         _tray?.ShowInfo(stored.EnableAiCleanup ? "AI cleanup on" : "AI cleanup off");
     }
@@ -1111,6 +1112,7 @@ public partial class App : Application
             _settingsWindow?.AdoptExternalMicrophone(storedChoice, revision);
         }
 
+        _settingsWindow?.AdoptStoredSettings(stored);
         _tray?.ShowInfo($"dictating with {Scribe.Core.Settings.MicrophoneChoices.Describe(storedChoice)}");
     }
 

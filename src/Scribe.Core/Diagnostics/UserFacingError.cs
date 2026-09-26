@@ -89,6 +89,7 @@ public enum FailureStage
     AudioCapture,
     VoiceActivityDetection,
     SpeechRecognition,
+    AiCleanup,
     DictionaryAndSnippets,
     TextInsertion,
 }
@@ -187,6 +188,7 @@ public static class TryDictationSummary
         FailureStage.AudioCapture => "Recording",
         FailureStage.VoiceActivityDetection => "Trimming silence",
         FailureStage.SpeechRecognition => "Speech recognition",
+        FailureStage.AiCleanup => "AI cleanup",
         FailureStage.DictionaryAndSnippets => "Dictionary and snippets",
         FailureStage.TextInsertion => "Typing",
         _ => throw new ArgumentOutOfRangeException(nameof(stage), stage, null),
@@ -207,6 +209,7 @@ public static class TryDictationSummary
         FailureStage.AudioCapture => "Check your microphone on the Dictation page, then try again.",
         FailureStage.VoiceActivityDetection => "Scribe couldn't finish trimming silence. Try again.",
         FailureStage.SpeechRecognition => "Scribe couldn't turn the recording into text. Try again.",
+        FailureStage.AiCleanup => "Scribe couldn't finish AI cleanup. Try again, or turn AI cleanup off.",
         FailureStage.DictionaryAndSnippets => "Scribe couldn't apply your dictionary and snippets. Try again.",
         FailureStage.TextInsertion => "Scribe couldn't type the text. Click in the box, then try again.",
         _ => throw new ArgumentOutOfRangeException(nameof(stage), stage, null),
