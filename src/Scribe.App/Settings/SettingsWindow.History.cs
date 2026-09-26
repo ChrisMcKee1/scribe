@@ -36,8 +36,8 @@ public partial class SettingsWindow
             if (_historyLoad.Fail(ticket))
             {
                 TryLog(ex, "Could not load dictation history for Settings.");
-                HistoryEmptyHint.Text = "Couldn't load your history.";
-                HistoryInlineStatusText.Text = "Couldn't load your history.";
+                HistoryEmptyHint.Text = HistoryRowFormat.LoadFailedText;
+                HistoryInlineStatusText.Text = HistoryRowFormat.LoadFailedText;
                 ApplyHistoryLoadState(loadFailed: true);
             }
 
@@ -49,6 +49,9 @@ public partial class SettingsWindow
             return;
         }
 
+        // The rows are replaced, which clears the list's selection; the dictation selected now stays selected if it's still
+        // there, so a reload (after a rating, a delete elsewhere) doesn't close the details the user is reading.
+        var selectedId = SelectedHistory?.Id;
         _historyRows.Clear();
         foreach (var entry in entries)
         {
@@ -58,6 +61,11 @@ public partial class SettingsWindow
             _historyRows.Add(_ratingWrites.IsPending(row.Id)
                 ? row with { Rating = _ratingWrites.Resolve(row.Id, row.Rating), RatingPending = true }
                 : row);
+        }
+
+        if (selectedId is { } reselect && IndexOfHistoryRow(reselect) is >= 0 and var reselectAt)
+        {
+            HistoryGrid.SelectedItem = _historyRows[reselectAt];
         }
 
         var hasRows = _historyRows.Count > 0;
@@ -92,10 +100,10 @@ public partial class SettingsWindow
 
     private void HistoryRetryButton_Click(object sender, RoutedEventArgs e)
     {
-        HistoryRetryButton.Visibility = Visibility.Collapsed;
-        HistoryInlineStatusPanel.Visibility = Visibility.Collapsed;
-        HistoryEmptyHint.Text = "Loading history...";
-        HistoryStatusPanel.Visibility = Visibility.Visible;
+        // Rows already shown stay in place with the loading line above them; only an empty list shows it centred.
+        HistoryEmptyHint.Text = HistoryRowFormat.LoadingText;
+        HistoryInlineStatusText.Text = HistoryRowFormat.LoadingText;
+        ApplyHistoryLoadState(loadFailed: false, loading: true);
         LoadHistory();
     }
 
@@ -111,17 +119,18 @@ public partial class SettingsWindow
         HistoryNoMatchesPanel.Visibility = state.ShowSearchNoMatches ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void ApplyHistoryLoadState(bool loadFailed)
+    private void ApplyHistoryLoadState(bool loadFailed, bool loading = false)
     {
         var noMatches = _historyRows.Count > 0 &&
             (_historyView?.Cast<object>().Count() ?? _historyRows.Count) == 0 &&
             !string.IsNullOrWhiteSpace(HistorySearchBox.Text);
-        var state = HistoryRowFormat.LoadState(_historyRows.Count > 0, loadFailed, noMatches);
+        var state = HistoryRowFormat.LoadState(_historyRows.Count > 0, loadFailed, noMatches, loading);
         HistoryGrid.Visibility = state.ShowGrid ? Visibility.Visible : Visibility.Collapsed;
         HistoryToolbarGrid.Visibility = state.ShowToolbar ? Visibility.Visible : Visibility.Collapsed;
         HistoryStatusPanel.Visibility = state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
-        HistoryRetryButton.Visibility = loadFailed && state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
+        HistoryRetryButton.Visibility = state.ShowRetry && state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
         HistoryInlineStatusPanel.Visibility = state.ShowInlineStatus ? Visibility.Visible : Visibility.Collapsed;
+        HistoryInlineRetryButton.Visibility = state.ShowRetry ? Visibility.Visible : Visibility.Collapsed;
         HistoryNoMatchesPanel.Visibility = state.ShowSearchNoMatches ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -169,6 +178,13 @@ public partial class SettingsWindow
         return HistoryRowFormat.EmptyState(HotkeyText.Verb(binding.Mode), HotkeyCapture.Describe(binding));
     }
 
+    // Everything on History and Usage that describes the saved and running settings rather than the draft.
+    private void OnCommittedSettingsChanged()
+    {
+        RefreshHistoryEmptyTextFromCommitted();
+        RefreshUsageInsightAvailability();
+    }
+
     private void RefreshHistoryEmptyTextFromCommitted()
     {
         _historyEmptyText = HistoryEmptyMessage();
@@ -190,6 +206,10 @@ public partial class SettingsWindow
     }
 
     private void HistorySettings_Changed(object sender, RoutedEventArgs e) => RefreshHistorySettingsSummary();
+
+    // A custom duration reaches what Save reads (the box's Value) when it commits, so the summary follows the same value.
+    private void HistoryRetentionCustomBox_ValueChanged(object sender, Wpf.Ui.Controls.NumberBoxValueChangedEventArgs e) =>
+        RefreshHistorySettingsSummary();
 
     private void HistoryGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e) => CopyHistoryText();
 
@@ -238,7 +258,7 @@ public partial class SettingsWindow
             return;
         }
 
-        _historyRows[index] = row with { Rating = next, RatingPending = true };
+        ReplaceHistoryRow(index, row with { Rating = next, RatingPending = true });
 
         var saved = false;
         try
@@ -260,7 +280,7 @@ public partial class SettingsWindow
         var current = IndexOfHistoryRow(id);
         if (current >= 0)
         {
-            _historyRows[current] = _historyRows[current] with { Rating = shown, RatingPending = false };
+            ReplaceHistoryRow(current, _historyRows[current] with { Rating = shown, RatingPending = false });
         }
 
         UpdateHistorySelection();
@@ -296,6 +316,18 @@ public partial class SettingsWindow
         }
 
         ShowAiReportDialog(_historyRows[index].Text, useCurrentAttribution: false);
+    }
+
+    // Rows are records compared by reference, so replacing one clears the list's selection when it was the selected row.
+    // Put it back on the replacement then, and only then: a row the user selected meanwhile keeps its selection.
+    private void ReplaceHistoryRow(int index, HistoryRow replacement)
+    {
+        var wasSelected = ReferenceEquals(HistoryGrid.SelectedItem, _historyRows[index]);
+        _historyRows[index] = replacement;
+        if (wasSelected && HistoryGrid.SelectedItem is null)
+        {
+            HistoryGrid.SelectedItem = replacement;
+        }
     }
 
     private int IndexOfHistoryRow(long id)

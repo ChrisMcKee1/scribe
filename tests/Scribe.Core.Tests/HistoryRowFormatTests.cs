@@ -76,10 +76,10 @@ public class HistoryRowFormatTests
     public void Load_state_places_failures_without_covering_rows()
     {
         Assert.Equal(
-            new HistoryLoadState(ShowGrid: false, ShowToolbar: false, ShowCenteredStatus: true, ShowInlineStatus: false, ShowSearchNoMatches: false),
+            new HistoryLoadState(ShowGrid: false, ShowToolbar: false, ShowCenteredStatus: true, ShowInlineStatus: false, ShowSearchNoMatches: false, ShowRetry: true),
             HistoryRowFormat.LoadState(hasRows: false, loadFailed: true, searchActive: false));
         Assert.Equal(
-            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: true, ShowSearchNoMatches: false),
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: true, ShowSearchNoMatches: false, ShowRetry: true),
             HistoryRowFormat.LoadState(hasRows: true, loadFailed: true, searchActive: false));
         Assert.Equal(
             new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: false, ShowSearchNoMatches: false),
@@ -87,6 +87,20 @@ public class HistoryRowFormatTests
         Assert.Equal(
             new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: false, ShowSearchNoMatches: true),
             HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: true));
+    }
+
+    [Fact]
+    public void A_retry_says_it_is_loading_where_the_failure_was_and_never_over_the_rows()
+    {
+        // Review of a1e3867, item 5: Try again with rows shown drew "Loading history..." in the centred panel over them.
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: true, ShowSearchNoMatches: false, ShowRetry: false),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: false, loading: true));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: false, ShowToolbar: false, ShowCenteredStatus: true, ShowInlineStatus: false, ShowSearchNoMatches: false, ShowRetry: false),
+            HistoryRowFormat.LoadState(hasRows: false, loadFailed: false, searchActive: false, loading: true));
+        Assert.Equal("Loading history...", HistoryRowFormat.LoadingText);
+        Assert.Equal("Couldn't load your history.", HistoryRowFormat.LoadFailedText);
     }
 
     [Theory]

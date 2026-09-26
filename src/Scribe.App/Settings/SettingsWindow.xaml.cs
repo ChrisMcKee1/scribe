@@ -435,7 +435,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         ArgumentNullException.ThrowIfNull(stored);
         _committedSettings = stored.Clone();
-        RefreshHistoryEmptyTextFromCommitted();
+        OnCommittedSettingsChanged();
         try
         {
             UpdateTryDictationPage();
@@ -2240,7 +2240,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         HistoryNoMatchesText.Text = HistoryRowFormat.NoSearchMatches;
         HistoryClearSearchButton.Content = HistoryRowFormat.ClearSearch;
         _historyEmptyText = HistoryEmptyMessage();
-        HistoryEmptyHint.Text = "Loading history...";
+        HistoryEmptyHint.Text = HistoryRowFormat.LoadingText;
         HistoryStatusPanel.Visibility = Visibility.Visible;
         HistoryClearButton.IsEnabled = false;
 
@@ -5408,7 +5408,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 snippets,
                 new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
             _committedSettings = _settings.Clone();
-            RefreshHistoryEmptyTextFromCommitted();
+            OnCommittedSettingsChanged();
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;

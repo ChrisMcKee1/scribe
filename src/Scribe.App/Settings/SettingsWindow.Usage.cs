@@ -50,7 +50,9 @@ public partial class SettingsWindow
         UsageCoverageText.Visibility = Visibility.Visible;
         UsageCoverageText.Text = UsagePeriodState.Describe(shownPeriod is null ? null : ToUsagePeriod(shownPeriod), ToUsagePeriod(period), loadFailed: false).StatusText;
         UsageRetryButton.Visibility = Visibility.Collapsed;
-        if (_usageSnapshot is null)
+        // Only when nothing has been shown yet: a request made while another loads, or a retry after a failure, finds the
+        // sendable snapshot already cleared, but the numbers on screen are still the labeled old period's.
+        if (_usageShownPeriod is null)
         {
             UsageDataPanel.Visibility = Visibility.Collapsed;
             UsageEmptyText.Visibility = Visibility.Collapsed;
@@ -171,10 +173,6 @@ public partial class SettingsWindow
             .Select(term => new UsageTermRow(term.Text, term.Dictations))
             .ToList();
 
-        UsageInsightText.Text = UsageInsightAvailability.Describe(
-            _committedSettings.EnableAiCleanup,
-            _cleanup.Status == CleanupStatus.Ready,
-            _committedSettings.AiCleanupProvider).Description;
         UsageInsightResultText.Text = string.Empty;
         UsageInsightResultText.Visibility = Visibility.Collapsed;
         UsageDataPanel.Visibility = snapshot.Dictations == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -268,6 +266,9 @@ public partial class SettingsWindow
             _committedSettings.EnableAiCleanup,
             _cleanup.Status == CleanupStatus.Ready,
             _committedSettings.AiCleanupProvider);
+        // The disclosure names the service a request would go to, so it follows every refresh: a Save that changes the
+        // provider, a tray change and the service becoming ready each come through here.
+        UsageInsightText.Text = state.Description;
         UsageInsightCard.Visibility = state.IsVisible ? Visibility.Visible : Visibility.Collapsed;
         UsageInsightDisabledText.Text = state.DisabledReason ?? string.Empty;
         UsageInsightDisabledText.Visibility = state.DisabledReason is null ? Visibility.Collapsed : Visibility.Visible;

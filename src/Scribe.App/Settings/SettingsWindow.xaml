@@ -2021,7 +2021,7 @@
                                             <ComboBox x:Name="HistoryRetentionCombo" Width="240" DisplayMemberPath="Label"
                                                       SelectionChanged="DurationCombo_SelectionChanged"
                                                       AutomationProperties.Name="Keep dictations"/>
-                                            <ui:NumberBox x:Name="HistoryRetentionCustomBox" Width="96" Margin="8,0,0,0"
+                                            <ui:NumberBox x:Name="HistoryRetentionCustomBox" ValueChanged="HistoryRetentionCustomBox_ValueChanged" Width="96" Margin="8,0,0,0"
                                                           SmallChange="1"
                                                           MaxDecimalPlaces="0" ClearButtonEnabled="False"
                                                           SpinButtonPlacementMode="Inline"

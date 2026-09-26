@@ -45,6 +45,7 @@ public static class HistoryRowFormat
     /// </param>
     public static string Latency(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? $"{value:N0} ms" : NotApplicable;
+
     /// <summary>AI cleanup duration for the History column, in seconds, or the not-recorded state.</summary>
     public static string CleanupTime(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? Seconds(value) : NotRecorded;
@@ -57,21 +58,30 @@ public static class HistoryRowFormat
 
     public const string NoSearchMatches = "No shown dictations match your search.";
 
+    public const string LoadingText = "Loading history...";
+
+    public const string LoadFailedText = "Couldn't load your history.";
+
     public const string ClearSearch = "Clear search";
 
     public static HistoryToolbarState Toolbar(bool hasRows, bool hasSelection) =>
         new(CanCopy: hasSelection, CanDelete: hasSelection, CanDeleteAll: hasRows);
 
-    public static HistoryLoadState LoadState(bool hasRows, bool loadFailed, bool searchActive)
+    /// <summary>
+    /// Which parts of the History list show. A failure or a load in progress is said on a line above rows already shown
+    /// (they stay as they are), and in the centred panel only when there are none; Try again goes with a failure only.
+    /// </summary>
+    public static HistoryLoadState LoadState(bool hasRows, bool loadFailed, bool searchActive, bool loading = false)
     {
-        if (loadFailed)
+        if (loadFailed || loading)
         {
             return new HistoryLoadState(
                 ShowGrid: hasRows,
                 ShowToolbar: hasRows,
                 ShowCenteredStatus: !hasRows,
                 ShowInlineStatus: hasRows,
-                ShowSearchNoMatches: false);
+                ShowSearchNoMatches: false,
+                ShowRetry: loadFailed && !loading);
         }
 
         return new HistoryLoadState(
@@ -79,7 +89,8 @@ public static class HistoryRowFormat
             ShowToolbar: hasRows,
             ShowCenteredStatus: !hasRows,
             ShowInlineStatus: false,
-            ShowSearchNoMatches: hasRows && searchActive);
+            ShowSearchNoMatches: hasRows && searchActive,
+            ShowRetry: false);
     }
 
     public static string Details(int audioMilliseconds, int decodeMilliseconds, int? cleanupMilliseconds)
@@ -111,7 +122,8 @@ public sealed record HistoryLoadState(
     bool ShowToolbar,
     bool ShowCenteredStatus,
     bool ShowInlineStatus,
-    bool ShowSearchNoMatches);
+    bool ShowSearchNoMatches,
+    bool ShowRetry = false);
 
 public static class HistorySettingsSummary
 {
