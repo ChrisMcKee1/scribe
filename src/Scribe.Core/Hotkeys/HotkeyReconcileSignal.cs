@@ -102,7 +102,10 @@ internal sealed class HotkeyReconcileSignal : IDisposable
         _signal.Dispose();
     }
 
-    // Pool thread: the request is taken as the pass starts, so a signal made while it runs gets a pass of its own.
+    // Pool thread: the request is taken as the pass starts, so a signal made while it runs gets a pass of its own. Nothing
+    // the pass throws leaves this callback: an exception escaping a pool callback takes the whole process down (review round
+    // 3, item 6: a test's recorder, disposed while a pass that coalesced late was still on its way, took the test host
+    // down). The next signal asks again.
     private void RunPass()
     {
         try
@@ -115,7 +118,14 @@ internal sealed class HotkeyReconcileSignal : IDisposable
             // pool callback would take the whole process down.
         }
 
-        _onSignaled(Interlocked.Exchange(ref _repairAt, 0));
+        try
+        {
+            _onSignaled(Interlocked.Exchange(ref _repairAt, 0));
+        }
+        catch (Exception)
+        {
+            // See above: never out onto the pool thread.
+        }
     }
 
     private void Set()
