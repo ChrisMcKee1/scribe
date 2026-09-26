@@ -133,23 +133,30 @@ public sealed class SameGenerationRepublicationTests
             release.Wait(Bound);
         };
 
-        var building = publisher.RefreshAsync();
-        await reading.Task.WaitAsync(Bound);
-        source.Publish(restored);
-        release.Set();
+        try
+        {
+            var building = publisher.RefreshAsync();
+            await reading.Task.WaitAsync(Bound);
+            source.Publish(restored);
+            release.Set();
 
-        // The build that was running publishes what it read; the restoration is built after it, not dropped for having
-        // the generation that build already had.
-        var answered = (await building.WaitAsync(Bound)).Generation;
-        Assert.Same(heldBack, answered.Libraries);
-        var afterRestore = await restoredPublished.Task.WaitAsync(Bound);
-        Assert.True(afterRestore.Number > answered.Number);
-        Assert.Same(afterRestore, publisher.Current);
-        Assert.Equal(StoredGeneration, afterRestore.Libraries.Generation);
-        Assert.Equal(
-            "please ask Zebraquill about Lanternridge",
-            processor.ProcessDetailed(Dictated, null, afterRestore.Rules).Text);
-        Assert.Contains("Zebraquill", afterRestore.Cleanup.GlossaryFor(CleanupPrompt.MaxGlossaryTermsCloud), StringComparison.Ordinal);
+            // The build that was running publishes what it read; the restoration is built after it, not dropped for having
+            // the generation that build already had.
+            var answered = (await building.WaitAsync(Bound)).Generation;
+            Assert.Same(heldBack, answered.Libraries);
+            var afterRestore = await restoredPublished.Task.WaitAsync(Bound);
+            Assert.True(afterRestore.Number > answered.Number);
+            Assert.Same(afterRestore, publisher.Current);
+            Assert.Equal(StoredGeneration, afterRestore.Libraries.Generation);
+            Assert.Equal(
+                "please ask Zebraquill about Lanternridge",
+                processor.ProcessDetailed(Dictated, null, afterRestore.Rules).Text);
+            Assert.Contains("Zebraquill", afterRestore.Cleanup.GlossaryFor(CleanupPrompt.MaxGlossaryTermsCloud), StringComparison.Ordinal);
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     // The library as the service publishes it whole for the stored generation, permitted for AI cleanup; a new instance

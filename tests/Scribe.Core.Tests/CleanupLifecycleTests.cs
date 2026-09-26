@@ -9,7 +9,9 @@ namespace Scribe.Core.Tests;
 /// and only then are the runtime, clients and semaphores released; one that will not stop in time
 /// keeps them rather than having them disposed underneath it. Interleavings are forced with gates,
 /// never with sleeps, and a test that expects disposal to release once the work in flight stops runs the drain on a
-/// clock only it moves (<see cref="CleanupHarness.DrainOnManualClock"/>), so the real 5 s never decides it.
+/// clock only it moves (<see cref="CleanupHarness.DrainOnManualClock"/>), so the real 5 s never decides it. Such a test
+/// opens every gate it shut in a finally, so a wait or an assertion that fails first cannot leave work parked behind one:
+/// the harness's disposal would wait on that drain for ever.
 /// </summary>
 public sealed class CleanupLifecycleTests
 {
@@ -108,18 +110,25 @@ public sealed class CleanupLifecycleTests
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
         harness.DrainOnManualClock();
-        harness.Runtime.EpGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Runtime.EpGate = gate;
+        try
+        {
+            var listing = svc.ListFoundryModelsAsync();
+            await harness.Runtime.EpStarted.Task.WaitAsync(Bound);
+            var dispose = svc.DisposeAsync().AsTask();
 
-        var listing = svc.ListFoundryModelsAsync();
-        await harness.Runtime.EpStarted.Task.WaitAsync(Bound);
-        var dispose = svc.DisposeAsync().AsTask();
+            Assert.Empty(await listing.WaitAsync(Bound));
+            await dispose.WaitAsync(Bound);
 
-        Assert.Empty(await listing.WaitAsync(Bound));
-        await dispose.WaitAsync(Bound);
-
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.Equal(1, harness.Runtime.Disposals);
-        Assert.False(harness.Runtime.DisposedWhileInUse);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.Equal(1, harness.Runtime.Disposals);
+            Assert.False(harness.Runtime.DisposedWhileInUse);
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
     }
 
     [Fact]
@@ -182,20 +191,27 @@ public sealed class CleanupLifecycleTests
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
         harness.DrainOnManualClock();
-        harness.Host.CreateGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Host.CreateGate = gate;
         harness.Host.IgnoreCancellation = true;
+        try
+        {
+            var probe = svc.ProbeAsync();
+            await harness.Host.CreateStarted.Task.WaitAsync(Bound);
+            var dispose = svc.DisposeAsync().AsTask();
+            Assert.False(dispose.IsCompleted, "Disposal waits for the admitted probe.");
 
-        var probe = svc.ProbeAsync();
-        await harness.Host.CreateStarted.Task.WaitAsync(Bound);
-        var dispose = svc.DisposeAsync().AsTask();
-        Assert.False(dispose.IsCompleted, "Disposal waits for the admitted probe.");
+            gate.SetResult();
 
-        harness.Host.CreateGate.SetResult();
-
-        Assert.False(await probe.WaitAsync(Bound));
-        await dispose.WaitAsync(Bound);
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.Equal(1, harness.Runtime.Disposals);
+            Assert.False(await probe.WaitAsync(Bound));
+            await dispose.WaitAsync(Bound);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.Equal(1, harness.Runtime.Disposals);
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
     }
 
     [Fact]
@@ -204,23 +220,30 @@ public sealed class CleanupLifecycleTests
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
         harness.DrainOnManualClock();
-        harness.Runtime.EpGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Runtime.EpGate = gate;
         harness.Runtime.IgnoreCancellation = true;
+        try
+        {
+            svc.Configure(CleanupHarness.FoundryOn());
+            await harness.Runtime.EpStarted.Task.WaitAsync(Bound);
 
-        svc.Configure(CleanupHarness.FoundryOn());
-        await harness.Runtime.EpStarted.Task.WaitAsync(Bound);
+            // A newer save cancels it, but it is still inside the runtime and still owns what it holds.
+            svc.Configure(CleanupOptions.Disabled);
+            var dispose = svc.DisposeAsync().AsTask();
+            Assert.False(dispose.IsCompleted);
 
-        // A newer save cancels it, but it is still inside the runtime and still owns what it holds.
-        svc.Configure(CleanupOptions.Disabled);
-        var dispose = svc.DisposeAsync().AsTask();
-        Assert.False(dispose.IsCompleted);
+            gate.SetResult();
+            await dispose.WaitAsync(Bound);
 
-        harness.Runtime.EpGate.SetResult();
-        await dispose.WaitAsync(Bound);
-
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.False(harness.Runtime.DisposedWhileInUse);
-        Assert.Equal(1, harness.Runtime.Disposals);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.False(harness.Runtime.DisposedWhileInUse);
+            Assert.Equal(1, harness.Runtime.Disposals);
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
     }
 
     [Fact]
@@ -229,28 +252,35 @@ public sealed class CleanupLifecycleTests
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
         harness.DrainOnManualClock();
-        harness.Qwen.LoadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Qwen.LoadGate = gate;
         harness.Qwen.LoadIgnoresCancellation = true;
-
-        svc.Configure(CleanupHarness.FoundryOn());
-        await harness.Qwen.LoadStarted.Task.WaitAsync(Bound);
-        var dispose = svc.DisposeAsync().AsTask();
-        var lateStatuses = new List<CleanupStatus>();
-        svc.StatusChanged += () =>
+        try
         {
-            lock (lateStatuses)
+            svc.Configure(CleanupHarness.FoundryOn());
+            await harness.Qwen.LoadStarted.Task.WaitAsync(Bound);
+            var dispose = svc.DisposeAsync().AsTask();
+            var lateStatuses = new List<CleanupStatus>();
+            svc.StatusChanged += () =>
             {
-                lateStatuses.Add(svc.Status);
-            }
-        };
+                lock (lateStatuses)
+                {
+                    lateStatuses.Add(svc.Status);
+                }
+            };
 
-        harness.Qwen.LoadGate.SetResult();
-        await dispose.WaitAsync(Bound);
+            gate.SetResult();
+            await dispose.WaitAsync(Bound);
 
-        Assert.Empty(lateStatuses);
-        Assert.NotEqual(CleanupStatus.Ready, svc.Status);
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
-        Assert.Equal(0, ((ScriptedHttpHandler)harness.Http).Requests);
+            Assert.Empty(lateStatuses);
+            Assert.NotEqual(CleanupStatus.Ready, svc.Status);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.Equal(0, ((ScriptedHttpHandler)harness.Http).Requests);
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
     }
 
     [Fact]
@@ -285,29 +315,36 @@ public sealed class CleanupLifecycleTests
         await using var harness = new CleanupHarness(http: http);
         var svc = harness.Service;
         var clock = harness.DrainOnManualClock();
-        svc.Configure(CleanupHarness.Custom("https://cleanup.example.test/v1"));
-        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        try
+        {
+            svc.Configure(CleanupHarness.Custom("https://cleanup.example.test/v1"));
+            await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
-        var dictation = svc.CleanAsync("please keep these exact words");
-        await requestArrived.Task.WaitAsync(Bound);
-        var dispose = svc.DisposeAsync().AsTask();
+            var dictation = svc.CleanAsync("please keep these exact words");
+            await requestArrived.Task.WaitAsync(Bound);
+            var dispose = svc.DisposeAsync().AsTask();
 
-        // DisposeAsync returned at its first wait, the drain, which the held call keeps open: production's 5 s timer is
-        // armed on the test's clock.
-        var drainTimer = Assert.Single(clock.Timers);
-        Assert.Equal(TimeSpan.FromSeconds(5), drainTimer.DueTime);
-        await cancelSeen.Task.WaitAsync(Bound);
-        Assert.False(dictation.IsCompleted, "The call is still unwinding.");
-        Assert.False(dispose.IsCompleted, "Disposal waits for the call.");
+            // DisposeAsync returned at its first wait, the drain, which the held call keeps open: production's 5 s timer is
+            // armed on the test's clock.
+            var drainTimer = Assert.Single(clock.Timers);
+            Assert.Equal(TimeSpan.FromSeconds(5), drainTimer.DueTime);
+            await cancelSeen.Task.WaitAsync(Bound);
+            Assert.False(dictation.IsCompleted, "The call is still unwinding.");
+            Assert.False(dispose.IsCompleted, "Disposal waits for the call.");
 
-        unwind.SetResult();
-        var result = await dictation.WaitAsync(Bound);
-        await dispose.WaitAsync(Bound);
+            unwind.SetResult();
+            var result = await dictation.WaitAsync(Bound);
+            await dispose.WaitAsync(Bound);
 
-        Assert.Equal(CleanupOutcome.Skipped, result.Outcome);
-        Assert.Equal("please keep these exact words", result.Text);
-        Assert.Contains("shutting down", result.SkipReason);
-        Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+            Assert.Equal(CleanupOutcome.Skipped, result.Outcome);
+            Assert.Equal("please keep these exact words", result.Text);
+            Assert.Contains("shutting down", result.SkipReason);
+            Assert.Equal(CleanupDisposalOutcome.Released, svc.DisposalOutcome);
+        }
+        finally
+        {
+            unwind.TrySetResult();
+        }
     }
 
     [Fact]
