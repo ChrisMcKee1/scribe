@@ -98,6 +98,7 @@ public sealed class RecordingCaptureTests
     {
         var (stack, service, lifecycle) = NewLoop();
         using var openMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
         var a = lifecycle.TryBeginRecording(() => "a");
 
@@ -136,6 +137,7 @@ public sealed class RecordingCaptureTests
         var (stack, service, lifecycle) = NewLoop();
         var a = lifecycle.TryBeginRecording(() => "a");
         using var activationMayOpen = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(activationMayOpen);
         RecordingOpen? open = null;
         var activation = BlockedThreads.Start(() =>
         {
@@ -218,6 +220,7 @@ public sealed class RecordingCaptureTests
     {
         var (stack, service, lifecycle) = NewLoop();
         using var openMayFinish = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(openMayFinish);
         stack.Devices.DuringOpen = openMayFinish.Wait;
         var a = lifecycle.TryBeginRecording(() => "a");
 

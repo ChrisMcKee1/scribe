@@ -27,12 +27,16 @@ public sealed class StoredChangeAcknowledgementTests
         // still interactive; then the build publishes and the answer is in.
         var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
         var queued = new List<Action>();
+
+        // The deadlines on the test's clock: on the system clock the refresh's 15 s deadline would answer the acknowledgement
+        // for an observer held up that long before the check that it still waits (stream TR round 5, the A9 sweep).
         using var publisher = new VocabularyPublisher(
             new TestVocabularySource(Of(3)),
             dictionary,
             new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance),
             NullLogger<VocabularyPublisher>.Instance,
-            queued.Add);
+            queued.Add,
+            new ManualClock());
         var starting = publisher.StartAsync();
         Assert.Single(queued)();
         queued.Clear();

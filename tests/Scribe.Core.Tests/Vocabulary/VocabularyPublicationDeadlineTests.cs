@@ -396,8 +396,9 @@ public sealed class VocabularyPublicationDeadlineTests
         }
     }
 
-    // A read held on the build's thread until the test releases it; the bound only keeps a failed test from leaving the
-    // thread blocked, and no assertion depends on it.
+    // A read held on the build's thread until the test releases it, and only then (review round 4 of stream TR, A5): tests
+    // assert it is still held (StillHeld), which a hold that ended by itself would leave saying so after the read returned.
+    // The rig releases every hold it made when it is disposed, so a test that fails first still ends.
     private sealed class Hang
     {
         private readonly TaskCompletionSource _reading = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -410,7 +411,7 @@ public sealed class VocabularyPublicationDeadlineTests
         public void Hold()
         {
             _reading.TrySetResult();
-            _release.Wait(Bound);
+            _release.Wait();
         }
 
         public void Release() => _release.Set();

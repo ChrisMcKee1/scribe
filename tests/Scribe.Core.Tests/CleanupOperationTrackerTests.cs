@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Scribe.Core.Cleanup;
+using Xunit.Abstractions;
 
 namespace Scribe.Core.Tests;
 
@@ -6,8 +9,11 @@ namespace Scribe.Core.Tests;
 /// The admission counter disposal waits on. An operation is either admitted before close, and so
 /// waited for, or refused, and so never touches anything shared.
 /// </summary>
-public sealed class CleanupOperationTrackerTests
+public sealed class CleanupOperationTrackerTests(ITestOutputHelper output)
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Fact]
     public void Leases_count_and_release_exactly_once()
     {
@@ -53,7 +59,7 @@ public sealed class CleanupOperationTrackerTests
         Assert.False(drained.IsCompleted);
 
         second.Dispose();
-        await drained.WaitAsync(TimeSpan.FromSeconds(10));
+        await drained.WaitAsync(Bound);
     }
 
     [Fact]
@@ -78,42 +84,141 @@ public sealed class CleanupOperationTrackerTests
         lease.Dispose();
         Volatile.Write(ref releaseReturned, true);
 
-        Assert.False(await ranInline.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.False(await ranInline.Task.WaitAsync(Bound));
     }
 
     [Fact]
     public async Task Racing_admission_against_close_never_loses_an_operation()
     {
-        for (var round = 0; round < 50; round++)
+        // Eight racers on threads of their own, as every other barrier race in this project uses, made once and met at a
+        // barrier to start each round and another to finish it. On the thread pool a round could start only once eight
+        // pool threads were free at the same time, and the racers already at the barrier held theirs until it did, so on
+        // a loaded machine a round waited for as long as the pool took to grow, with every other test's pool work queued
+        // behind it (stream TR round 4: a 37 s stall in a full run). Made once, not for each round: a thread's start is
+        // slow to be scheduled on a loaded machine, and one just started meets Close less often than one parked at the
+        // barrier (an admission check made outside the lock was caught 20 of 20 times with these racers, 17 of 20 with a
+        // thread for each round, and 20 of 20 on the pool).
+        //
+        // A failure on either side ends the race cleanly (stream TR round 5, A7, and round 6, A11), because an exception on a
+        // racer's own thread ends the test host and hides the failure. The racers start inside the try, each tracked only
+        // once its start returned, so the finally never joins a thread that was never started. The finally calls the race
+        // off and joins every racer, all within one bound of calling it off, and disposes the barriers and the token source
+        // only once every racer has ended: a racer still running may yet reach one of them, so otherwise they are left to
+        // process exit, on a test that has already failed. Anything a racer throws is recorded and calls the race off, and
+        // calling it off never throws.
+        const int Workers = 8;
+        const int Rounds = 50;
+        var trackers = new CleanupOperationTracker[Rounds];
+        var admitted = new CleanupOperationTracker.Lease?[Rounds, Workers];
+        var racerFailures = new ConcurrentQueue<Exception>();
+        var racers = new List<Thread>(Workers); // room for every racer, so tracking one once it started cannot fail
+        var start = new Barrier(Workers + 1);
+        var finish = new Barrier(Workers + 1);
+        var abandon = new CancellationTokenSource();
+
+        void CallOff()
         {
-            var tracker = new CleanupOperationTracker();
-            const int Workers = 8;
-            using var start = new Barrier(Workers + 1);
-            var admitted = new CleanupOperationTracker.Lease?[Workers];
-
-            var workers = Enumerable.Range(0, Workers).Select(i => Task.Run(() =>
+            try
             {
-                start.SignalAndWait();
-                admitted[i] = tracker.TryEnter();
-            })).ToArray();
-
-            start.SignalAndWait();
-            var drained = tracker.Close();
-            await Task.WhenAll(workers);
-
-            // Whatever was admitted is still outstanding, so the drain cannot have completed unless
-            // nothing was admitted at all.
-            var outstanding = admitted.Count(lease => lease is not null);
-            Assert.Equal(outstanding, tracker.ActiveCount);
-            Assert.Equal(outstanding == 0, drained.IsCompleted);
-            Assert.Null(tracker.TryEnter());
-
-            foreach (var lease in admitted)
+                abandon.Cancel();
+            }
+            catch (Exception ex)
             {
-                lease?.Dispose();
+                // It is never disposed while a racer may run, and nothing registered on it throws; recorded all the same,
+                // never rethrown.
+                racerFailures.Enqueue(ex);
+            }
+        }
+
+        try
+        {
+            for (var i = 0; i < Workers; i++)
+            {
+                var racer = i;
+                var thread = new Thread(() =>
+                {
+                    try
+                    {
+                        for (var round = 0; round < Rounds; round++)
+                        {
+                            start.SignalAndWait(abandon.Token);
+                            admitted[round, racer] = trackers[round].TryEnter();
+                            finish.SignalAndWait(abandon.Token);
+                        }
+                    }
+                    catch (OperationCanceledException) when (abandon.IsCancellationRequested)
+                    {
+                        // The race was called off.
+                    }
+                    catch (Exception ex)
+                    {
+                        racerFailures.Enqueue(ex);
+                        CallOff(); // recorded first, so whoever sees the race called off also sees why
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Name = "test-admission-racer",
+                };
+                thread.Start();
+                racers.Add(thread);
             }
 
-            await drained.WaitAsync(TimeSpan.FromSeconds(10));
+            for (var round = 0; round < Rounds; round++)
+            {
+                var tracker = trackers[round] = new CleanupOperationTracker();
+                Assert.True(start.SignalAndWait(Bound, abandon.Token), "The racers never reached the start.");
+                var drained = tracker.Close();
+                Assert.True(finish.SignalAndWait(Bound, abandon.Token), "A racer never finished its round.");
+
+                // Whatever was admitted is still outstanding, so the drain cannot have completed unless
+                // nothing was admitted at all.
+                var leases = Enumerable.Range(0, Workers).Select(i => admitted[round, i]).ToArray();
+                var outstanding = leases.Count(lease => lease is not null);
+                Assert.Equal(outstanding, tracker.ActiveCount);
+                Assert.Equal(outstanding == 0, drained.IsCompleted);
+                Assert.Null(tracker.TryEnter());
+
+                foreach (var lease in leases)
+                {
+                    lease?.Dispose();
+                }
+
+                await drained.WaitAsync(Bound);
+            }
         }
+        catch (OperationCanceledException) when (!racerFailures.IsEmpty)
+        {
+            // A racer failed and called the race off; its failure is reported below.
+        }
+        finally
+        {
+            CallOff();
+            var calledOff = Stopwatch.GetTimestamp();
+            var everyRacerEnded = true;
+            for (var i = 0; i < racers.Count; i++)
+            {
+                var left = Bound - Stopwatch.GetElapsedTime(calledOff);
+                if (!racers[i].Join(left > TimeSpan.Zero ? left : TimeSpan.Zero))
+                {
+                    everyRacerEnded = false;
+                    var stillRunning = $"Racer {i} was still running {Bound.TotalSeconds:0} s after the race was called off; "
+                        + "the barriers and the token source are left to process exit.";
+                    racerFailures.Enqueue(new TimeoutException(stillRunning));
+
+                    // Also written out: when the test already failed on its own thread, that failure is the one reported.
+                    output.WriteLine(stillRunning);
+                }
+            }
+
+            if (everyRacerEnded)
+            {
+                start.Dispose();
+                finish.Dispose();
+                abandon.Dispose();
+            }
+        }
+
+        Assert.True(racerFailures.IsEmpty, "A racer failed: " + string.Join(" | ", racerFailures));
     }
 }

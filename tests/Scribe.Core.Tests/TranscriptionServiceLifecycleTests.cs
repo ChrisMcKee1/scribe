@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Models;
 using Scribe.Core.Tests.Concurrency;
@@ -80,6 +81,7 @@ public sealed class TranscriptionServiceLifecycleTests
         using var releaseDispose = new ManualResetEventSlim();
         var engine = new FakeEngine();
         using var service = new TranscriptionService(engine.Load, Logger());
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
         service.Initialize();
         service.Transcribe(CapturedAudio.Empty); // compiles the call path before the race
         engine.OnDispose = () =>
@@ -125,6 +127,7 @@ public sealed class TranscriptionServiceLifecycleTests
         using var releaseDecode = new ManualResetEventSlim();
         var engine = new FakeEngine();
         using var service = new TranscriptionService(engine.Load, Logger());
+        using var releaseAtExit = new ReleaseAtExit(releaseDecode);
         service.Unload(); // compiles the call path; a no-op before anything is loaded
         engine.OnDecode = _ =>
         {
@@ -155,6 +158,7 @@ public sealed class TranscriptionServiceLifecycleTests
     {
         using var inDecode = new ManualResetEventSlim();
         using var releaseDecode = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseDecode);
         var engine = new FakeEngine();
         var service = new TranscriptionService(engine.Load, Logger());
         engine.OnDecode = _ =>
@@ -189,6 +193,7 @@ public sealed class TranscriptionServiceLifecycleTests
     {
         using var inDispose = new ManualResetEventSlim();
         using var releaseDispose = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
         var engine = new FakeEngine();
         var service = new TranscriptionService(engine.Load, Logger());
         service.Initialize();
@@ -245,6 +250,7 @@ public sealed class TranscriptionServiceLifecycleTests
         using var releaseDecode = new ManualResetEventSlim();
         var engine = new FakeEngine();
         using var service = new TranscriptionService(engine.Load, Logger());
+        using var releaseAtExit = new ReleaseAtExit(releaseDecode);
         service.Transcribe(CapturedAudio.Empty); // compiles the call path before the race
         engine.OnDecode = _ =>
         {
@@ -332,8 +338,9 @@ public sealed class TranscriptionServiceLifecycleTests
     public void A_cold_load_is_reported_apart_from_the_decode_it_delayed()
     {
         // A guaranteed minimum load time, measured rather than slept, so the claim below is about attribution and not
-        // about how fast this machine is.
+        // about how fast this machine is. The fake adds up what it spins, and the test times each whole call.
         var minimumLoad = TimeSpan.FromMilliseconds(400);
+        var spunTicks = 0L;
         var logger = new CapturingLogger<TranscriptionService>();
         var engine = new FakeEngine
         {
@@ -344,21 +351,96 @@ public sealed class TranscriptionServiceLifecycleTests
                 {
                     Thread.SpinWait(1_000);
                 }
+
+                Interlocked.Add(ref spunTicks, Stopwatch.GetElapsedTime(started).Ticks);
             },
         };
         using var service = new TranscriptionService(engine.Load, logger);
 
-        var cold = service.Transcribe(Speech(seconds: 1));
-        var warm = service.Transcribe(Speech(seconds: 1));
+        var (cold, coldCall, coldSpun) = TimedTranscribe(service, () => Interlocked.Read(ref spunTicks));
+        var (warm, warmCall, warmSpun) = TimedTranscribe(service, () => Interlocked.Read(ref spunTicks));
 
+        // The decode is timed inside the call and after the load, so it is at most the call less what the load spun: a
+        // stall of this machine lands in both clocks, never in one alone (review round 4 of stream TR). All three readings
+        // come from the one performance counter; the slack covers only their conversion to TimeSpan ticks. A decode that
+        // took the load in is longer than that by the load itself, 400 ms or more on the cold call.
+        var slack = TimeSpan.FromMilliseconds(1);
+        Assert.True(coldSpun >= minimumLoad);
         Assert.True(
-            cold.DecodeDuration < minimumLoad,
-            $"The decode duration ({cold.DecodeDuration.TotalMilliseconds} ms) must not include the model load.");
+            cold.DecodeDuration <= coldCall - coldSpun + slack,
+            $"The decode duration ({cold.DecodeDuration.TotalMilliseconds} ms) must not include the model load: the call took " +
+            $"{coldCall.TotalMilliseconds} ms, of which the load spun {coldSpun.TotalMilliseconds} ms.");
         var decodes = logger.Entries.Where(entry => entry.Message.StartsWith("Decoded ", StringComparison.Ordinal)).ToList();
         Assert.Equal(2, decodes.Count);
         Assert.True(Convert.ToInt64(decodes[0].Value("LoadMs")) >= (long)minimumLoad.TotalMilliseconds);
         Assert.Equal(0L, Convert.ToInt64(decodes[1].Value("LoadMs")));
-        Assert.True(warm.DecodeDuration < minimumLoad);
+        Assert.Equal(TimeSpan.Zero, warmSpun);
+        Assert.True(
+            warm.DecodeDuration <= warmCall - warmSpun + slack,
+            $"The warm decode ({warm.DecodeDuration.TotalMilliseconds} ms) outlasted its call ({warmCall.TotalMilliseconds} ms).");
+    }
+
+    [Fact]
+    public void The_decode_is_timed_only_from_after_the_model_load()
+    {
+        // The bound above holds on correct code whatever this machine does, and it catches a decode that took the load in,
+        // except when the machine stalls outside the production timer (building the input, or after the call returns): then
+        // 401 <= 901 - 400 + 1 (review round 5 of stream TR, A10). So the order the bound rests on is pinned in the source: in
+        // Transcribe, the stopwatch whose elapsed time becomes the result's decode duration starts after the load returns.
+        // Whitespace and comments are ignored, and the stopwatch is found by the result it feeds, not by its name.
+        var body = CompactMethodBody(
+            ReadSource("src", "Scribe.Core", "Transcription", "TranscriptionService.cs"),
+            "publicTranscriptionResultTranscribe(CapturedAudioaudio,CancellationTokencancellationToken)");
+        var result = Regex.Match(body, @"newTranscriptionResult\(text,audio\.Duration,(\w+)\.Elapsed,");
+        Assert.True(result.Success, "Transcribe no longer builds its result from a stopwatch's elapsed time.");
+        var timer = result.Groups[1].Value;
+        var started = body.IndexOf($"var{timer}=Stopwatch.StartNew();", StringComparison.Ordinal);
+        var loaded = body.IndexOf("EnsureLoaded()", StringComparison.Ordinal);
+        Assert.True(started >= 0, $"The decode stopwatch '{timer}' is no longer started with Stopwatch.StartNew.");
+        Assert.True(loaded >= 0, "Transcribe no longer loads the model through EnsureLoaded.");
+        Assert.True(started > loaded, $"The decode stopwatch '{timer}' starts before the model load, so the decode duration takes it in.");
+    }
+
+    // The body of the method with this signature, with comments and every blank removed, as the order checks above read it.
+    private static string CompactMethodBody(string source, string compactSignature)
+    {
+        var compact = Regex.Replace(Regex.Replace(source, @"//[^\n]*", string.Empty), @"\s+", string.Empty);
+        var at = compact.IndexOf(compactSignature, StringComparison.Ordinal);
+        Assert.True(at >= 0, $"No method {compactSignature} in the source.");
+        var open = compact.IndexOf('{', at);
+        var depth = 0;
+        for (var i = open; i < compact.Length; i++)
+        {
+            depth += compact[i] switch { '{' => 1, '}' => -1, _ => 0 };
+            if (depth == 0)
+            {
+                return compact[(open + 1)..i];
+            }
+        }
+
+        throw new InvalidOperationException($"{compactSignature} has no closing brace.");
+    }
+
+    private static string ReadSource(params string[] parts)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return File.ReadAllText(Path.Combine([root.FullName, .. parts]));
+    }
+    // One call, timed whole, and what the fake's load spun during it.
+    private static (TranscriptionResult Result, TimeSpan Call, TimeSpan Spun) TimedTranscribe(
+        TranscriptionService service, Func<long> spunTicks)
+    {
+        var spunBefore = spunTicks();
+        var started = Stopwatch.GetTimestamp();
+        var result = service.Transcribe(Speech(seconds: 1));
+        var call = Stopwatch.GetElapsedTime(started);
+        return (result, call, TimeSpan.FromTicks(spunTicks() - spunBefore));
     }
 
     [Fact]
