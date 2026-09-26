@@ -4755,7 +4755,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (IsAzureApiKeySelected)
         {
             var candidate = BuildAiCleanupCandidateOptions();
-            if (!CleanupConnectionTestPolicy.CanTest(candidate))
+            if (!CleanupConnectionTestPolicy.CanTest(candidate, IsAzureApiKeySelected))
             {
                 return new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true);
             }
@@ -4778,7 +4778,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             var candidate = BuildAiCleanupCandidateOptions();
-            if (!CleanupConnectionTestPolicy.CanTest(candidate))
+            if (!CleanupConnectionTestPolicy.CanTest(candidate, IsAzureApiKeySelected))
             {
                 return new(AzureSetupResult.ServicePrincipalIncomplete, AuthMode: AzureAuthMode.ServicePrincipal);
             }
@@ -4831,7 +4831,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private CustomEndpointSetupState CurrentCustomSetup()
     {
         var candidate = BuildAiCleanupCandidateOptions();
-        var canTest = CleanupConnectionTestPolicy.CanTest(candidate);
+        var canTest = CleanupConnectionTestPolicy.CanTest(candidate, IsAzureApiKeySelected);
         if (SelectedProvider != CleanupProvider.OpenAiCompatible)
         {
             return new(CustomEndpointTestResult.NotTested, CanTest: canTest);
@@ -4867,7 +4867,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private async Task RunCleanupConnectionTestAsync(CleanupProvider provider)
     {
         var candidate = BuildAiCleanupCandidateOptions();
-        if (candidate.Provider != provider || !CleanupConnectionTestPolicy.CanTest(candidate))
+        if (candidate.Provider != provider || !CleanupConnectionTestPolicy.CanTest(candidate, IsAzureApiKeySelected))
         {
             RefreshAiStatus();
             return;

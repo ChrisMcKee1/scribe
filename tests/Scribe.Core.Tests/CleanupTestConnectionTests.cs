@@ -180,24 +180,32 @@ public sealed class CleanupTestConnectionTests
         Assert.True(result.Recipient.Matches(CleanupConnectionTestPolicy.Canonicalize(pageCandidate)));
     }
 
-    public static TheoryData<CleanupOptions, bool> AvailabilityCases => new()
+    private const string TenantGuid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    private const string ClientGuid = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+
+    public static TheoryData<CleanupOptions, bool, bool> AvailabilityCases => new()
     {
-        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "tenant", AzureClientId = "client", AzureClientSecret = "secret" }, true },
-        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "tenant", AzureClientId = "client", AzureClientSecret = "secret", AzureEndpoint = null }, false },
-        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "tenant", AzureClientId = "client", AzureClientSecret = null }, false },
-        { Azure(), true },
-        { Azure() with { AzureApiKey = null }, true },
-        { Azure() with { AzureEndpoint = null }, false },
-        { Azure() with { AzureDeployment = null }, false },
-        { Custom(), true },
-        { Custom(model: " "), false },
-        { Custom(endpoint: " "), false },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = TenantGuid, AzureClientId = ClientGuid, AzureClientSecret = "secret" }, false, true },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "contoso.onmicrosoft.com", AzureClientId = ClientGuid, AzureClientSecret = "secret" }, false, true },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = TenantGuid, AzureClientId = ClientGuid, AzureClientSecret = "secret", AzureEndpoint = null }, false, false },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = TenantGuid, AzureClientId = ClientGuid, AzureClientSecret = null }, false, false },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = TenantGuid, AzureClientId = "not-a-client-guid", AzureClientSecret = "secret" }, false, false },
+        { Azure(), false, true },
+        { Azure() with { AzureApiKey = null }, false, true },
+        { Azure(), true, true },
+        { Azure() with { AzureApiKey = null }, true, false },
+        { Azure() with { AzureApiKey = string.Empty }, true, false },
+        { Azure() with { AzureEndpoint = null }, false, false },
+        { Azure() with { AzureDeployment = null }, false, false },
+        { Custom(), false, true },
+        { Custom(model: " "), false, false },
+        { Custom(endpoint: " "), false, false },
     };
 
     [Theory]
     [MemberData(nameof(AvailabilityCases))]
-    public void Availability_is_decided_from_provider_prerequisites(CleanupOptions candidate, bool expected) =>
-        Assert.Equal(expected, CleanupConnectionTestPolicy.CanTest(candidate));
+    public void Availability_is_decided_from_provider_prerequisites(CleanupOptions candidate, bool apiKeySelected, bool expected) =>
+        Assert.Equal(expected, CleanupConnectionTestPolicy.CanTest(candidate, apiKeySelected));
 
     private static void AssertProbe(string body)
     {

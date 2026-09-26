@@ -28,20 +28,25 @@ public static class CleanupConnectionTestPolicy
         };
     }
 
-    public static bool CanTest(CleanupOptions candidate)
+    /// <summary>Whether Test connection can run for <paramref name="candidate"/>; the button and the click both ask this.</summary>
+    /// <param name="candidate">The page's current draft.</param>
+    /// <param name="apiKeySelected">
+    /// The page's sign-in method is "An API key". An API key is stored as Azure CLI mode with a key, not as a mode of its
+    /// own, so without this an empty key would silently test the Azure CLI sign-in instead of the key the user chose.
+    /// </param>
+    public static bool CanTest(CleanupOptions candidate, bool apiKeySelected = false)
     {
         var options = Canonicalize(candidate);
         return options.Provider switch
         {
             CleanupProvider.AzureFoundry => options.AzureAuthMode switch
             {
+                // The same validation the credential applies, so an enabled button never meets a rejected identity.
                 AzureAuthMode.ServicePrincipal =>
-                    !string.IsNullOrWhiteSpace(options.AzureTenantId) &&
-                    !string.IsNullOrWhiteSpace(options.AzureClientId) &&
-                    !string.IsNullOrEmpty(options.AzureClientSecret) &&
+                    AzureServicePrincipalValidator.IsComplete(options.AzureTenantId, options.AzureClientId, options.AzureClientSecret) &&
                     HasAzureDeployment(options),
-                AzureAuthMode.AzureCli when !string.IsNullOrEmpty(options.AzureApiKey) =>
-                    HasAzureDeployment(options),
+                _ when apiKeySelected =>
+                    !string.IsNullOrEmpty(options.AzureApiKey) && HasAzureDeployment(options),
                 _ => HasAzureDeployment(options),
             },
             CleanupProvider.OpenAiCompatible =>
