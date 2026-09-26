@@ -19,9 +19,13 @@ public sealed class DraftSnapshotTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
-    // Every delimiter the drafts have used or a user can type, the tags and digits the framing writes, null and empty.
+    // Every delimiter the drafts have used or a user can type, the tags and digits the framing writes (alone and followed by
+    // what a token would hold, so a value can mimic the start of the next token), null and empty.
     private static readonly string?[] Values =
-        [null, string.Empty, "|", ",", ":", ";", "\u001e", "\u001f", "0", "1:", "s1:a", "n", "a", "b", "ab", "a|b", "a,b", "Mail|outlook"];
+    [
+        null, string.Empty, "|", ",", ":", ";", "\u001e", "\u001f", "0", "1:", "s1:a", "n", "s", "as", "sb", "l0:", "p1:a", "t",
+        "a", "b", "ab", "a|b", "a,b", "Mail|outlook",
+    ];
 
     [Fact]
     public void Astras_two_profiles_that_joined_into_the_same_text_are_different_drafts()
@@ -45,14 +49,17 @@ public sealed class DraftSnapshotTests
             from second in Values
             select (Key: Key(first, second), Hash: new DraftSnapshot().Text(first).Text(second).Hash()));
 
-        // Lists of up to two values, then a value after the list: nothing moves between the list and what follows it.
+        // Lists of up to two values, then a value after the list or nothing: nothing moves between a list and what follows it,
+        // so a list followed by a value never matches a longer list.
         var lists = new List<string?[]> { Array.Empty<string?>() };
         lists.AddRange(Values.Select(value => new[] { value }));
         lists.AddRange(from first in Values from second in Values select new[] { first, second });
         AssertDistinct(
             from list in lists
-            from after in new string?[] { null, string.Empty, "a", "a,b" }
-            select (Key: Key([.. list, "#", after]), Hash: new DraftSnapshot().List(list).Text(after).Hash()));
+            from after in new string?[] { null, string.Empty, "a", "a,b", "(nothing)" }
+            select (
+                Key: Key([.. list, "#", after]),
+                Hash: after == "(nothing)" ? new DraftSnapshot().List(list).Hash() : new DraftSnapshot().List(list).Text(after).Hash()));
 
         // Profiles, field by field, including the process list and a missing line-break override.
         var names = new[] { "Mail", "Mail|outlook", string.Empty };
