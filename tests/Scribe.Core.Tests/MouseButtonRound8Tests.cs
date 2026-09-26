@@ -200,7 +200,9 @@ public sealed class MouseButtonRound8Tests
 
     // The same split through MouseHookFilter and a real signal: after the last mouse binding went, an owed release asks for
     // a pass that only syncs the mouse hook, and a release the bindings swallowed (the control, a bound Back) for one that
-    // repairs keys too, in the key view the release was judged in.
+    // repairs keys too, in the key view the release was judged in. Observed where the request is made, on this thread
+    // (review round 3, item 6): the signal counts each request as it is asked, and the hold keeps its word for this test to
+    // read, so nothing here waits for the pool to run a pass (the signal's own tests above cover that hop).
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -208,8 +210,8 @@ public sealed class MouseButtonRound8Tests
     {
         using var h = new HotkeyEngineHarness(
             HotkeyCaptureSession.Build([Back], HotkeyMode.Hold), buttonDownInWindows: _ => false);
-        using var passes = new BlockingCollection<long>();
-        using var signal = new HotkeyReconcileSignal(passes.Add);
+        using var hold = new ManualResetEventSlim(false);
+        using var signal = new HotkeyReconcileSignal(_ => { }) { HoldBeforeTakingForTests = hold };
         var message = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.MSLLHOOKSTRUCT>());
         try
         {
@@ -221,13 +223,15 @@ public sealed class MouseButtonRound8Tests
                 h.Engine.OnWake();
             }
 
+            Assert.Equal((0L, 0L), (signal.RepairRequests, signal.SyncRequestsForTests)); // the press asked for nothing
             Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONUP, message, h.Engine, signal));
 
-            Assert.True(passes.TryTake(out var repairAt, TimeSpan.FromSeconds(10)), "The release asked for no pass.");
-            Assert.Equal(stillBound ? h.Engine.KeyViewEpoch : 0, repairAt);
+            Assert.Equal(stillBound ? (1L, 0L) : (0L, 1L), (signal.RepairRequests, signal.SyncRequestsForTests));
+            Assert.Equal(stillBound ? h.Engine.KeyViewEpoch : 0, signal.PendingRepairAtForTests);
         }
         finally
         {
+            hold.Set();
             Marshal.FreeHGlobal(message);
         }
     }

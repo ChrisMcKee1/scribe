@@ -35,6 +35,9 @@ internal sealed class HotkeyReconcileSignal : IDisposable
     // Every repair this signal has been asked for, counted on the asking thread as it is asked; for tests.
     private long _repairRequests;
 
+    // Every sync-only pass this signal has been asked for, counted the same way; for tests.
+    private long _syncRequests;
+
     /// <param name="onSignaled">
     /// The pass, on a pool thread: the key view epoch to repair keys at, or 0 for the mouse hook's sync alone.
     /// </param>
@@ -52,6 +55,18 @@ internal sealed class HotkeyReconcileSignal : IDisposable
 
     /// <summary>Any thread: how many repairs this signal has been asked for, counted as each is asked; for tests.</summary>
     internal long RepairRequests => Interlocked.Read(ref _repairRequests);
+
+    /// <summary>
+    /// Any thread: how many sync-only passes this signal has been asked for, counted as each is asked, on the asking thread;
+    /// for tests that must see what a hook callback asked for without waiting for the pool to run a pass.
+    /// </summary>
+    internal long SyncRequestsForTests => Interlocked.Read(ref _syncRequests);
+
+    /// <summary>
+    /// Any thread: the key view epoch the pending request asks the repair for, or 0 when none does or a pass has taken it;
+    /// for tests, which keep it from being taken with <see cref="HoldBeforeTakingForTests"/>.
+    /// </summary>
+    internal long PendingRepairAtForTests => Interlocked.Read(ref _repairAt);
 
     /// <summary>
     /// Test seam, null in production: the pool callback waits on it before it takes the request, so a test can publish
@@ -73,9 +88,13 @@ internal sealed class HotkeyReconcileSignal : IDisposable
 
     /// <summary>
     /// Any thread, including the mouse hook callback: asks for a pass that only syncs the mouse hook, unless a repair is
-    /// already asked for. A SetEvent; it waits for no other thread and never throws.
+    /// already asked for. An interlocked count (for tests) and a SetEvent; it waits for no other thread and never throws.
     /// </summary>
-    public void SignalMouseHookSync() => Set();
+    public void SignalMouseHookSync()
+    {
+        Interlocked.Increment(ref _syncRequests);
+        Set();
+    }
 
     public void Dispose()
     {

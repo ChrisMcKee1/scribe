@@ -666,23 +666,27 @@ public sealed class MouseButtonHotkeyTests
     [Fact]
     public void A_swallowed_release_asks_for_the_leak_check()
     {
+        // Observed where the request is made, on this thread (review round 3, item 6): the signal counts the repair it is
+        // asked for, and the hold keeps the epoch it asks it for, so the test waits for no pass on the pool.
         using var h = new HotkeyEngineHarness(Bare(Middle));
         using var hook = new HookMessage();
-        using var checkRan = new ManualResetEventSlim(false);
-        using var signal = new HotkeyReconcileSignal(repairAt =>
+        using var hold = new ManualResetEventSlim(false);
+        using var signal = new HotkeyReconcileSignal(_ => { }) { HoldBeforeTakingForTests = hold };
+        try
         {
-            if (repairAt == h.Engine.KeyViewEpoch)
-            {
-                checkRan.Set();
-            }
-        });
-        hook.Set(0);
+            hook.Set(0);
 
-        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, hook.Pointer, h.Engine, signal));
-        Assert.False(checkRan.IsSet);
-        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, hook.Pointer, h.Engine, signal));
+            Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, hook.Pointer, h.Engine, signal));
+            Assert.Equal((0L, 0L), (signal.RepairRequests, signal.SyncRequestsForTests));
+            Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, hook.Pointer, h.Engine, signal));
 
-        Assert.True(checkRan.Wait(TimeSpan.FromSeconds(10)), "The swallowed release never asked for the leak check.");
+            Assert.Equal((1L, 0L), (signal.RepairRequests, signal.SyncRequestsForTests));
+            Assert.Equal(h.Engine.KeyViewEpoch, signal.PendingRepairAtForTests);
+        }
+        finally
+        {
+            hold.Set();
+        }
     }
 
     [Fact]
