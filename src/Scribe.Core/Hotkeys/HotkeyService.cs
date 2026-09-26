@@ -213,6 +213,10 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>How many times the current installation registered its mouse hook; for tests.</summary>
     internal long MouseHookRegistrations => CurrentInstallation?.MouseHookRegistrations ?? 0;
 
+    /// <summary>The current installation's WM_HOTKEY_REFRESH posts, refused posts and handlings; for tests.</summary>
+    internal (long Posted, long PostFailures, long Handled) MouseHookRefreshesForTests =>
+        CurrentInstallation?.MouseHookRefreshes ?? (0, 0, 0);
+
     /// <summary>How many of the current installation's renewals found the previous registration gone; for tests.</summary>
     internal long MouseHookLosses => CurrentInstallation?.MouseHookLosses ?? 0;
 
@@ -1270,6 +1274,11 @@ public sealed class HotkeyService : IHotkeyService
         private long _mouseHookRegistrations;
         private long _mouseHookLosses;
 
+        // The WM_HOTKEY_REFRESH messages posted to this thread, refused, and handled; for tests (MouseHookRefreshes).
+        private long _refreshesPosted;
+        private long _refreshPostFailures;
+        private long _refreshesHandled;
+
         /// <param name="replacesRegistration">
         /// True for a reinstall: its registration is the newest in the chain and replaces one of Scribe's that a hook ahead
         /// of it may have been keeping keys from, so the engine opens its uncertainty window as a move ahead does
@@ -1449,11 +1458,23 @@ public sealed class HotkeyService : IHotkeyService
         public void RequestMouseHookRefresh()
         {
             var threadId = _engine.OwnerThreadId;
-            if (threadId != 0)
+            if (threadId != 0 && NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_REFRESH, nint.Zero, nint.Zero))
             {
-                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_REFRESH, nint.Zero, nint.Zero);
+                Interlocked.Increment(ref _refreshesPosted);
+            }
+            else
+            {
+                Interlocked.Increment(ref _refreshPostFailures);
             }
         }
+
+        /// <summary>
+        /// Any thread, for tests: how many WM_HOTKEY_REFRESH messages were posted to this thread, how many posts found no
+        /// thread or were refused, and how many the thread has handled (counted once its sync is done), so a test that waits
+        /// for the mouse hook's removal can say which side stalled.
+        /// </summary>
+        public (long Posted, long PostFailures, long Handled) MouseHookRefreshes =>
+            (Interlocked.Read(ref _refreshesPosted), Interlocked.Read(ref _refreshPostFailures), Interlocked.Read(ref _refreshesHandled));
 
         /// <summary>
         /// Any thread (the pool side of the moves ahead, tests): asks this installation's thread to register its keyboard
@@ -1657,6 +1678,7 @@ public sealed class HotkeyService : IHotkeyService
                     {
                         _engine.OnWake();
                         SyncMouseHook(refresh: true);
+                        Interlocked.Increment(ref _refreshesHandled);
                         continue;
                     }
 

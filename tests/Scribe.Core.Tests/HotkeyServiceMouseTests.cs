@@ -402,6 +402,7 @@ public partial class HotkeyServiceTests
         AwaitRenewal(service);
         Assert.True(service.MouseHookInstalled, "The mouse hook was removed while a swallowed press still owed its release.");
         var passes = service.ReconcilePassesRun;
+        var posted = service.MouseHookRefreshesForTests.Posted;
 
         switch (settled)
         {
@@ -416,9 +417,28 @@ public partial class HotkeyServiceTests
                 break;
         }
 
-        AwaitMouseHookRemoved(service, allowUpkeep: false);
-        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The settle started no pass.");
+        AwaitDrainOnlyHookRemovedByThePass(service, passes, posted);
         Assert.Empty(injected);
+    }
+
+    // The drain-only hook's removal after a settle, one side at a time, each named if it stalls (review round 2, item 8: the
+    // 10 s wait for the hook to go could not tell which side had failed, once, on CI): the reconcile pass the settle asked
+    // for, run on the pool; its WM_HOTKEY_REFRESH, posted to the hook thread; the hook thread's handling of every refresh
+    // posted up to it; and the removal that handling makes.
+    private static void AwaitDrainOnlyHookRemovedByThePass(HotkeyService service, long passesBefore, long postedBefore)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(() => service.ReconcilePassesRun > passesBefore, HookTimeout),
+            "Stalled before the pass: the reconcile pass the settle asked for never ran on the pool.");
+        var refreshes = service.MouseHookRefreshesForTests;
+        Assert.True(
+            refreshes.Posted > postedBefore,
+            $"Stalled in the pass: it ran but posted no refresh (refused posts: {refreshes.PostFailures}, hook still installed: " +
+            $"{service.MouseHookInstalled}).");
+        Assert.True(
+            SpinWait.SpinUntil(() => service.MouseHookRefreshesForTests.Handled >= refreshes.Posted, HookTimeout),
+            $"Stalled on the hook thread: {refreshes.Posted} refresh(es) posted, {service.MouseHookRefreshesForTests.Handled} handled.");
+        Assert.False(service.MouseHookInstalled, "The hook thread handled the refresh and kept the drain-only mouse hook.");
     }
 
     // Round 9 (A11): a repair that capture stopped is not run again when capture ends, through the real hook thread and
