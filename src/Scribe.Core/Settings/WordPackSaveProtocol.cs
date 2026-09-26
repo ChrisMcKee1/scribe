@@ -39,6 +39,11 @@ public sealed class WordPackSaveProtocol
             }
         }
 
+        if (request.Validate?.Invoke() is { Count: > 0 } validationErrors)
+        {
+            return WordPackSaveProtocolResult.Error(validationErrors[0]);
+        }
+
         WordPackSaveSession? session = null;
         if (request.Workspace?.HasUnsavedChanges == true)
         {
@@ -55,7 +60,7 @@ public sealed class WordPackSaveProtocol
         LibraryPrepareResult? prepared = null;
         if (session is not null)
         {
-            prepared = await _store.PrepareAsync(session.Changes).ConfigureAwait(false);
+            prepared = await _store.PrepareAsync(session.Changes).ConfigureAwait(true);
             if (prepared.Status != LibraryPrepareStatus.Prepared || prepared.Save is null)
             {
                 if (prepared.Status == LibraryPrepareStatus.Stale)
@@ -93,7 +98,7 @@ public sealed class WordPackSaveProtocol
         {
             if (prepared?.Save is not null)
             {
-                outcome = await _store.CompleteAsync(prepared.Save).ConfigureAwait(false);
+                outcome = await _store.CompleteAsync(prepared.Save).ConfigureAwait(true);
             }
         }
 
@@ -216,7 +221,7 @@ public sealed class WordPackSaveProtocol
             }
 
             var repair = begin.Session;
-            var prepare = await _store.PrepareAsync(repair.Changes).ConfigureAwait(false);
+            var prepare = await _store.PrepareAsync(repair.Changes).ConfigureAwait(true);
             if (prepare.Status != LibraryPrepareStatus.Prepared || prepare.Save is null)
             {
                 return WordPackSaveProtocolResult.Warning("Saved, but a word pack reference still needs to be updated.");
@@ -238,7 +243,7 @@ public sealed class WordPackSaveProtocol
             }
             finally
             {
-                repairOutcome = await _store.CompleteAsync(prepare.Save).ConfigureAwait(false);
+                repairOutcome = await _store.CompleteAsync(prepare.Save).ConfigureAwait(true);
             }
 
             if (repairOutcome.Status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
@@ -330,6 +335,7 @@ public sealed record WordPackSaveProtocolRequest(
     Func<Task<VocabularyRefresh>> ApplySettings,
     Func<string> CaptureDraft,
     Func<string> CurrentDraft,
+    Func<IReadOnlyList<string>>? Validate = null,
     Action? OnSettingsCommitted = null,
     Action? OnWordPacksChanged = null);
 

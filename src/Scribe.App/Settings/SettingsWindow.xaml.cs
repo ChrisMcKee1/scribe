@@ -5578,6 +5578,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings),
             SaveDraftSignature,
             SaveDraftSignature,
+            Validate: null,
             OnSettingsCommitted,
             OnWordPacksChanged);
 

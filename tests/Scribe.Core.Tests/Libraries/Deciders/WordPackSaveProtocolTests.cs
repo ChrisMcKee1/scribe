@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Scribe.Core.Libraries;
 using Scribe.Core.Settings;
 using Scribe.Core.Vocabulary;
@@ -6,141 +7,543 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 
 public sealed class WordPackSaveProtocolTests
 {
-    [Fact]
-    public async Task Not_committed_settlement_clears_the_pending_save_and_keeps_the_draft_unsaved()
+    public static TheoryData<string> ValidationFailures => new()
     {
-        var catalog = DeciderFixture.Standard();
-        var workspace = DeciderFixture.Workspace(catalog);
-        workspace.SetEnabled(DeciderFixture.AzureId, true);
-        var store = new FakeProtocolStore(catalog) { Status = LibrarySaveStatus.CommitUnknown };
-        var protocol = new WordPackSaveProtocol(store);
+        "dictionary", "snippet", "hotkey", "duration", "provider", "word pack",
+    };
 
-        var unknown = await protocol.SaveAsync(Request(workspace, store));
+    public static TheoryData<string, string?> HoldAndEditCases => new()
+    {
+        { "prepare", null },
+        { "complete", null },
+        { "publication", null },
+        { "prepare", "dictionary" },
+        { "complete", "snippet" },
+        { "publication", "pack" },
+        { "publication", "ai" },
+        { "publication", "microphone" },
+        { "publication", "revert" },
+        { "publication", "first-load" },
+    };
 
-        Assert.False(unknown.Success);
-        Assert.True(protocol.HasPendingSave);
-        Assert.True(workspace.HasUnsavedChanges);
+    public static TheoryData<LibrarySaveStatus> Outcomes => new()
+    {
+        LibrarySaveStatus.Applied,
+        LibrarySaveStatus.AppliedAwaitingRelease,
+        LibrarySaveStatus.NotCommitted,
+        LibrarySaveStatus.Superseded,
+    };
 
-        store.Status = LibrarySaveStatus.Applied;
-        store.Current = catalog;
-        var settled = await protocol.SaveAsync(Request(workspace, store));
+    public static TheoryData<LibraryPrepareStatus> PreparationRefusals => new()
+    {
+        LibraryPrepareStatus.Stale,
+        LibraryPrepareStatus.PreviousSaveUnfinished,
+        LibraryPrepareStatus.ReadOnly,
+        LibraryPrepareStatus.OutsideEdit,
+        LibraryPrepareStatus.Failed,
+    };
 
-        Assert.False(protocol.HasPendingSave);
-        Assert.True(settled.Success);
-        Assert.False(workspace.HasUnsavedChanges);
+    public static TheoryData<string> UnknownSettlements => new()
+    {
+        "target", "base", "other", "failed-then-target", "switch-back", "explicit-settle",
+    };
+
+    public static TheoryData<string> RepairCases => new()
+    {
+        "success", "prepare-refused", "transaction-exception", "not-committed", "unknown", "delayed-success",
+    };
+
+    [Theory]
+    [MemberData(nameof(ValidationFailures))]
+    public async Task Family1_validation_barrier_blocks_prepare_and_commit_then_corrected_save_proceeds(string invalidPart)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.ValidationErrors.Add($"invalid {invalidPart}");
+
+            var blocked = await harness.SaveAsync();
+
+            Assert.False(blocked.Success);
+            Assert.Empty(harness.Store.Prepared);
+            Assert.Empty(harness.Store.Completed);
+            Assert.DoesNotContain("commit", harness.Trace);
+
+            harness.ValidationErrors.Clear();
+            var saved = await harness.SaveAsync();
+
+            Assert.True(saved.Success);
+            Assert.Single(harness.Store.Prepared);
+            Assert.Single(harness.Store.Completed);
+            Assert.False(harness.Workspace.HasUnsavedChanges);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(HoldAndEditCases))]
+    public async Task Family2_captured_draft_and_acknowledgement_keep_later_edits_unsaved(string hold, string? edit)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Hold(hold);
+            var saveTask = harness.SaveAsync();
+            await harness.WaitForHoldAsync(hold);
+
+            if (edit is not null)
+            {
+                harness.EditDraft(edit);
+            }
+
+            harness.Release(hold);
+            var result = await saveTask;
+
+            if (edit is "dictionary" or "snippet" or "pack" or "ai" or "microphone")
+            {
+                Assert.False(result.Success);
+                Assert.Contains("changed while saving", result.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                Assert.True(result.Success);
+            }
+
+            Assert.Equal("draft:pack", harness.CapturedDrafts.Single());
+            Assert.Equal("payload", harness.StoredInputs.Single().Kind);
+            Assert.Single(harness.Store.Prepared);
+            Assert.Single(harness.Store.Completed);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(Outcomes))]
+    public async Task Family3_outcome_matrix_follows_status_not_transaction_shape(LibrarySaveStatus status)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Store.Status = status;
+
+            var result = await harness.SaveAsync();
+
+            Assert.Single(harness.Store.Prepared);
+            Assert.Single(harness.Store.Completed);
+            if (status is LibrarySaveStatus.Applied)
+            {
+                Assert.True(result.Success);
+                Assert.False(harness.Workspace.HasUnsavedChanges);
+            }
+            else if (status is LibrarySaveStatus.AppliedAwaitingRelease)
+            {
+                Assert.False(result.Success);
+                Assert.False(harness.Workspace.HasUnsavedChanges);
+            }
+            else
+            {
+                Assert.False(result.Success);
+                Assert.True(harness.Workspace.HasUnsavedChanges);
+            }
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(PreparationRefusals))]
+    public async Task Family3_preparation_refusals_prepare_no_commit_and_stale_rebases(LibraryPrepareStatus status)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Store.PrepareStatus = status;
+            harness.Store.Current = DeciderFixture.Catalog(harness.Catalog.Libraries, enabled: [DeciderFixture.GitHubId, DeciderFixture.AzureId], generation: 4);
+
+            var result = await harness.SaveAsync();
+
+            Assert.False(result.Success);
+            Assert.Empty(harness.Store.Completed);
+            Assert.DoesNotContain("commit", harness.Trace);
+            if (status == LibraryPrepareStatus.Stale)
+            {
+                Assert.Equal(4, harness.Workspace.Draft.BaseGeneration);
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(LibrarySaveStatus.NotCommitted, true)]
+    [InlineData(LibrarySaveStatus.Applied, false)]
+    public async Task Family3_transaction_exceptions_still_complete_and_settle_by_status(LibrarySaveStatus status, bool remainsUnsaved)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Store.Status = status;
+            harness.ThrowOnCommit = true;
+
+            var result = await harness.SaveAsync();
+
+            Assert.False(result.Success);
+            Assert.Single(harness.Store.Completed);
+            Assert.Equal(remainsUnsaved, harness.Workspace.HasUnsavedChanges);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(UnknownSettlements))]
+    public async Task Family4_unknown_lifecycle_settles_only_while_unresolved(string settlement)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.EditPack();
+            harness.Store.Status = LibrarySaveStatus.CommitUnknown;
+            var unknown = await harness.SaveAsync();
+            Assert.False(unknown.Success);
+            Assert.True(harness.Protocol.HasPendingSave);
+
+            if (settlement == "failed-then-target")
+            {
+                harness.Store.ThrowOnLoad = true;
+                var fenced = await harness.SaveAsync();
+                Assert.True(harness.Protocol.HasPendingSave);
+                Assert.Single(harness.Store.Prepared);
+                Assert.False(fenced.Success);
+                harness.Store.ThrowOnLoad = false;
+                settlement = "target";
+            }
+
+            if (settlement == "switch-back")
+            {
+                harness.EditPack(backToOriginal: true);
+                settlement = "base";
+            }
+
+            harness.Store.Current = settlement switch
+            {
+                "target" or "explicit-settle" => DeciderFixture.Apply(harness.Catalog, harness.Store.Prepared.Single()),
+                "other" => DeciderFixture.Catalog(harness.Catalog.Libraries, generation: 99),
+                _ => harness.Catalog,
+            };
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            for (var i = 0; i < 12; i++)
+            {
+                _ = harness.Workspace.CaptureChangeSet();
+            }
+
+            var settleDirectly = settlement is "explicit-settle" or "base" or "other";
+            var settled = settleDirectly
+                ? await harness.Protocol.TrySettlePendingAsync(harness.Request())
+                : await harness.SaveAsync();
+
+            Assert.False(harness.Protocol.HasPendingSave);
+            if (settlement == "target" || settlement == "explicit-settle")
+            {
+                Assert.True(settled.Success);
+                Assert.False(harness.Workspace.HasUnsavedChanges);
+            }
+            else
+            {
+                Assert.False(settled.Success);
+                Assert.Contains("weren't saved", settled.Message, StringComparison.Ordinal);
+            }
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(RepairCases))]
+    public async Task Family5_repair_continuation_writes_only_reference_repairs(string repairCase)
+    {
+        await ProtocolHarness.RunOnOwnerAsync(async owner =>
+        {
+            var harness = ProtocolHarness.Create(owner);
+            harness.Workspace = DeciderFixture.PendingRepair(harness.Catalog, out var copy, out var keptAs, out var saved,
+                (workspace, _) => workspace.SetAiPermission(DeciderFixture.AzureId, false));
+            harness.Catalog = saved;
+            harness.Store.Current = saved;
+            harness.Workspace.SetEnabled(DeciderFixture.GitHubId, false);
+            Assert.True(harness.Workspace.HasPendingReferenceRepairs);
+
+            harness.Store.RepairPrepareStatus = repairCase == "prepare-refused" ? LibraryPrepareStatus.PreviousSaveUnfinished : LibraryPrepareStatus.Prepared;
+            harness.Store.RepairStatus = repairCase switch
+            {
+                "not-committed" => LibrarySaveStatus.NotCommitted,
+                "unknown" => LibrarySaveStatus.CommitUnknown,
+                _ => LibrarySaveStatus.Applied,
+            };
+            harness.ThrowRepairCommit = repairCase == "transaction-exception";
+            harness.Store.Status = repairCase == "delayed-success" ? LibrarySaveStatus.CommitUnknown : LibrarySaveStatus.Applied;
+
+            var result = await harness.SaveAsync();
+            if (repairCase == "delayed-success")
+            {
+                Assert.True(harness.Protocol.HasPendingSave);
+                harness.Store.Current = DeciderFixture.Apply(saved, harness.Store.Prepared.Last());
+                result = await harness.Protocol.TrySettlePendingAsync(harness.Request());
+            }
+
+            if (repairCase == "success" || repairCase == "delayed-success")
+            {
+                Assert.True(result.Success);
+                Assert.False(harness.Workspace.HasPendingReferenceRepairs);
+                Assert.Contains(harness.Store.Prepared, change => change.Writes.Count == 1 && change.Writes[0].LibraryId == copy);
+                Assert.Contains(keptAs, harness.Workspace.Draft.Find(copy)!.Content.BasedOn, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.True(result.Success || harness.Workspace.HasPendingReferenceRepairs || harness.Protocol.HasPendingSave);
+            }
+        });
     }
 
     [Fact]
-    public async Task Successful_save_completes_once_marks_saved_and_waits_for_publication()
+    public void Editor_to_workspace_clearing_replacement_does_not_grant_removal_intent()
     {
-        var catalog = DeciderFixture.Standard();
-        var workspace = DeciderFixture.Workspace(catalog);
-        workspace.SetEnabled(DeciderFixture.AzureId, true);
-        var store = new FakeProtocolStore(catalog);
-        var draftReads = new Queue<string>(["saved", "saved"]);
+        var workspace = DeciderFixture.Workspace(DeciderFixture.Standard());
+        var rowId = DeciderFixture.RowIdOf(workspace, DeciderFixture.GitHubId, "get hub");
 
-        var result = await new WordPackSaveProtocol(store).SaveAsync(Request(workspace, store, draftReads));
+        var result = workspace.EditTerm(DeciderFixture.GitHubId, rowId, new TermValues("get hub", string.Empty), removalIntent: false);
+        var capture = workspace.CaptureChangeSet();
 
-        Assert.True(result.Success);
-        Assert.False(workspace.HasUnsavedChanges);
-        Assert.Single(store.Prepared);
-        Assert.Single(store.Completed);
-        Assert.Equal(["prepare", "commit", "complete", "load", "apply"], store.Trace);
+        Assert.True(result.Applied);
+        Assert.Contains(capture.Issues, issue => issue.Kind == LibraryValidationKind.EmptyWrittenWithoutIntent);
     }
 
-    [Fact]
-    public async Task Repair_transaction_exception_is_reported_after_completion()
+    private sealed class ProtocolHarness
     {
-        var catalog = DeciderFixture.Standard();
-        var workspace = DeciderFixture.Workspace(catalog);
-        workspace.SetEnabled(DeciderFixture.AzureId, true);
-        var store = new FakeProtocolStore(catalog) { ThrowRepairCommit = true };
+        private readonly int _owner;
+        private readonly Dictionary<string, Hold> _holds = new(StringComparer.OrdinalIgnoreCase);
 
-        // The fake cannot create a real pending reference repair cheaply, so this pins the primary transaction path that
-        // shares the same complete-in-finally rule.
-        store.ThrowPrimaryCommit = true;
-        var result = await new WordPackSaveProtocol(store).SaveAsync(Request(workspace, store));
+        private ProtocolHarness(int owner)
+        {
+            _owner = owner;
+            Catalog = DeciderFixture.Standard();
+            Workspace = DeciderFixture.Workspace(Catalog);
+            Store = new TraceStore(this, Catalog);
+            Protocol = new WordPackSaveProtocol(Store);
+        }
 
-        Assert.False(result.Success);
-        Assert.Single(store.Completed);
-        Assert.Single(store.Trace, step => step == "complete");
-    }
+        public LibraryCatalog Catalog { get; set; }
+        public LibraryWorkspace Workspace { get; set; }
+        public TraceStore Store { get; }
+        public WordPackSaveProtocol Protocol { get; }
+        public List<string> Trace { get; } = [];
+        public List<string> CapturedDrafts { get; } = [];
+        public List<(string Kind, LibrarySavePayload? Payload, string Draft)> StoredInputs { get; } = [];
+        public List<string> ValidationErrors { get; } = [];
+        public bool ThrowOnCommit { get; set; }
+        public bool ThrowRepairCommit { get; set; }
+        public string Draft { get; private set; } = "draft:initial";
 
-    private static WordPackSaveProtocolRequest Request(
-        LibraryWorkspace workspace,
-        FakeProtocolStore store,
-        Queue<string>? drafts = null)
-    {
-        drafts ??= new Queue<string>(["saved", "saved"]);
-        return new WordPackSaveProtocolRequest(
-            workspace,
+        public static ProtocolHarness Create(int owner) => new(owner);
+
+        public static Task RunOnOwnerAsync(Func<int, Task> action) => PumpContext.RunAsync(action);
+
+        public void EditPack(bool backToOriginal = false)
+        {
+            AssertOwner();
+            Workspace.SetEnabled(DeciderFixture.AzureId, !backToOriginal);
+            Draft = backToOriginal ? "draft:initial" : "draft:pack";
+        }
+
+        public Task<WordPackSaveProtocolResult> SaveAsync() => Protocol.SaveAsync(Request());
+
+        public WordPackSaveProtocolRequest Request() => new(
+            Workspace,
             payload =>
             {
-                store.Trace.Add("commit");
-                if (store.ThrowPrimaryCommit)
+                AssertOwner();
+                Trace.Add("commit");
+                StoredInputs.Add(("payload", payload, Draft));
+                if (ThrowOnCommit)
                 {
-                    throw new InvalidOperationException("after commit");
+                    throw new InvalidOperationException("transaction");
                 }
+            },
+            async () =>
+            {
+                AssertOwner();
+                Trace.Add("apply");
+                await Gate("publication");
+                return new VocabularyRefresh(VocabularyRefreshOutcome.Applied, VocabularyGeneration.Empty);
             },
             () =>
             {
-                store.Trace.Add("apply");
-                return Task.FromResult(new VocabularyRefresh(VocabularyRefreshOutcome.Applied, VocabularyGeneration.Empty));
+                AssertOwner();
+                CapturedDrafts.Add(Draft);
+                return Draft;
             },
-            () => drafts.Dequeue(),
-            () => drafts.Dequeue());
+            () =>
+            {
+                AssertOwner();
+                return Draft;
+            },
+            () => ValidationErrors,
+            () => Trace.Add("settings-committed"),
+            () => Trace.Add("wordpacks-changed"));
+
+        public void EditDraft(string edit)
+        {
+            AssertOwner();
+            switch (edit)
+            {
+                case "pack":
+                    Workspace.SetEnabled(DeciderFixture.GitHubId, false);
+                    Draft = "draft:pack-edit";
+                    break;
+                case "revert":
+                case "first-load":
+                    Draft = "draft:pack";
+                    break;
+                default:
+                    Draft = "draft:" + edit;
+                    break;
+            }
+        }
+
+        public void Hold(string name) => _holds[name] = new Hold();
+
+        public async Task WaitForHoldAsync(string name)
+        {
+            if (_holds.TryGetValue(name, out var hold))
+            {
+                await hold.Hit.Task;
+            }
+        }
+
+        public void Release(string name)
+        {
+            if (_holds.TryGetValue(name, out var hold))
+            {
+                hold.Release.TrySetResult();
+            }
+        }
+
+        public async Task Gate(string name)
+        {
+            if (_holds.TryGetValue(name, out var hold))
+            {
+                hold.Hit.TrySetResult();
+                await hold.Release.Task;
+            }
+        }
+
+        public void AssertOwner() => Assert.Equal(_owner, Environment.CurrentManagedThreadId);
+
+        public void AssertWorker() => Assert.NotEqual(_owner, Environment.CurrentManagedThreadId);
     }
 
-    private sealed class FakeProtocolStore(LibraryCatalog catalog) : IWordPackSaveProtocolStore
+    private sealed class TraceStore : IWordPackSaveProtocolStore
     {
+        private readonly ProtocolHarness _harness;
+        public TraceStore(ProtocolHarness harness, LibraryCatalog current)
+        {
+            _harness = harness;
+            Current = current;
+        }
+
         public LibrarySaveStatus Status { get; set; } = LibrarySaveStatus.Applied;
-        public LibraryCatalog Current { get; set; } = catalog;
-        public bool ThrowPrimaryCommit { get; set; }
-        public bool ThrowRepairCommit { get; set; }
+        public LibrarySaveStatus RepairStatus { get; set; } = LibrarySaveStatus.Applied;
+        public LibraryPrepareStatus PrepareStatus { get; set; } = LibraryPrepareStatus.Prepared;
+        public LibraryPrepareStatus RepairPrepareStatus { get; set; } = LibraryPrepareStatus.Prepared;
+        public bool ThrowOnLoad { get; set; }
+        public LibraryCatalog Current { get; set; }
         public List<LibraryChangeSet> Prepared { get; } = [];
         public List<PreparedLibrarySave> Completed { get; } = [];
-        public List<string> Trace { get; } = [];
 
-        public Task<LibraryPrepareResult> PrepareAsync(LibraryChangeSet changes)
+        public Task<LibraryPrepareResult> PrepareAsync(LibraryChangeSet changes) => Task.Run(async () =>
         {
-            Trace.Add("prepare");
-            Prepared.Add(changes);
-            var payload = new LibrarySavePayload(
-                changes.BaseGeneration,
-                changes.BaseGeneration + 1,
-                changes.LocalState.EnabledIds.ToList(),
-                []);
-            return Task.FromResult(new LibraryPrepareResult(
-                LibraryPrepareStatus.Prepared,
-                new PreparedLibrarySave(changes.DraftRevision, payload, new LibraryChangeCounts(0, 0, 0, 0, 0)),
-                []));
-        }
-
-        public Task<LibrarySaveOutcome> CompleteAsync(PreparedLibrarySave prepared)
-        {
-            Trace.Add("complete");
-            Completed.Add(prepared);
-            if (Status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
+            _harness.AssertWorker();
+            _harness.Trace.Add("prepare");
+            await _harness.Gate("prepare");
+            var repair = changes.Writes.Count == 1 && !changes.LocalStateChanged && changes.Deletions.Count == 0 && changes.RecentlyDeletedActions.Count == 0;
+            var status = repair ? RepairPrepareStatus : PrepareStatus;
+            if (status != LibraryPrepareStatus.Prepared)
             {
-                Current = DeciderFixture.Apply(Current, Prepared.Last());
+                return new LibraryPrepareResult(status, null, [], LibraryIoFailure.None);
             }
 
-            return Task.FromResult(new LibrarySaveOutcome(Status, Current.Generation, 0, [], LibraryIoFailure.None));
-        }
+            Prepared.Add(changes);
+            var payload = new LibrarySavePayload(changes.BaseGeneration, changes.BaseGeneration + 1, changes.LocalState.EnabledIds.ToList(), []);
+            return new LibraryPrepareResult(status, new PreparedLibrarySave(changes.DraftRevision, payload, new LibraryChangeCounts(0, 0, 0, 0, 0)), []);
+        });
 
-        public Task<LibraryCatalog> LoadCatalogAsync()
+        public Task<LibrarySaveOutcome> CompleteAsync(PreparedLibrarySave prepared) => Task.Run(async () =>
         {
-            Trace.Add("load");
-            return Task.FromResult(Current);
-        }
+            _harness.AssertWorker();
+            _harness.Trace.Add("complete");
+            await _harness.Gate("complete");
+            Completed.Add(prepared);
+            var changes = Prepared[Completed.Count - 1];
+            var repair = changes.Writes.Count == 1 && !changes.LocalStateChanged && changes.Deletions.Count == 0 && changes.RecentlyDeletedActions.Count == 0;
+            var status = repair ? RepairStatus : Status;
+            if (status is LibrarySaveStatus.Applied or LibrarySaveStatus.AppliedAwaitingRelease)
+            {
+                Current = DeciderFixture.Apply(Current, changes);
+            }
+
+            return new LibrarySaveOutcome(status, status is LibrarySaveStatus.CommitUnknown ? changes.BaseGeneration : Current.Generation, 0, [], LibraryIoFailure.None);
+        });
+
+        public Task<LibraryCatalog> LoadCatalogAsync() => Task.Run(() =>
+        {
+            _harness.AssertWorker();
+            _harness.Trace.Add("load");
+            if (ThrowOnLoad)
+            {
+                throw new InvalidOperationException("load");
+            }
+
+            return Current;
+        });
 
         public void CommitRepair(LibrarySavePayload payload)
         {
-            Trace.Add("repair-commit");
-            if (ThrowRepairCommit)
+            _harness.AssertOwner();
+            _harness.Trace.Add("repair-commit");
+            if (_harness.ThrowRepairCommit)
             {
                 throw new InvalidOperationException("repair");
             }
         }
+    }
+
+    private sealed class Hold
+    {
+        public TaskCompletionSource Hit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class PumpContext : SynchronizationContext
+    {
+        private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = [];
+
+        public static async Task RunAsync(Func<int, Task> action)
+        {
+            var previous = Current;
+            var context = new PumpContext();
+            SetSynchronizationContext(context);
+            var owner = Environment.CurrentManagedThreadId;
+            var task = action(owner);
+            _ = task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
+            while (!task.IsCompleted || context._queue.Count > 0)
+            {
+                if (context._queue.TryTake(out var work, 50))
+                {
+                    SetSynchronizationContext(context);
+                    work.Callback(work.State);
+                }
+            }
+
+            SetSynchronizationContext(previous);
+            await task;
+        }
+
+        public override void Post(SendOrPostCallback d, object? state) => _queue.Add((d, state));
     }
 }
