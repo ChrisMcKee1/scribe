@@ -14,6 +14,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -90,6 +91,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
+    private bool _dataGridStylesScaled;
     private readonly ILogger<SettingsWindow> _log;
     private readonly TranscriptionOptions _runningTranscription;
 
@@ -303,7 +305,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _cleanup.StatusChanged += OnCleanupStatusChanged;
         Closed += OnClosed;
         Loaded += RefreshStartupStatus;
+        Loaded += (_, _) => UpdateDataGridFontStyles();
         Activated += RefreshStartupStatus;
+        SectionAppProfiles.SizeChanged += (_, _) => UpdateProfileLayout();
+        UsageMetricsCard.SizeChanged += (_, _) => UpdateUsageMetricLayout();
 
         // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
         SourceInitialized += (_, _) =>
@@ -375,7 +380,74 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void TextScale_Changed(object? sender, EventArgs e) => ApplyWindowFit();
+    private void TextScale_Changed(object? sender, EventArgs e)
+    {
+        ApplyWindowFit();
+        UpdateProfileLayout();
+        UpdateUsageMetricLayout();
+        UpdateDataGridFontStyles();
+    }
+
+    private void UpdateDataGridFontStyles()
+    {
+        var factor = TextScaleService.CurrentFactor;
+        var keyboardCell = Resources["KeyboardCell"] as Style;
+        Style? scaledCell = null;
+        Style? scaledHeader = null;
+        if (factor <= 1 && !_dataGridStylesScaled)
+        {
+            return;
+        }
+
+        if (factor > 1)
+        {
+            var size = Scribe.Core.Settings.TextScale.Apply(14, factor);
+            scaledCell = new Style(typeof(DataGridCell), keyboardCell)
+            {
+                Setters = { new Setter(Control.FontSizeProperty, size) },
+            };
+            scaledHeader = new Style(typeof(DataGridColumnHeader), TryFindResource("DefaultDataGridColumnHeaderStyle") as Style)
+            {
+                Setters = { new Setter(Control.FontSizeProperty, size) },
+            };
+        }
+
+        foreach (var grid in FindVisualChildren<DataGrid>(this))
+        {
+            if (factor <= 1)
+            {
+                grid.ClearValue(Control.FontSizeProperty);
+                grid.ClearValue(DataGrid.CellStyleProperty);
+                grid.ClearValue(DataGrid.ColumnHeaderStyleProperty);
+            }
+            else
+            {
+                grid.FontSize = Scribe.Core.Settings.TextScale.Apply(14, factor);
+                grid.CellStyle = scaledCell;
+                grid.ColumnHeaderStyle = scaledHeader;
+            }
+        }
+
+        _dataGridStylesScaled = factor > 1;
+    }
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var nested in FindVisualChildren<T>(child))
+            {
+                yield return nested;
+            }
+        }
+    }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {

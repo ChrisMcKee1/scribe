@@ -5,6 +5,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using Scribe.App.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
 
@@ -48,6 +49,7 @@ public partial class SettingsWindow
         AppPickerList.ItemsSource = _appPickerRows;
         RefreshProfileEmptyState();
         RefreshProfileRules();
+        UpdateProfileLayout();
     }
 
     private ProfileRow? SelectedProfile => ProfileList.SelectedItem as ProfileRow;
@@ -384,10 +386,40 @@ public partial class SettingsWindow
         ProfileAiCleanupInfoBar.Message = state.NoticeText ?? string.Empty;
         ProfileAiCleanupActionButton.Content = state.ActionText ?? ProfileRules.AiCleanupAction;
         ProfileOrderHint.Visibility = state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+        ProfileCompactAiCleanupInfoBar.Message = state.NoticeText ?? string.Empty;
+        ProfileCompactAiCleanupActionButton.Content = state.ActionText ?? ProfileRules.AiCleanupAction;
         RefreshProfileCommands();
+        UpdateProfileLayout();
     }
 
     private void ProfileAiCleanupButton_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage.AiCleanup);
+
+    private void UpdateProfileLayout()
+    {
+        if (ProfileBodyGrid.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        var compact = ProfileLayoutPlanner.UseCompact(new ProfileLayoutInput(
+            ProfileBodyGrid.ActualHeight,
+            TextScaleService.CurrentFactor,
+            ProfileAiCleanupNotice.Visibility == Visibility.Visible ? Math.Max(ProfileAiCleanupNotice.ActualHeight, 80) : 0,
+            ProfileOrderHint.Visibility == Visibility.Visible ? Math.Max(ProfileOrderHint.ActualHeight, 28) : 0,
+            Math.Max(ProfileToolbar.ActualHeight, 48)));
+
+        var state = ProfileRules.Describe(AiCleanupCheck.IsChecked == true, _profileRows.Count);
+        ProfileAiCleanupNotice.Visibility = !compact && state.ShowAiCleanupNotice ? Visibility.Visible : Visibility.Collapsed;
+        ProfileOrderHint.Visibility = !compact && state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+        ProfileCompactAiCleanupNotice.Visibility = compact && state.ShowAiCleanupNotice ? Visibility.Visible : Visibility.Collapsed;
+        ProfileCompactOrderHint.Visibility = compact && state.ShowFirstMatchHint ? Visibility.Visible : Visibility.Collapsed;
+
+        ProfileMainGrid.ColumnDefinitions[0].Width = new GridLength(270);
+        ProfileListCard.Margin = new Thickness(0, 0, 10, 0);
+        Grid.SetColumn(ProfileEditorCard, 1);
+        Grid.SetRow(ProfileEditorCard, 0);
+        ProfileMainGrid.RowDefinitions.Clear();
+    }
 
     /// <summary>Builds the profile list to persist. The order is the ListBox order: first match wins.</summary>
     private List<AppProfile> BuildProfiles() =>
@@ -396,27 +428,16 @@ public partial class SettingsWindow
                 r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
 
     private void MarkProfileRowsSaved()
-
     {
-
         foreach (var row in _profileRows)
-
         {
-
             row.Origin = DraftRowOrigin.Saved;
-
             row.LoadedName = row.Name;
-
             row.LoadedProcesses = row.Processes;
-
             row.LoadedWritingStyle = row.WritingStyle;
-
             row.LoadedNewlineHandling = row.NewlineHandling;
-
             row.Touched = false;
-
         }
-
     }
 
 

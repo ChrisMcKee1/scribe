@@ -673,48 +673,37 @@
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
                                         <TextBlock x:Name="HotkeyTitle" Text="Dictation shortcut" Style="{StaticResource CardTitle}"/>
-                                        <Grid Margin="0,10,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" Width="200" IsReadOnly="True"
+                                        <WrapPanel x:Name="HotkeyControlsPanel" Margin="0,10,0,0">
+                                            <ui:TextBox x:Name="HotkeyBox" MinWidth="200" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="Choose Change, then press a key, two keys or a mouse button"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=HotkeyTitle}"/>
-                                            <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Change"
+                                            <ui:Button x:Name="CaptureButton" Content="Change"
                                                        Margin="8,0,0,0" MinWidth="72"
                                                        Click="CaptureButton_Click"/>
-                                            <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="210" Margin="8,0,0,0"
+                                            <ComboBox x:Name="ModeCombo" MinWidth="210" Margin="8,0,0,0"
                                                       SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Dictation shortcut, hold or toggle"/>
-                                        </Grid>
+                                        </WrapPanel>
                                         <TextBlock x:Name="HotkeyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Types your words with AI cleanup."/>
                                         <TextBlock x:Name="HotkeyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
                                         <TextBlock x:Name="DictationOnlyTitle" Text="Shortcut without AI cleanup" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                        <Grid Margin="0,10,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" Width="200" IsReadOnly="True"
+                                        <WrapPanel x:Name="DictationOnlyControlsPanel" Margin="0,10,0,0">
+                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" MinWidth="200" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
                                                         PlaceholderText="None"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=DictationOnlyTitle}"/>
-                                            <ui:Button Grid.Column="1" Content="Change" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button Content="Change" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyCaptureButton_Click"/>
-                                            <ui:Button x:Name="DictationOnlyClearButton" Grid.Column="2" Content="Remove" Margin="8,0,0,0" MinWidth="72"
+                                            <ui:Button x:Name="DictationOnlyClearButton" Content="Remove" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyClearButton_Click"/>
-                                            <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="210" Margin="8,0,0,0"
+                                            <ComboBox x:Name="DictationOnlyModeCombo" MinWidth="210" Margin="8,0,0,0"
                                                       SelectionChanged="ShortcutModeCombo_SelectionChanged"
                                                       VerticalContentAlignment="Center"
                                                       AutomationProperties.Name="Shortcut without AI cleanup, hold or toggle"/>
-                                        </Grid>
+                                        </WrapPanel>
                                         <TextBlock x:Name="DictationOnlyDescriptionText" Style="{StaticResource CardDescription}"
                                                    Text="Optional. Types exactly what Scribe hears, with your dictionary and snippets."/>
                                         <TextBlock x:Name="DictationOnlyCaveatText" Style="{StaticResource CardDescription}" Visibility="Collapsed"/>
@@ -997,7 +986,7 @@
                                                    Text="Typing works in almost every app and doesn't use your clipboard. Pasting is faster for long text: Scribe uses the clipboard for a moment and puts back what you had copied when it can. Some apps block pasting. Remote Desktop and virtual machine windows are always typed into, even with Paste the text chosen: a remote session reads the clipboard only when it pastes, which can be after Scribe has put back what you had copied."/>
                                         <!-- Left under the description at a fixed width wide enough for its longest item, like the
                                              speech model's, rather than across the whole card. -->
-                                        <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Left" MinWidth="240" MaxWidth="420"
+                                        <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Left" MinWidth="420"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=InjectionTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=InjectionDescription}"/>
                                     </StackPanel>
@@ -1007,7 +996,7 @@
                                         <TextBlock x:Name="NewlineTitle" Text="Line breaks" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="NewlineDescription" Style="{StaticResource CardDescription}"
                                                    Text="In command windows such as Terminal, a line break works like Enter and can send text early."/>
-                                        <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Left" MinWidth="240" MaxWidth="420"
+                                        <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Left" MinWidth="420"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=NewlineTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=NewlineDescription}"/>
                                     </StackPanel>
@@ -1430,7 +1419,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
+                        <StackPanel x:Name="ProfilesHeaderPanel" Grid.Row="0" Margin="2,8,0,14" MaxWidth="1000" HorizontalAlignment="Left">
                             <TextBlock x:Name="DictionaryPageTitle" Text="Dictionary" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Replace spoken words or phrases with the spelling you actually want. 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
@@ -1679,7 +1668,7 @@
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Say a phrase and Scribe types saved text instead, like your email address or a sign-off."/>
                         </StackPanel>
-                        <Grid Grid.Row="1">
+                        <Grid x:Name="ProfileBodyGrid" Grid.Row="1">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
@@ -1692,13 +1681,13 @@
                                 <ui:InfoBar x:Name="SnippetTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
                                 <ui:Button x:Name="SnippetTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
                             </Grid>
-                            <Grid Grid.Row="1">
+                            <Grid x:Name="ProfileMainGrid" Grid.Row="1">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="270"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
 
-                                <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
+                                <ui:Card x:Name="ProfileListCard" Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource PanelCard}">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="*"/>
@@ -1834,7 +1823,7 @@
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
                                         </ListBox>
-                                        <WrapPanel Grid.Row="1" Margin="0,8,0,0">
+                                        <WrapPanel x:Name="ProfileToolbar" Grid.Row="1" Margin="0,8,0,0">
                                             <ui:Button x:Name="ProfileAddButton" Content="Add" MinWidth="70" Margin="0,0,8,8" Click="ProfileAddButton_Click"/>
                                             <ui:Button x:Name="ProfileDeleteButton" Content="Delete..." MinWidth="78" Margin="0,0,8,8" Click="ProfileDeleteButton_Click"/>
                                             <ui:Button x:Name="ProfileMoveUpButton" Content="Move up" MinWidth="82" Margin="0,0,8,8" Click="ProfileMoveUpButton_Click"/>
@@ -1843,9 +1832,20 @@
                                     </Grid>
                                 </ui:Card>
 
-                                <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
+                                <ui:Card x:Name="ProfileEditorCard" Grid.Column="1" Padding="18,14" Style="{StaticResource EditorPanelCard}">
                                     <Grid>
                                         <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <StackPanel>
+                                            <Grid x:Name="ProfileCompactAiCleanupNotice" Visibility="Collapsed" Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <ui:InfoBar x:Name="ProfileCompactAiCleanupInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Informational" Title="AI cleanup is off"/>
+                                                <ui:Button x:Name="ProfileCompactAiCleanupActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="120" Content="Go to AI cleanup" Click="ProfileAiCleanupButton_Click"/>
+                                            </Grid>
+                                            <TextBlock x:Name="ProfileCompactOrderHint" Style="{StaticResource CardDescription}" Margin="0,0,0,12" Visibility="Collapsed"
+                                                       Text="When an app matches more than one profile, Scribe uses the one higher in the list."/>
                                             <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                                 <TextBlock x:Name="ProfileNameTitle" Text="Name" Style="{StaticResource CardTitle}"/>
                                                 <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
@@ -1944,6 +1944,7 @@
                                                 <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                           AutomationProperties.LabeledBy="{Binding ElementName=ProfileNewlineTitle}"
                                                           SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
+                                            </StackPanel>
                                             </StackPanel>
                                         </ScrollViewer>
                                         <StackPanel x:Name="ProfileEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
@@ -2391,8 +2392,8 @@
                                                Visibility="Collapsed"/>
 
                                     <StackPanel x:Name="UsageDataPanel">
-                                        <ui:Card Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
-                                            <UniformGrid Columns="6">
+                                        <ui:Card x:Name="UsageMetricsCard" Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
+                                            <UniformGrid x:Name="UsageMetricsGrid" Columns="6">
                                                 <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageDictationsText" Style="{StaticResource MetricValue}"/>
                                                     <TextBlock Text="dictations" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
