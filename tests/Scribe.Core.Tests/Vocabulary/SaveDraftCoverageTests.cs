@@ -31,7 +31,6 @@ public sealed class SaveDraftCoverageTests
         ["AiCleanupAzureSubscriptionName"] = Subscription,
         ["AiCleanupAzureSubscriptionTenantId"] = Subscription,
         ["Profiles"] = "BuildProfiles()",
-        ["EnabledDictionaryLibraryIds"] = "CollectEnabledLibraryIds()",
     };
 
     // Values the save stores that nothing edited during its wait can change, with the reason.
@@ -48,6 +47,8 @@ public sealed class SaveDraftCoverageTests
         ["HasCompletedFirstRun"] = "the first-run welcome's one-time flag, set by the welcome, never by an editor in Settings",
         ["HasRetiredSeedVocabulary"] = "startup migration bookkeeping (SeedVocabularyRetirement), never shown in Settings",
         ["HasResetFoundryDemotions"] = "startup migration bookkeeping (FoundryDemotionReset), never shown in Settings",
+        ["EnabledDictionaryLibraryIds"] =
+            "word pack switches are stored by the library payload; a settings-only Save keeps the stored projection",
     };
 
     private const string Subscription =
@@ -104,11 +105,12 @@ public sealed class SaveDraftCoverageTests
         var bundle = Regex.Match(save, @"_settingsRepository\.SaveBundle\((?<arguments>[^;]*)\);");
         Assert.True(bundle.Success, "SaveBundle's call was not found.");
         var arguments = Regex.Split(bundle.Groups["arguments"].Value, @",\s*(?![^()]*\))").Select(argument => argument.Trim()).ToList();
-        Assert.Equal(4, arguments.Count);
+        Assert.Equal(5, arguments.Count);
         Assert.Equal("_settings", arguments[0]);
         Assert.Equal("entries", arguments[1]);
         Assert.Equal("snippets", arguments[2]);
-        Assert.StartsWith("new ExternalIntents(", arguments[3], StringComparison.Ordinal);
+        Assert.Equal("intents", arguments[3]);
+        Assert.Equal("wordPackSave?.Payload", arguments[4]);
         Assert.Contains("_dictionaryLoad.HasChanges(DictionarySignature())", draft, StringComparison.Ordinal);
         Assert.Contains("RowEditInProgress(DictionaryGrid)", draft, StringComparison.Ordinal);
         Assert.Contains("_snippetLoad.HasChanges(SnippetSignature())", draft, StringComparison.Ordinal);

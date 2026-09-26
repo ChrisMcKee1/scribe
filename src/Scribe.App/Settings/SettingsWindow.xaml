@@ -1547,10 +1547,7 @@
                                 </Grid>
                             </TabItem>
                             <TabItem Header="Word packs">
-                                <!-- Interim until Phase 3b's Word packs editor replaces this tab: LegacyLibraryPageContainment
-                                     finds the subtitle as the title's next sibling and the tip in row 3, as it did on the old
-                                     Libraries page, and 3b deletes the containment with this markup (release gate 3). -->
-                                <Grid x:Name="SectionLibraries">
+                                <Grid x:Name="SectionWordPacks">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
@@ -1558,22 +1555,23 @@
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
-                            <TextBlock x:Name="LibrariesPageTitle" Text="Word packs" Style="{StaticResource CardTitle}"/>
-                            <TextBlock Style="{StaticResource PageSubtitle}" Text=""/>
+                            <TextBlock Text="Word packs" Style="{StaticResource CardTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win."/>
                         </StackPanel>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                             <ui:Button x:Name="LibraryImportButton" Content="Import a word pack..."
                                        Icon="{ui:SymbolIcon ArrowDownload24}"
                                        Margin="0,0,8,0" Click="LibraryImportButton_Click"
                                        ToolTip="Add a dictionary word pack from a CSV file."/>
-                            <ui:Button x:Name="LibraryExportButton" Content="Export CSV"
+                            <ui:Button x:Name="LibraryExportButton" Content="Export..."
                                        Icon="{ui:SymbolIcon ArrowUpload24}"
                                        Margin="0,0,8,0" Click="LibraryExportButton_Click"
                                        ToolTip="Save the selected word pack as a CSV file to back up or share."/>
-                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove"
+                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove..."
                                        Icon="{ui:SymbolIcon Delete24}"
                                        Click="LibraryRemoveButton_Click"
-                                       ToolTip="Remove the selected imported word pack. Built-in libraries can only be turned off."/>
+                                       ToolTip="Remove the selected imported word pack. Built-in word packs can only be turned off."/>
                         </StackPanel>
                         <Grid Grid.Row="2">
                             <Grid.ColumnDefinitions>
@@ -1619,8 +1617,7 @@
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellTemplate>
                                         </DataGridTemplateColumn>
-                                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
-                                        <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Words" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </ui:Card>
@@ -1642,8 +1639,8 @@
                                               Background="Transparent" BorderThickness="0"
                                               AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}">
                                         <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern}" Width="*"/>
-                                            <DataGridTextColumn Header="Written" Binding="{Binding Replacement}" Width="*"/>
+                                            <DataGridTextColumn Header="Scribe hears" Binding="{Binding Pattern}" Width="*"/>
+                                            <DataGridTextColumn Header="Scribe writes" Binding="{Binding Replacement}" Width="*"/>
                                         </DataGrid.Columns>
                                     </DataGrid>
                                     <TextBlock x:Name="LibraryDetailEmpty" Grid.Row="1"
@@ -1653,8 +1650,6 @@
                                 </Grid>
                             </ui:Card>
                         </Grid>
-                        <TextBlock Grid.Row="3" Style="{StaticResource CardDescription}" Margin="0,8,0,0"/>
-
                                 </Grid>
                             </TabItem>
                         </TabControl>

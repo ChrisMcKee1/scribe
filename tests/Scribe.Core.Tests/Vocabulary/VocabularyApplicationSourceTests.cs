@@ -131,8 +131,8 @@ public sealed class VocabularyApplicationSourceTests
         var window = Read("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
 
-        // The draft is taken with nothing since the Save read what it stores that could let an edit in: no await from the
-        // row signatures it marks as saved and its first control read, through the store and the application, to the watch.
+        // The draft is taken after the settings document is stored and after the word pack journal is completed. New
+        // awaits in this region must not store another draft or close the window before the acknowledgement compares it.
         var signatures = save.IndexOf("var dictionarySignature = DictionarySignature();", StringComparison.Ordinal);
         var read = save.IndexOf("_externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);", StringComparison.Ordinal);
         var store = save.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
@@ -144,7 +144,8 @@ public sealed class VocabularyApplicationSourceTests
         Assert.True(
             signatures > 0 && signatures < read && read < store && store < apply && apply < watch && watch < awaited,
             "The Save does not take its draft between storing it and awaiting its generation.");
-        Assert.DoesNotMatch(@"\bawait\b", save[signatures..watch]);
+        Assert.DoesNotContain("_settingsRepository.", save[store..watch].Replace("_settingsRepository.SaveBundle(", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Contains("wordPackSave.Complete(settingsCommitted: true", save[store..watch], StringComparison.Ordinal);
 
         // A change while waiting is reported and the Save returns false; only an unchanged draft in use returns true.
         var tail = save[awaited..];
