@@ -119,7 +119,6 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
 
     private static bool Same(string? left, string? right) =>
         string.Equals(left, right, StringComparison.Ordinal);
-
 }
 
 public sealed class RemoteActivityAuthorization

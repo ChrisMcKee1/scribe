@@ -156,5 +156,4 @@ public sealed class UserFacingErrorTests
 
         Assert.Equal(expected, TryDictationSummary.ToneFor(input));
     }
-
 }

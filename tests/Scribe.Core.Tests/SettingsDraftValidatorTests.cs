@@ -398,44 +398,24 @@ public sealed class SettingsDraftValidatorTests
     }
 
     [Fact]
-
     public void Profile_baseline_after_repair_makes_removing_the_last_app_block()
-
     {
-
         var repaired = new ProfileDraftRow(
-
             "profile",
-
             DraftRowOrigin.Saved,
-
             Touched: false,
-
             Name: "Email",
-
             Apps: "OUTLOOK",
-
             LoadedName: "Email",
-
             LoadedApps: "OUTLOOK");
-
         Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(AppSettings.CreateDefault(), ProfileRows: [repaired])));
 
-
-
         var removedAgain = repaired with { Touched = true, Apps = "" };
-
         var issue = Single(new SettingsDraft(AppSettings.CreateDefault(), ProfileRows: [removedAgain]));
 
-
-
         Assert.Equal(ValidationCode.ProfileAppsEmpty, issue.Code);
-
         Assert.Equal(ValidationSeverity.Blocking, issue.Severity);
-
     }
-
-
 
     [Fact]
     public void A_style_or_line_break_change_makes_a_saved_invalid_profile_block()
