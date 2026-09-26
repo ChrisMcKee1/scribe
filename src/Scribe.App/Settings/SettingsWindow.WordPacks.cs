@@ -53,6 +53,7 @@ public partial class SettingsWindow
     private string? _noticeLibraryId;
     private string? _activeLoadNoticeKey;
     private readonly WordPackSaveProtocol _wordPackSaveProtocol;
+
     private void TryRunWordPackAccelerator(KeyEventArgs e)
     {
         if (e.Handled)
@@ -60,10 +61,15 @@ public partial class SettingsWindow
             return;
         }
 
-        if (DictionaryTabs.SelectedItem == WordPacksTab &&
-            Keyboard.Modifiers == ModifierKeys.Alt &&
+        // Find and Add work on both Dictionary tabs, each in its own list; a new word pack and Back to word packs only on
+        // the Word packs tab. The tab stays selected while another page shows, so the page counts too.
+        var onDictionary = SectionDictionary.Visibility == Visibility.Visible;
+        var onWordPacks = onDictionary && DictionaryTabs.SelectedItem == WordPacksTab;
+        if (Keyboard.Modifiers == ModifierKeys.Alt &&
             (e.Key == Key.Left || e.SystemKey == Key.Left) &&
-            _wordPackLayout?.SideBySide == false)
+            _wordPackLayout?.SideBySide == false &&
+            _wordPackStackedCardOpen &&
+            SettingsCloseGuard.CanRunAccelerator(SettingsAccelerator.BackToWordPacks, new AcceleratorState(_capturing, _imeComposing, onWordPacks)))
         {
             e.Handled = true;
             ShowWordPackListPage();
@@ -80,9 +86,6 @@ public partial class SettingsWindow
             return;
         }
 
-        // Find and Add work on both Dictionary tabs, each in its own list; a new word pack only on the Word packs tab.
-        var onDictionary = SectionDictionary.Visibility == Visibility.Visible;
-        var onWordPacks = onDictionary && DictionaryTabs.SelectedItem == WordPacksTab;
         if (!SettingsCloseGuard.CanRunAccelerator(accelerator.Value, new AcceleratorState(_capturing, _imeComposing, onDictionary)) ||
             (accelerator.Value == SettingsAccelerator.NewLibrary && !onWordPacks))
         {
@@ -111,6 +114,7 @@ public partial class SettingsWindow
                 break;
         }
     }
+
     // --- Word packs -----------------------------------------------------------------------
 
     private void InitializeLibraryGrid()

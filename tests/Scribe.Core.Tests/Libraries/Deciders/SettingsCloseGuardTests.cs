@@ -111,5 +111,6 @@ public sealed class SettingsCloseGuardTests
         Assert.False(SettingsCloseGuard.CanRunAccelerator(SettingsAccelerator.Find, elsewhere));
         Assert.False(SettingsCloseGuard.CanRunAccelerator(SettingsAccelerator.AddTerm, elsewhere));
         Assert.False(SettingsCloseGuard.CanRunAccelerator(SettingsAccelerator.NewLibrary, elsewhere));
+        Assert.False(SettingsCloseGuard.CanRunAccelerator(SettingsAccelerator.BackToWordPacks, elsewhere));
     }
 }

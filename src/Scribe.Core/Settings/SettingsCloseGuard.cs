@@ -117,6 +117,9 @@ public enum SettingsAccelerator
 
     /// <summary>Ctrl+Shift+N, New word pack, on the Word packs tab.</summary>
     NewLibrary,
+
+    /// <summary>Alt+Left, Back to word packs, on the Word packs tab while a stacked card covers the list.</summary>
+    BackToWordPacks,
 }
 
 /// <summary>What the window knows when an accelerator is pressed.</summary>

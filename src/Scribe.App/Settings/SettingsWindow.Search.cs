@@ -124,6 +124,13 @@ public partial class SettingsWindow
     // Escape order and the close guard.
     private bool TryConsumeSettingsSearchEscape()
     {
+        // A hotkey capture owns every key and an IME composition owns Escape, wherever the focus is: both go on to the
+        // window's Escape order, which cancels the capture or leaves the key to the IME.
+        if (_capturing || _imeComposing)
+        {
+            return false;
+        }
+
         var focused = Keyboard.FocusedElement as DependencyObject;
         if (!IsWithin(SettingsSearchBox, focused) && !IsWithin(_settingsSearchSuggestionsList, focused))
         {
