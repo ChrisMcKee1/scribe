@@ -89,20 +89,30 @@ public enum FailureStage
     AudioCapture,
     VoiceActivityDetection,
     SpeechRecognition,
+    AiCleanup,
     DictionaryAndSnippets,
     TextInsertion,
+}
+
+public enum TryDictationSummaryTone
+{
+    Success,
+    Information,
+    Caution,
+    Critical,
 }
 
 public sealed record TryDictationSummaryInput(
     bool Success,
     double ProcessingSeconds = 0,
     bool AiCleanupEnabled = false,
-    string? Model = null,
-    string? Where = null,
+    string? CleanupPhrase = null,
     bool CleanupFailed = false,
+    bool CleanupNotReady = false,
     bool NoSpeech = false,
     bool MicrophoneProblem = false,
-    FailureStage? StoppedAt = null);
+    FailureStage? StoppedAt = null,
+    string? Reason = null);
 
 public static class TryDictationSummary
 {
@@ -111,6 +121,9 @@ public static class TryDictationSummary
 
     public const string MicrophoneProblemMessage =
         "Scribe couldn't record from your microphone. Check your microphone on the Dictation page, then try again.";
+
+    public const string CleanupNotReadyFallback = "Open AI cleanup to check it.";
+    public const string EmptyTextReason = "Post-processing produced empty text.";
 
     public static string Describe(TryDictationSummaryInput input)
     {
@@ -121,17 +134,27 @@ public static class TryDictationSummary
 
         if (input.MicrophoneProblem)
         {
-            return MicrophoneProblemMessage;
+            return string.IsNullOrWhiteSpace(input.Reason)
+                ? MicrophoneProblemMessage
+                : $"Scribe couldn't record from your microphone. {input.Reason}";
         }
 
         if (input.StoppedAt is { } stage)
         {
-            return $"Stopped at {StageName(stage)}. {StageAdvice(stage)}";
+            return $"Stopped at {StageName(stage)}. {ReasonForStoppedStage(stage, input.Reason)}";
         }
 
         if (input.CleanupFailed)
         {
-            return "Done. AI cleanup didn't finish, so Scribe typed what it heard. Try again, or turn AI cleanup off.";
+            return string.IsNullOrWhiteSpace(input.Reason)
+                ? "Done. AI cleanup didn't finish, so Scribe typed what it heard. Try again, or turn AI cleanup off."
+                : $"Done. AI cleanup didn't finish, so Scribe typed what it heard. {input.Reason}";
+        }
+
+        if (input.CleanupNotReady)
+        {
+            var reason = string.IsNullOrWhiteSpace(input.Reason) ? CleanupNotReadyFallback : input.Reason.Trim();
+            return $"Done. AI cleanup wasn't ready, so Scribe typed what it heard. {reason}";
         }
 
         if (!input.Success)
@@ -141,27 +164,54 @@ public static class TryDictationSummary
 
         var seconds = input.ProcessingSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
         return input.AiCleanupEnabled
-            ? $"Done. Processing took {seconds} seconds. AI cleanup: on, {input.Model} {input.Where}."
+            ? $"Done. Processing took {seconds} seconds. {input.CleanupPhrase}"
             : $"Done. Processing took {seconds} seconds. AI cleanup: off.";
+    }
+
+    public static TryDictationSummaryTone ToneFor(TryDictationSummaryInput input)
+    {
+        if (input.MicrophoneProblem || input.StoppedAt is not null)
+        {
+            return TryDictationSummaryTone.Critical;
+        }
+
+        if (input.CleanupFailed || input.CleanupNotReady)
+        {
+            return TryDictationSummaryTone.Caution;
+        }
+
+        return input.NoSpeech ? TryDictationSummaryTone.Information : TryDictationSummaryTone.Success;
     }
 
     public static string StageName(FailureStage stage) => stage switch
     {
-        FailureStage.AudioCapture => "Audio capture",
-        FailureStage.VoiceActivityDetection => "Voice activity detection",
+        FailureStage.AudioCapture => "Recording",
+        FailureStage.VoiceActivityDetection => "Trimming silence",
         FailureStage.SpeechRecognition => "Speech recognition",
+        FailureStage.AiCleanup => "AI cleanup",
         FailureStage.DictionaryAndSnippets => "Dictionary and snippets",
-        FailureStage.TextInsertion => "Text insertion",
+        FailureStage.TextInsertion => "Typing",
         _ => throw new ArgumentOutOfRangeException(nameof(stage), stage, null),
     };
+
+    public static string ReasonForStoppedStage(FailureStage stage, string? reason)
+    {
+        if (string.Equals(reason, EmptyTextReason, StringComparison.Ordinal))
+        {
+            return "Your dictionary or snippets removed all of the text, so there was nothing to type.";
+        }
+
+        return StageAdvice(stage);
+    }
 
     private static string StageAdvice(FailureStage stage) => stage switch
     {
         FailureStage.AudioCapture => "Check your microphone on the Dictation page, then try again.",
-        FailureStage.VoiceActivityDetection => "Scribe could not finish trimming silence. Try again.",
-        FailureStage.SpeechRecognition => "Scribe could not turn the recording into text. Try again.",
-        FailureStage.DictionaryAndSnippets => "Scribe could not apply your dictionary and snippets. Try again.",
-        FailureStage.TextInsertion => "Scribe could not type into the app. Copy the recovery text from the tray.",
+        FailureStage.VoiceActivityDetection => "Scribe couldn't finish trimming silence. Try again.",
+        FailureStage.SpeechRecognition => "Scribe couldn't turn the recording into text. Try again.",
+        FailureStage.AiCleanup => "Scribe couldn't finish AI cleanup. Try again, or turn AI cleanup off.",
+        FailureStage.DictionaryAndSnippets => "Scribe couldn't apply your dictionary and snippets. Try again.",
+        FailureStage.TextInsertion => "Scribe couldn't type the text. Click in the box, then try again.",
         _ => throw new ArgumentOutOfRangeException(nameof(stage), stage, null),
     };
 }

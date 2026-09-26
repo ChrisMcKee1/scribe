@@ -1,5 +1,7 @@
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
+using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Xunit;
 
@@ -313,6 +315,552 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(InjectionMethod.ClipboardPaste, true, "Pasted, then a space")]
     public void Injection_method_labels_hide_internal_codes(InjectionMethod method, bool space, string expected) =>
         Assert.Equal(expected, InjectionMethodLabel.Describe(method, space));
+
+    [Fact]
+    public void Try_dictation_processing_time_excludes_recording()
+    {
+        var elapsed = TryDictationTiming.ProcessingDuration(
+            TimeSpan.FromMilliseconds(12),
+            TimeSpan.FromMilliseconds(240),
+            TimeSpan.FromMilliseconds(820),
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(35));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1108), elapsed);
+        Assert.Equal("13 times faster than real time", TryDictationTiming.SpeedLabel(0.08));
+    }
+
+    [Fact]
+    public void Try_dictation_change_lines_use_plain_sources()
+    {
+        var lines = TryDictationChangeList.Describe([
+            new TextReplacement(0, 4, "dot net", ".NET", TextReplacementKind.Dictionary),
+            new TextReplacement(5, 4, "sig", "Best regards", TextReplacementKind.Snippet),
+        ], aiCleanupChanged: true);
+
+        Assert.Equal([
+            "\"dot net\" became \".NET\" (your dictionary or a word pack)",
+            "\"sig\" became \"Best regards\" (snippet)",
+            "AI cleanup rewrote the text.",
+        ], lines);
+    }
+
+    [Fact]
+    public void Try_dictation_result_view_hides_empty_sections_for_failures()
+    {
+        var noSpeech = TryDictationResultView.For(new TryDictationResultViewInput(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.NoSpeechRecognized,
+            null,
+            null,
+            0,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.False(noSpeech.ShowHeard);
+        Assert.False(noSpeech.ShowTyped);
+        Assert.False(noSpeech.ShowChanges);
+        Assert.True(noSpeech.ShowTimingDetails);
+        Assert.Equal(TryDictationSummaryTone.Information, TryDictationSummary.ToneFor(noSpeech.Summary));
+
+        var microphone = TryDictationResultView.For(new TryDictationResultViewInput(
+            TryDictationReportClassifier.StageAudioCapture,
+            "The microphone produced no audio.",
+            null,
+            null,
+            0,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.False(microphone.ShowHeard);
+        Assert.Equal(TryDictationSummaryAction.OpenSoundSettings, microphone.Action);
+
+        var typing = TryDictationResultView.For(new TryDictationResultViewInput(
+            TryDictationReportClassifier.StageTextInsertion,
+            "Text could not be inserted.",
+            "hello",
+            false,
+            0.4,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.True(typing.ShowHeard);
+        Assert.False(typing.ShowTyped);
+        Assert.False(typing.ShowChanges);
+        Assert.Equal(FailureStage.TextInsertion, typing.Summary.StoppedAt);
+    }
+
+    [Fact]
+    public void Try_dictation_result_view_shows_all_sections_for_success_and_cleanup_cautions()
+    {
+        var success = TryDictationResultView.For(new TryDictationResultViewInput(
+            null,
+            null,
+            "raw",
+            true,
+            1.1,
+            true,
+            "AI cleanup: on, Qwen3 on this PC."));
+        Assert.True(success.Summary.Success);
+        Assert.True(success.ShowHeard);
+        Assert.True(success.ShowTyped);
+        Assert.True(success.ShowChanges);
+
+        var notReady = TryDictationResultView.For(new TryDictationResultViewInput(
+            null,
+            null,
+            "raw",
+            true,
+            1.1,
+            true,
+            "AI cleanup: on, Qwen3 on this PC.",
+            CleanupNotReady: true));
+        Assert.True(notReady.ShowTyped);
+        Assert.True(notReady.Summary.CleanupNotReady);
+        Assert.Equal(TryDictationSummaryAction.OpenAiCleanup, notReady.Action);
+    }
+
+    [Fact]
+    public void Try_dictation_report_classifier_matches_exact_controller_text()
+    {
+        Assert.True(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageVoiceActivityDetection,
+            TryDictationReportClassifier.NoSpeechDetected));
+        Assert.True(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.NoSpeechRecognized));
+        Assert.False(TryDictationReportClassifier.IsNoSpeech(
+            TryDictationReportClassifier.StageSpeechRecognition,
+            "The speech recognizer crashed."));
+        Assert.Equal(FailureStage.TextInsertion, TryDictationReportClassifier.StageFrom(TryDictationReportClassifier.StageTextInsertion));
+        Assert.True(TryDictationReportClassifier.IsMicrophoneProblem(TryDictationReportClassifier.StageAudioCapture));
+    }
+
+    [Fact]
+    public void Try_dictation_timing_details_use_plain_words()
+    {
+        Assert.Equal("Off in settings", TryDictationTimingDetail.Cleanup(null, enabled: false));
+        Assert.Equal("Didn't finish", TryDictationTimingDetail.Cleanup(new CleanupResult("raw", CleanupOutcome.Failed), enabled: true));
+        Assert.Equal("Not ready", TryDictationTimingDetail.Cleanup(CleanupResult.Skip("raw", "Still loading"), enabled: true));
+        Assert.Equal("Skipped", TryDictationTimingDetail.Cleanup(CleanupResult.Skip("raw"), enabled: true));
+        Assert.Equal("No changes", TryDictationTimingDetail.ChangeCount(0));
+        Assert.Equal("1 change", TryDictationTimingDetail.ChangeCount(1));
+        Assert.Equal("2 changes", TryDictationTimingDetail.ChangeCount(2));
+    }
+
+    [Fact]
+    public void Dictation_controller_pipeline_stage_strings_stay_in_sync_with_try_dictation_classifier()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Dictation", "DictationController.cs"));
+        var calls = ExtractReportFailCalls(source);
+
+        // The two no-speech reports, each exactly once, with the classifier's own texts.
+        Assert.Single(calls, call =>
+            call.StageLiteral == TryDictationReportClassifier.StageVoiceActivityDetection &&
+            call.ReasonLiteral == TryDictationReportClassifier.NoSpeechDetected);
+        Assert.Single(calls, call =>
+            call.StageLiteral == TryDictationReportClassifier.StageSpeechRecognition &&
+            call.ReasonLiteral == TryDictationReportClassifier.NoSpeechRecognized);
+
+        // Every stage the controller can report, literally or through currentStage on its exception path, is one the
+        // classifier names, so no failure falls through to the page's empty state; and the classifier names no stage
+        // the controller never reports.
+        var stages = calls.Where(call => call.StageLiteral is not null).Select(call => call.StageLiteral!)
+            .Concat(ExtractCurrentStageAssignments(source))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        Assert.All(stages, stage => Assert.NotNull(TryDictationReportClassifier.StageFrom(stage)));
+        Assert.DoesNotContain(null, ReadCurrentStageAssignments(source));
+        string[] classified =
+        [
+            TryDictationReportClassifier.StageAudioCapture,
+            TryDictationReportClassifier.StageVoiceActivityDetection,
+            TryDictationReportClassifier.StageSpeechRecognition,
+            TryDictationReportClassifier.StageAiCleanup,
+            TryDictationReportClassifier.StageDictionaryAndSnippets,
+            TryDictationReportClassifier.StageTextInsertion,
+        ];
+        Assert.Equal(classified.OrderBy(s => s, StringComparer.Ordinal), stages.OrderBy(s => s, StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("// report.Fail(\"Voice activity detection\", \"No speech was detected.\");")]
+    [InlineData("/* report.Fail(\"Voice activity detection\", \"No speech was detected.\"); */")]
+    [InlineData("var text = \"\"\"report.Fail(\"Voice activity detection\", \"No speech was detected.\");\"\"\";")]
+    [InlineData("var text = @\"report.Fail(\"\"Voice activity detection\"\", \"\"No speech was detected.\"\");\";")]
+    [InlineData("var text = $\"{\"report.Fail(\"} and {\"x\"}\";")]
+    [InlineData("var quote = '\"'; var text = \"report.Fail(\";")]
+    public void Report_fail_scan_finds_no_call_in_comments_or_strings(string source)
+    {
+        Assert.Empty(ExtractReportFailCalls(source));
+        Assert.Empty(ExtractCurrentStageAssignments(source.Replace("report.Fail(", "currentStage = ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Report_fail_scan_never_takes_an_interpolated_string_for_an_exact_text()
+    {
+        var calls = ExtractReportFailCalls("report.Fail(\"Speech recognition\", $\"No speech was recognized.{1}\");");
+        var call = Assert.Single(calls);
+        Assert.Equal(TryDictationReportClassifier.StageSpeechRecognition, call.StageLiteral);
+        Assert.Null(call.ReasonLiteral);
+
+        Assert.Null(Assert.Single(ExtractReportFailCalls("report.Fail($\"Speech recognition\", \"x\");")).StageLiteral);
+        Assert.Equal([null], ReadCurrentStageAssignments("currentStage = $\"Speech recognition{1}\";"));
+        Assert.Equal([null], ReadCurrentStageAssignments("currentStage = StageFor(step);"));
+        Assert.Empty(ExtractCurrentStageAssignments("currentStage = $\"Speech recognition{1}\";"));
+    }
+
+    [Fact]
+    public void Report_fail_scan_bounds_each_call_and_reads_stage_assignments()
+    {
+        const string source = """
+            report.Fail("Text insertion", injection.Error ?? "Text could not be inserted.");
+            report.Fail(stage, "The capture contained only silence.");
+            if (currentStage == "Audio capture") { currentStage = "Decode"; }
+            """;
+
+        var calls = ExtractReportFailCalls(source);
+
+        Assert.Equal(2, calls.Count);
+        Assert.Equal("Text insertion", calls[0].StageLiteral);
+        Assert.Null(calls[0].ReasonLiteral);
+        Assert.Null(calls[1].StageLiteral);
+        Assert.Equal("The capture contained only silence.", calls[1].ReasonLiteral);
+        Assert.Equal(["Decode"], ExtractCurrentStageAssignments(source));
+        Assert.Null(TryDictationReportClassifier.StageFrom("Decode"));
+    }
+
+    [Fact]
+    public void Settings_window_tracks_committed_settings_for_try_dictation()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var tryDictation = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs"));
+
+        Assert.Contains("_committedSettings = _settings.Clone();", source, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(source, "_committedSettings = _settings.Clone();"));
+        Assert.Contains("SettingsChangeTracker.Compare(_committedSettings, TryDictationDraft()", tryDictation, StringComparison.Ordinal);
+        Assert.Contains("_committedSettings.AiCleanupProvider", tryDictation, StringComparison.Ordinal);
+
+        // A tray change confirmed as stored moves the baseline; the optimistic word of it, which may still fail, doesn't.
+        Assert.Equal(1, CountOccurrences(source, "_committedSettings = stored.Clone();"));
+        var app = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "App.xaml.cs"));
+        Assert.Equal(2, CountOccurrences(app, "_settingsWindow?.AdoptStoredSettings(stored);"));
+    }
+
+    [Fact]
+    public void Try_dictation_draft_keeps_multiline_writing_style_clean()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.AiCleanupWritingStyle = "First rule.\r\nSecond rule.";
+        var draft = saved.Clone();
+        draft.AiCleanupWritingStyle = "First rule.\r\nSecond rule.";
+
+        Assert.False(SettingsChangeTracker.Compare(saved, draft).IsDirty);
+    }
+
+    private sealed record FailCall(string? StageLiteral, string? ReasonLiteral);
+
+    private sealed record SourceToken(string Text, bool IsString, bool IsPlainLiteral = false);
+
+    // The controller's report.Fail calls as the compiler sees them: each call's arguments bounded by its own parentheses,
+    // and an argument that is exactly one string literal read as that literal, any other expression as null.
+    private static IReadOnlyList<FailCall> ExtractReportFailCalls(string source)
+    {
+        var tokens = Tokenize(source);
+        var calls = new List<FailCall>();
+        for (var t = 0; t + 3 < tokens.Count; t++)
+        {
+            if (!IsCode(tokens[t], "report") || !IsCode(tokens[t + 1], ".") || !IsCode(tokens[t + 2], "Fail") ||
+                !IsCode(tokens[t + 3], "("))
+            {
+                continue;
+            }
+
+            var arguments = new List<List<SourceToken>> { new() };
+            var depth = 0;
+            var u = t + 4;
+            for (; u < tokens.Count; u++)
+            {
+                var token = tokens[u];
+                if (IsCode(token, ")") && depth == 0)
+                {
+                    break;
+                }
+
+                if (IsCode(token, ",") && depth == 0)
+                {
+                    arguments.Add([]);
+                    continue;
+                }
+
+                if (!token.IsString && token.Text is "(" or "[" or "{")
+                {
+                    depth++;
+                }
+                else if (!token.IsString && token.Text is ")" or "]" or "}")
+                {
+                    depth--;
+                }
+
+                arguments[^1].Add(token);
+            }
+
+            calls.Add(new FailCall(Literal(arguments, 0), Literal(arguments, 1)));
+            t = u;
+        }
+
+        return calls;
+    }
+
+    // Every literal assigned to currentStage, the stage the controller's exception path reports.
+    private static IReadOnlyList<string> ExtractCurrentStageAssignments(string source) =>
+        [.. ReadCurrentStageAssignments(source).Where(stage => stage is not null).Select(stage => stage!)];
+
+    // Every assignment to currentStage: its plain literal, or null for anything else (an interpolated string, a variable,
+    // a call), which the contract can't check and so rejects.
+    private static IReadOnlyList<string?> ReadCurrentStageAssignments(string source)
+    {
+        var tokens = Tokenize(source);
+        var stages = new List<string?>();
+        for (var t = 0; t + 2 < tokens.Count; t++)
+        {
+            if (!IsCode(tokens[t], "currentStage") || !IsCode(tokens[t + 1], "=") || IsCode(tokens[t + 2], "="))
+            {
+                continue;
+            }
+
+            var end = t + 2;
+            while (end < tokens.Count && !IsCode(tokens[end], ";"))
+            {
+                end++;
+            }
+
+            stages.Add(end == t + 3 && tokens[t + 2].IsPlainLiteral ? tokens[t + 2].Text : null);
+        }
+
+        return stages;
+    }
+
+    private static bool IsCode(SourceToken token, string text) =>
+        !token.IsString && string.Equals(token.Text, text, StringComparison.Ordinal);
+
+    private static string? Literal(List<List<SourceToken>> arguments, int index) =>
+        index < arguments.Count && arguments[index] is [{ IsPlainLiteral: true } only] ? only.Text : null;
+
+    // Enough of a C# lexer for these scans: comments are dropped, string literals of every form (regular, verbatim,
+    // interpolated, raw) and char literals are single tokens, never code, and everything else is an identifier or one
+    // punctuation character.
+    private static List<SourceToken> Tokenize(string source)
+    {
+        var tokens = new List<SourceToken>();
+        var i = 0;
+        while (i < source.Length)
+        {
+            var c = source[i];
+            if (char.IsWhiteSpace(c))
+            {
+                i++;
+            }
+            else if (c == '/' && i + 1 < source.Length && source[i + 1] == '/')
+            {
+                while (i < source.Length && source[i] is not ('\r' or '\n'))
+                {
+                    i++;
+                }
+            }
+            else if (c == '/' && i + 1 < source.Length && source[i + 1] == '*')
+            {
+                var end = source.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = end < 0 ? source.Length : end + 2;
+            }
+            else if (TryReadString(source, ref i, out var value, out var interpolated))
+            {
+                // An interpolated string's value is only known at run time, so it is never an exact text.
+                tokens.Add(new SourceToken(value, IsString: true, IsPlainLiteral: !interpolated));
+            }
+            else if (c == '\'')
+            {
+                i = SkipCharLiteral(source, i);
+                tokens.Add(new SourceToken("'", IsString: false));
+            }
+            else if (char.IsLetterOrDigit(c) || c == '_')
+            {
+                var start = i;
+                while (i < source.Length && (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
+                {
+                    i++;
+                }
+
+                tokens.Add(new SourceToken(source[start..i], IsString: false));
+            }
+            else
+            {
+                tokens.Add(new SourceToken(c.ToString(), IsString: false));
+                i++;
+            }
+        }
+
+        return tokens;
+    }
+
+    // Reads a string literal at i, of any form, and moves i past it. An interpolation hole's expression is skipped, so a
+    // string inside it never ends the outer one; only plain literals are compared, so the hole's text is not kept.
+    private static bool TryReadString(string source, ref int i, out string value, out bool interpolated)
+    {
+        var j = i;
+        var dollars = 0;
+        var verbatim = false;
+        while (j < source.Length && source[j] is '$' or '@')
+        {
+            dollars += source[j] == '$' ? 1 : 0;
+            verbatim |= source[j] == '@';
+            j++;
+        }
+
+        value = string.Empty;
+        interpolated = dollars > 0;
+        if (j >= source.Length || source[j] != '"')
+        {
+            return false;
+        }
+
+        var quotes = 0;
+        while (j + quotes < source.Length && source[j + quotes] == '"')
+        {
+            quotes++;
+        }
+
+        if (quotes >= 3)
+        {
+            var fence = new string('"', quotes);
+            var contentStart = j + quotes;
+            var end = source.IndexOf(fence, contentStart, StringComparison.Ordinal);
+            value = end < 0 ? source[contentStart..] : source[contentStart..end];
+            i = end < 0 ? source.Length : end + quotes;
+            return true;
+        }
+
+        if (quotes == 2)
+        {
+            i = j + 2;
+            return true;
+        }
+
+        var builder = new System.Text.StringBuilder();
+        var k = j + 1;
+        while (k < source.Length)
+        {
+            var ch = source[k];
+            if (dollars > 0 && ch == '{')
+            {
+                if (k + 1 < source.Length && source[k + 1] == '{')
+                {
+                    builder.Append('{');
+                    k += 2;
+                    continue;
+                }
+
+                k = SkipInterpolationHole(source, k + 1);
+                continue;
+            }
+
+            if (verbatim && ch == '"')
+            {
+                if (k + 1 < source.Length && source[k + 1] == '"')
+                {
+                    builder.Append('"');
+                    k += 2;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (!verbatim && ch == '\\' && k + 1 < source.Length)
+            {
+                builder.Append(source[k + 1]);
+                k += 2;
+                continue;
+            }
+
+            if (!verbatim && ch == '"')
+            {
+                break;
+            }
+
+            builder.Append(ch);
+            k++;
+        }
+
+        value = builder.ToString();
+        i = Math.Min(source.Length, k + 1);
+        return true;
+    }
+
+    private static int SkipInterpolationHole(string source, int k)
+    {
+        var depth = 1;
+        while (k < source.Length && depth > 0)
+        {
+            var ch = source[k];
+            if (ch == '{')
+            {
+                depth++;
+                k++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                k++;
+            }
+            else if (ch == '\'')
+            {
+                k = SkipCharLiteral(source, k);
+            }
+            else if (TryReadString(source, ref k, out _, out _))
+            {
+                // A string inside the hole is skipped whole, so its quotes never end the outer string.
+            }
+            else
+            {
+                k++;
+            }
+        }
+
+        return k;
+    }
+
+    private static int SkipCharLiteral(string source, int k)
+    {
+        k++;
+        while (k < source.Length && source[k] != '\'')
+        {
+            k += source[k] == '\\' ? 2 : 1;
+        }
+
+        return Math.Min(source.Length, k + 1);
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
+    private static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Scribe.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new InvalidOperationException("Could not find the repository root.");
+    }
 
     [Fact]
     public void Advanced_defaults_count_changed_settings_by_section_and_reset_only_advanced_fields()

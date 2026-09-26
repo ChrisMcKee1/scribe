@@ -90,6 +90,29 @@ public class CleanupActivationMessageTests
         Assert.Equal("AI cleanup is on. Scribe uses GitHub Copilot. Your text goes to GitHub.", CleanupActivationMessage.ForReady(options with { CopilotModel = null }));
     }
 
+    [Theory]
+    [InlineData("http://localhost:11434/v1", "AI cleanup: on, llama3 in Ollama.")]
+    [InlineData("http://localhost:1234/v1", "AI cleanup: on, llama3 in LM Studio.")]
+    [InlineData("http://localhost:8080/v1", "AI cleanup: on, llama3 on this PC.")]
+    [InlineData("https://openrouter.ai/api/v1", "AI cleanup: on, llama3 at openrouter.ai.")]
+    public void TryDictationPhrase_names_custom_endpoint_location(string endpoint, string expected)
+    {
+        Assert.Equal(expected, CleanupActivationMessage.TryDictationPhrase(Custom(endpoint, "llama3")));
+    }
+
+    [Fact]
+    public void TryDictationPhrase_names_all_provider_types()
+    {
+        Assert.Equal("AI cleanup: on, Qwen3 1.7B on this PC.", CleanupActivationMessage.TryDictationPhrase(Local("qwen3-1.7b")));
+        Assert.Equal("AI cleanup: on, gpt-5.6-terra in Microsoft Foundry.", CleanupActivationMessage.TryDictationPhrase(Azure("https://example.services.ai.azure.com", "gpt-5.6-terra")));
+
+        var copilot = new CleanupOptions(true, CleanupProvider.GitHubCopilot, "unused", null, null, CopilotModel: "gpt-5.4");
+        Assert.Equal("AI cleanup: on, GitHub Copilot with gpt-5.4.", CleanupActivationMessage.TryDictationPhrase(copilot));
+        Assert.Equal("AI cleanup: on, GitHub Copilot.", CleanupActivationMessage.TryDictationPhrase(copilot with { CopilotModel = null }));
+        Assert.Equal("AI cleanup: on, the selected model in Microsoft Foundry.", CleanupActivationMessage.TryDictationPhrase(Azure("https://example.services.ai.azure.com", null)));
+        Assert.Equal("AI cleanup: on, the selected model at openrouter.ai.", CleanupActivationMessage.TryDictationPhrase(Custom("https://openrouter.ai/api/v1", null)));
+    }
+
     [Fact]
     public void ForDisabled_announces_only_a_disabled_configuration()
     {

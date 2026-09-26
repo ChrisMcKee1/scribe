@@ -19,6 +19,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
@@ -87,8 +88,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
     private readonly ILogger<SettingsWindow> _log;
+    private readonly TranscriptionOptions _runningTranscription;
 
     private readonly AppSettings _settings;
+    private AppSettings _committedSettings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     // This build stores no library switch from this page (LegacyLibraryPageContainment): the rows are read-only, the
@@ -205,6 +208,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ITranscriptionModelInstaller transcriptionModelInstaller,
         AppPaths paths,
         StartupRegistration startup,
+        IOptions<TranscriptionOptions> runningTranscription,
         Action<OverlayPosition> previewOverlay,
         Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> applySettings,
         Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> reloadVocabulary,
@@ -226,6 +230,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _transcriptionModelInstaller = transcriptionModelInstaller;
         _paths = paths;
         _startup = startup;
+        _runningTranscription = runningTranscription.Value;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
@@ -236,6 +241,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _log = log;
 
         _settings = settingsRepository.Load();
+        _committedSettings = _settings.Clone();
         _savedAiProvider = _settings.AiCleanupProvider;
         _settingsRecovered = settingsRepository.LastLoadFailed;
         _libraryContainment = new LegacyLibraryPageContainment(_settings.EnabledDictionaryLibraryIds);
@@ -415,6 +421,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (showNow)
         {
             ShowExternalAiCleanup(enabled);
+        }
+    }
+
+    /// <summary>
+    /// Takes the settings as stored after a tray change the settings lane confirmed as the baseline Try dictation compares
+    /// with and describes, since they are what dictation now runs on. The lane never hands back a document older than one
+    /// this window saved and applied before (<see cref="SettingsWriteLane"/>), so this can't move the baseline back. The
+    /// optimistic word of a tray change (<see cref="AdoptExternalAiCleanup"/>, <see cref="AdoptExternalMicrophone"/>)
+    /// changes only the draft, because that change may still fail.
+    /// </summary>
+    public void AdoptStoredSettings(AppSettings stored)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        _committedSettings = stored.Clone();
+        try
+        {
+            UpdateTryDictationPage();
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not refresh Try dictation after a tray change was saved.");
         }
     }
 
@@ -703,172 +730,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        PlaygroundRecognizedText.Text = report.RawText ?? string.Empty;
-        var displayedText = report.FinalText ?? report.PostProcessing?.Text ??
-            report.CleanedText ?? report.RawText ?? string.Empty;
-        var displayedResult = report.PostProcessing is { } postProcessing &&
-            string.Equals(postProcessing.Text, displayedText, StringComparison.Ordinal)
-                ? postProcessing
-                : new TextPostProcessingResult(displayedText, []);
-        RenderPlaygroundResult(displayedResult);
-
-        PlaygroundCaptureDuration.Text = FormatDuration(report.CaptureDuration);
-        PlaygroundCaptureDetail.Text = DetailOrFailure(report, "Audio capture", "Audio recorded");
-
-        PlaygroundVadDuration.Text = report.VadEnabled ? FormatDuration(report.VadDuration) : "Skipped";
-        PlaygroundVadDetail.Text = report.VadEnabled
-            ? report.VadAvailable
-                ? DetailOrFailure(
-                    report,
-                    "Voice activity detection",
-                    $"Kept {report.SpeechDuration.TotalSeconds:N1} seconds of speech")
-                : "VAD model unavailable, audio passed through"
-            : "Off in settings";
-
-        PlaygroundDecodeDuration.Text = report.DecodeDuration > TimeSpan.Zero
-            ? FormatDuration(report.DecodeDuration)
-            : "Not run";
-        PlaygroundDecodeDetail.Text = report.RawText is not null
-            ? $"{report.RawText.Length} characters, RTF {report.RealTimeFactor:N2}"
-            : DetailOrFailure(report, "Speech recognition", "Not reached");
-
-        PlaygroundAiDuration.Text = report.CleanupEnabled
-            ? FormatDuration(report.CleanupDuration)
-            : "Skipped";
-        PlaygroundAiDetail.Text = report.Cleanup is { } cleanup
-            ? DescribeCleanup(cleanup, report.CleanupEnabled)
-            : DetailOrFailure(report, "AI cleanup", "Not reached");
-
-        PlaygroundPostDuration.Text = report.PostProcessingEnabled
-            ? FormatDuration(report.PostProcessingDuration)
-            : "Skipped";
-        PlaygroundPostDetail.Text = report.PostProcessing is { } processed
-            ? $"{processed.Replacements.Count} dictionary, library, or snippet replacement(s)"
-            : DetailOrFailure(report, "Dictionary and snippets", "Not reached");
-
-        PlaygroundInjectionDuration.Text = report.Injection is not null
-            ? FormatDuration(report.InjectionDuration)
-            : "Not run";
-        // The final text above is the dictation as history keeps it; a space added after it for the target is invisible
-        // at the end of that box, so this row says it was typed (the playground's own text box received it).
-        PlaygroundInjectionDetail.Text = report.Injection is { } injection
-            ? injection.Succeeded
-                ? report.SpaceAddedAfterText
-                    ? $"Inserted using {injection.Method}, followed by a space"
-                    : $"Inserted using {injection.Method}"
-                : $"Failed: {injection.Error}"
-            : DetailOrFailure(report, "Text insertion", "Not reached");
-
-        PlaygroundTotalDuration.Text = FormatDuration(report.TotalDuration);
-        PlaygroundTotalDetail.Text = report.FailureStage is null
-            ? "Full audio pipeline"
-            : $"Stopped at {report.FailureStage}: {report.FailureReason}";
+        RenderTryDictationReport(report);
     }
-
-    private static string DetailOrFailure(
-        DictationPipelineReport report,
-        string stage,
-        string detail) =>
-        string.Equals(report.FailureStage, stage, StringComparison.Ordinal)
-            ? $"Failed: {report.FailureReason}"
-            : detail;
-
-    private static string DescribeCleanup(CleanupResult cleanup, bool enabled)
-    {
-        if (!enabled)
-        {
-            return "Skipped, AI cleanup is off";
-        }
-
-        // The playground is on screen and local, so it shows the endpoint's own explanation when
-        // there is one; the diagnostics-safe reason is the fallback.
-        var failure = cleanup.DisplayDetail ?? cleanup.FailureReason;
-        return cleanup.Outcome switch
-        {
-            CleanupOutcome.Cleaned when cleanup.FailureReason is not null =>
-                $"Cleaned with a partial fallback: {failure}",
-            CleanupOutcome.Cleaned => "Cleaned",
-            CleanupOutcome.Unchanged => "Ran, no changes needed",
-            CleanupOutcome.Failed => $"Failed, raw text kept: {failure}",
-            _ => "Skipped, cleanup model is not ready",
-        };
-    }
-
-    private void RenderPlaygroundResult(TextPostProcessingResult result)
-    {
-        var paragraph = new Paragraph { Margin = new Thickness(0) };
-        var position = 0;
-        foreach (var replacement in result.Replacements)
-        {
-            AppendPlaygroundText(paragraph, result.Text[position..replacement.Start]);
-            var source = replacement.Kind == TextReplacementKind.Snippet
-                ? "Snippet"
-                : "Dictionary or library";
-            AppendPlaygroundText(
-                paragraph,
-                result.Text.Substring(replacement.Start, replacement.Length),
-                $"{source} matched '{replacement.Pattern}'");
-            position = replacement.Start + replacement.Length;
-        }
-
-        AppendPlaygroundText(paragraph, result.Text[position..]);
-        var document = new FlowDocument(paragraph)
-        {
-            PagePadding = new Thickness(0),
-            FontFamily = PlaygroundOutput.FontFamily,
-            FontSize = PlaygroundOutput.FontSize,
-            Foreground = PlaygroundOutput.Foreground,
-        };
-        PlaygroundOutput.Document = document;
-    }
-
-    private static void AppendPlaygroundText(
-        Paragraph paragraph,
-        string text,
-        string? highlightTooltip = null)
-    {
-        var start = 0;
-        for (var index = 0; index < text.Length; index++)
-        {
-            if (text[index] is not ('\r' or '\n'))
-            {
-                continue;
-            }
-
-            AppendRun(paragraph, text[start..index], highlightTooltip);
-            paragraph.Inlines.Add(new LineBreak());
-            if (text[index] == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
-            {
-                index++;
-            }
-
-            start = index + 1;
-        }
-
-        AppendRun(paragraph, text[start..], highlightTooltip);
-    }
-
-    private static void AppendRun(Paragraph paragraph, string text, string? highlightTooltip)
-    {
-        if (text.Length == 0)
-        {
-            return;
-        }
-
-        var run = new Run(text);
-        if (highlightTooltip is not null)
-        {
-            run.Background = new SolidColorBrush(Color.FromArgb(64, 0, 120, 212));
-            run.FontWeight = FontWeights.SemiBold;
-            run.TextDecorations = TextDecorations.Underline;
-            run.ToolTip = highlightTooltip;
-        }
-
-        paragraph.Inlines.Add(run);
-    }
-
-    private static string FormatDuration(TimeSpan elapsed) =>
-        elapsed.TotalMilliseconds < 1 ? "<1 ms" : $"{elapsed.TotalMilliseconds:N0} ms";
 
     // --- Navigation rail -------------------------------------------------------------------
 
@@ -911,6 +774,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         else if (page == SettingsPage.Usage)
         {
             LoadUsage();
+        }
+        else if (page == SettingsPage.TryDictation)
+        {
+            UpdateTryDictationPage();
         }
 
         if (!string.IsNullOrWhiteSpace(focusName) && FindName(focusName) is IInputElement target)
@@ -5652,6 +5519,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 entries,
                 snippets,
                 new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
+            _committedSettings = _settings.Clone();
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
