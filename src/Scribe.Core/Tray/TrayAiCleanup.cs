@@ -19,7 +19,7 @@ public static class TrayAiCleanup
 {
     /// <remarks>
     /// For Foundry Local, the caller supplies setupComplete from the model cache without initializing the SDK. An
-    /// uncached selected model beside another cached model is a known 0.4.5 limit: the tray may show the toggle, and the
+    /// uncached selected model beside another cached model is a known 0.5.0 limit: the tray may show the toggle, and the
     /// cleanup service still performs the real load or setup when the setting is used.
     /// </remarks>
     public static TrayAiCleanupItem Describe(AppSettings settings, bool setupComplete, CleanupStatus status, bool settingsRecovered)

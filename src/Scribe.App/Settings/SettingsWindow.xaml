@@ -95,6 +95,29 @@
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
+        <!-- Read-only text people can select and copy (History's selected dictation). WPF-UI's TextBox template draws an
+             underline that makes it look editable, so this template has only the content host; keyboard focus stays
+             visible through WPF-UI's focus visual. -->
+        <Style TargetType="TextBox" x:Key="SelectableText">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                      Focusable="False"
+                                      Background="{TemplateBinding Background}"
+                                      Padding="{TemplateBinding Padding}"
+                                      HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                      VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <!-- A check box row's box sits on the card's content edge, and the 28 DIP description indent (the box's 20 plus
              WPF-UI's 8 DIP content margin) lines up with the title; WPF-UI's default 11 DIP left padding offset both. -->
@@ -2278,13 +2301,11 @@
                                          Visibility="Collapsed">
                                     <StackPanel>
                                         <TextBox x:Name="HistoryDetailsText"
-                                                 IsReadOnly="True"
+                                                 Style="{StaticResource SelectableText}"
                                                  TextWrapping="Wrap"
                                                  AcceptsReturn="True"
                                                  MaxHeight="160"
                                                  VerticalScrollBarVisibility="Auto"
-                                                 BorderThickness="0"
-                                                 Background="Transparent"
                                                  AutomationProperties.Name="Selected dictation text"/>
                                         <TextBlock x:Name="HistoryDetailsTimingText"
                                                    Margin="0,10,0,0"
