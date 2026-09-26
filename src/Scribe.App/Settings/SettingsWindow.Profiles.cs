@@ -44,6 +44,7 @@ public partial class SettingsWindow
             });
         }
 
+        _loadedProfileRows = LoadedProfileDraftRowsFromRows();
         ProfileList.ItemsSource = _profileRows;
         AppPickerList.ItemsSource = _appPickerRows;
         RefreshProfileEmptyState();
@@ -433,7 +434,9 @@ public partial class SettingsWindow
             }
         }
 
-        _loadedProfileRows = LoadedProfileDraftRowsFromRows();
+        // The whole submission is what is stored now, a profile deleted while the Save waited included.
+        _loadedProfileRows = [.. submission.Select(submitted => new LoadedProfileDraftRow(
+            submitted.Row.RowKey, submitted.Name, submitted.Processes, submitted.WritingStyle, submitted.NewlineHandling))];
     }
 
     private IReadOnlyList<ProfileDraftRow> ProfileDraftRows() =>

@@ -587,13 +587,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var persisted = _dictionary.AddRange(candidates);
         foreach (var entry in persisted)
         {
-            _rows.Add(SavedDictionaryRow(entry));
+            var row = SavedDictionaryRow(entry);
+            _rows.Add(row);
+            AdvanceDictionaryBaseline(row);
         }
 
         if (!wasDirty)
         {
             _dictionaryLoad.MarkSaved(DictionarySignature());
-            _loadedDictionaryRows = LoadedDictionaryDraftRowsFromRows();
         }
 
         return persisted;
@@ -649,7 +650,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (row is null)
         {
             persisted = _dictionary.Add(entry with { Id = 0 });
-            _rows.Add(SavedDictionaryRow(persisted));
+            var added = SavedDictionaryRow(persisted);
+            _rows.Add(added);
+            AdvanceDictionaryBaseline(added);
         }
         else
         {
@@ -670,6 +673,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             row.Replacement = persisted.Replacement;
             row.WholeWord = persisted.WholeWord;
             row.Enabled = persisted.Enabled;
+            row.Origin = DraftRowOrigin.Saved;
+            row.LoadedPattern = persisted.Pattern;
+            row.LoadedReplacement = persisted.Replacement;
+            row.LoadedWholeWord = persisted.WholeWord;
+            row.LoadedEnabled = persisted.Enabled;
+            AdvanceDictionaryBaseline(row);
         }
 
         // A quick add must not turn an otherwise untouched window dirty and start prompting the
@@ -677,10 +686,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (!wasDirty)
         {
             _dictionaryLoad.MarkSaved(DictionarySignature());
-            _loadedDictionaryRows = LoadedDictionaryDraftRowsFromRows();
         }
 
         return persisted;
+    }
+
+    // A write that stored this row outside Save (quick add, learning from history) makes it part of what is saved, so its
+    // baseline entry is replaced by what was stored; every other row's baseline stays as it was, whatever else is unsaved.
+    private void AdvanceDictionaryBaseline(DictionaryRow row)
+    {
+        var stored = new LoadedDictionaryDraftRow(row.RowKey, row.LoadedPattern, row.LoadedReplacement, row.LoadedWholeWord, row.LoadedEnabled);
+        _loadedDictionaryRows = [.. _loadedDictionaryRows.Where(loaded => loaded.RowKey != row.RowKey), stored];
     }
 
     /// <summary>
@@ -5934,19 +5950,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ShowMicrophones(MicrophoneSelection.From(_settings));
             }
 
-            if (dictionarySignature is not null && entries is not null)
+            if (dictionarySignature is not null && entries is not null && dictionarySubmission is not null)
             {
                 _dictionaryLoad.MarkSaved(dictionarySignature);
-                MarkDictionaryRowsSaved(dictionarySubmission ?? []);
+                MarkDictionaryRowsSaved(dictionarySubmission);
             }
 
-            if (snippetSignature is not null && snippets is not null)
+            if (snippetSignature is not null && snippets is not null && snippetSubmission is not null)
             {
                 _snippetLoad.MarkSaved(snippetSignature);
-                MarkSnippetRowsSaved(snippetSubmission ?? []);
+                MarkSnippetRowsSaved(snippetSubmission);
             }
 
-            MarkProfileRowsSaved(profileSubmission ?? []);
+            if (profileSubmission is not null)
+            {
+                MarkProfileRowsSaved(profileSubmission);
+            }
 
             if (observedStartup is not null)
             {
@@ -6143,6 +6162,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // one, its stored value is kept and _settings takes it, so the window shows what is stored rather than a value
             // the settings no longer hold.
             var intents = preflight.Intents;
+
+            // The protocol captures the word pack draft when this call starts. An edit made while the Save waited above
+            // (for Start with Windows, or an earlier save to settle) isn't in what was validated, so this Save stops here
+            // with the edit kept, and the next Save includes it.
+            if (!ReferenceEquals(_wordPackWorkspace, preflight.Workspace) || _wordPackWorkspace?.EditRevision != preflight.WorkspaceRevision)
+            {
+                ShowInfo(WordPackDraftChangedBeforeSave);
+                return false;
+            }
+
             var result = await _wordPackSaveProtocol.SaveAsync(
                 BuildWordPackSaveRequest(entries, snippets, intents, dictionarySignature, snippetSignature, observedStartup, snippetSubmission: snippetSubmission, profileSubmission: profileSubmission, dictionarySubmission: preflight.DictionarySubmission, capturedDraft: preflight.DraftSignature, capturedSections: preflight.DraftCapture));
             if (_closed)
@@ -6347,7 +6376,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return entries;
     }
 
-
     private sealed record DictionarySubmission(DictionaryRow Row, string Pattern, string Replacement, bool WholeWord, bool Enabled);
 
     private void MarkDictionaryRowsSaved(IReadOnlyList<DictionarySubmission> submission)
@@ -6374,13 +6402,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
         }
 
-        _loadedDictionaryRows = LoadedDictionaryDraftRowsFromRows();
+        // What is stored now is the whole submission, rows deleted from the grid while the Save waited included, so the
+        // baseline is built from it and never from the rows still shown: a row deleted meanwhile stays an unsaved deletion.
+        _loadedDictionaryRows = [.. submission.Select(submitted => new LoadedDictionaryDraftRow(
+            submitted.Row.RowKey, submitted.Pattern, submitted.Replacement, submitted.WholeWord, submitted.Enabled))];
     }
 
+    // Start with Windows applies the moment its switch is flipped and stores its preference itself (StartupPreference), so a
+    // Save never takes it from a draft captured earlier: the live value stays, and Save reconciles it with what Windows says.
     private static void CopySettings(AppSettings source, AppSettings target)
     {
         var copy = source.Clone();
-        foreach (var property in typeof(AppSettings).GetProperties().Where(property => property.CanRead && property.CanWrite))
+        foreach (var property in typeof(AppSettings).GetProperties().Where(property =>
+            property.CanRead && property.CanWrite && property.Name != nameof(AppSettings.LaunchOnLogin)))
         {
             property.SetValue(target, property.GetValue(copy));
         }

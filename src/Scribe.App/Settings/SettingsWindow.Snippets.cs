@@ -74,6 +74,7 @@ public partial class SettingsWindow
             });
         }
 
+        _loadedSnippetRows = LoadedSnippetDraftRowsFromRows();
         _snippetLoad.Publish(ticket, SnippetSignature());
         SnippetEmptyActionButton.Content = "Add snippet";
         SnippetEmptyHint.Text = _snippetEmptyText;
@@ -309,7 +310,9 @@ public partial class SettingsWindow
             submitted.Row.LoadedEnabled = submitted.Enabled;
         }
 
-        _loadedSnippetRows = LoadedSnippetDraftRowsFromRows();
+        // The whole submission is what is stored now, a snippet deleted while the Save waited included.
+        _loadedSnippetRows = [.. submission.Select(submitted => new LoadedSnippetDraftRow(
+            submitted.Row.RowKey, submitted.Phrase, submitted.Template, submitted.Enabled))];
         RefreshSnippetEmptyState();
     }
 

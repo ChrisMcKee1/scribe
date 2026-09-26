@@ -27,10 +27,13 @@ public partial class SettingsWindow
             return;
         }
 
-        CommitPendingGridEdits();
+        CommitPendingEditorValues();
         RefreshFooterNow();
         var decision = ShouldAskBeforeClose(CloseTrigger.CloseButton);
-        if (!decision.Ask)
+
+        // A running Save can still commit what it captured, and a close already under way owns the decision, so both
+        // defer to RequestCloseAsync, which waits for the Save and decides again.
+        if (!decision.Ask && !_saveInProgress && _closeOperation is null)
         {
             _closeAccepted = true;
             base.OnClosing(e);
@@ -110,7 +113,7 @@ public partial class SettingsWindow
         var draftSections = BuildSaveDraftSections();
         var draftCapture = draftSections.CaptureNow();
         var draftSignature = SaveDraftSignature(draftSections, draftCapture);
-        var preflight = new SavePreflightInput(settings, entries, dictionarySubmission, snippets, snippetSubmission, profileSubmission, intents, dictionarySignature, snippetSignature, draftSignature, draftCapture);
+        var preflight = new SavePreflightInput(settings, entries, dictionarySubmission, snippets, snippetSubmission, profileSubmission, intents, dictionarySignature, snippetSignature, draftSignature, draftCapture, _wordPackWorkspace, _wordPackWorkspace?.EditRevision);
         if (!await ConfirmNewRemovalRulesAsync(dictionaryRows))
         {
             return null;
@@ -170,7 +173,7 @@ public partial class SettingsWindow
             }
         }
 
-        CommitPendingGridEdits();
+        CommitPendingEditorValues();
         RefreshFooterNow();
         var decision = ShouldAskBeforeClose(trigger);
         if (!decision.Ask)
@@ -456,14 +459,18 @@ public partial class SettingsWindow
             case ValidationCode.DictionarySpokenEmpty:
             case ValidationCode.DictionaryDuplicate:
                 DictionaryTabs.SelectedItem = YourWordsTab;
+                ShowValidation(DictionaryValidation, DictionaryValidationText, DictionaryValidationIcon, DictionaryGrid, issue.Message);
                 if (issue.RowKey is not null && _rows.FirstOrDefault(row => row.RowKey == issue.RowKey) is { } row)
                 {
                     DictionaryGrid.SelectedItem = row;
                     DictionaryGrid.ScrollIntoView(row);
+                    FocusDictionarySpokenCell(row);
+                }
+                else
+                {
+                    DictionaryGrid.Focus();
                 }
 
-                ShowValidation(DictionaryValidation, DictionaryValidationText, DictionaryValidationIcon, DictionaryGrid, issue.Message);
-                DictionaryGrid.Focus();
                 break;
             case ValidationCode.SnippetTriggerEmpty:
             case ValidationCode.SnippetTextEmpty:
@@ -558,8 +565,6 @@ public partial class SettingsWindow
         HideValidation(ShortcutValidation, ShortcutValidationText, DictationOnlyHotkeyBox);
     }
 
-
-
     private static DictionaryDraftRow ToDictionaryDraftRow(DictionaryRow row) => new(
         RowKey: row.RowKey,
         Origin: row.Origin,
@@ -605,6 +610,37 @@ public partial class SettingsWindow
         }
     }
 
+    // Puts keyboard focus in the row's Scribe hears editor, so the fix starts where the message points. Found by its binding
+    // rather than by name, since the tab's columns are built by another part of the window.
+    private void FocusDictionarySpokenCell(DictionaryRow row)
+    {
+        var column = DictionaryGrid.Columns
+            .OfType<DataGridBoundColumn>()
+            .FirstOrDefault(c => (c.Binding as System.Windows.Data.Binding)?.Path?.Path == nameof(DictionaryRow.Pattern));
+        if (column is null)
+        {
+            DictionaryGrid.Focus();
+            return;
+        }
+
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+        {
+            if (_closed || !ReferenceEquals(DictionaryGrid.SelectedItem, row))
+            {
+                return;
+            }
+
+            DictionaryGrid.Focus();
+            DictionaryGrid.CurrentCell = new DataGridCellInfo(row, column);
+            DictionaryGrid.BeginEdit();
+            if (column.GetCellContent(row) is TextBox editor)
+            {
+                editor.Focus();
+                editor.SelectAll();
+            }
+        }));
+    }
+
     private async Task<bool> ConfirmNewRemovalRulesAsync(IReadOnlyList<DictionaryRow> rows)
     {
         var removals = rows.Select(ToDictionaryDraftRow)
@@ -647,6 +683,10 @@ public partial class SettingsWindow
             confirmation.DeleteAndSaveText,
             confirmation.KeepEditingText);
     }
+
+    private const string WordPackDraftChangedBeforeSave =
+        "Your word packs changed while Scribe was getting ready to save, so nothing was saved yet. Save again to include the change.";
+
     private sealed record SavePreflightInput(
         AppSettings Settings,
         IReadOnlyList<DictionaryEntry>? Entries,
@@ -658,7 +698,7 @@ public partial class SettingsWindow
         string DictionarySignature,
         string SnippetSignature,
         string DraftSignature,
-        SaveDraftSections.Capture DraftCapture);
+        SaveDraftSections.Capture DraftCapture,
+        LibraryWorkspace? Workspace,
+        long? WorkspaceRevision);
 }
-
-

@@ -47,6 +47,7 @@ public partial class SettingsWindow
         {
             _saveInProgress = false;
             UpdateTryDictationPage();
+            ScheduleFooterRefresh();
         }
     }
 
