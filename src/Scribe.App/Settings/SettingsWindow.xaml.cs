@@ -114,6 +114,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
     private bool _loadingProfile;
     private readonly ObservableCollection<HistoryRow> _historyRows = new();
+    private readonly List<HistoryRow> _historyPagedRows = new();
+    private readonly HistoryDeletionNotifier? _historyDeletionNotifier;
+    private readonly HistoryReadGeneration _historyMutationGeneration = new();
+    private CancellationTokenSource? _historySearchDelay;
+    private long _historySearchTicket;
+    private bool _historyLeaveHooked;
+    private bool _historyShowsFailure;
+    private long _historyOlderTicket;
+    private bool _historyLoadedOlder;
+    private bool _historyMayHaveOlder;
+    private bool _historyOlderLoading;
+    private bool _historyOlderLoadFailed;
     private readonly ObservableCollection<FailureRow> _failures = new();
 
     // Sections read off the UI thread. Until one has loaded, Save treats it as untouched.
@@ -220,7 +232,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ILibraryVocabularySource libraryVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
-        SessionDiagnostics? diagnostics = null)
+        SessionDiagnostics? diagnostics = null,
+        HistoryDeletionNotifier? historyDeletionNotifier = null)
     {
         _settingsRepository = settingsRepository;
         _audio = audio;
@@ -228,6 +241,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _libraries = libraries;
         _snippets = snippets;
         _history = history;
+        _historyDeletionNotifier = historyDeletionNotifier;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _azureCliInstaller = azureCliInstaller;
@@ -297,6 +311,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
+        if (_historyDeletionNotifier is not null)
+        {
+            _historyDeletionNotifier.Deleted += OnHistoryDeleted;
+        }
+
         Closed += OnClosed;
         Loaded += RefreshStartupStatus;
         Activated += RefreshStartupStatus;
@@ -2233,6 +2252,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _historyView.Filter = FilterHistoryRow;
         HistoryNoMatchesText.Text = HistoryRowFormat.NoSearchMatches;
         HistoryClearSearchButton.Content = HistoryRowFormat.ClearSearch;
+        HistoryLoadOlderButton.Content = "Load older";
         _historyEmptyText = HistoryEmptyMessage();
         HistoryEmptyHint.Text = HistoryRowFormat.LoadingText;
         HistoryStatusPanel.Visibility = Visibility.Visible;
@@ -5018,6 +5038,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
         SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
+        if (_historyDeletionNotifier is not null)
+        {
+            _historyDeletionNotifier.Deleted -= OnHistoryDeleted;
+        }
+
+        _historySearchDelay?.Cancel();
+        _historySearchDelay?.Dispose();
+        _historySearchDelay = null;
         if (_updates is not null)
         {
             _updates.UpdateReady -= OnUpdateReady;

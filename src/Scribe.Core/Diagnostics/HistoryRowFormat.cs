@@ -50,13 +50,57 @@ public static class HistoryRowFormat
     public static string CleanupTime(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? Seconds(value) : NotRecorded;
 
-    public static string? RangeLine(int shownCount, int limit) =>
-        shownCount >= limit ? $"Showing your latest {limit:N0} dictations." : null;
+    public static HistoryPageLine PageLine(
+        int shownCount,
+        int limit,
+        bool loadedOlder,
+        bool mayHaveOlder,
+        bool olderLoadFailed)
+    {
+        if (olderLoadFailed)
+        {
+            return new HistoryPageLine("Couldn't load older dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Try again");
+        }
+
+        if (shownCount <= 0)
+        {
+            return HistoryPageLine.Hidden;
+        }
+
+        if (!loadedOlder && shownCount >= limit)
+        {
+            return new HistoryPageLine($"Showing your latest {limit:N0} dictations.", mayHaveOlder, "Load older");
+        }
+
+        if (loadedOlder || mayHaveOlder)
+        {
+            return new HistoryPageLine($"Showing {shownCount:N0} dictations.", mayHaveOlder, "Load older");
+        }
+
+        return HistoryPageLine.Hidden;
+    }
+
+    public static HistorySearchLine SearchLine(int matchCount, int cap)
+    {
+        if (matchCount <= 0)
+        {
+            return new HistorySearchLine("No dictations match your search.", ShowClearSearch: true);
+        }
+
+        if (matchCount >= cap)
+        {
+            return new HistorySearchLine($"The first {cap:N0} matches are shown.", ShowClearSearch: false);
+        }
+
+        return matchCount == 1
+            ? new HistorySearchLine("1 dictation matches.", ShowClearSearch: false)
+            : new HistorySearchLine($"{matchCount:N0} dictations match.", ShowClearSearch: false);
+    }
 
     public static string EmptyState(string verb, string shortcut) =>
         $"No dictations yet. {verb} {shortcut} in any app and speak.";
 
-    public const string NoSearchMatches = "No shown dictations match your search.";
+    public const string NoSearchMatches = "No dictations match your search.";
 
     public const string LoadingText = "Loading history...";
 
@@ -116,6 +160,13 @@ public static class HistoryRowFormat
 }
 
 public sealed record HistoryToolbarState(bool CanCopy, bool CanDelete, bool CanDeleteAll);
+
+public sealed record HistoryPageLine(string Text, bool ShowLoadOlder, string LoadOlderButtonText)
+{
+    public static HistoryPageLine Hidden { get; } = new(string.Empty, ShowLoadOlder: false, LoadOlderButtonText: "Load older");
+}
+
+public sealed record HistorySearchLine(string Text, bool ShowClearSearch);
 
 public sealed record HistoryLoadState(
     bool ShowGrid,

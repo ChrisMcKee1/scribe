@@ -17,6 +17,12 @@ public interface IHistoryRepository
     /// <summary>Returns the most recent entries, newest first, up to <paramref name="limit"/>.</summary>
     IReadOnlyList<HistoryEntry> GetRecent(int limit = 100);
 
+    /// <summary>Returns entries strictly older than the timestamp and id boundary, newest first.</summary>
+    IReadOnlyList<HistoryEntry> GetOlder(DateTimeOffset beforeUtc, long beforeId, int limit);
+
+    /// <summary>Returns kept entries whose text or app display name contains the query, newest first.</summary>
+    IReadOnlyList<HistoryEntry> Search(string query, int limit);
+
     /// <summary>Loads a stored audio blob, or <see langword="null"/> when it no longer exists.</summary>
     CapturedAudio? GetAudio(long blobId);
 
