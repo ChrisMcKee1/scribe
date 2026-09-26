@@ -27,6 +27,7 @@ public sealed class SaveDraftCoverageTests
         ["Hotkey"] = "_pendingBinding with { Mode = SelectedMode }",
         ["DictationOnlyHotkey"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
         ["EnableAiCleanup"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
+        ["AiCleanupModel"] = "SelectedFoundryModelAlias",
         ["AiCleanupAzureSubscriptionId"] = Subscription,
         ["AiCleanupAzureSubscriptionName"] = Subscription,
         ["AiCleanupAzureSubscriptionTenantId"] = Subscription,

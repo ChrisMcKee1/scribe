@@ -162,39 +162,61 @@ public static class AiCleanupPageState
         };
     }
 
-    public static AiCleanupPageDescription Describe(
-        bool enabled,
-        CleanupProvider savedProvider,
-        CleanupProvider shownProvider,
-        CleanupStatus status,
-        bool draftComplete,
-        AiCleanupSetupState savedSetupState = AiCleanupSetupState.NothingConfigured,
-        string? providerSummary = null,
-        string? modelName = null,
-        string? safeReason = null,
-        string? progressText = null)
+    public static AiCleanupSetupState SavedSetupState(AppSettings settings)
     {
-        if (!enabled)
+        ArgumentNullException.ThrowIfNull(settings);
+
+        if (!settings.EnableAiCleanup && settings.AiCleanupProvider == CleanupProvider.FoundryLocal)
         {
-            return DescribeOff(savedSetupState, providerSummary ?? ProviderName(savedProvider));
+            return AiCleanupSetupState.NothingConfigured;
         }
 
-        if (!draftComplete)
+        if (!HasProviderConfiguration(settings, settings.AiCleanupProvider))
         {
-            return new(
-                ShowProviderSetup: true,
-                "Save to start AI cleanup.",
-                OffHelperText: null,
-                DraftStatusRow(shownProvider));
+            return settings.AiCleanupProvider == CleanupProvider.FoundryLocal
+                ? AiCleanupSetupState.Incomplete
+                : AiCleanupSetupState.NothingConfigured;
         }
 
-        return shownProvider switch
+        return AiCleanupSetupState.Complete;
+    }
+
+    public static string ProviderSetupSummary(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        return settings.AiCleanupProvider switch
         {
-            CleanupProvider.FoundryLocal => DescribeFoundry(status, modelName, safeReason, progressText),
-            CleanupProvider.AzureFoundry => DescribeRemote(status, safeReason, "On. Choose Check sign-in to continue.", "Check sign-in"),
-            CleanupProvider.OpenAiCompatible => DescribeRemote(status, safeReason, "On. Set up the AI service, then test the connection.", "Test connection"),
-            CleanupProvider.GitHubCopilot => DescribeRemote(status, safeReason, "On. Choose Get models to see what your subscription includes.", "Get models"),
-            _ => DescribeRemote(status, safeReason, "On, but not set up yet. Until it's ready, Scribe types what it hears.", null),
+            CleanupProvider.FoundryLocal => "On this PC (Foundry Local)",
+            CleanupProvider.AzureFoundry when !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) =>
+                $"Microsoft Foundry ({settings.AiCleanupAzureDeployment})",
+            CleanupProvider.AzureFoundry => "Microsoft Foundry",
+            CleanupProvider.OpenAiCompatible when !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel) =>
+                $"Another AI service ({settings.AiCleanupCustomModel})",
+            CleanupProvider.OpenAiCompatible => "Another AI service",
+            CleanupProvider.GitHubCopilot when !string.IsNullOrWhiteSpace(settings.AiCleanupCopilotModel) =>
+                $"GitHub Copilot ({settings.AiCleanupCopilotModel})",
+            CleanupProvider.GitHubCopilot => "GitHub Copilot",
+            _ => "AI cleanup",
+        };
+    }
+
+    public static bool HasProviderConfiguration(AppSettings settings, CleanupProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        return provider switch
+        {
+            CleanupProvider.FoundryLocal => !string.IsNullOrWhiteSpace(settings.AiCleanupModel),
+            CleanupProvider.AzureFoundry => !string.IsNullOrWhiteSpace(settings.AiCleanupAzureEndpoint) &&
+                !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) &&
+                (!string.IsNullOrWhiteSpace(settings.AiCleanupAzureApiKey) ||
+                 settings.AiCleanupAzureAuthMode == AzureAuthMode.AzureCli ||
+                 AzureServicePrincipalValidator.IsComplete(settings.AiCleanupAzureTenantId, settings.AiCleanupAzureClientId, settings.AiCleanupAzureClientSecret)),
+            CleanupProvider.OpenAiCompatible => !string.IsNullOrWhiteSpace(settings.AiCleanupCustomEndpoint) &&
+                !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel),
+            CleanupProvider.GitHubCopilot => true,
+            _ => false,
         };
     }
 

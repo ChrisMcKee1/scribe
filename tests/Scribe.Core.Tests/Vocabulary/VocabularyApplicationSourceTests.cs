@@ -264,7 +264,7 @@ public sealed class VocabularyApplicationSourceTests
         foreach (var name in read)
         {
             // The pages the Save shows on a validation problem, and the status line it writes, are not values it stores.
-            if (rowLists.Contains(name) || name.StartsWith("Section", StringComparison.Ordinal) || name == "AzureStatusText")
+            if (rowLists.Contains(name) || name.StartsWith("Section", StringComparison.Ordinal))
             {
                 continue;
             }
@@ -301,10 +301,12 @@ public sealed class VocabularyApplicationSourceTests
             ["DictationOnlyModeCombo"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
             ["DeviceCombo"] = "_externalMicrophone.ForSave(ShownMicrophone)",
             ["AiCleanupCheck"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
+            ["AiModelBox"] = "SelectedFoundryModelAlias",
             ["AzureSubscriptionBox"] = "_selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text",
         };
         Assert.Equal(carriedBy.Keys.Order(StringComparer.Ordinal), skipped.Order(StringComparer.Ordinal));
         Assert.DoesNotContain("AzureModelBox", skipped);
+        Assert.Contains("AiModelBox", skipped);
         Assert.DoesNotContain("HotkeyBox", skipped);
         foreach (var (name, carrier) in carriedBy)
         {

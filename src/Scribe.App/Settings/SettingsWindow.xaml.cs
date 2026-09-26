@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using Scribe.Core.Feedback;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -150,6 +151,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _azureCliInstalled;
     private bool _azureConnectionKnown;
     private bool _azureManualConfiguration;
+    private string? _azureStatusMessage;
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
     private bool _azureApiKeyVerified;
@@ -3151,7 +3153,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private async Task RunAzurePrimaryActionAsync()
+    private async Task RunAzurePrimaryActionAsync(AiCleanupActionId action)
     {
         if (IsAzureApiKeySelected)
         {
@@ -3165,10 +3167,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        var interactive = action == AiCleanupActionId.SignIn;
         await RefreshAzureConnectionAsync(
-            allowInteractiveLogin: true,
+            allowInteractiveLogin: interactive,
             listModels: true,
-            forceListModels: true);
+            forceListModels: action == AiCleanupActionId.RefreshModels);
     }
 
     private void AzureEndpointBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -3222,9 +3225,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _azureSignInStatus = new AzureSignInStatus(false, null);
         ApplyAzureSettingsAccess();
 
-        if (AzureStatusText is not null && CanVerifyAzureApiKey)
+        if (CanVerifyAzureApiKey)
         {
-            AzureStatusText.Text = message;
+            _azureStatusMessage = message;
         }
     }
 
@@ -3269,7 +3272,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         ApplyAzureSettingsAccess();
-        AzureStatusText.Text = "Tenant changed. Verify Azure sign-in before browsing subscriptions and models.";
+        _azureStatusMessage = "Tenant changed. Verify Azure sign-in before browsing subscriptions and models.";
     }
 
     // Best-effort and non-blocking; runs when the Azure panel is shown.
@@ -3277,12 +3280,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (IsAzureApiKeySelected)
         {
-            if (AzureStatusText is not null)
-            {
-                AzureStatusText.Text = CanVerifyAzureApiKey
-                    ? "Fill in the details above, then choose Verify."
-                    : "Fill in the details above, then choose Verify.";
-            }
+            _azureStatusMessage = "Fill in the details above, then choose Verify.";
 
             ApplyAzureSettingsAccess();
             return Task.CompletedTask;
@@ -3294,10 +3292,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var principal = CurrentServicePrincipal;
             if (principal is null)
             {
-                if (AzureStatusText is not null)
-                {
-                    AzureStatusText.Text = "Fill in the details above, then choose Verify.";
-                }
+                _azureStatusMessage = "Fill in the details above, then choose Verify.";
 
                 ApplyAzureSettingsAccess();
                 return Task.CompletedTask;
@@ -3329,7 +3324,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var shouldListModels = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         ApplyAzureSettingsAccess();
-        AzureStatusText.Text = "Checking your Azure sign-in...";
+        _azureStatusMessage = "Checking your Azure sign-in...";
 
         try
         {
@@ -3358,7 +3353,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 _azureConnectionKnown = true;
                 ApplyAzureSettingsAccess();
-                AzureStatusText.Text = "Azure sign-in timed out. Please try again.";
+                _azureStatusMessage = "Azure sign-in timed out. Please try again.";
             }
         }
         catch (Exception ex)
@@ -3369,7 +3364,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 _azureConnectionKnown = true;
                 ApplyAzureSettingsAccess();
-                AzureStatusText.Text = "Couldn't verify Azure sign-in. Please try again.";
+                _azureStatusMessage = "Couldn't verify Azure sign-in. Please try again.";
             }
         }
         finally
@@ -3446,7 +3441,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public Task<AzureSignInStatus> ProbeAsync() => window.ProbeCurrentAzureSignInAsync(attemptCancellation);
 
-        public void ReportBrowserSignIn() => window.AzureStatusText.Text = "Finish signing in in your browser.";
+        public void ReportBrowserSignIn() => window._azureStatusMessage = "Finish signing in in your browser.";
 
         public async Task<(bool Ok, string Message)> LoginAsync()
         {
@@ -3469,7 +3464,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var status = result.Status ?? new AzureSignInStatus(false, null);
             window._azureSignInStatus = status;
             window.ApplyAzureSettingsAccess();
-            window.AzureStatusText.Text = result.Outcome switch
+            window._azureStatusMessage = result.Outcome switch
             {
                 AzureCliSignIn.Outcome.CliMissing =>
                     "Azure CLI isn't installed.",
@@ -3554,7 +3549,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void ApplyAzureSettingsAccess()
     {
-        if (AzureDiscoveryPanel is null || AzureConfigurationPanel is null)
+        if (AzureDiscoveryPanel is null || AzureEndpointPanel is null)
         {
             return;
         }
@@ -3563,13 +3558,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var servicePrincipal = access.ShowServicePrincipalFields;
         var apiKeyMode = IsAzureApiKeySelected;
         var cliMode = !apiKeyMode && SelectedAzureAuthMode == AzureAuthMode.AzureCli;
-
         AzureDiscoveryPanel.Visibility = cliMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
-        AzureConfigurationPanel.Visibility = (apiKeyMode || servicePrincipal || (cliMode && access.ShowConfiguration)) ? Visibility.Visible : Visibility.Collapsed;
-        if (AzureConfigurationPanel is Wpf.Ui.Controls.CardExpander manualDetails)
-        {
-            manualDetails.IsExpanded = apiKeyMode || servicePrincipal || access.ManualDetailsExpanded;
-        }
+        AzureEndpointPanel.Visibility = access.ShowEndpointPanel ? Visibility.Visible : Visibility.Collapsed;
+        AzureManualToggleButton.Visibility = access.ShowManualToggleButton ? Visibility.Visible : Visibility.Collapsed;
+
+        var manualOpen = access.ShowEndpointPanel && cliMode;
+        AzureManualToggleText.Text = manualOpen ? "Hide manual details" : "Enter details manually";
+        AzureManualToggleButton.SetValue(AutomationProperties.NameProperty, AzureManualToggleText.Text);
+        AzureManualToggleIcon.Symbol = manualOpen
+            ? Wpf.Ui.Controls.SymbolRegular.ChevronUp24
+            : Wpf.Ui.Controls.SymbolRegular.ChevronDown24;
 
         if (AzureServicePrincipalPanel is not null)
         {
@@ -3578,7 +3576,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (AzureApiKeyPanel is not null)
         {
-            AzureApiKeyPanel.Visibility = apiKeyMode ? Visibility.Visible : Visibility.Collapsed;
+            AzureApiKeyPanel.Visibility = access.ShowApiKeyPanel ? Visibility.Visible : Visibility.Collapsed;
         }
 
         if (AzureCliTenantPanel is not null)
@@ -3594,6 +3592,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateServicePrincipalValidation(servicePrincipal);
         UpdateAzureProjectApiKeyHint();
         RefreshAiStatus();
+    }
+
+    private void AzureManualToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        _azureManualConfiguration = !AzureEndpointPanel.IsVisible;
+        ApplyAzureSettingsAccess();
     }
 
     // Shows the first unmet requirement while the user is still typing, but stays quiet on an
@@ -3664,14 +3668,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _azureAutoListed = false;
         AzureCredentialInvalidation.Invalidate();
         ApplyAzureSettingsAccess();
-        if (AzureStatusText is not null)
-        {
-            AzureStatusText.Text = IsAzureApiKeySelected
+        _azureStatusMessage = IsAzureApiKeySelected
+            ? "Fill in the details above, then choose Verify."
+            : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
                 ? "Fill in the details above, then choose Verify."
-                : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-                    ? "Fill in the details above, then choose Verify."
-                    : "Not checked yet.";
-        }
+                : "Not checked yet.";
 
         ApplyAzureSettingsAccess();
     }
@@ -3693,10 +3694,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // Also replaces "Verifying the service principal…", which nothing would replace any more.
             _azureSignInStatus = new AzureSignInStatus(false, null);
-            if (AzureStatusText is not null)
-            {
-                AzureStatusText.Text = "The service principal changed. Verify it again.";
-            }
+            _azureStatusMessage = "Changed since the last check. Choose Verify.";
         }
 
         AzureCredentialInvalidation.Invalidate();
@@ -3887,7 +3885,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (!CanVerifyAzureApiKey)
         {
-            AzureStatusText.Text = "Fill in the details above, then choose Verify.";
+            _azureStatusMessage = "Fill in the details above, then choose Verify.";
             ApplyAzureSettingsAccess();
             return;
         }
@@ -3897,7 +3895,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var apiKey = SelectedAzureApiKey.Trim();
         var operationVersion = _azureSignInAttempts.Begin();
         ApplyAzureSettingsAccess();
-        AzureStatusText.Text = "Verifying the API key…";
+        _azureStatusMessage = "Verifying the API key...";
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -3911,7 +3909,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _azureSignInStatus = result.Success
                 ? new AzureSignInStatus(true, null)
                 : new AzureSignInStatus(false, result.Message);
-            AzureStatusText.Text = result.Message;
+            _azureStatusMessage = result.Message;
         }
         catch (OperationCanceledException)
         {
@@ -3919,7 +3917,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 _azureApiKeyVerified = false;
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                AzureStatusText.Text = "Verifying the API key timed out. Check the endpoint host and try again.";
+                _azureStatusMessage = "Verifying the API key timed out. Check the endpoint host and try again.";
             }
         }
         catch (Exception ex)
@@ -3929,7 +3927,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 _azureApiKeyVerified = false;
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                AzureStatusText.Text = "The API key could not be verified. Check the endpoint, deployment name, and key.";
+                _azureStatusMessage = "The API key could not be verified. Check the endpoint, deployment name, and key.";
             }
         }
         finally
@@ -4092,7 +4090,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // switching modes mid-verification would let the old identity's result land on the new one.
         var operationVersion = _azureSignInAttempts.Begin();
         ApplyAzureSettingsAccess();
-        AzureStatusText.Text = automatic
+        _azureStatusMessage = automatic
             ? "Checking the saved service principal…"
             : "Verifying the service principal…";
         try
@@ -4114,7 +4112,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _azureSignInStatus = status;
-            AzureStatusText.Text = status.IsSignedIn
+            _azureStatusMessage = status.IsSignedIn
                 ? DescribeServicePrincipalReady(status)
                 : status.FailureReason ?? AzureSignInDiagnostics.Generic;
         }
@@ -4123,7 +4121,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                AzureStatusText.Text = "Verifying the service principal timed out. Please try again.";
+                _azureStatusMessage = "Verifying the service principal timed out. Please try again.";
             }
         }
         catch (Exception ex)
@@ -4134,7 +4132,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
-                AzureStatusText.Text = "The service principal could not be verified. Check the details and try again.";
+                _azureStatusMessage = "The service principal could not be verified. Check the details and try again.";
             }
         }
         finally
@@ -4194,7 +4192,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (!subscriptionsOk)
             {
-                AzureStatusText.Text = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
+                _azureStatusMessage = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
                 return;
             }
 
@@ -4225,7 +4223,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             var scope = selectedSubscription is null ? string.Empty : $" in {selectedSubscription.DisplayName}";
             var identity = DescribeAzureIdentity(_azureSignInStatus);
-            AzureStatusText.Text = discovery.FailedTenantCount > 0
+            _azureStatusMessage = discovery.FailedTenantCount > 0
                 ? deployments.Count == 0
                     ? $"{identity} No deployments could be listed. Check access to the selected tenant subscriptions."
                     : $"{identity} Found {deployments.Count} compatible deployment(s){scope}. Some tenants couldn't be checked."
@@ -4237,7 +4235,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (loadVersion == _azureDeploymentLoadVersion)
             {
-                AzureStatusText.Text = "Listing Azure deployments timed out. Please try again.";
+                _azureStatusMessage = "Listing Azure deployments timed out. Please try again.";
             }
         }
         catch (Exception ex)
@@ -4245,7 +4243,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TryLog(ex, "Could not list Azure deployments.");
             if (loadVersion == _azureDeploymentLoadVersion)
             {
-                AzureStatusText.Text =
+                _azureStatusMessage =
                     "Couldn't list deployments. Sign in again and make sure you have access to a deployment.";
             }
         }
@@ -4625,10 +4623,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CopilotPanel.Visibility = provider == CleanupProvider.GitHubCopilot ? Visibility.Visible : Visibility.Collapsed;
         if (provider == CleanupProvider.GitHubCopilot)
         {
-            // Re-checked on every switch to this provider rather than once at open: the CLI can be
-            // installed in the terminal while this window is sitting open, and the whole point of the
-            // banner is to stop being wrong about that.
-            RefreshCopilotCliStatus();
+            var savedActive = RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen);
+            RefreshCopilotCliStatus(runVersionProbe: savedActive, allowModelList: savedActive);
         }
     }
 
@@ -4650,11 +4646,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true);
             }
 
-            return _azureApiKeyVerified
-                ? new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true)
-                : _azureSignInStatus.IsSignedIn
-                    ? new(AzureSetupResult.ApiKeyVerifyAgain, ApiKeySelected: true)
-                    : new(AzureSetupResult.ApiKeyComplete, ApiKeySelected: true);
+            if (_azureApiKeyVerified)
+            {
+                return new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true);
+            }
+
+            return AzureMessageIsFailure(_azureStatusMessage)
+                ? new(AzureSetupResult.ApiKeyVerificationFailed, ApiKeySelected: true, SafeReason: _azureStatusMessage)
+                : new(AzureSetupResult.ApiKeyComplete, ApiKeySelected: true);
         }
 
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
@@ -4664,8 +4663,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(AzureSetupResult.ServicePrincipalIncomplete, AuthMode: AzureAuthMode.ServicePrincipal);
             }
 
-            return _azureSignInStatus.IsSignedIn
-                ? new(AzureSetupResult.ServicePrincipalVerified, AuthMode: AzureAuthMode.ServicePrincipal)
+            if (_azureSignInStatus.IsSignedIn)
+            {
+                return new(AzureSetupResult.ServicePrincipalVerified, AuthMode: AzureAuthMode.ServicePrincipal);
+            }
+
+            return AzureMessageIsFailure(_azureStatusMessage)
+                ? new(AzureSetupResult.ServicePrincipalVerificationFailed, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _azureStatusMessage)
                 : new(AzureSetupResult.ServicePrincipalComplete, AuthMode: AzureAuthMode.ServicePrincipal);
         }
 
@@ -4689,6 +4693,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             : new(AzureSetupResult.NotSignedIn);
     }
 
+    private static bool AzureMessageIsFailure(string? message) =>
+        !string.IsNullOrWhiteSpace(message) &&
+        (message.StartsWith("Couldn't", StringComparison.Ordinal) ||
+         message.StartsWith("The API key could not", StringComparison.Ordinal) ||
+         message.StartsWith("The service principal could not", StringComparison.Ordinal) ||
+         message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+         message.Contains("denied", StringComparison.OrdinalIgnoreCase));
+
     private CopilotSetupState CurrentCopilotSetup()
     {
         if (!_copilotChecked)
@@ -4710,8 +4722,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         var draft = CurrentAiDraftSettings();
         var providerSummary = CleanupDisclosure.SummaryFor(SelectedProvider);
-        var offProviderSummary = ProviderSetupSummary(_settings);
-        var savedSetup = SavedAiSetupState();
+        var offProviderSummary = AiCleanupPageState.ProviderSetupSummary(_settings);
+        var savedSetup = AiCleanupPageState.SavedSetupState(_settings);
         var page = AiCleanupPageState.Describe(
             _settings,
             draft,
@@ -4736,52 +4748,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAiWritingStyleSummary();
         RefreshAiStatus();
     }
-
-    private AiCleanupSetupState SavedAiSetupState()
-    {
-        if (!_settings.EnableAiCleanup && _settings.AiCleanupProvider == CleanupProvider.FoundryLocal)
-        {
-            return AiCleanupSetupState.NothingConfigured;
-        }
-
-        if (!HasProviderConfiguration(_settings, _settings.AiCleanupProvider))
-        {
-            return _settings.AiCleanupProvider == CleanupProvider.FoundryLocal
-                ? AiCleanupSetupState.Incomplete
-                : AiCleanupSetupState.NothingConfigured;
-        }
-
-        return AiCleanupSetupState.Complete;
-    }
-
-    private static string ProviderSetupSummary(AppSettings settings) => settings.AiCleanupProvider switch
-    {
-        CleanupProvider.FoundryLocal => "On this PC (Foundry Local)",
-        CleanupProvider.AzureFoundry when !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) =>
-            $"Microsoft Foundry ({settings.AiCleanupAzureDeployment})",
-        CleanupProvider.AzureFoundry => "Microsoft Foundry",
-        CleanupProvider.OpenAiCompatible when !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel) =>
-            $"Another AI service ({settings.AiCleanupCustomModel})",
-        CleanupProvider.OpenAiCompatible => "Another AI service",
-        CleanupProvider.GitHubCopilot when !string.IsNullOrWhiteSpace(settings.AiCleanupCopilotModel) =>
-            $"GitHub Copilot ({settings.AiCleanupCopilotModel})",
-        CleanupProvider.GitHubCopilot => "GitHub Copilot",
-        _ => "AI cleanup",
-    };
-
-    private static bool HasProviderConfiguration(AppSettings settings, CleanupProvider provider) => provider switch
-    {
-        CleanupProvider.FoundryLocal => !string.IsNullOrWhiteSpace(settings.AiCleanupModel),
-        CleanupProvider.AzureFoundry => !string.IsNullOrWhiteSpace(settings.AiCleanupAzureEndpoint) &&
-            !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) &&
-            (!string.IsNullOrWhiteSpace(settings.AiCleanupAzureApiKey) ||
-             settings.AiCleanupAzureAuthMode == AzureAuthMode.AzureCli ||
-             AzureServicePrincipalValidator.IsComplete(settings.AiCleanupAzureTenantId, settings.AiCleanupAzureClientId, settings.AiCleanupAzureClientSecret)),
-        CleanupProvider.OpenAiCompatible => !string.IsNullOrWhiteSpace(settings.AiCleanupCustomEndpoint) &&
-            !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel),
-        CleanupProvider.GitHubCopilot => true,
-        _ => false,
-    };
 
     private void UpdateAiWritingStyleSummary()
     {
@@ -4975,7 +4941,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             case AiCleanupActionId.SignIn:
             case AiCleanupActionId.RefreshModels:
             case AiCleanupActionId.Verify:
-                await RunAzurePrimaryActionAsync();
+                await RunAzurePrimaryActionAsync(action);
                 break;
             case AiCleanupActionId.InstallAzureCli:
                 AzureCliButton_Click(this, new RoutedEventArgs());
@@ -5003,7 +4969,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CopilotInstallButton_Click(this, new RoutedEventArgs());
                 break;
             case AiCleanupActionId.CheckAgain:
-                RefreshCopilotCliStatus();
+                RefreshCopilotCliStatus(runVersionProbe: true);
                 break;
             case AiCleanupActionId.SignInCopilot:
                 CopilotSignInButton_Click(this, new RoutedEventArgs());
@@ -5514,7 +5480,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     "Choose a discovered model or enter its exact Azure deployment name.",
                 _ => "Complete the Microsoft Foundry configuration before saving.",
             };
-            AzureStatusText.Text = message;
+            _azureStatusMessage = message;
             ShowThemedMessage("Microsoft Foundry is not ready", message);
             return false;
         }
@@ -5752,7 +5718,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         HashSet<DependencyObject> carriedElsewhere =
         [
-            LaunchCheck, ModeCombo, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck, AzureSubscriptionBox,
+            LaunchCheck, ModeCombo, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck, AiModelBox, AzureSubscriptionBox,
         ];
         var draft = new Scribe.Core.Vocabulary.DraftSnapshot();
         foreach (var page in new FrameworkElement[] { SectionDictation, SectionAi, SectionAdvanced, HistorySettingsCard })
@@ -5770,6 +5736,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.Part("intents")
             .Flag(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
             .Microphone(_externalMicrophone.ForSave(ShownMicrophone));
+        draft.Part("foundryModel").Text(SelectedFoundryModelAlias);
         draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
         draft.Part("profiles").Profiles(BuildProfiles());

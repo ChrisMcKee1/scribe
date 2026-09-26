@@ -38,8 +38,8 @@ public partial class SettingsWindow
     /// Re-detects the CLI and rewrites the banner.
     /// </summary>
     /// <remarks>
-    /// Detection shells out to read a version, so it runs off the UI thread and comes back through
-    /// the dispatcher.
+    /// The browse path only locates the executable on disk. The version probe shells out and is
+    /// reserved for explicit actions, or for the saved active provider that may already contact GitHub.
     /// <para>
     /// The close-while-in-flight case is handled by <see cref="System.Windows.Threading.DispatcherOperation"/>
     /// rather than by a null check on the control. A field generated from <c>x:Name</c> is not set
@@ -49,13 +49,13 @@ public partial class SettingsWindow
     /// and <c>HasShutdownStarted</c> is the condition that actually distinguishes the two cases.
     /// </para>
     /// </remarks>
-    private void RefreshCopilotCliStatus()
+    private void RefreshCopilotCliStatus(bool runVersionProbe = false, bool allowModelList = false)
     {
         _copilotChecked = false;
         CopilotLoadModelsButton.IsEnabled = false;
         UpdateAiEnabledState();
 
-        _ = Task.Run(GitHubCopilotCli.Detect).ContinueWith(
+        _ = Task.Run(() => runVersionProbe ? GitHubCopilotCli.Detect() : GitHubCopilotCli.Locate()).ContinueWith(
             task =>
             {
                 var status = task.Status == TaskStatus.RanToCompletion
@@ -74,7 +74,7 @@ public partial class SettingsWindow
                     CopilotLoadModelsButton.IsEnabled = status.Found;
                     UpdateAiEnabledState();
 
-                    if (status.Found && !_copilotModelsLoaded &&
+                    if (status.Found && !_copilotModelsLoaded && allowModelList &&
                         RemoteActivityPolicy.MayContact(_settings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen))
                     {
                         LoadCopilotModels();
@@ -88,7 +88,7 @@ public partial class SettingsWindow
             TaskScheduler.Default);
     }
 
-    private void CopilotRecheckButton_Click(object sender, RoutedEventArgs e) => RefreshCopilotCliStatus();
+    private void CopilotRecheckButton_Click(object sender, RoutedEventArgs e) => RefreshCopilotCliStatus(runVersionProbe: true);
 
     /// <summary>
     /// Hands the install to WinGet, in a terminal the user can see.
@@ -117,6 +117,7 @@ public partial class SettingsWindow
         ShowInfo("The installer is open. Finish it, then choose Check again.");
         _copilotChecked = true;
         UpdateAiEnabledState();
+        RefreshCopilotCliStatus(runVersionProbe: true);
     }
 
     /// <summary>

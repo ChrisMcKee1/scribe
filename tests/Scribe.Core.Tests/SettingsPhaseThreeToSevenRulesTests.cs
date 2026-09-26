@@ -57,34 +57,55 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Ai_cleanup_off_rows_cover_complete_incomplete_and_empty_setup()
     {
-        var empty = AiCleanupPageState.Describe(
-            false,
-            CleanupProvider.FoundryLocal,
-            CleanupProvider.FoundryLocal,
-            CleanupStatus.Disabled,
-            draftComplete: false);
+        var saved = AppSettings.CreateDefault();
+        var draft = saved.Clone();
+        draft.EnableAiCleanup = false;
+        var empty = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Disabled);
         Assert.False(empty.ShowProviderSetup);
         Assert.Equal("Off. Scribe types what it hears, with your dictionary and snippets.", empty.StatusLine);
         Assert.Equal("Turn on AI cleanup to choose where it runs and set your writing style.", empty.OffHelperText);
 
+        saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        saved.AiCleanupAzureEndpoint = "https://example.test";
+        saved.AiCleanupAzureDeployment = "gpt-4o";
+        var completeDraft = saved.Clone();
+        completeDraft.EnableAiCleanup = false;
         var complete = AiCleanupPageState.Describe(
-            false,
-            CleanupProvider.AzureFoundry,
-            CleanupProvider.AzureFoundry,
+            saved,
+            completeDraft,
             CleanupStatus.Ready,
-            draftComplete: true,
-            AiCleanupSetupState.Complete,
-            "Microsoft Foundry (gpt-4o)");
+            savedSetupState: AiCleanupPageState.SavedSetupState(saved),
+            providerSummary: AiCleanupPageState.ProviderSetupSummary(saved));
         Assert.Equal("Set up to use Microsoft Foundry (gpt-4o).", complete.OffHelperText);
 
+        saved.AiCleanupAzureEndpoint = null;
+        saved.EnableAiCleanup = true;
+        var incompleteDraft = saved.Clone();
+        incompleteDraft.EnableAiCleanup = false;
         var incomplete = AiCleanupPageState.Describe(
-            false,
-            CleanupProvider.AzureFoundry,
-            CleanupProvider.AzureFoundry,
+            saved,
+            incompleteDraft,
             CleanupStatus.Disabled,
-            draftComplete: false,
-            AiCleanupSetupState.Incomplete);
+            savedSetupState: AiCleanupSetupState.Incomplete,
+            providerSummary: "Microsoft Foundry");
         Assert.Equal("Partly set up for Microsoft Foundry. Turn on AI cleanup to finish setting it up.", incomplete.StatusLine);
+    }
+
+    [Fact]
+    public void Ai_cleanup_setup_summary_and_completeness_are_core_owned()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        settings.AiCleanupAzureEndpoint = "https://example.test";
+        settings.AiCleanupAzureDeployment = "gpt-4o";
+
+        Assert.True(AiCleanupPageState.HasProviderConfiguration(settings, CleanupProvider.AzureFoundry));
+        Assert.Equal(AiCleanupSetupState.Complete, AiCleanupPageState.SavedSetupState(settings));
+        Assert.Equal("Microsoft Foundry (gpt-4o)", AiCleanupPageState.ProviderSetupSummary(settings));
+
+        settings.AiCleanupAzureDeployment = null;
+        Assert.False(AiCleanupPageState.HasProviderConfiguration(settings, CleanupProvider.AzureFoundry));
+        Assert.Equal(AiCleanupSetupState.NothingConfigured, AiCleanupPageState.SavedSetupState(settings));
     }
 
     [Theory]
@@ -95,12 +116,19 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(CleanupStatus.Unavailable, "On, but not ready. Until it's ready, Scribe types what it hears.", AiCleanupStatusKind.Error, "Try again")]
     public void Ai_cleanup_foundry_state_table(CleanupStatus status, string line, AiCleanupStatusKind kind, string? action)
     {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.FoundryLocal;
+        saved.AiCleanupModel = "qwen3-1.7b";
+        var setup = FoundryLocalSetup.Describe(
+            FoundryLocalSetup.FromCleanupStatus(status, runtimeReady: status != CleanupStatus.Disabled, modelCached: status == CleanupStatus.Ready, modelLoaded: status == CleanupStatus.Ready),
+            "Qwen3 1.7B",
+            "about 1.3 GB");
         var description = AiCleanupPageState.Describe(
-            true,
-            CleanupProvider.FoundryLocal,
-            CleanupProvider.FoundryLocal,
+            saved,
+            saved.Clone(),
             status,
-            draftComplete: true,
+            foundrySetup: setup,
             modelName: "Qwen3 1.7B");
 
         Assert.True(description.ShowProviderSetup);
@@ -431,6 +459,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         { CopilotSetupResult.NotChecked, AiCleanupStatusKind.Busy, "Looking for GitHub Copilot...", null, null },
         { CopilotSetupResult.ToolNotFound, AiCleanupStatusKind.Warning, "GitHub Copilot isn't installed on this PC.", "Install", "Check again" },
+        { CopilotSetupResult.Outdated, AiCleanupStatusKind.Warning, "GitHub Copilot needs an update.", "Update", "Check again" },
         { CopilotSetupResult.Installing, AiCleanupStatusKind.Info, "The installer is open. Finish it, then choose Check again.", "Check again", null },
         { CopilotSetupResult.Installed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Sign in", null },
         { CopilotSetupResult.SignedIn, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", null, null },
