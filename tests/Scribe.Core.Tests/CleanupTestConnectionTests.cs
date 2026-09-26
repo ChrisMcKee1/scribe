@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests;
 
@@ -158,6 +159,45 @@ public sealed class CleanupTestConnectionTests
         Assert.True(result.Recipient.Matches(Custom(model: "qwen")));
         Assert.False(result.Recipient.Matches(Custom(model: "llama")));
     }
+
+    [Fact]
+    public async Task Result_recipient_matches_a_page_shaped_unchanged_candidate_with_blank_fields()
+    {
+        await using var harness = new CleanupHarness();
+        var pageCandidate = Custom(model: "qwen") with
+        {
+            AzureEndpoint = string.Empty,
+            AzureDeployment = " ",
+            AzureApiKey = string.Empty,
+            AzureTenantId = " ",
+            CustomApiKey = string.Empty,
+            CopilotModel = " ",
+        };
+
+        var result = await harness.Service.TestAsync(pageCandidate).WaitAsync(Bound);
+
+        Assert.Equal(CleanupTestOutcome.Connected, result.Outcome);
+        Assert.True(result.Recipient.Matches(CleanupConnectionTestPolicy.Canonicalize(pageCandidate)));
+    }
+
+    public static TheoryData<CleanupOptions, bool> AvailabilityCases => new()
+    {
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "tenant", AzureClientId = "client", AzureClientSecret = "secret" }, true },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "tenant", AzureClientId = "client", AzureClientSecret = "secret", AzureEndpoint = null }, false },
+        { Azure() with { AzureAuthMode = AzureAuthMode.ServicePrincipal, AzureTenantId = "tenant", AzureClientId = "client", AzureClientSecret = null }, false },
+        { Azure(), true },
+        { Azure() with { AzureApiKey = null }, true },
+        { Azure() with { AzureEndpoint = null }, false },
+        { Azure() with { AzureDeployment = null }, false },
+        { Custom(), true },
+        { Custom(model: " "), false },
+        { Custom(endpoint: " "), false },
+    };
+
+    [Theory]
+    [MemberData(nameof(AvailabilityCases))]
+    public void Availability_is_decided_from_provider_prerequisites(CleanupOptions candidate, bool expected) =>
+        Assert.Equal(expected, CleanupConnectionTestPolicy.CanTest(candidate));
 
     private static void AssertProbe(string body)
     {

@@ -564,7 +564,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     public async Task<CleanupTestResult> TestAsync(
         CleanupOptions candidate, CancellationToken cancellationToken = default)
     {
-        var options = WithoutUnadmittedGlossary(Normalize(candidate));
+        var options = WithoutUnadmittedGlossary(CleanupConnectionTestPolicy.Canonicalize(candidate));
         var recipient = new CleanupRecipient(options);
 
         if (options.Provider is CleanupProvider.FoundryLocal or CleanupProvider.GitHubCopilot)
@@ -583,7 +583,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         try
         {
             ct.ThrowIfCancellationRequested();
-            if (!options.IsActionable)
+            if (!CleanupConnectionTestPolicy.CanTest(options))
             {
                 return CleanupTestResult.Failed(recipient, CleanupReason.Same(options.Provider switch
                 {

@@ -2809,24 +2809,54 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupAzureClientId = signIn.ClientId;
         draft.AiCleanupAzureClientSecret = signIn.ClientSecret;
         draft.AiCleanupAzureApiKey = signIn.ApiKey;
+        var azureSubscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
+            _selectedAzureDeployment,
+            SelectedAzureSubscription,
+            AzureEndpointBox?.Text,
+            AzureDeploymentBox?.Text);
+        draft.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
+        draft.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
+        draft.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
         draft.AiCleanupCustomEndpoint = CustomEndpointBox?.Text;
         draft.AiCleanupCustomModel = CustomModelBox?.Text;
         draft.AiCleanupCustomApiKey = CustomApiKeyBox?.Password;
         draft.AiCleanupCopilotModel = CopilotModelCombo?.Text;
+
+        var writingStyle = NormalizePrompt(AiWritingStyleBox?.Text);
+        draft.AiCleanupWritingStyle =
+            writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
+                ? string.Empty
+                : writingStyle;
+        draft.AiCleanupPromptStyle = SelectedPromptStyle;
+        var frontierPrompt = NormalizePrompt(AiFrontierPromptBox?.Text);
+        draft.AiCleanupFrontierPrompt =
+            frontierPrompt.Length == 0 || frontierPrompt == CleanupPrompt.DefaultFrontierPrompt
+                ? string.Empty
+                : frontierPrompt;
+        var localPrompt = NormalizePrompt(AiLocalPromptBox?.Text);
+        draft.AiCleanupLocalPrompt =
+            localPrompt.Length == 0 || localPrompt == CleanupPrompt.DefaultLocalPrompt
+                ? string.Empty
+                : localPrompt;
         return draft;
     }
 
     private CleanupOptions BuildAiCleanupCandidateOptions()
     {
         var draft = CurrentAiDraftSettings();
-        return new CleanupOptions(
+        return CleanupConnectionTestPolicy.Canonicalize(new CleanupOptions(
             true,
             draft.AiCleanupProvider,
             draft.AiCleanupModel,
             draft.AiCleanupAzureEndpoint,
             draft.AiCleanupAzureDeployment,
             draft.AiCleanupAzureApiKey,
-            draft.AiCleanupAzureTenantId,
+            draft.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal
+                ? draft.AiCleanupAzureTenantId
+                : AzureSubscriptionSelection.ResolveTenantId(
+                    draft.AiCleanupAzureSubscriptionId,
+                    draft.AiCleanupAzureSubscriptionTenantId,
+                    draft.AiCleanupAzureTenantId),
             draft.AiCleanupWritingStyle,
             Glossary: null,
             draft.AiCleanupCustomEndpoint,
@@ -2839,7 +2869,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             draft.AiCleanupAzureAuthMode,
             draft.AiCleanupAzureClientId,
             draft.AiCleanupAzureClientSecret,
-            draft.AiCleanupCopilotModel);
+            draft.AiCleanupCopilotModel));
     }
 
     // --- Filterable model dropdowns --------------------------------------------------------
@@ -4724,12 +4754,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (IsAzureApiKeySelected)
         {
-            if (!CanVerifyAzureApiKey)
+            var candidate = BuildAiCleanupCandidateOptions();
+            if (!CleanupConnectionTestPolicy.CanTest(candidate))
             {
                 return new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true);
             }
 
-            var candidate = BuildAiCleanupCandidateOptions();
             if (AzureConnectionTestApplies(candidate))
             {
                 var testResult = _cleanupConnectionTest!.Outcome switch
@@ -4742,18 +4772,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(testResult, ApiKeySelected: true, SafeReason: _cleanupConnectionTest.SafeReason);
             }
 
-            var result = _azureApiKeyOutcome.ToApiKeyResult(complete: true);
-            return new(result, ApiKeySelected: true, SafeReason: _azureApiKeyOutcome.SafeMessage);
+            return new(AzureSetupResult.ApiKeyComplete, ApiKeySelected: true);
         }
 
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
-            if (CurrentServicePrincipal is null)
+            var candidate = BuildAiCleanupCandidateOptions();
+            if (!CleanupConnectionTestPolicy.CanTest(candidate))
             {
                 return new(AzureSetupResult.ServicePrincipalIncomplete, AuthMode: AzureAuthMode.ServicePrincipal);
             }
 
-            var candidate = BuildAiCleanupCandidateOptions();
             if (AzureConnectionTestApplies(candidate))
             {
                 var testResult = _cleanupConnectionTest!.Outcome switch
@@ -4766,8 +4795,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return new(testResult, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _cleanupConnectionTest.SafeReason);
             }
 
-            var result = _servicePrincipalOutcome.ToServicePrincipalResult(complete: true);
-            return new(result, AuthMode: AzureAuthMode.ServicePrincipal, SafeReason: _servicePrincipalOutcome.SafeMessage);
+            return new(AzureSetupResult.ServicePrincipalComplete, AuthMode: AzureAuthMode.ServicePrincipal);
         }
 
         if (!_azureConnectionKnown)
@@ -4803,7 +4831,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private CustomEndpointSetupState CurrentCustomSetup()
     {
         var candidate = BuildAiCleanupCandidateOptions();
-        var canTest = candidate.IsActionable;
+        var canTest = CleanupConnectionTestPolicy.CanTest(candidate);
         if (SelectedProvider != CleanupProvider.OpenAiCompatible)
         {
             return new(CustomEndpointTestResult.NotTested, CanTest: canTest);
@@ -4839,7 +4867,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private async Task RunCleanupConnectionTestAsync(CleanupProvider provider)
     {
         var candidate = BuildAiCleanupCandidateOptions();
-        if (candidate.Provider != provider || !candidate.IsActionable)
+        if (candidate.Provider != provider || !CleanupConnectionTestPolicy.CanTest(candidate))
         {
             RefreshAiStatus();
             return;
@@ -4857,15 +4885,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var result = await _cleanup.TestAsync(candidate, cts.Token);
             if (_closed || _cleanupConnectionTestCts != cts || !result.Recipient.Matches(BuildAiCleanupCandidateOptions()))
             {
+                if (!_closed && _cleanupConnectionTestCts == cts)
+                {
+                    _cleanupConnectionTest = null;
+                    RefreshAiStatus();
+                }
+
                 return;
             }
 
             _cleanupConnectionTest = new(provider, result.Recipient, result.Outcome, result.SafeReason);
-            if (provider == CleanupProvider.AzureFoundry)
-            {
-                ApplyAzureConnectionTestResult(result);
-            }
-
             RefreshAiStatus();
             var message = result.Outcome == CleanupTestOutcome.Connected
                 ? "Connected."
@@ -4888,26 +4917,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             cts.Dispose();
-        }
-    }
-
-    private void ApplyAzureConnectionTestResult(CleanupTestResult result)
-    {
-        var outcome = result.Outcome switch
-        {
-            CleanupTestOutcome.Connected => AzureVerificationOutcome.Succeeded("Connected."),
-            CleanupTestOutcome.Failed => AzureVerificationOutcome.Failed(result.SafeReason ?? "Couldn't connect."),
-            _ => AzureVerificationOutcome.NotRun,
-        };
-
-        if (IsAzureApiKeySelected)
-        {
-            _azureApiKeyOutcome = outcome;
-            _azureApiKeyVerified = result.Outcome == CleanupTestOutcome.Connected;
-        }
-        else if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
-        {
-            _servicePrincipalOutcome = outcome;
         }
     }
 
