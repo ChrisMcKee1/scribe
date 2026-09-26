@@ -20,7 +20,9 @@ namespace Scribe.Core.Vocabulary;
 /// <remarks>
 /// The components a save computes beyond a plain editor are written here, the way the save stores them, so what they carry
 /// is tested in Core: a hotkey binding field by field, the microphone as it is normalized when stored, the Azure
-/// subscription's stored fields, the profiles field by field and the set of enabled libraries.
+/// subscription's stored fields, the profiles field by field and the set of enabled libraries. So are the rows the window
+/// signs its dictionary, snippet and library sections with (round 5): a save skips a section whose rows sign like the saved
+/// ones, and its draft reads whether they do, so those signatures are framed like everything else.
 /// </remarks>
 public sealed class DraftSnapshot
 {
@@ -150,6 +152,52 @@ public sealed class DraftSnapshot
     {
         ArgumentNullException.ThrowIfNull(ids);
         return List(ids.Select(id => id.ToUpperInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The dictionary grid's rows, in order, count first, each with every field a save compares with storage: its identity,
+    /// spoken and written forms as typed, and its two switches (round 5, G3). The window signs its rows with this, so a
+    /// changed row can never sign like the saved one, whatever its text holds.
+    /// </summary>
+    public DraftSnapshot DictionaryRows(IReadOnlyList<DictionaryEntryBuilder.Row> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        _framed.Append('D').Append(rows.Count.ToString(CultureInfo.InvariantCulture)).Append(':');
+        foreach (var row in rows)
+        {
+            Number(row.Id).Text(row.Pattern).Text(row.Replacement).Flag(row.WholeWord).Flag(row.Enabled);
+        }
+
+        return this;
+    }
+
+    /// <summary>The snippet list's rows, in order, count first, each with its identity, phrase and template as typed and its switch.</summary>
+    public DraftSnapshot SnippetRows(IReadOnlyList<SnippetBuilder.Row> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        _framed.Append('S').Append(rows.Count.ToString(CultureInfo.InvariantCulture)).Append(':');
+        foreach (var row in rows)
+        {
+            Number(row.Id).Text(row.Phrase).Text(row.Template).Flag(row.Enabled);
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// The library list's rows, in order, count first, each with its id and switch. Framed like the others although today's
+    /// ids (a slug, or a custom library's file name, which cannot hold a '|') could not make two lists sign alike unframed.
+    /// </summary>
+    public DraftSnapshot LibraryRows(IReadOnlyList<(string Id, bool Enabled)> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        _framed.Append('L').Append(rows.Count.ToString(CultureInfo.InvariantCulture)).Append(':');
+        foreach (var (id, enabled) in rows)
+        {
+            Text(id).Flag(enabled);
+        }
+
+        return this;
     }
 
     /// <summary>The draft's SHA-256, over its UTF-16 code units, as 64 upper-case hex digits.</summary>

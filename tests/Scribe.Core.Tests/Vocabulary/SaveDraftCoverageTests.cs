@@ -196,6 +196,105 @@ public sealed class SaveDraftCoverageTests
         }
     }
 
+    [Fact]
+    public void Every_signature_the_save_and_its_draft_compare_frames_its_values()
+    {
+        // G3: a Save skips a section whose rows sign like the saved ones, and its draft reads whether they do, so a signature
+        // that joins user text lets a changed row sign like the saved one. Every signature in the window frames its values
+        // through DraftSnapshot, and every snapshot an editable section is given, and every comparison with it, is that
+        // section's own signature, so no two formats ever meet.
+        var (window, save, _, _, _) = Sources();
+        var signatures = Regex.Matches(window, @"private string (?<name>\w+Signature)\(\)").Select(match => match.Groups["name"].Value).ToList();
+        Assert.Equal(["DictionarySignature", "LibrarySignature", "SaveDraftSignature", "SnippetSignature"], signatures.Order(StringComparer.Ordinal));
+        foreach (var name in signatures)
+        {
+            var expression = Regex.Match(window, $@"private string {name}\(\)\s*=>\s*(?<body>[^;]+);");
+            var body = expression.Success ? expression.Groups["body"].Value : Body(window, $"private string {name}()");
+            Assert.Contains("new Scribe.Core.Vocabulary.DraftSnapshot()", body, StringComparison.Ordinal);
+            Assert.Contains(".Hash()", body, StringComparison.Ordinal);
+            AssertNoJoining(body, name);
+        }
+
+        // Each section signs the rows its SaveAll writes, mapped as the Save's own builders take them.
+        Assert.Contains(
+            ".DictionaryRows([.. _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled))])",
+            window,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            ".SnippetRows([.. _snippetRows.Select(r => new SnippetBuilder.Row(r.Id, r.Phrase, r.Template, r.Enabled))])",
+            window,
+            StringComparison.Ordinal);
+        Assert.Contains(".LibraryRows([.. _libraryRows.Select(r => (r.Id, r.Enabled))])", window, StringComparison.Ordinal);
+
+        var own = new Dictionary<string, string[]>
+        {
+            ["_dictionaryLoad"] = ["DictionarySignature()", "dictionarySignature"],
+            ["_snippetLoad"] = ["SnippetSignature()", "snippetSignature"],
+            ["_libraryLoad"] = ["LibrarySignature()"],
+        };
+        var calls = 0;
+        foreach (Match call in Regex.Matches(window, @"(?<load>_(dictionary|snippet|library)Load)\.(?<method>HasChanges|MarkSaved|TryBegin|Publish)\("))
+        {
+            var arguments = SplitArguments(Arguments(window, call.Index + call.Length - 1));
+            var signature = call.Groups["method"].Value == "Publish" ? arguments[1] : arguments[0];
+            Assert.True(
+                own[call.Groups["load"].Value].Contains(signature),
+                $"{call.Groups["load"].Value}.{call.Groups["method"].Value} is given {signature}, not its section's own signature.");
+            calls++;
+        }
+
+        Assert.True(calls >= 12, $"Only {calls} section signature calls were found.");
+        Assert.Contains("var dictionarySignature = DictionarySignature();", save, StringComparison.Ordinal);
+        Assert.Contains("var snippetSignature = SnippetSignature();", save, StringComparison.Ordinal);
+    }
+
+    private static void AssertNoJoining(string body, string name)
+    {
+        foreach (var joining in new[] { "string.Join", "string.Concat", "$\"", "StringBuilder", ".Append(", "AppendJoin", "string.Format" })
+        {
+            Assert.False(body.Contains(joining, StringComparison.Ordinal), $"{name} joins text with {joining}.");
+        }
+
+        Assert.False(Regex.IsMatch(body, @"""\s*\+|\+\s*"""), $"{name} concatenates text with +.");
+    }
+
+    // The text between the parenthesis at open and the one that closes it.
+    private static string Arguments(string source, int open)
+    {
+        Assert.Equal('(', source[open]);
+        var depth = 0;
+        for (var i = open; i < source.Length; i++)
+        {
+            depth += source[i] switch { '(' or '[' => 1, ')' or ']' => -1, _ => 0 };
+            if (depth == 0)
+            {
+                return source[(open + 1)..i];
+            }
+        }
+
+        throw new InvalidOperationException("Unbalanced parentheses.");
+    }
+
+    // Top-level arguments, split at commas outside any parentheses or brackets.
+    private static List<string> SplitArguments(string arguments)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            depth += arguments[i] switch { '(' or '[' => 1, ')' or ']' => -1, _ => 0 };
+            if (arguments[i] == ',' && depth == 0)
+            {
+                parts.Add(arguments[start..i].Trim());
+                start = i + 1;
+            }
+        }
+
+        parts.Add(arguments[start..].Trim());
+        return parts;
+    }
+
     private static void AssertWalked(string control, IReadOnlyCollection<string> skipped, IReadOnlyDictionary<string, XElement> xaml, string context)
     {
         Assert.True(xaml.ContainsKey(control), $"{context}, which the window does not declare.");

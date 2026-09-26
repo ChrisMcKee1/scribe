@@ -1912,19 +1912,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // Save skips sections the user never touched, so a pre-existing data problem in one section
     // (e.g. a duplicate dictionary entry loaded from disk) can never block saving a change made in
     // another. The signatures capture everything the section's SaveAll would write; the matching
-    // snapshots live in the section's SettingsSectionLoad.
-    private string DictionarySignature() => string.Join(
-        "", _rows.Select(r => $"{r.Id}|{r.Pattern}|{r.Replacement}|{r.WholeWord}|{r.Enabled}"));
+    // snapshots live in the section's SettingsSectionLoad. Every value is framed (DraftSnapshot) and the
+    // rows are counted, so no text typed or pasted into a row can make changed rows sign like the saved
+    // ones: joined with a '|', a phrase "a" with the template "b|c" signed like "a|b" with "c", and a
+    // Save skipped the section, or closed over it while waiting for its vocabulary.
+    private string DictionarySignature() => new Scribe.Core.Vocabulary.DraftSnapshot()
+        .DictionaryRows([.. _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled))])
+        .Hash();
 
-    private string SnippetSignature() => string.Join(
-        "", _snippetRows.Select(r => $"{r.Id}|{r.Phrase}|{r.Template}|{r.Enabled}"));
+    private string SnippetSignature() => new Scribe.Core.Vocabulary.DraftSnapshot()
+        .SnippetRows([.. _snippetRows.Select(r => new SnippetBuilder.Row(r.Id, r.Phrase, r.Template, r.Enabled))])
+        .Hash();
 
     /// <summary>
     /// Which libraries are on. Used to detect a change made while an asynchronous scan was running,
     /// since a library toggled mid-scan silently changes which terms the verdict applies to.
     /// </summary>
-    private string LibrarySignature() => string.Join(
-        "", _libraryRows.Select(r => $"{r.Id}|{r.Enabled}"));
+    private string LibrarySignature() => new Scribe.Core.Vocabulary.DraftSnapshot()
+        .LibraryRows([.. _libraryRows.Select(r => (r.Id, r.Enabled))])
+        .Hash();
 
     /// <summary>Set once the window has closed, so async continuations know not to touch its controls.</summary>
     private bool _closed;
@@ -5215,9 +5221,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // dictionary or the snippets differ from what storage holds (a read that finishes during the wait publishes what storage
     // holds, so it is no change) or a grid row edit is in progress. The walk leaves out the controls one of those already
     // carries, and the Start with Windows switch, which applies on its own when flipped: a Save stores the Windows
-    // observation it read before the wait, never the switch. Every value is framed by DraftSnapshot, so no text a user types
-    // can make two different drafts alike, and the draft is hashed, so the copy the check keeps holds no key or secret;
-    // never logged.
+    // observation it read before the wait, never the switch. Every value is framed by DraftSnapshot, and so are the row
+    // signatures behind the dictionary and snippet flags (DictionarySignature, SnippetSignature), so no text typed or
+    // pasted can make two different drafts alike, and the draft is hashed, so the copy the check keeps holds no key or
+    // secret; never logged.
     private string SaveDraftSignature()
     {
         HashSet<DependencyObject> carriedElsewhere =
