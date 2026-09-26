@@ -1021,6 +1021,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             SpaceAfterDictationCheck.IsChecked = _settings.AddSpaceAfterDictation;
             LoadDurationChoices(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, _settings.HistoryRetentionDays);
             HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
+            RefreshHistorySettingsSummary();
             LoadAdvancedControls(_settings);
             UpdateAdvancedSectionHeaders(_settings);
 
@@ -4892,7 +4893,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     }
                     else
                     {
-                        copyFailureText = "Couldn't copy the report. Select the text and copy it yourself.";
+                        copyFailureText = AiContentReport.CopyFailed;
                         continue;
                     }
 
@@ -4910,7 +4911,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     return;
                 }
 
-                copyFailureText = "Couldn't copy the report. Select the text and copy it yourself.";
+                copyFailureText = AiContentReport.CopyFailed;
                 continue;
             }
 

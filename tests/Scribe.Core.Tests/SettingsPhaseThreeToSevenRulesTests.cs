@@ -225,12 +225,31 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         Assert.Equal("Counting your dictations...", UsagePeriodState.Describe(null, UsagePeriod.Last30Days, false).StatusText);
         Assert.Equal("Usage isn't available right now.", UsagePeriodState.Describe(null, UsagePeriod.Last30Days, true).StatusText);
-        Assert.Equal("Showing Last 7 days. Loading Last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);
+        Assert.Equal("Showing the last 7 days. Loading the last 30 days...", UsagePeriodState.Describe(UsagePeriod.Last7Days, UsagePeriod.Last30Days, false).StatusText);
         Assert.Equal("All kept history", UsagePeriodState.Label(UsagePeriod.AllKeptHistory));
         var failed = UsagePeriodState.Describe(UsagePeriod.Last90Days, null, true);
-        Assert.Equal("Showing Last 90 days. Usage isn't available right now.", failed.StatusText);
+        Assert.Equal("Showing the last 90 days. Usage isn't available right now.", failed.StatusText);
         Assert.True(failed.ShowRetry);
     }
+
+    [Fact]
+    public void Usage_coverage_line_avoids_retained_jargon()
+    {
+        Assert.Null(UsagePeriodState.CoverageLine("Last 30 days", 0, capped: false, limit: 5000));
+        Assert.Equal("Last 30 days: 1 dictation.", UsagePeriodState.CoverageLine("Last 30 days", 1, capped: false, limit: 5000));
+        Assert.Equal("Last 30 days: 48 dictations.", UsagePeriodState.CoverageLine("Last 30 days", 48, capped: false, limit: 5000));
+        Assert.Equal("All kept history: based on your latest 5,000 dictations.", UsagePeriodState.CoverageLine("All kept history", 5000, capped: true, limit: 5000));
+    }
+
+    [Theory]
+    [InlineData(0, "0 s")]
+    [InlineData(24.5, "25 s")]
+    [InlineData(59.9, "60 s")]
+    [InlineData(60, "1 min")]
+    [InlineData(546, "9.1 min")]
+    [InlineData(4320, "1.2 hr")]
+    public void Usage_durations_match_tile_copy(double seconds, string expected) =>
+        Assert.Equal(expected, UsagePeriodState.FormatDuration(TimeSpan.FromSeconds(seconds)));
 
     [Fact]
     public void Usage_trend_axis_labels_match_granularity()

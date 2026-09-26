@@ -62,6 +62,26 @@ public static class HistoryRowFormat
     public static HistoryToolbarState Toolbar(bool hasRows, bool hasSelection) =>
         new(CanCopy: hasSelection, CanDelete: hasSelection, CanDeleteAll: hasRows);
 
+    public static HistoryLoadState LoadState(bool hasRows, bool loadFailed, bool searchActive)
+    {
+        if (loadFailed)
+        {
+            return new HistoryLoadState(
+                ShowGrid: hasRows,
+                ShowToolbar: hasRows,
+                ShowCenteredStatus: !hasRows,
+                ShowInlineStatus: hasRows,
+                ShowSearchNoMatches: false);
+        }
+
+        return new HistoryLoadState(
+            ShowGrid: hasRows,
+            ShowToolbar: hasRows,
+            ShowCenteredStatus: !hasRows,
+            ShowInlineStatus: false,
+            ShowSearchNoMatches: hasRows && searchActive);
+    }
+
     public static string Details(int audioMilliseconds, int decodeMilliseconds, int? cleanupMilliseconds)
     {
         var recorded = Audio(audioMilliseconds);
@@ -85,3 +105,28 @@ public static class HistoryRowFormat
 }
 
 public sealed record HistoryToolbarState(bool CanCopy, bool CanDelete, bool CanDeleteAll);
+
+public sealed record HistoryLoadState(
+    bool ShowGrid,
+    bool ShowToolbar,
+    bool ShowCenteredStatus,
+    bool ShowInlineStatus,
+    bool ShowSearchNoMatches);
+
+public static class HistorySettingsSummary
+{
+    public static string Describe(int retentionDays, bool storeAudio)
+    {
+        var retention = retentionDays switch
+        {
+            0 => "Keeps dictations until you delete them.",
+            1 => "Keeps dictations for 1 day.",
+            365 => "Keeps dictations for 1 year.",
+            _ => $"Keeps dictations for {retentionDays:N0} days.",
+        };
+        var recordings = storeAudio
+            ? "Saves a recording with each dictation for up to 7 days."
+            : "Doesn't save recordings.";
+        return $"{retention} {recordings}";
+    }
+}

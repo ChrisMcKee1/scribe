@@ -47,6 +47,7 @@ public partial class SettingsWindow
 
         var period = UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1];
         var shownPeriod = _usageShownPeriod;
+        UsageCoverageText.Visibility = Visibility.Visible;
         UsageCoverageText.Text = UsagePeriodState.Describe(shownPeriod is null ? null : ToUsagePeriod(shownPeriod), ToUsagePeriod(period), loadFailed: false).StatusText;
         UsageRetryButton.Visibility = Visibility.Collapsed;
         if (_usageSnapshot is null)
@@ -134,16 +135,14 @@ public partial class SettingsWindow
         _usageLibraryScope = result.LibraryScope;
         var snapshot = _usageSnapshot;
 
-        UsageCoverageText.Text = result.PeriodCapped
-            ? $"{period.Label}, based on the latest {UsageReport.HistoryLimit:N0} retained dictations."
-            : $"{period.Label}, {_usageSnapshot.Dictations:N0} retained dictation" +
-              (_usageSnapshot.Dictations == 1 ? "." : "s.");
+        UsageCoverageText.Text = UsagePeriodState.CoverageLine(period.Label, _usageSnapshot.Dictations, result.PeriodCapped, UsageReport.HistoryLimit) ?? string.Empty;
+        UsageCoverageText.Visibility = UsageCoverageText.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         UsageDictationsText.Text = snapshot.Dictations.ToString("N0");
         UsageWordsText.Text = snapshot.Words.ToString("N0");
         UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
-        UsageSpeechText.Text = FormatDuration(snapshot.Speech);
+        UsageSpeechText.Text = UsagePeriodState.FormatDuration(snapshot.Speech);
         UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
-        UsageLongestText.Text = FormatDuration(snapshot.LongestDictation);
+        UsageLongestText.Text = UsagePeriodState.FormatDuration(snapshot.LongestDictation);
         UsageAppsGrid.ItemsSource = snapshot.TopApps.Select(app => new UsageAppRow(app)).ToList();
 
         var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
@@ -155,7 +154,7 @@ public partial class SettingsWindow
                 point.RelativeHeight))
             .ToList();
         UsageTrendChart.ItemsSource = trendRows;
-        UsageTrendGrid.ItemsSource = trendRows;
+        UsageTrendGrid.ItemsSource = trendRows.AsEnumerable().Reverse().ToList();
         var axis = UsagePeriodState.AxisLabels(snapshot.Trend, snapshot.Granularity);
         UsageTrendAxisStartText.Text = axis[0];
         UsageTrendAxisMiddleText.Text = axis[1];
@@ -177,15 +176,12 @@ public partial class SettingsWindow
             _cleanup.Status == CleanupStatus.Ready,
             _committedSettings.AiCleanupProvider).Description;
         UsageInsightResultText.Text = string.Empty;
+        UsageInsightResultText.Visibility = Visibility.Collapsed;
         UsageDataPanel.Visibility = snapshot.Dictations == 0 ? Visibility.Collapsed : Visibility.Visible;
         UsageEmptyText.Visibility = snapshot.Dictations == 0 ? Visibility.Visible : Visibility.Collapsed;
         UsageRetryButton.Visibility = Visibility.Collapsed;
         _usageShownPeriod = period;
         RefreshUsageInsightAvailability();
-
-        static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
-            ? $"{duration.TotalHours:0.#} hr"
-            : $"{duration.TotalMinutes:0.#} min";
 
         static string FormatUsageTerm(UsageAnalyzer.TermUsage term) =>
             $"{term.Text} ({term.Dictations:N0} dictation{(term.Dictations == 1 ? string.Empty : "s")})";
@@ -195,6 +191,7 @@ public partial class SettingsWindow
     {
         _usageSnapshot = null;
         _usageLibraryScope = AiVocabularyScope.None;
+        UsageCoverageText.Visibility = Visibility.Visible;
         UsageCoverageText.Text = UsagePeriodState.Describe(_usageShownPeriod is null ? null : ToUsagePeriod(_usageShownPeriod), ToUsagePeriod(UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1]), loadFailed: true).StatusText;
         if (_usageShownPeriod is null)
         {
@@ -292,12 +289,14 @@ public partial class SettingsWindow
         if (_cleanup.Recipient is not { } recipient)
         {
             UsageInsightResultText.Text = UsageSummaryText.NotReady;
+            UsageInsightResultText.Visibility = Visibility.Visible;
             return;
         }
 
         _usageInsightRunning = true;
         RefreshUsageInsightAvailability();
         UsageInsightResultText.Text = UsageSummaryText.Running;
+        UsageInsightResultText.Visibility = Visibility.Visible;
         try
         {
             // Every request, the first attempt and each retry, goes only while the report's library scope is still
@@ -325,6 +324,7 @@ public partial class SettingsWindow
                 _ => UsageInsight.Parse(completion.Text) ?? UsageSummaryText.NoAnswer,
             };
             UsageInsightResultText.Text = resultText;
+            UsageInsightResultText.Visibility = string.IsNullOrWhiteSpace(resultText) ? Visibility.Collapsed : Visibility.Visible;
             UsageInsightText.Text = UsageInsightAvailability.Describe(
                 _committedSettings.EnableAiCleanup,
                 _cleanup.Status == CleanupStatus.Ready,
@@ -339,6 +339,7 @@ public partial class SettingsWindow
 
             _log.LogWarning("Could not get a usage summary ({Failure}).", FailureShape.Describe(ex));
             UsageInsightResultText.Text = UsageSummaryText.Exception;
+            UsageInsightResultText.Visibility = Visibility.Visible;
         }
         finally
         {
@@ -367,6 +368,7 @@ public partial class SettingsWindow
         if (_usageSnapshot is null)
         {
             UsageInsightResultText.Text = UsageSummaryText.SnapshotChanged;
+            UsageInsightResultText.Visibility = Visibility.Visible;
         }
 
         return false;

@@ -110,6 +110,15 @@ public static class UsagePeriodState
         _ => throw new ArgumentOutOfRangeException(nameof(period), period, null),
     };
 
+    public static string SentenceLabel(UsagePeriod period) => period switch
+    {
+        UsagePeriod.Last7Days => "the last 7 days",
+        UsagePeriod.Last30Days => "the last 30 days",
+        UsagePeriod.Last90Days => "the last 90 days",
+        UsagePeriod.AllKeptHistory => "all kept history",
+        _ => throw new ArgumentOutOfRangeException(nameof(period), period, null),
+    };
+
     public static UsagePeriodDescription Describe(UsagePeriod? shownPeriod, UsagePeriod? loadingPeriod, bool loadFailed)
     {
         if (shownPeriod is null)
@@ -121,12 +130,35 @@ public static class UsagePeriodState
 
         if (loadFailed)
         {
-            return new UsagePeriodDescription($"Showing {Label(shownPeriod.Value)}. Usage isn't available right now.", ShowRetry: true);
+            return new UsagePeriodDescription($"Showing {SentenceLabel(shownPeriod.Value)}. Usage isn't available right now.", ShowRetry: true);
         }
 
         return loadingPeriod is { } next && next != shownPeriod.Value
-            ? new UsagePeriodDescription($"Showing {Label(shownPeriod.Value)}. Loading {Label(next)}...", ShowRetry: false)
+            ? new UsagePeriodDescription($"Showing {SentenceLabel(shownPeriod.Value)}. Loading {SentenceLabel(next)}...", ShowRetry: false)
             : new UsagePeriodDescription(Label(shownPeriod.Value), ShowRetry: false);
+    }
+
+    public static string? CoverageLine(string periodLabel, int dictations, bool capped, int limit)
+    {
+        if (dictations == 0)
+        {
+            return null;
+        }
+
+        return capped
+            ? $"{periodLabel}: based on your latest {limit:N0} dictations."
+            : $"{periodLabel}: {dictations:N0} dictation{(dictations == 1 ? string.Empty : "s")}.";
+    }
+
+    public static string FormatDuration(TimeSpan duration)
+    {
+        var seconds = Math.Max(0, duration.TotalSeconds);
+        return seconds switch
+        {
+            < 60 => $"{Math.Round(seconds, MidpointRounding.AwayFromZero):N0} s",
+            < 3600 => $"{seconds / 60:0.#} min",
+            _ => $"{seconds / 3600:0.#} hr",
+        };
     }
 
     public static IReadOnlyList<string> AxisLabels(IReadOnlyList<Diagnostics.UsageAnalyzer.TrendPoint> points, Diagnostics.UsageAnalyzer.TrendGranularity granularity)

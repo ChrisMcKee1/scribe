@@ -77,6 +77,7 @@ public class AiContentReportTests
         Assert.Equal(
             "The report contains the AI result and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.",
             AiContentReport.Explanation(hasAttribution: false));
+        Assert.Equal("Couldn't copy the report. Select the text and copy it yourself.", AiContentReport.CopyFailed);
     }
 
     [Fact]

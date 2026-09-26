@@ -2000,9 +2000,14 @@
                             <TextBlock x:Name="HistoryPageTitle" Text="History" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Find, copy or delete your recent dictations."/>
-                            <ui:Card x:Name="HistorySettingsCard" Style="{StaticResource SettingsCard}" Margin="0,12,0,4">
+                            <ui:CardExpander x:Name="HistorySettingsCard" IsExpanded="False" Margin="0,12,0,4">
+                                <ui:CardExpander.Header>
+                                    <StackPanel>
+                                        <TextBlock Text="History settings" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="HistorySettingsSummaryText" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </ui:CardExpander.Header>
                                 <StackPanel>
-                                    <TextBlock Text="History settings" Style="{StaticResource CardTitle}"/>
                                     <Grid Margin="0,10,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -2026,6 +2031,7 @@
                                     </Grid>
                                     <StackPanel Margin="0,14,0,0">
                                         <CheckBox x:Name="StoreAudioCheck" Style="{StaticResource SettingCheckBox}"
+                                                  Click="HistorySettings_Changed"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}">
                                             <TextBlock x:Name="StoreAudioTitle" Text="Save a recording with each dictation" Style="{StaticResource CardTitle}"/>
@@ -2033,17 +2039,18 @@
                                         <TextBlock Margin="28,2,0,0" x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}" Text="Keeps the audio of each dictation on this PC for up to 7 days (250 MB in total), then deletes it. Scribe doesn't play recordings back."/>
                                     </StackPanel>
                                 </StackPanel>
-                            </ui:Card>
+                            </ui:CardExpander>
                         </StackPanel>
                         <ui:Card Grid.Row="1" Padding="0" Style="{StaticResource PanelCard}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*" MinHeight="104"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <Grid Margin="12,12,12,8">
+                                <Grid x:Name="HistoryToolbarGrid" Margin="12,12,12,8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
@@ -2069,12 +2076,31 @@
                                                    Click="HistoryClearButton_Click" IsEnabled="False"/>
                                     </StackPanel>
                                 </Grid>
+                                <Grid x:Name="HistoryInlineStatusPanel"
+                                      Grid.Row="1"
+                                      Margin="12,0,12,8"
+                                      Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="HistoryInlineStatusText"
+                                               Style="{StaticResource CardDescription}"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"/>
+                                    <ui:Button x:Name="HistoryInlineRetryButton"
+                                               Grid.Column="1"
+                                               Content="Try again"
+                                               Margin="12,0,0,0"
+                                               Click="HistoryRetryButton_Click"/>
+                                </Grid>
                                 <DataGrid x:Name="HistoryGrid"
-                                          Grid.Row="1"
+                                          Grid.Row="2"
                                           AutoGenerateColumns="False"
                                           CanUserAddRows="False" CanUserDeleteRows="False"
                                           IsReadOnly="True" HeadersVisibility="Column"
                                           SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                           Background="Transparent" BorderThickness="0"
                                           AutomationProperties.LabeledBy="{Binding ElementName=HistoryPageTitle}"
                                           SelectionChanged="HistoryGrid_SelectionChanged"
@@ -2100,7 +2126,7 @@
                                         </DataGridTextColumn>
                                     </DataGrid.Columns>
                                 </DataGrid>
-                                <Grid x:Name="HistoryStatusPanel" Grid.Row="1"
+                                <Grid x:Name="HistoryStatusPanel" Grid.Row="2"
                                       Visibility="Collapsed"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                       Margin="32">
@@ -2117,7 +2143,7 @@
                                                    Click="HistoryRetryButton_Click"/>
                                     </StackPanel>
                                 </Grid>
-                                <Grid x:Name="HistoryNoMatchesPanel" Grid.Row="1"
+                                <Grid x:Name="HistoryNoMatchesPanel" Grid.Row="2"
                                       Visibility="Collapsed"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                       Margin="32">
@@ -2132,12 +2158,12 @@
                                     </StackPanel>
                                 </Grid>
                                 <TextBlock x:Name="HistoryRangeText"
-                                           Grid.Row="2"
+                                           Grid.Row="3"
                                            Margin="12,8,12,0"
                                            Style="{StaticResource CardDescription}"
                                            Visibility="Collapsed"/>
                                 <ui:Card x:Name="HistoryDetailsCard"
-                                         Grid.Row="3"
+                                         Grid.Row="4"
                                          Style="{StaticResource EditorPanelCard}"
                                          Margin="12,10,12,12"
                                          Visibility="Collapsed">
@@ -2237,29 +2263,29 @@
                                     <StackPanel x:Name="UsageDataPanel">
                                         <ui:Card Style="{StaticResource SettingsCard}" Margin="0,0,0,12">
                                             <UniformGrid Columns="6">
-                                                <StackPanel>
+                                                <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageDictationsText" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="dictations" Style="{StaticResource MetricLabel}"/>
+                                                    <TextBlock Text="dictations" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
                                                 </StackPanel>
-                                                <StackPanel>
+                                                <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageWordsText" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="words" Style="{StaticResource MetricLabel}"/>
+                                                    <TextBlock Text="words" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
                                                 </StackPanel>
-                                                <StackPanel>
+                                                <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageActiveDaysText" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="active days" Style="{StaticResource MetricLabel}"/>
+                                                    <TextBlock Text="active days" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
                                                 </StackPanel>
-                                                <StackPanel>
+                                                <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageSpeechText" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="speaking time" Style="{StaticResource MetricLabel}"/>
+                                                    <TextBlock Text="speaking time" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
                                                 </StackPanel>
-                                                <StackPanel>
+                                                <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageAverageText" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="words per dictation" Style="{StaticResource MetricLabel}"/>
+                                                    <TextBlock Text="words per dictation" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
                                                 </StackPanel>
-                                                <StackPanel>
+                                                <StackPanel Margin="0,0,12,0">
                                                     <TextBlock x:Name="UsageLongestText" Style="{StaticResource MetricValue}"/>
-                                                    <TextBlock Text="longest dictation" Style="{StaticResource MetricLabel}"/>
+                                                    <TextBlock Text="longest dictation" Style="{StaticResource MetricLabel}" TextWrapping="Wrap"/>
                                                 </StackPanel>
                                             </UniformGrid>
                                         </ui:Card>
@@ -2270,7 +2296,7 @@
                                         <ColumnDefinition Width="12"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <ui:Card Grid.Column="0" Padding="18,14" Style="{StaticResource PanelCard}">
+                                    <ui:Card Grid.Column="0" Padding="18,14" Style="{StaticResource PanelCard}" VerticalAlignment="Top">
                                         <StackPanel>
                                             <TextBlock x:Name="UsageAppsTitle" Text="Top apps" Style="{StaticResource CardTitle}"/>
                                             <DataGrid x:Name="UsageAppsGrid" Margin="0,10,0,0"
@@ -2289,7 +2315,7 @@
                                             </DataGrid>
                                         </StackPanel>
                                     </ui:Card>
-                                    <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource PanelCard}">
+                                    <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource PanelCard}" VerticalAlignment="Top">
                                         <StackPanel>
                                             <TextBlock x:Name="UsageTrendTitle" Text="Trend" Style="{StaticResource CardTitle}"/>
                                             <!-- An ItemsControl is a Control, so WPF makes it a Tab stop of its own, an
@@ -2367,7 +2393,7 @@
                                         <ColumnDefinition Width="12"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <ui:Card Grid.Column="0" Padding="18,14" Style="{StaticResource PanelCard}">
+                                    <ui:Card Grid.Column="0" Padding="18,14" Style="{StaticResource PanelCard}" VerticalAlignment="Top">
                                         <StackPanel>
                                             <TextBlock x:Name="UsageKnownTitle" Text="Words your dictionary already knows" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Text="Dictionary and word pack words that came up in this period."
@@ -2376,7 +2402,7 @@
                                                           AutomationProperties.LabeledBy="{Binding ElementName=UsageKnownTitle}"/>
                                         </StackPanel>
                                     </ui:Card>
-                                    <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource PanelCard}">
+                                    <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource PanelCard}" VerticalAlignment="Top">
                                         <StackPanel>
                                             <TextBlock x:Name="UsageNovelTitle" Text="Words you could add" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Text="Words that came up often and aren't in your dictionary yet."
@@ -2441,7 +2467,8 @@
                                                 <TextBlock x:Name="UsageInsightResultText"
                                                            Style="{StaticResource CardDescription}"
                                                            Margin="0,10,0,0"
-                                                           TextWrapping="Wrap"/>
+                                                           TextWrapping="Wrap"
+                                                           Visibility="Collapsed"/>
                                             </StackPanel>
                                         </ui:Card>
                                     </StackPanel>

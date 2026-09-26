@@ -72,6 +72,31 @@ public class HistoryRowFormatTests
         Assert.Equal(new HistoryToolbarState(copy, delete, deleteAll), HistoryRowFormat.Toolbar(hasRows, hasSelection));
     }
 
+    [Fact]
+    public void Load_state_places_failures_without_covering_rows()
+    {
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: false, ShowToolbar: false, ShowCenteredStatus: true, ShowInlineStatus: false, ShowSearchNoMatches: false),
+            HistoryRowFormat.LoadState(hasRows: false, loadFailed: true, searchActive: false));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: true, ShowSearchNoMatches: false),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: true, searchActive: false));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: false, ShowSearchNoMatches: false),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: false));
+        Assert.Equal(
+            new HistoryLoadState(ShowGrid: true, ShowToolbar: true, ShowCenteredStatus: false, ShowInlineStatus: false, ShowSearchNoMatches: true),
+            HistoryRowFormat.LoadState(hasRows: true, loadFailed: false, searchActive: true));
+    }
+
+    [Theory]
+    [InlineData(90, false, "Keeps dictations for 90 days. Doesn't save recordings.")]
+    [InlineData(1, false, "Keeps dictations for 1 day. Doesn't save recordings.")]
+    [InlineData(365, true, "Keeps dictations for 1 year. Saves a recording with each dictation for up to 7 days.")]
+    [InlineData(0, true, "Keeps dictations until you delete them. Saves a recording with each dictation for up to 7 days.")]
+    public void History_settings_summary_names_retention_and_recordings(int days, bool recordings, string expected) =>
+        Assert.Equal(expected, HistorySettingsSummary.Describe(days, recordings));
+
     [Theory]
     [InlineData(412, "412 ms")]
     [InlineData(3412, "3,412 ms")]

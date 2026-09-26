@@ -37,8 +37,8 @@ public partial class SettingsWindow
             {
                 TryLog(ex, "Could not load dictation history for Settings.");
                 HistoryEmptyHint.Text = "Couldn't load your history.";
-                HistoryRetryButton.Visibility = Visibility.Visible;
-                HistoryStatusPanel.Visibility = Visibility.Visible;
+                HistoryInlineStatusText.Text = "Couldn't load your history.";
+                ApplyHistoryLoadState(loadFailed: true);
             }
 
             return;
@@ -63,11 +63,11 @@ public partial class SettingsWindow
         var hasRows = _historyRows.Count > 0;
         HistoryEmptyHint.Text = _historyEmptyText;
         HistoryRetryButton.Visibility = Visibility.Collapsed;
-        HistoryStatusPanel.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
         HistorySearchBox.Visibility = hasRows ? Visibility.Visible : Visibility.Collapsed;
         HistoryRangeText.Text = HistoryRowFormat.RangeLine(_historyRows.Count, HistoryRowFormat.RecentLimit) ?? string.Empty;
         HistoryRangeText.Visibility = HistoryRangeText.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         _historyView?.Refresh();
+        ApplyHistoryLoadState(loadFailed: false);
         UpdateHistorySearchStatus();
         UpdateHistorySelection();
     }
@@ -93,6 +93,7 @@ public partial class SettingsWindow
     private void HistoryRetryButton_Click(object sender, RoutedEventArgs e)
     {
         HistoryRetryButton.Visibility = Visibility.Collapsed;
+        HistoryInlineStatusPanel.Visibility = Visibility.Collapsed;
         HistoryEmptyHint.Text = "Loading history...";
         HistoryStatusPanel.Visibility = Visibility.Visible;
         LoadHistory();
@@ -106,7 +107,22 @@ public partial class SettingsWindow
     {
         var filteredCount = _historyView?.Cast<object>().Count() ?? _historyRows.Count;
         var noMatches = _historyRows.Count > 0 && filteredCount == 0 && !string.IsNullOrWhiteSpace(HistorySearchBox.Text);
-        HistoryNoMatchesPanel.Visibility = noMatches ? Visibility.Visible : Visibility.Collapsed;
+        var state = HistoryRowFormat.LoadState(_historyRows.Count > 0, loadFailed: false, searchActive: noMatches);
+        HistoryNoMatchesPanel.Visibility = state.ShowSearchNoMatches ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ApplyHistoryLoadState(bool loadFailed)
+    {
+        var noMatches = _historyRows.Count > 0 &&
+            (_historyView?.Cast<object>().Count() ?? _historyRows.Count) == 0 &&
+            !string.IsNullOrWhiteSpace(HistorySearchBox.Text);
+        var state = HistoryRowFormat.LoadState(_historyRows.Count > 0, loadFailed, noMatches);
+        HistoryGrid.Visibility = state.ShowGrid ? Visibility.Visible : Visibility.Collapsed;
+        HistoryToolbarGrid.Visibility = state.ShowToolbar ? Visibility.Visible : Visibility.Collapsed;
+        HistoryStatusPanel.Visibility = state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
+        HistoryRetryButton.Visibility = loadFailed && state.ShowCenteredStatus ? Visibility.Visible : Visibility.Collapsed;
+        HistoryInlineStatusPanel.Visibility = state.ShowInlineStatus ? Visibility.Visible : Visibility.Collapsed;
+        HistoryNoMatchesPanel.Visibility = state.ShowSearchNoMatches ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateHistorySelection()
@@ -161,6 +177,19 @@ public partial class SettingsWindow
             HistoryEmptyHint.Text = _historyEmptyText;
         }
     }
+
+    private void RefreshHistorySettingsSummary()
+    {
+        if (HistorySettingsSummaryText is null)
+        {
+            return;
+        }
+
+        var days = SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, _settings.HistoryRetentionDays);
+        HistorySettingsSummaryText.Text = HistorySettingsSummary.Describe(days, StoreAudioCheck.IsChecked == true);
+    }
+
+    private void HistorySettings_Changed(object sender, RoutedEventArgs e) => RefreshHistorySettingsSummary();
 
     private void HistoryGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e) => CopyHistoryText();
 
