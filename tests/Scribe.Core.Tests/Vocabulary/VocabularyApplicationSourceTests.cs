@@ -286,7 +286,8 @@ public sealed class VocabularyApplicationSourceTests
         // The walk skips exactly the controls whose stored value the draft carries as the Save computes it, and the one whose
         // value a Save never takes: skipping a control with nothing carrying it would drop what a Save stores from it. The Azure
         // model picker is walked, not skipped (round 4, A7): its typed text applies only when it loses focus, so the
-        // subscription it resolves to cannot stand in for it.
+        // subscription it resolves to cannot stand in for it. So are the hotkey boxes, where a capture still in progress
+        // (applied only when its keys are released) shows.
         var draft = Body(window, "private string SaveDraftSignature()");
         var skippedList = Regex.Match(draft, @"HashSet<DependencyObject> carriedElsewhere =\s*\[(?<names>[^\]]*)\]");
         Assert.True(skippedList.Success, "The draft's list of controls the walk skips was not found.");
@@ -296,9 +297,7 @@ public sealed class VocabularyApplicationSourceTests
             // Start with Windows applies from its own switch when flipped; a Save stores the Windows observation it read
             // before the wait, never the switch.
             ["LaunchCheck"] = string.Empty,
-            ["HotkeyBox"] = "_pendingBinding with { Mode = SelectedMode }",
             ["ModeCombo"] = "_pendingBinding with { Mode = SelectedMode }",
-            ["DictationOnlyHotkeyBox"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
             ["DictationOnlyModeCombo"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
             ["DeviceCombo"] = "_externalMicrophone.ForSave(ShownMicrophone)",
             ["AiCleanupCheck"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
@@ -306,6 +305,7 @@ public sealed class VocabularyApplicationSourceTests
         };
         Assert.Equal(carriedBy.Keys.Order(StringComparer.Ordinal), skipped.Order(StringComparer.Ordinal));
         Assert.DoesNotContain("AzureModelBox", skipped);
+        Assert.DoesNotContain("HotkeyBox", skipped);
         foreach (var (name, carrier) in carriedBy)
         {
             if (carrier.Length == 0)

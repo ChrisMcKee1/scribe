@@ -161,9 +161,14 @@ public sealed class SaveDraftCoverageTests
         Assert.Contains(".Text(number.Text).Number(number.Value)", editors, StringComparison.Ordinal);
         Assert.True(xaml["AzureModelBox"].Attribute("IsEditable")?.Value == "True", "The Azure model picker is no longer an editable combo box.");
 
-        // A hotkey capture applies only when its keys are released: one in progress is carried as it stands.
+        // A hotkey capture applies only when its keys are released: one in progress shows in the hotkey boxes, which the walk
+        // reads, and in the capture flag. Both exist in every version of the window (a capture's own fields do not).
+        Assert.DoesNotContain("HotkeyBox", skipped);
+        Assert.DoesNotContain("DictationOnlyHotkeyBox", skipped);
+        AssertWalked("HotkeyBox", skipped, xaml, "A capture in progress shows in HotkeyBox");
+        AssertWalked("DictationOnlyHotkeyBox", skipped, xaml, "A capture in progress shows in DictationOnlyHotkeyBox");
         Assert.Contains(".Flag(_capturing)", draft, StringComparison.Ordinal);
-        Assert.Contains(".List(_capturedKeys.Select(key => key.ToString()))", draft, StringComparison.Ordinal);
+        Assert.DoesNotContain("_capturedKeys", draft, StringComparison.Ordinal);
     }
 
     [Fact]

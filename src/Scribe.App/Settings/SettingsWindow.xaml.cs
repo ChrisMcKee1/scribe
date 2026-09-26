@@ -5208,8 +5208,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // waited for its vocabulary generation. Values stored straight from an editor come from walking the four pages whose
     // controls a Save reads, each editor as typed (an editable combo box by its text, a number box by its text as well as
     // its committed value), so an edit that would apply only when its editor loses focus, like a deployment typed into the
-    // Azure model picker, still counts. The rest are taken as the Save computes them: the hotkeys with their modes and any
-    // capture in progress, the AI cleanup switch and the microphone with any tray change still waiting, the Azure
+    // Azure model picker, still counts. The rest are taken as the Save computes them: the hotkeys with their modes (a
+    // capture in progress, which applies only when its keys are released, shows in the hotkey boxes the walk reads, and
+    // in the capture flag), the AI cleanup switch and the microphone with any tray change still waiting, the Azure
     // subscription the deployment resolves to, the profiles and the set of enabled libraries it writes, and whether the
     // dictionary or the snippets differ from what storage holds (a read that finishes during the wait publishes what storage
     // holds, so it is no change) or a grid row edit is in progress. The walk leaves out the controls one of those already
@@ -5221,8 +5222,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         HashSet<DependencyObject> carriedElsewhere =
         [
-            LaunchCheck, HotkeyBox, ModeCombo, DictationOnlyHotkeyBox, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck,
-            AzureSubscriptionBox,
+            LaunchCheck, ModeCombo, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck, AzureSubscriptionBox,
         ];
         var draft = new Scribe.Core.Vocabulary.DraftSnapshot();
         foreach (var page in new FrameworkElement[] { SectionGeneral, SectionDictation, SectionOverlay, SectionAi })
@@ -5236,8 +5236,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Binding(_pendingDictationOnlyBinding is null
                 ? null
                 : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode })
-            .Flag(_capturing)
-            .List(_capturedKeys.Select(key => key.ToString()));
+            .Flag(_capturing);
         draft.Part("intents")
             .Flag(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
             .Microphone(_externalMicrophone.ForSave(ShownMicrophone));
