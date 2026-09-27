@@ -577,14 +577,26 @@ public sealed class TextInjector : ITextInjector
     internal static INPUT[] BuildUnicodeChunk(
         string text, int start, int count, bool shiftEnter = true, InjectionKeys keys = default)
     {
-        var inputs = new List<INPUT>(count * 2);
+        var inputs = new INPUT[CountKeyEvents(text, start, count, shiftEnter)];
+        int written = 0;
         int end = start + count;
         for (int i = start; i < end; i++)
         {
             char ch = text[i];
             if (ch is '\r' or '\n')
             {
-                inputs.AddRange(BuildLineBreak(shiftEnter, keys));
+                if (shiftEnter)
+                {
+                    inputs[written++] = KeyDown(VK_SHIFT, keys.Shift);
+                    inputs[written++] = KeyDown(VK_RETURN, keys.Return);
+                    inputs[written++] = KeyUp(VK_RETURN, keys.Return);
+                    inputs[written++] = KeyUp(VK_SHIFT, keys.Shift);
+                }
+                else
+                {
+                    inputs[written++] = KeyDown(VK_RETURN, keys.Return);
+                    inputs[written++] = KeyUp(VK_RETURN, keys.Return);
+                }
 
                 // CRLF is one line break, not two. ChunkLength guarantees the pair is never split
                 // across batches, so the lookahead never runs past the end of this chunk.
@@ -596,11 +608,11 @@ public sealed class TextInjector : ITextInjector
                 continue;
             }
 
-            inputs.Add(UnicodeKey(ch, keyUp: false));
-            inputs.Add(UnicodeKey(ch, keyUp: true));
+            inputs[written++] = UnicodeKey(ch, keyUp: false);
+            inputs[written++] = UnicodeKey(ch, keyUp: true);
         }
 
-        return [.. inputs];
+        return inputs;
     }
 
     // A line break has to be a real Return keypress. Sent as KEYEVENTF_UNICODE the bare LF control
