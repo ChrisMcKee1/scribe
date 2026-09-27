@@ -30,16 +30,25 @@ public static class FirstRunHint
 
 public sealed record AppProgramGroup(string Key, string DisplayName, IReadOnlyList<string> Programs)
 {
-    public bool Contains(string? processName)
+    public bool Contains(string? processName) => ContainsNormalized(AppDisplayName.NormalizeProcessName(processName));
+
+    internal bool ContainsNormalized(string normalized)
     {
-        var normalized = AppDisplayName.NormalizeProcessName(processName);
-        return Programs.Any(program => string.Equals(program, normalized, StringComparison.OrdinalIgnoreCase));
+        for (var i = 0; i < Programs.Count; i++)
+        {
+            if (string.Equals(Programs[i], normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
 public static partial class AppDisplayName
 {
-    private static readonly IReadOnlyList<AppProgramGroup> Groups =
+    private static readonly AppProgramGroup[] Groups =
     [
         new("outlook", "Outlook", ["OUTLOOK"]),
         new("new-outlook", "New Outlook", ["olk"]),
@@ -75,7 +84,7 @@ public static partial class AppDisplayName
             return string.Empty;
         }
 
-        var group = GroupFor(normalized);
+        var group = FirstGroupContaining(NormalizeAgain(normalized));
         if (group is not null)
         {
             return group.DisplayName;
@@ -84,22 +93,18 @@ public static partial class AppDisplayName
         return Known.TryGetValue(normalized, out var display) ? display : normalized;
     }
 
-    public static AppProgramGroup? GroupFor(string? processName)
-    {
-        var normalized = NormalizeProcessName(processName);
-        return normalized.Length == 0 ? null : Groups.FirstOrDefault(group => group.Contains(normalized));
-    }
+    public static AppProgramGroup? GroupFor(string? processName) => FirstGroupContaining(NormalizeProcessName(processName));
 
     public static string GroupKeyFor(string? processName)
     {
         var normalized = NormalizeProcessName(processName);
-        return GroupFor(normalized)?.Key ?? normalized;
+        return FirstGroupContaining(NormalizeAgain(normalized))?.Key ?? normalized;
     }
 
     public static IReadOnlyList<string> GroupMembersFor(string? processName)
     {
         var normalized = NormalizeProcessName(processName);
-        var group = GroupFor(normalized);
+        var group = FirstGroupContaining(NormalizeAgain(normalized));
         return group is null ? [normalized] : group.Programs;
     }
 
@@ -112,6 +117,49 @@ public static partial class AppDisplayName
         }
 
         return MultipleWhitespace().Replace(value, " ");
+    }
+
+    // GroupFor for the name its NormalizeProcessName call returned. AppProgramGroup.Contains normalizes its argument again,
+    // for every group alike, so it is normalized once here.
+    private static AppProgramGroup? FirstGroupContaining(string normalized)
+    {
+        if (normalized.Length == 0)
+        {
+            return null;
+        }
+
+        var member = NormalizeAgain(normalized);
+        foreach (var group in Groups)
+        {
+            if (group.ContainsNormalized(member))
+            {
+                return group;
+            }
+        }
+
+        return null;
+    }
+
+    // Normalizing is not idempotent: "x.exe.exe" loses one ".exe" per pass, and stripping ".exe" from "x .exe" exposes a space the
+    // next pass trims. The group lookups have always normalized a name two or three times, so a name that is not yet a fixed
+    // point still gets each pass; one that is (the usual process name) skips them, since they would return the same text.
+    private static string NormalizeAgain(string normalized) =>
+        IsFixedPoint(normalized) ? normalized : NormalizeProcessName(normalized);
+
+    // True only when NormalizeProcessName would return this text unchanged: no white space to trim at either end, no ".exe" to
+    // strip, and no white-space run the collapse would rewrite (every one a single U+0020). The pattern's \s is char.IsWhiteSpace.
+    private static bool IsFixedPoint(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsWhiteSpace(value[i]) &&
+                (i == 0 || i == value.Length - 1 || value[i] != ' ' || char.IsWhiteSpace(value[i + 1])))
+            {
+                return false;
+            }
+        }
+
+        return !value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
     }
 
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
