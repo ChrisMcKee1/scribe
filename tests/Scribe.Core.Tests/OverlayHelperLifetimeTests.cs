@@ -1134,6 +1134,228 @@ public sealed class OverlayHelperLifetimeTests
         Assert.Equal([Idle + 10], consumer.At("Write PARTLYTYPED Copy it from the tray menu"));
     }
 
+    // ---- The pill turned on: the idle deadline trims the helper instead of ending it ------------------------------------
+
+    [Fact]
+    public void With_the_pill_on_the_idle_deadline_trims_the_helper_once_and_the_next_pill_needs_no_launch()
+    {
+        // 84 of 472 dictations in Chris's logs found the suspended helper gone and waited 0.5 to 11 s for a relaunch.
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+
+        consumer.AdvanceTo(Idle);
+        Assert.Equal([Idle], consumer.At("Trim"));
+        Assert.Equal(OverlayHelperStatus.Alive, consumer.HelperStatus);
+
+        // Once per idle period: nothing more falls due until a command arms the deadline again.
+        consumer.AdvanceTo(3 * Idle);
+        Assert.Equal([Idle], consumer.At("Trim"));
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        consumer.Drain();
+        Assert.Equal([0L], consumer.At("Launch"));
+        Assert.Equal(["Write RECORDING", "Write HIDE"], consumer.WhatSince(3 * Idle));
+
+        consumer.AdvanceTo(5 * Idle);
+        Assert.Equal([Idle, 4 * Idle], consumer.At("Trim"));
+        Assert.Empty(consumer.At("Suspend"));
+    }
+
+    [Fact]
+    public void With_the_pill_off_the_idle_deadline_ends_the_helper_as_before()
+    {
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(false);
+        consumer.Warmup();
+        consumer.Drain();
+
+        consumer.AdvanceTo(2 * Idle);
+        Assert.Equal([Idle], consumer.At("Suspend"));
+        Assert.Empty(consumer.At("Trim"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        Assert.Equal([0L, 2 * Idle], consumer.At("Launch"));
+    }
+
+    [Fact]
+    public void With_the_pill_on_a_helper_that_is_not_running_is_neither_trimmed_nor_launched()
+    {
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.FailNextLaunches(1);
+        consumer.Warmup();
+        consumer.Drain(); // the warmup's launch fails; nothing is on screen, so no retry is pending
+
+        consumer.AdvanceTo(3 * Idle);
+        Assert.Equal(["Launch"], consumer.WhatSince(0));
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+    }
+
+    [Fact]
+    public void With_the_pill_on_a_helper_lost_while_idle_is_classified_as_before_and_not_relaunched()
+    {
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+        consumer.CrashHelperAt(20_000);
+
+        consumer.AdvanceTo(2 * Idle);
+        Assert.Equal(new OverlayHelperLoss(20_000, null), consumer.Lifetime.LastLoss); // lived past the stable window
+        Assert.Empty(consumer.At("Trim"));
+        Assert.Equal([0L], consumer.At("Launch"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+    }
+
+    [Fact]
+    public void A_command_stamped_after_the_deadline_was_armed_vetoes_the_trim()
+    {
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+
+        consumer.AdvanceTo(Idle - 1);
+        consumer.PublishOnly(OverlayDemand.Sustained);
+        consumer.StampAndEnqueue("RECORDING"); // stamped and queued, not yet taken when the deadline falls
+        consumer.AdvanceTo(Idle);
+        Assert.Empty(consumer.At("Trim"));
+
+        consumer.Drain();
+        Assert.Equal([Idle], consumer.At("Write RECORDING"));
+    }
+
+    [Fact]
+    public void A_recording_on_screen_vetoes_the_trim_however_long_it_runs()
+    {
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+
+        for (var t = 1_000L; t <= 3 * Idle; t += 1_000)
+        {
+            consumer.AdvanceTo(t);
+            consumer.Meter();
+        }
+
+        Assert.Empty(consumer.At("Trim"));
+        Assert.Empty(consumer.At("Suspend"));
+    }
+
+    [Fact]
+    public void An_outcome_on_screen_holds_the_trim_until_it_has_hidden()
+    {
+        var consumer = new Consumer(idleMs: 200);
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+        consumer.AdvanceTo(100);
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.Drain();
+
+        consumer.AdvanceTo(5_000);
+        Assert.Equal([100 + TypedOnScreen], consumer.At("Trim"));
+    }
+
+    [Fact]
+    public void Turning_the_pill_on_or_off_changes_what_the_next_deadline_does()
+    {
+        var consumer = new Consumer();
+        consumer.Warmup();
+        consumer.Drain();
+
+        consumer.AdvanceTo(1_000);
+        consumer.Lifetime.SetKeepResident(true); // a deadline already armed follows the new mode
+        consumer.AdvanceTo(Idle);
+        Assert.Equal([Idle], consumer.At("Trim"));
+
+        consumer.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        consumer.Drain();
+        consumer.Lifetime.SetKeepResident(false);
+        consumer.AdvanceTo(3 * Idle);
+        Assert.Equal([2 * Idle], consumer.At("Suspend"));
+        Assert.Equal([Idle], consumer.At("Trim"));
+    }
+
+    [Fact]
+    public void A_zero_idle_period_never_trims_or_ends_the_helper()
+    {
+        var consumer = new Consumer(idleMs: 0);
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+        consumer.AdvanceTo(10 * Idle);
+        Assert.Equal(["Launch", "Replay POSITION BottomCenter", "Replay HIDE", "Write WARMUP"], consumer.WhatSince(0));
+    }
+
+    [Fact]
+    public void A_trim_keeps_the_helper_s_launch_time_so_a_later_loss_is_judged_from_its_launch()
+    {
+        // A suspend ends the helper on purpose and forgets when it was launched; a trimmed helper is still that helper.
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+        consumer.AdvanceTo(Idle);
+        Assert.Equal([Idle], consumer.At("Trim"));
+
+        consumer.CrashHelperAt(Idle + 1_000);
+        consumer.AdvanceTo(Idle + 2_000);
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+
+        Assert.Equal(new OverlayHelperLoss(Idle + 1_000, null), consumer.Lifetime.LastLoss);
+        Assert.Equal(0, consumer.Lifetime.ConsecutiveFailures);
+        Assert.Equal([0L, Idle + 2_000], consumer.At("Launch")); // stable, so no cooldown holds the relaunch back
+    }
+
+    [Fact]
+    public void With_the_pill_on_a_pause_still_releases_the_helper_trimmed_or_not()
+    {
+        var consumer = new Consumer();
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+        consumer.AdvanceTo(Idle);
+        Assert.Equal([Idle], consumer.At("Trim"));
+
+        consumer.AdvanceTo(Idle + 5_000);
+        consumer.RequestRelease();
+        consumer.Drain();
+        Assert.Equal([Idle + 5_000], consumer.At("Release"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+    }
+
+    [Fact]
+    public void With_the_pill_on_a_release_waiting_for_an_outcome_is_judged_before_the_idle_deadline()
+    {
+        // The pause's own dictation shows its outcome, the release waits for it, and the idle deadline, due at the same
+        // moment, never takes the release's place.
+        var consumer = new Consumer(idleMs: 200);
+        consumer.Lifetime.SetKeepResident(true);
+        consumer.Warmup();
+        consumer.Drain();
+        consumer.AdvanceTo(100);
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+        Assert.Equal(100 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs);
+
+        consumer.AdvanceTo(5_000);
+        Assert.Equal([100 + TypedOnScreen], consumer.At("Release"));
+        Assert.Empty(consumer.At("Trim"));
+    }
+
     /// <summary>
     /// Plays the overlay client's consumer and its producers against a scripted clock and a simulated
     /// helper, recording each decision as "<c>What</c> at <c>time</c>".
@@ -1427,6 +1649,9 @@ public sealed class OverlayHelperLifetimeTests
                 case OverlayDueWork.Release:
                     Record("Release");
                     _helper = OverlayHelperStatus.Absent;
+                    break;
+                case OverlayDueWork.Trim:
+                    Record("Trim"); // the helper keeps running, its pipe and its launch time with it
                     break;
                 case OverlayDueWork.Retry:
                     Record("Retry");

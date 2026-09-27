@@ -64,8 +64,8 @@ public enum OverlayDueWork
     None,
 
     /// <summary>
-    /// End the running helper to reclaim its memory (EXIT, then kill), keeping the consumer running so the
-    /// next command that needs the pill relaunches it.
+    /// The keep-warm period passed with nothing on screen and the pill turned off: end the running helper to reclaim its
+    /// memory (EXIT, then kill), keeping the consumer running so the next command that needs the pill relaunches it.
     /// </summary>
     Suspend,
 
@@ -74,9 +74,16 @@ public enum OverlayDueWork
 
     /// <summary>
     /// End the running helper because dictation was paused (EXIT, then kill), as <see cref="Suspend"/> does, now or once the
-    /// outcome that was on screen when the pause asked has hidden.
+    /// outcome that was on screen when the pause asked has hidden. Whether the pill is turned on makes no difference.
     /// </summary>
     Release,
+
+    /// <summary>
+    /// The keep-warm period passed with nothing on screen while the pill is turned on
+    /// (<see cref="OverlayHelperLifetime.SetKeepResident"/>): trim the running helper's working set and keep it running, so
+    /// the next pill shows at once instead of after a relaunch.
+    /// </summary>
+    Trim,
 }
 
 /// <summary>How a launch attempt ended.</summary>
@@ -99,9 +106,9 @@ public readonly record struct OverlayHelperLoss(long? LivedMs, long? CooldownMs)
 
 /// <summary>
 /// Every lifetime decision the overlay client's command consumer makes about the helper process: when to
-/// wake, whether an idle helper is suspended, whether a command is written, launches the helper, or waits
+/// wake, whether an idle helper is trimmed or ended, whether a command is written, launches the helper, or waits
 /// out a cooldown, how a lost helper is classified, what a launch outcome does, and what shutdown ends.
-/// The client carries the decisions out (process start, pipe I/O, kill) and decides nothing itself, so the
+/// The client carries the decisions out (process start, pipe I/O, trim, kill) and decides nothing itself, so the
 /// behavior is pinned here against a scripted clock instead of living in glue that no test reaches.
 /// </summary>
 /// <remarks>
@@ -112,6 +119,15 @@ public readonly record struct OverlayHelperLoss(long? LivedMs, long? CooldownMs)
 /// cancels a pending retry, a lost helper is classified before anything else is decided, the consumer
 /// wakes at the earliest of the idle deadline, the retry and a waiting release, and after shutdown nothing
 /// falls due.
+/// </para>
+/// <para>
+/// What the idle deadline does depends on whether the pill is turned on (<see cref="SetKeepResident"/>). With it on, a
+/// running helper is trimmed and kept (<see cref="OverlayDueWork.Trim"/>): its working set goes back to Windows, and the
+/// next pill shows at once instead of waiting for a relaunch, which Chris's logs show taking 0.5 s on an idle machine and
+/// 2 to 11 s while the speech models reload at the same recording start. A trimmed helper is still the helper that was
+/// launched: it keeps its launch time for the stable window, and nothing pending is cancelled. With the pill off, the
+/// deadline ends the helper (<see cref="OverlayDueWork.Suspend"/>), as it always did. Both commit on the same validation,
+/// once per idle period; a pause release ends the helper either way.
 /// </para>
 /// <para>
 /// A lost helper is brought back whenever the latest state keeps the pill on screen (a recording or
@@ -142,6 +158,7 @@ public sealed class OverlayHelperLifetime
     private readonly OverlayIdleDeadline _idle = new();
     private readonly OverlayLaunchBackoff _backoff;
     private long _idleMs;
+    private bool _keepResident;
     private bool _exited;
 
     // A pause release that waits for the outcome on screen to hide: its stamp, and when it falls due.
@@ -172,8 +189,11 @@ public sealed class OverlayHelperLifetime
     /// <summary>How long a launched helper must run before losing it is no longer counted as a failed launch.</summary>
     public long StableAfterMs => _backoff.StableAfterMs;
 
-    /// <summary>The idle period in milliseconds; zero never suspends.</summary>
+    /// <summary>The idle period in milliseconds; zero never trims or ends the helper.</summary>
     public long IdlePeriodMs => _idleMs;
+
+    /// <summary>Whether the idle deadline trims a running helper and keeps it (<see cref="SetKeepResident"/>). For logging.</summary>
+    public bool KeepResident => _keepResident;
 
     /// <summary>How the most recently lost helper was classified, or <c>null</c> before any loss. For logging.</summary>
     public OverlayHelperLoss? LastLoss { get; private set; }
@@ -189,10 +209,19 @@ public sealed class OverlayHelperLifetime
     public long IssueStamp() => _idle.NoteCommandIssued();
 
     /// <summary>
-    /// Sets the idle period after which an unused helper is suspended (the keep-warm setting). Zero or less
-    /// never suspends. It also applies to a deadline that is already armed.
+    /// Sets the idle period after which an unused helper is trimmed, while the pill is turned on, or ended, while it is off
+    /// (the keep-warm setting; see <see cref="SetKeepResident"/>). Zero or less never does either. It also applies to a
+    /// deadline that is already armed.
     /// </summary>
     public void SetIdlePeriodMs(long idleMs) => _idleMs = Math.Max(0, idleMs);
+
+    /// <summary>
+    /// Whether the pill is turned on, so an idle helper is kept running: when the idle period passes with nothing on screen,
+    /// the deadline trims a running helper (<see cref="OverlayDueWork.Trim"/>) instead of ending it
+    /// (<see cref="OverlayDueWork.Suspend"/>). False, as it starts, ends it as before; a pause release ends it either way.
+    /// The next deadline follows the latest value, one already armed included.
+    /// </summary>
+    public void SetKeepResident(bool keepResident) => _keepResident = keepResident;
 
     /// <summary>
     /// When the consumer must next wake to run <see cref="TakeDueWork"/> even if no command arrives: the
@@ -205,10 +234,11 @@ public sealed class OverlayHelperLifetime
     /// <summary>
     /// Runs whatever has fallen due at <paramref name="nowMs"/>. Call it whenever <see cref="NextWakeAtMs"/>
     /// is at or before now; it always moves that wake time past now or clears it, so the consumer cannot
-    /// spin. A pause release that waited for an outcome to hide is judged again, as when it arrived. An idle
-    /// suspend commits only when no command has been stamped since the deadline was armed, the latest state
-    /// does not keep the pill on screen and no outcome is still on screen; it cancels a pending retry. The
-    /// retry applies only while the latest state still keeps the pill on screen.
+    /// spin. A pause release that waited for an outcome to hide is judged again, as when it arrived. The idle
+    /// deadline commits only when no command has been stamped since it was armed, the latest state does not keep
+    /// the pill on screen and no outcome is still on screen, and then only once until the next command: with the pill
+    /// turned on it trims a running helper and keeps it, touching nothing else; otherwise it ends the helper and cancels
+    /// a pending retry. The retry applies only while the latest state still keeps the pill on screen.
     /// </summary>
     public OverlayDueWork TakeDueWork(long nowMs, OverlayDemand demand, OverlayHelperObservation helper)
     {
@@ -225,6 +255,12 @@ public sealed class OverlayHelperLifetime
 
         if (_idle.TryCommitSuspend(nowMs, _idleMs, demand))
         {
+            // The helper stays, so it is not ended on purpose: it keeps its launch time for the stable window.
+            if (_keepResident && helper.Status == OverlayHelperStatus.Alive)
+            {
+                return OverlayDueWork.Trim;
+            }
+
             EndedOnPurpose();
             return helper.Status == OverlayHelperStatus.Alive ? OverlayDueWork.Suspend : OverlayDueWork.None;
         }

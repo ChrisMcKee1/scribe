@@ -1,9 +1,10 @@
 namespace Scribe.Core.Overlay;
 
 /// <summary>
-/// Decides when the overlay helper process has sat idle long enough to be suspended, and makes that
-/// decision safe against a command racing it. One of the two policies <see cref="OverlayHelperLifetime"/>
-/// combines; the client never calls it directly.
+/// Decides when the overlay helper process has sat idle long enough to be trimmed or ended (which of the two is
+/// <see cref="OverlayHelperLifetime"/>'s choice, by whether the pill is turned on), and makes that decision safe against a
+/// command racing it. One of the two policies <see cref="OverlayHelperLifetime"/> combines; the client never calls it
+/// directly.
 /// </summary>
 /// <remarks>
 /// <para>
