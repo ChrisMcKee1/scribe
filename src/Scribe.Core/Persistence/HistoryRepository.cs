@@ -219,18 +219,21 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
         var textQuery = query.Trim();
         using var connection = _database.Open();
-        using var command = CreateHistoryReadCommand(connection);
+        using var command = CreateHistoryReadCommand(connection, ", text LIKE $query ESCAPE '\\' AS text_match");
         command.CommandText +=
             """
              FROM history
+            WHERE text LIKE $query ESCAPE '\'
+                OR target_app IS NOT NULL
             ORDER BY timestamp_utc DESC, id DESC
             """;
+        command.Parameters.AddWithValue("$query", $"%{EscapeLike(textQuery)}%");
 
         var results = new List<HistoryEntry>();
         using var reader = command.ExecuteReader();
         while (reader.Read() && results.Count < limit)
         {
-            if (TextMatches(reader.GetString(2), textQuery) ||
+            if (reader.GetInt64(10) != 0 ||
                 AppMatches(reader.IsDBNull(6) ? null : reader.GetString(6), query))
             {
                 results.Add(ReadHistoryEntry(reader));
@@ -282,8 +285,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9));
 
-    private static bool TextMatches(string text, string query) =>
-        text.Contains(query, StringComparison.OrdinalIgnoreCase);
+    private static string EscapeLike(string query) =>
+        query.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
 
     private static bool AppMatches(string? targetApp, string query) =>
         !string.IsNullOrWhiteSpace(targetApp) &&

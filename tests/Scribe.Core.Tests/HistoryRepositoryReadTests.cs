@@ -95,7 +95,7 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     [Fact]
 
-    public void Search_uses_ordinal_text_matching_and_friendly_app_names_for_apps()
+    public void Search_uses_sqlite_like_for_text_and_friendly_app_names_for_apps()
 
     {
 
@@ -115,9 +115,9 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
         var accentResults = repository.Search("été", 10);
 
-        Assert.Contains(accentResults, entry => entry.Id == accentNullApp.Id);
+        Assert.DoesNotContain(accentResults, entry => entry.Id == accentNullApp.Id);
 
-        Assert.Contains(accentResults, entry => entry.Id == accentWithApp.Id);
+        Assert.DoesNotContain(accentResults, entry => entry.Id == accentWithApp.Id);
 
         Assert.Contains(repository.Search("ascii", 10), entry => entry.Id == ascii.Id);
 
@@ -213,51 +213,87 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
         var repository = new HistoryRepository(database);
 
-        var rows = new[]
+        repository.Add(Entry(Now.AddMinutes(1), "Émile writes a note", targetApp: "notepad"));
+
+        repository.Add(Entry(Now.AddMinutes(2), "Greek δς sample", targetApp: "δς.exe"));
+
+        repository.Add(Entry(Now.AddMinutes(3), "İstanbul and Izmir", targetApp: "Éditeur.exe"));
+
+        repository.Add(Entry(Now.AddMinutes(4), "literal 100% and ABC_123", targetApp: "Writer  Pro.exe"));
+
+        repository.Add(Entry(Now.AddMinutes(5), "plain code text", targetApp: " code.exe "));
+
+        repository.Add(Entry(Now.AddMinutes(6), "plain word text", targetApp: "WINWORD.EXE"));
+
+        repository.Add(Entry(Now.AddMinutes(7), "needle oldest", targetApp: "notepad"));
+
+        repository.Add(Entry(Now.AddMinutes(8), "needle middle", targetApp: "notepad"));
+
+        repository.Add(Entry(Now.AddMinutes(9), "needle newest", targetApp: "notepad"));
+
+
+
+        AssertMatchesReference(database, repository, "émile", 10);
+
+        AssertMatchesReference(database, repository, "δσ", 10);
+
+        AssertMatchesReference(database, repository, "é", 10);
+
+        AssertMatchesReference(database, repository, "été", 10);
+
+        AssertMatchesReference(database, repository, "ÉTÉ", 10);
+
+        AssertMatchesReference(database, repository, "𐐨", 10);
+
+        AssertMatchesReference(database, repository, "Writer Pro", 10);
+
+        AssertMatchesReference(database, repository, "VS Code", 10);
+
+        AssertMatchesReference(database, repository, " Word ", 10);
+
+        AssertMatchesReference(database, repository, "word", 10);
+
+        AssertMatchesReference(database, repository, "100%", 10);
+
+        AssertMatchesReference(database, repository, "ABC_123", 10);
+
+        AssertMatchesReference(database, repository, "needle", 2);
+
+    }
+
+
+
+    [Fact]
+
+    public void Search_keeps_sqlite_text_limit_when_accented_case_differs()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        var oldMatches = new List<HistoryEntry>();
+
+        for (var index = 0; index < 50; index++)
 
         {
 
-            repository.Add(Entry(Now.AddMinutes(1), "Émile writes a note", targetApp: "notepad")),
+            oldMatches.Add(repository.Add(Entry(Now.AddMinutes(index), $"été row {index}")));
 
-            repository.Add(Entry(Now.AddMinutes(2), "Greek δς sample", targetApp: "δς.exe")),
+        }
 
-            repository.Add(Entry(Now.AddMinutes(3), "İstanbul and Izmir", targetApp: "Éditeur.exe")),
-
-            repository.Add(Entry(Now.AddMinutes(4), "literal 100% and ABC_123", targetApp: "Writer  Pro.exe")),
-
-            repository.Add(Entry(Now.AddMinutes(5), "plain code text", targetApp: " code.exe ")),
-
-            repository.Add(Entry(Now.AddMinutes(6), "plain word text", targetApp: "WINWORD.EXE")),
-
-            repository.Add(Entry(Now.AddMinutes(7), "needle oldest", targetApp: "notepad")),
-
-            repository.Add(Entry(Now.AddMinutes(8), "needle middle", targetApp: "notepad")),
-
-            repository.Add(Entry(Now.AddMinutes(9), "needle newest", targetApp: "notepad")),
-
-        };
+        var newestNonMatch = repository.Add(Entry(Now.AddMinutes(100), "ÉTÉ newest"));
 
 
 
-        AssertMatchesReference(repository, rows, "émile", 10);
+        var results = repository.Search("été", 50);
 
-        AssertMatchesReference(repository, rows, "δσ", 10);
 
-        AssertMatchesReference(repository, rows, "é", 10);
 
-        AssertMatchesReference(repository, rows, "Writer Pro", 10);
+        Assert.DoesNotContain(results, entry => entry.Id == newestNonMatch.Id);
 
-        AssertMatchesReference(repository, rows, "VS Code", 10);
-
-        AssertMatchesReference(repository, rows, " Word ", 10);
-
-        AssertMatchesReference(repository, rows, "word", 10);
-
-        AssertMatchesReference(repository, rows, "100%", 10);
-
-        AssertMatchesReference(repository, rows, "ABC_123", 10);
-
-        AssertMatchesReference(repository, rows, "needle", 2);
+        Assert.Equal(oldMatches.OrderByDescending(entry => entry.TimestampUtc).Select(entry => entry.Id), results.Select(entry => entry.Id));
 
     }
 
@@ -377,9 +413,9 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     private static void AssertMatchesReference(
 
-        HistoryRepository repository,
+        ScribeDatabase database,
 
-        IReadOnlyList<HistoryEntry> rows,
+        HistoryRepository repository,
 
         string query,
 
@@ -389,7 +425,7 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
         Assert.Equal(
 
-            ReferenceSearch(rows, query, limit).Select(entry => entry.Id),
+            ReferenceSearch(database, query, limit),
 
             repository.Search(query, limit).Select(entry => entry.Id));
 
@@ -397,7 +433,7 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
 
 
-    private static IReadOnlyList<HistoryEntry> ReferenceSearch(IReadOnlyList<HistoryEntry> rows, string query, int limit)
+    private static IReadOnlyList<long> ReferenceSearch(ScribeDatabase database, string query, int limit)
 
     {
 
@@ -411,27 +447,63 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
 
 
-        var textQuery = query.Trim();
+        using var connection = database.Open();
 
-        return rows
+        using var command = connection.CreateCommand();
 
-            .Where(entry =>
+        command.CommandText =
 
-                entry.Text.Contains(textQuery, StringComparison.OrdinalIgnoreCase) ||
+            """
 
-                (!string.IsNullOrWhiteSpace(entry.TargetApp) &&
+            SELECT id, text LIKE $query ESCAPE '\' AS text_match, target_app
 
-                 AppDisplayName.For(entry.TargetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+            FROM history
 
-            .OrderByDescending(entry => entry.TimestampUtc)
+            WHERE text LIKE $query ESCAPE '\'
 
-            .ThenByDescending(entry => entry.Id)
+                OR target_app IS NOT NULL
 
-            .Take(limit)
+            ORDER BY timestamp_utc DESC, id DESC;
 
-            .ToList();
+            """;
+
+        command.Parameters.AddWithValue("$query", $"%{EscapeLike(query.Trim())}%");
+
+        var results = new List<long>();
+
+        using var reader = command.ExecuteReader();
+
+        while (reader.Read() && results.Count < limit)
+
+        {
+
+            if (reader.GetInt64(1) != 0 ||
+
+                (!reader.IsDBNull(2) && AppDisplayName.For(reader.GetString(2)).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+
+            {
+
+                results.Add(reader.GetInt64(0));
+
+            }
+
+        }
+
+
+
+        return results;
 
     }
+
+
+
+    private static string EscapeLike(string query) =>
+
+        query.Replace("\\", "\\\\", StringComparison.Ordinal)
+
+            .Replace("%", "\\%", StringComparison.Ordinal)
+
+            .Replace("_", "\\_", StringComparison.Ordinal);
 
 
 
