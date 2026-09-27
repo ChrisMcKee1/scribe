@@ -1,8 +1,11 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Scribe.Core.Models;
 
 using Scribe.Core.Persistence;
+
+using Scribe.Core.Settings;
 
 
 
@@ -92,7 +95,7 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     [Fact]
 
-    public void Search_uses_sqlite_like_for_text_and_friendly_app_names_for_apps()
+    public void Search_uses_ordinal_text_matching_and_friendly_app_names_for_apps()
 
     {
 
@@ -112,9 +115,9 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
         var accentResults = repository.Search("été", 10);
 
-        Assert.DoesNotContain(accentResults, entry => entry.Id == accentNullApp.Id);
+        Assert.Contains(accentResults, entry => entry.Id == accentNullApp.Id);
 
-        Assert.DoesNotContain(accentResults, entry => entry.Id == accentWithApp.Id);
+        Assert.Contains(accentResults, entry => entry.Id == accentWithApp.Id);
 
         Assert.Contains(repository.Search("ascii", 10), entry => entry.Id == ascii.Id);
 
@@ -202,6 +205,94 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     [Fact]
 
+    public void Search_matches_the_client_side_predicate_for_unicode_apps_literals_and_limits()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        var rows = new[]
+
+        {
+
+            repository.Add(Entry(Now.AddMinutes(1), "Émile writes a note", targetApp: "notepad")),
+
+            repository.Add(Entry(Now.AddMinutes(2), "Greek δς sample", targetApp: "δς.exe")),
+
+            repository.Add(Entry(Now.AddMinutes(3), "İstanbul and Izmir", targetApp: "Éditeur.exe")),
+
+            repository.Add(Entry(Now.AddMinutes(4), "literal 100% and ABC_123", targetApp: "Writer  Pro.exe")),
+
+            repository.Add(Entry(Now.AddMinutes(5), "plain code text", targetApp: " code.exe ")),
+
+            repository.Add(Entry(Now.AddMinutes(6), "plain word text", targetApp: "WINWORD.EXE")),
+
+            repository.Add(Entry(Now.AddMinutes(7), "needle oldest", targetApp: "notepad")),
+
+            repository.Add(Entry(Now.AddMinutes(8), "needle middle", targetApp: "notepad")),
+
+            repository.Add(Entry(Now.AddMinutes(9), "needle newest", targetApp: "notepad")),
+
+        };
+
+
+
+        AssertMatchesReference(repository, rows, "émile", 10);
+
+        AssertMatchesReference(repository, rows, "δσ", 10);
+
+        AssertMatchesReference(repository, rows, "é", 10);
+
+        AssertMatchesReference(repository, rows, "Writer Pro", 10);
+
+        AssertMatchesReference(repository, rows, "VS Code", 10);
+
+        AssertMatchesReference(repository, rows, " Word ", 10);
+
+        AssertMatchesReference(repository, rows, "word", 10);
+
+        AssertMatchesReference(repository, rows, "100%", 10);
+
+        AssertMatchesReference(repository, rows, "ABC_123", 10);
+
+        AssertMatchesReference(repository, rows, "needle", 2);
+
+    }
+
+
+
+    [Fact]
+
+    public void Rolled_back_lazy_history_columns_are_not_cached_as_available()
+
+    {
+
+        CreateSchemaWithoutOptionalHistoryColumns(_folder.DatabasePath);
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        Assert.ThrowsAny<Exception>(() => repository.Add(Entry("first write rolls back", targetApp: null) with { Text = null! }));
+
+
+
+        var saved = repository.Add(Entry("second write succeeds"));
+
+
+
+        Assert.Equal("second write succeeds", repository.GetRecent(1).Single().Text);
+
+        Assert.True(saved.Id > 0);
+
+    }
+
+
+
+    [Fact]
+
     public void Ordered_search_waits_for_accepted_history_writes()
 
     {
@@ -281,5 +372,171 @@ public sealed class HistoryRepositoryReadTests : IDisposable
     private static HistoryEntry Entry(DateTimeOffset timestampUtc, string text, string? targetApp = null) =>
 
         new(0, timestampUtc, text, AudioMilliseconds: 1000, DecodeMilliseconds: 100, TargetApp: targetApp);
+
+
+
+    private static void AssertMatchesReference(
+
+        HistoryRepository repository,
+
+        IReadOnlyList<HistoryEntry> rows,
+
+        string query,
+
+        int limit)
+
+    {
+
+        Assert.Equal(
+
+            ReferenceSearch(rows, query, limit).Select(entry => entry.Id),
+
+            repository.Search(query, limit).Select(entry => entry.Id));
+
+    }
+
+
+
+    private static IReadOnlyList<HistoryEntry> ReferenceSearch(IReadOnlyList<HistoryEntry> rows, string query, int limit)
+
+    {
+
+        if (limit <= 0 || string.IsNullOrWhiteSpace(query))
+
+        {
+
+            return [];
+
+        }
+
+
+
+        var textQuery = query.Trim();
+
+        return rows
+
+            .Where(entry =>
+
+                entry.Text.Contains(textQuery, StringComparison.OrdinalIgnoreCase) ||
+
+                (!string.IsNullOrWhiteSpace(entry.TargetApp) &&
+
+                 AppDisplayName.For(entry.TargetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+
+            .OrderByDescending(entry => entry.TimestampUtc)
+
+            .ThenByDescending(entry => entry.Id)
+
+            .Take(limit)
+
+            .ToList();
+
+    }
+
+
+
+    private static void CreateSchemaWithoutOptionalHistoryColumns(string path)
+
+    {
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+
+        {
+
+            DataSource = path,
+
+            Mode = SqliteOpenMode.ReadWriteCreate,
+
+            Pooling = false,
+
+            ForeignKeys = true,
+
+        }.ToString());
+
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+
+        command.CommandText =
+
+            """
+
+            PRAGMA journal_mode=WAL;
+
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+
+            CREATE TABLE audio_blobs (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                sample_rate INTEGER NOT NULL,
+
+                samples BLOB NOT NULL,
+
+                created_utc TEXT NOT NULL);
+
+            CREATE TABLE history (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                timestamp_utc TEXT NOT NULL,
+
+                text TEXT NOT NULL,
+
+                audio_ms INTEGER NOT NULL,
+
+                decode_ms INTEGER NOT NULL,
+
+                target_app TEXT NULL,
+
+                audio_blob_id INTEGER NULL REFERENCES audio_blobs (id) ON DELETE SET NULL);
+
+            CREATE INDEX ix_history_timestamp ON history (timestamp_utc DESC);
+
+            CREATE TABLE dictionary (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                pattern TEXT NOT NULL,
+
+                replacement TEXT NOT NULL,
+
+                whole_word INTEGER NOT NULL DEFAULT 1,
+
+                enabled INTEGER NOT NULL DEFAULT 1);
+
+            CREATE UNIQUE INDEX ux_dictionary_pattern ON dictionary (pattern);
+
+            CREATE TABLE cleanup_failures (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                timestamp_utc TEXT NOT NULL,
+
+                provider TEXT NULL,
+
+                model TEXT NULL,
+
+                reason TEXT NOT NULL,
+
+                sample TEXT NULL);
+
+            CREATE TABLE snippets (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                phrase TEXT NOT NULL,
+
+                template TEXT NOT NULL,
+
+                enabled INTEGER NOT NULL DEFAULT 1);
+
+            PRAGMA user_version=7;
+
+            """;
+
+        command.ExecuteNonQuery();
+
+    }
 
 }

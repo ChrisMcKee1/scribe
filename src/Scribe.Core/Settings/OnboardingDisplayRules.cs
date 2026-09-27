@@ -67,14 +67,6 @@ public static partial class AppDisplayName
         ["zoom"] = "Zoom",
     };
 
-    private static readonly IReadOnlyList<string> KnownProcessNameList =
-        Groups.SelectMany(group => group.Programs)
-            .Concat(Known.Keys)
-            .Select(NormalizeProcessName)
-            .Where(name => name.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
     public static string For(string? processName)
     {
         var normalized = NormalizeProcessName(processName);
@@ -91,36 +83,6 @@ public static partial class AppDisplayName
 
         return Known.TryGetValue(normalized, out var display) ? display : normalized;
     }
-
-    public static IReadOnlyList<string> ProcessNamesWhoseDisplayMatches(string query)
-    {
-        var value = query.Trim();
-        if (value.Length == 0)
-        {
-            return [];
-        }
-
-        var matches = new List<string>();
-        foreach (var group in Groups)
-        {
-            if (group.DisplayName.Contains(value, StringComparison.OrdinalIgnoreCase))
-            {
-                matches.AddRange(group.Programs.Select(NormalizeProcessName));
-            }
-        }
-
-        foreach (var (processName, display) in Known)
-        {
-            if (display.Contains(value, StringComparison.OrdinalIgnoreCase))
-            {
-                matches.Add(NormalizeProcessName(processName));
-            }
-        }
-
-        return matches.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    public static IReadOnlyList<string> KnownProcessNames() => KnownProcessNameList;
 
     public static AppProgramGroup? GroupFor(string? processName)
     {
