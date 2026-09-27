@@ -60,6 +60,14 @@ dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release
 dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*ChunkLongTranscript*" --artifacts artifacts/performance/chunking
 ```
 
+These use BenchmarkDotNet's quick ShortRun job, which is right for a first look but can report error
+bars wider than the difference being measured. For any number you quote, add `--scribe-default-job`
+to use BenchmarkDotNet's default job, and report Mean, Error, StdDev and Allocated:
+
+```powershell
+dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --scribe-default-job --filter "*ReadAllAudio*" --artifacts artifacts/performance/audio
+```
+
 The benchmark job passes `/p:RuntimeIdentifier=win-x64` to both restore and build. This is required
 because BenchmarkDotNet's generated .NET 10 Windows project otherwise restores only the framework
 target while the Scribe project reference requests the `win-x64` target.

@@ -322,9 +322,12 @@ pwsh ./scripts/New-ScenarioFixtures.ps1
 # BenchmarkDotNet hot paths (Release is required; run from inside the repository, and pass
 # --artifacts <folder> to put the output elsewhere). BenchmarkDotNet raises every benchmark process to
 # High priority, so these are not Normal-priority measurements, and this job leaves the machine's power
-# plan alone (DontEnforcePowerPlan). --soak repeats real capture, post-processing and history writes
-# at the priority it was started with.
+# plan alone (DontEnforcePowerPlan). The default is the quick ShortRun job, for a first look: its error
+# bars can be wider than the difference being measured, so any number you quote comes from a run with
+# --scribe-default-job (BenchmarkDotNet's default job), with Mean, Error, StdDev and Allocated. --soak
+# repeats real capture, post-processing and history writes at the priority it was started with.
 dotnet run -c Release --project tools/Scribe.Benchmarks
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --scribe-default-job --filter *TextInjection*
 dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak
 
 # Offline AI-cleanup quality eval (no network, no judge model)
