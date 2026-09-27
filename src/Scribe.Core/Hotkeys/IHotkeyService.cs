@@ -102,6 +102,13 @@ public enum HotkeyDeactivation
     /// binding would have ended it.
     /// </summary>
     DesktopSwitch,
+
+    /// <summary>
+    /// Windows had removed the mouse hook (it removes a low-level hook whose callback misses the deadline) while a mouse
+    /// button binding was held or toggled on, and the hook's renewal found it gone. The button's release, or the toggle's
+    /// second click, may have happened while no hook could see it, so the recording is ended rather than left running.
+    /// </summary>
+    MouseHookLost,
 }
 
 public sealed class HotkeyTriggerEventArgs(

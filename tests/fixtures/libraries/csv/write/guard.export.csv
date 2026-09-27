@@ -1,0 +1,15 @@
+﻿# name: Guard
+# category: Custom
+# formula-guard: 1
+pattern,replacement,whole_word,enabled
+'=SUM(A1),'+1,true,true
+'-x,'@user,true,true
+'＝x,'＋x,true,true
+'－x,'＠x,true,true
+'	x,"'x",true,true
+"'
+x",'  =x,true,true
+''=x,'''+x,true,true
+'' =x,a=b,true,true
+','',true,true
+" ' =x","　=x",true,true

@@ -25,12 +25,15 @@ namespace Scribe.Core.Settings;
 /// </summary>
 public static class GlossaryHint
 {
-    /// <summary>What the page shows: its rows as typed, its enabled libraries' entries, and the settings on screen.</summary>
+    /// <summary>What the page shows: its rows as typed, its word pack entries, and the settings on screen.</summary>
     /// <param name="LibraryEntries">
-    /// The enabled libraries' entries as <see cref="DictionaryLibraryComposer.ComposeLibraries"/> returns them: one row per
-    /// spoken form, in precedence order (<see cref="Libraries.LibraryPrecedence"/>), which is what the library service
-    /// gives dictation's glossary. They are counted as given: a flattened list no longer says which library a row came
-    /// from, so any reordering here could only lose which library's row wins.
+    /// The enabled word pack entries that local dictation applies, as the draft composition returns them: one row per
+    /// spoken form, in precedence order. They are counted as given: a flattened list no longer says which word pack a row
+    /// came from, so any reordering here could only lose which word pack's row wins.
+    /// </param>
+    /// <param name="AiLibraryEntries">
+    /// The subset of <paramref name="LibraryEntries"/> that AI cleanup may receive, in the same composition order. Null
+    /// keeps the old contract for callers that have no separate AI permission.
     /// </param>
     public sealed record Input(
         IReadOnlyList<DictionaryEntryBuilder.Row> Rows,
@@ -38,7 +41,8 @@ public static class GlossaryHint
         bool AiCleanupOn,
         bool PostProcessingOn,
         CleanupProvider Provider,
-        CleanupPromptStyle PromptStyle);
+        CleanupPromptStyle PromptStyle,
+        IReadOnlyList<DictionaryEntry>? AiLibraryEntries = null);
 
     public static string Describe(Input input)
     {
@@ -48,34 +52,36 @@ public static class GlossaryHint
         // enabled as one that replaces it.
         var entries = DictionaryEntryBuilder.Build(input.Rows).Entries;
         var enabled = entries.Where(e => e.Enabled).ToList();
-        var text = new StringBuilder($"{Count(enabled.Count)} of {Count(entries.Count)} entries enabled");
+        var text = new StringBuilder($"{Count(enabled.Count)} of {Count(entries.Count)} words are on");
 
         // Dictation reads only enabled entries, so a disabled row never keeps a library term with the same
         // spoken form out of the vocabulary. The page's own rows are put in the order the repository reads the
         // saved dictionary back; that is the only reordering here, and it touches no library entry.
         var personal = enabled.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance).ToList();
-        var libraries = input.LibraryEntries;
-        var effective = CleanupPrompt.ComposeVocabulary(personal, libraries);
+        var localLibraries = input.LibraryEntries;
+        var aiLibraries = input.AiLibraryEntries ?? localLibraries;
+        var localVocabulary = CleanupPrompt.ComposeVocabulary(personal, localLibraries);
+        var aiVocabulary = CleanupPrompt.ComposeVocabulary(personal, aiLibraries);
         var personalTerms = DictionaryLibraryComposer.Merge(personal, []).Count;
 
         if (!input.AiCleanupOn)
         {
             text.Append('.');
-            return AppendLocalUse(text, effective.Count, input.PostProcessingOn, onlyWhenOff: true).ToString();
+            return AppendLocalUse(text, localVocabulary.Count, input.PostProcessingOn, onlyWhenOff: true).ToString();
         }
 
-        if (libraries.Count > 0 && effective.Count > personalTerms)
+        if (localLibraries.Count > 0 && localVocabulary.Count > personalTerms)
         {
-            text.Append($" plus {Count(effective.Count - personalTerms)} from enabled libraries");
+            text.Append($", plus {Count(localVocabulary.Count - personalTerms)} from word packs that are on");
         }
 
         text.Append('.');
-        AppendLocalUse(text, effective.Count, input.PostProcessingOn, onlyWhenOff: false);
+        AppendLocalUse(text, localVocabulary.Count, input.PostProcessingOn, onlyWhenOff: false);
 
         var local = CleanupPrompt.ResolvePromptStyle(input.PromptStyle, input.Provider) == CleanupPromptStyle.Local;
         var glossary = CleanupPrompt.CountGlossary(
-            effective, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider));
-        var templates = effective.Count(e => e.Enabled && !string.IsNullOrWhiteSpace(e.Replacement) &&
+            aiVocabulary, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider));
+        var templates = aiVocabulary.Count(e => e.Enabled && !string.IsNullOrWhiteSpace(e.Replacement) &&
                                              !CleanupPrompt.IsVocabularyReplacement(e.Replacement));
 
         if (glossary.Eligible == 0)
@@ -84,12 +90,12 @@ public static class GlossaryHint
         }
         else
         {
-            var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The on-device model" : "Your AI provider";
+            var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The AI model on this PC" : "Your AI service";
             if (glossary.Included == glossary.Eligible)
             {
                 var (terms, them) = glossary.Eligible == 1
-                    ? ("that term", "it")
-                    : ($"all {Count(glossary.Eligible)} terms", "them");
+                    ? ("that word", "it")
+                    : ($"all {Count(glossary.Eligible)} words", "them");
                 text.Append(
                     $" {receiver} receives {terms} as vocabulary with every cleanup request, whether or not the " +
                     $"dictation mentions {them}.");
@@ -97,13 +103,13 @@ public static class GlossaryHint
             else
             {
                 text.Append(
-                    $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} terms " +
+                    $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} words " +
                     "as vocabulary with every cleanup request, whether or not the dictation mentions them. Your own " +
-                    "entries come first.");
+                    "words come first.");
                 text.Append(local
-                    ? $" The Local prompt style stops the list at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms so " +
-                      "it fits a small model's context."
-                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms or " +
+                    ? $" With the short instructions, the list stops at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} " +
+                      "words or phrases so a small model can take it in."
+                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at " +
                       $"{Count(CleanupPrompt.MaxGlossaryChars)} characters.");
             }
         }
@@ -111,8 +117,9 @@ public static class GlossaryHint
         if (templates > 0)
         {
             text.Append(
-                $" {Count(templates)} {(templates == 1 ? "entry is" : "entries are")} left out because the written " +
-                $"form spans more than one line or runs past {Count(CleanupPrompt.MaxGlossaryTermChars)} characters.");
+                $" {Count(templates)} {(templates == 1 ? "word is" : "words are")} left out because what Scribe writes " +
+                $"for {(templates == 1 ? "it" : "them")} spans more than one line or runs past " +
+                $"{Count(CleanupPrompt.MaxGlossaryTermChars)} characters.");
         }
 
         return text.ToString();
@@ -131,8 +138,8 @@ public static class GlossaryHint
         {
             (true, true) => " It is applied on this PC.",
             (true, false) => " All of them are applied on this PC.",
-            (false, true) => " Post-processing is off, so it is not applied on this PC.",
-            (false, false) => " Post-processing is off, so none of them are applied on this PC.",
+            (false, true) => " Your dictionary and snippets are turned off, so it is not applied on this PC.",
+            (false, false) => " Your dictionary and snippets are turned off, so none of them are applied on this PC.",
         });
     }
 

@@ -63,7 +63,18 @@ public class SessionBannerTests : IDisposable
 
         var injection = Compose(settings).Split(Environment.NewLine).Single(line => line.Contains("injection: ", StringComparison.Ordinal));
 
-        Assert.EndsWith($"shiftEnter=True spaceAfter={addSpace}", injection, StringComparison.Ordinal);
+        Assert.EndsWith($"shiftEnter=True spaceAfter={addSpace} accent=Scribe", injection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Banner_records_the_accent_source_by_name_only()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.AccentSource = AccentSource.Windows;
+
+        var injection = Compose(settings).Split(Environment.NewLine).Single(line => line.Contains("injection: ", StringComparison.Ordinal));
+
+        Assert.EndsWith("accent=Windows", injection, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -75,11 +86,28 @@ public class SessionBannerTests : IDisposable
         settings.DictationOnlyHotkey = null;
         var stored = Compose(settings);
 
-        Assert.Contains("primary='Page Down'(vk=0x22 mods=None mode=Hold suppress=True chord=False)", fresh);
-        Assert.Contains("dictationOnly='Page Up'(vk=0x21 mods=None mode=Hold suppress=True chord=False)", fresh);
+        Assert.Contains("primary='Page Down'(vk=0x22 mods=None mode=Hold suppress=True chord=False input=key)", fresh);
+        Assert.Contains("dictationOnly='Page Up'(vk=0x21 mods=None mode=Hold suppress=True chord=False input=key)", fresh);
         Assert.Contains("primary='Page Down'(vk=0x22", stored);
         Assert.Contains("dictationOnly=none", stored);
         Assert.DoesNotContain("Next", stored);
+    }
+
+    [Fact]
+    public void Banner_says_which_hotkeys_press_a_mouse_button()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = Scribe.Core.Settings.HotkeyCaptureSession.Build([0x05], HotkeyMode.Hold);
+        settings.DictationOnlyHotkey = Scribe.Core.Settings.HotkeyCaptureSession.Build([0xA2, 0x04], HotkeyMode.Toggle);
+
+        var text = Compose(settings);
+
+        Assert.Contains(
+            "primary='Mouse Back (button 4)'(vk=0x05 mods=None mode=Hold suppress=True chord=False input=mouse)", text);
+        Assert.Contains(
+            "dictationOnly='Left Ctrl+Middle mouse button'(vk=0xA2 mods=None mode=Toggle suppress=True chord=True " +
+            "input=key+mouse)",
+            text);
     }
 
     [Fact]
@@ -96,7 +124,7 @@ public class SessionBannerTests : IDisposable
 
         var text = Compose(settings);
 
-        Assert.Contains("primary='Page Down+Oem1'(vk=0x22 mods=None mode=Hold suppress=True chord=True)", text);
+        Assert.Contains("primary='Page Down+Oem1'(vk=0x22 mods=None mode=Hold suppress=True chord=True input=key)", text);
         Assert.Contains("dictationOnly='Page Up+ImeConvert'(vk=0x21", text);
         Assert.DoesNotContain("Next", text);
         Assert.DoesNotContain("Prior", text);

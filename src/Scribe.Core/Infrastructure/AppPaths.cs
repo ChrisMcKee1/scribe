@@ -131,6 +131,24 @@ public sealed class AppPaths
     /// <summary>Imported custom dictionary libraries (one CSV per library).</summary>
     public string LibrariesDir { get; }
 
+    /// <summary>
+    /// Built-in libraries' edits documents, their last good copies and their set-aside copies. A subfolder, so neither
+    /// 0.4.3's loader nor <see cref="TryMigrateLibraries"/>, which read the top level only, ever sees them.
+    /// </summary>
+    internal string LibraryEditsDir => Path.Combine(LibrariesDir, LibraryEditsFolderName);
+
+    /// <summary>The library journal: manifests, redo images, set-aside manifests, kept orphan backups and the witness.</summary>
+    internal string LibraryJournalDir => Path.Combine(LibrariesDir, LibraryJournalFolderName);
+
+    /// <summary>Recently deleted custom libraries, each file kept byte for byte under a name that carries its deletion time.</summary>
+    internal string LibraryDeletedDir => Path.Combine(LibrariesDir, LibraryDeletedFolderName);
+
+    /// <summary>
+    /// The libraries folder as it exists outside this process, for display and hand-off only ("Open libraries folder");
+    /// see <see cref="EffectiveRootDir"/>. Scribe's own library I/O keeps using <see cref="LibrariesDir"/>.
+    /// </summary>
+    public string EffectiveLibrariesDir => Path.Combine(EffectiveRootDir, LibrariesFolderName);
+
     /// <summary>Full path to the SQLite database file.</summary>
     public string DatabasePath { get; }
 
@@ -148,6 +166,15 @@ public sealed class AppPaths
 
     /// <summary>Imported-library subfolder name, shared by the live path and the migration probes.</summary>
     public const string LibrariesFolderName = "libraries";
+
+    /// <summary>The edits documents' subfolder of the libraries folder.</summary>
+    internal const string LibraryEditsFolderName = "edits";
+
+    /// <summary>The journal's subfolder of the libraries folder.</summary>
+    internal const string LibraryJournalFolderName = "journal";
+
+    /// <summary>Recently deleted's subfolder of the libraries folder.</summary>
+    internal const string LibraryDeletedFolderName = "deleted";
 
     /// <summary>Log subfolder name, shared by the live path and the outside-the-container path.</summary>
     public const string LogsFolderName = "logs";

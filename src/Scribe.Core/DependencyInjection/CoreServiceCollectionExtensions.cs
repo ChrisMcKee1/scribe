@@ -3,6 +3,7 @@ using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Libraries;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
@@ -54,6 +55,7 @@ public static class CoreServiceCollectionExtensions
 
         // History commits in the background, in order, through the one concrete repository. IHistoryRepository is
         // that same repository behind a barrier that makes reads and maintenance wait for writes accepted before them.
+        services.AddSingleton<HistoryDeletionNotifier>();
         services.AddSingleton<HistoryRepository>();
         services.AddSingleton(sp => new HistoryWriter(
             sp.GetRequiredService<HistoryRepository>(), sp.GetRequiredService<ILogger<HistoryWriter>>()));
@@ -65,16 +67,48 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ICleanupFailureLog, CleanupFailureLog>();
 
         // Retention runs against the concrete repository, never through an IHistoryRepository
-        // wrapper: the database write gate is what serializes it with history writes.
+        // wrapper: the database write gate is what serializes it with history writes. The library storage's retention
+        // is one of its light steps, run with maintenance's own clock.
         services.AddSingleton<IHistoryMaintenance>(sp => sp.GetRequiredService<HistoryRepository>());
-        services.AddSingleton<StorageMaintenance>();
+        services.AddSingleton(sp => new StorageMaintenance(
+            sp.GetRequiredService<ScribeDatabase>(),
+            sp.GetRequiredService<IHistoryMaintenance>(),
+            sp.GetRequiredService<ICleanupFailureLog>(),
+            sp.GetRequiredService<ILogger<StorageMaintenance>>(),
+            TimeProvider.System,
+            StorageMaintenanceOptions.Default,
+            sp.GetRequiredService<DictionaryLibraryService>().Janitor));
         services.AddSingleton<LastTranscriptStore>();
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 
-        // Dictionary libraries: the built-in embedded set plus any custom CSVs the user imports.
-        // Layered on top of the base dictionary by the post-processor and the AI glossary.
-        services.AddSingleton<IDictionaryLibraryService, DictionaryLibraryService>();
+        // Dictionary libraries: the built-in embedded set plus any custom CSVs the user imports, and the journal that
+        // stores their changes. The three pure parts (the library CSV codec, the built-in overlay, composition and
+        // policy) are singletons the Libraries page shares with the service; one service stands behind all three of its
+        // interfaces, and the database says whether a repair ran at this start, which the library state reads a missing
+        // row by. The service reads for itself whether the stored document can be used (a session on defaults).
+        services.AddSingleton<ILibraryCsvCodec>(LibraryCsvCodec.Instance);
+        services.AddSingleton<IBuiltInLibraryOverlay>(BuiltInLibraryOverlay.Instance);
+        services.AddSingleton<ILibraryComposer>(LibraryComposer.Instance);
+        services.AddSingleton(sp =>
+        {
+            var database = sp.GetRequiredService<ScribeDatabase>();
+            return new DictionaryLibraryService(
+                sp.GetRequiredService<AppPaths>(),
+                sp.GetRequiredService<ISettingsRepository>(),
+                sp.GetRequiredService<ILogger<DictionaryLibraryService>>(),
+                LibraryServiceParts.Default with
+                {
+                    Codec = sp.GetRequiredService<ILibraryCsvCodec>(),
+                    Overlay = sp.GetRequiredService<IBuiltInLibraryOverlay>(),
+                    Composer = sp.GetRequiredService<ILibraryComposer>(),
+                    Context = () => new LibraryStateContext(
+                        RunningOnDefaults: false, DatabaseRepaired: database.RepairedAtStartup, GenerationStored: false),
+                });
+        });
+        services.AddSingleton<IDictionaryLibraryService>(sp => sp.GetRequiredService<DictionaryLibraryService>());
+        services.AddSingleton<ILibraryCatalogStore>(sp => sp.GetRequiredService<DictionaryLibraryService>());
+        services.AddSingleton<ILibraryVocabularySource>(sp => sp.GetRequiredService<DictionaryLibraryService>());
 
         // Optional AI cleanup (Foundry Local on-device, or a Microsoft Foundry deployment via the
         // user's Azure sign-in). Registered unconditionally; it stays inert until enabled in

@@ -48,6 +48,39 @@ public sealed class UsageReportTests
     }
 
     [Fact]
+    public void Everyday_abbreviations_are_not_offered_as_words_to_add()
+    {
+        // Found in the P5-HU renders: "Thursday at 2 PM" in ten dictations put "PM" under Words you could add, because
+        // Usage asked only whether a token was jargon-shaped and skipped the miner's stoplist.
+        var history = Enumerable.Range(1, 10)
+            .Select(i => Entry(i, Now.AddHours(-i), "Let's meet Thursday at 2 PM about the AKS cluster."))
+            .ToArray();
+
+        var result = Build(history, periodDays: 7);
+
+        Assert.DoesNotContain(result.Snapshot.Terms, term => term.Text == "PM");
+        Assert.Contains(result.Snapshot.Terms, term => term is { Text: "AKS", Covered: false });
+    }
+
+    [Fact]
+    public void Snapshot_uses_friendly_app_names_and_longest_dictation()
+    {
+        var history = new[]
+        {
+            Entry(1, Now.AddHours(-1), "one", audioMilliseconds: 1000, targetApp: "WINWORD.exe"),
+            Entry(2, Now.AddHours(-2), "two", audioMilliseconds: 2500, targetApp: "ms-teams"),
+            Entry(3, Now.AddHours(-3), "three", audioMilliseconds: 1200, targetApp: "Teams"),
+        };
+
+        var result = Build(history, periodDays: 7);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(2500), result.Snapshot.LongestDictation);
+        Assert.Contains(result.Snapshot.TopApps, app => app.Name == "Word");
+        Assert.Contains(result.Snapshot.TopApps, app => app is { Name: "Teams", Dictations: 2 });
+        Assert.Equal(2, result.Snapshot.TopApps.Count);
+    }
+
+    [Fact]
     public void Reads_one_row_past_the_cap_and_reports_a_capped_period()
     {
         var requested = 0;
@@ -120,6 +153,6 @@ public sealed class UsageReportTests
     private static UsageReport.Result Build(IReadOnlyList<HistoryEntry> history, int? periodDays) =>
         UsageReport.Build(limit => history, () => [], () => [], periodDays, Now, CancellationToken.None);
 
-    private static HistoryEntry Entry(long id, DateTimeOffset when, string text) =>
-        new(id, when, text, AudioMilliseconds: 1000, DecodeMilliseconds: 100, TargetApp: "notepad");
+    private static HistoryEntry Entry(long id, DateTimeOffset when, string text, int audioMilliseconds = 1000, string targetApp = "notepad") =>
+        new(id, when, text, AudioMilliseconds: audioMilliseconds, DecodeMilliseconds: 100, TargetApp: targetApp);
 }

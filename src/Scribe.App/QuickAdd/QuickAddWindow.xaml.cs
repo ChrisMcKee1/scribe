@@ -5,126 +5,154 @@ using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using Microsoft.Extensions.Logging;
+using Scribe.App.Infrastructure;
+using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Wpf.Ui.Controls;
 
 namespace Scribe.App.QuickAdd;
 
 /// <summary>
-/// The tray's quick "Add to dictionary" popup.
-///
-/// It exists because the slow part of fixing a misrecognition was never the dictionary grid, it was
-/// getting there (tray, settings, dictionary page, new row) and then retyping the wrong word from
-/// memory. A pattern with a typo in it silently never fires and gives the user no feedback saying
-/// why, so the spoken side is filled in by clicking the recognizer's own output instead.
-///
-/// All of the decisions live in <see cref="QuickDictionaryAdd"/>; this class is the surface.
+/// The tray's Add to dictionary window. Core builds the states and messages; this class binds them to WPF.
 /// </summary>
-public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
+public partial class QuickAddWindow : FluentWindow
 {
+    private const int WmDpiChanged = 0x02E0;
+
     private readonly Func<IReadOnlyList<DictionaryEntry>> _loadExisting;
     private readonly Func<DictionaryEntry, DictionaryEntry> _persist;
+    private readonly QuickAddWindowOptions _options;
+    private readonly TextScaleService? _textScale;
     private readonly ILogger? _logger;
     private readonly ObservableCollection<WordChip> _chips = new();
     private readonly List<TranscriptSource> _sources;
+    private readonly System.Windows.Threading.DispatcherTimer _announcementTimer;
 
-    private IReadOnlyList<DictionaryEntry> _existing;
+    private QuickAddVocabulary _vocabulary;
+    private bool _referencesAvailable = true;
     private string _transcript = string.Empty;
     private IReadOnlyList<QuickDictionaryAdd.Token> _tokens = [];
-
-    // The word range currently lit, or -1 when nothing is selected. Authoritative: chip visuals are
-    // written from it and never read back, so a toggle arriving from assistive tech cannot corrupt it.
     private int _first = -1;
     private int _last = -1;
-
-    // -1 means "no chip has been clicked yet", so a shift-click has nothing to extend from.
     private int _anchor = -1;
+    private int _focusIndex = -1;
     private bool _dragging;
-
-    // Guards the chip toggle handler while the selection itself is writing IsSelected on every chip.
     private bool _syncingChips;
+    private bool _keyboardFocusInWords;
+    private bool _allowClose;
+    private bool _closePromptActive;
+    private bool _dirtySinceSave;
+    private bool _suppressFieldChanged;
+    private string? _fixedTranscript;
+    private string? _pendingAnnouncementText;
+    private QuickDictionaryAdd.Plan? _lastPlan;
+    private QuickDictionaryAdd.Plan _currentPlan;
 
-    /// <summary>
-    /// What a successful save produced: the stored entry, plus the transcript it was built from and
-    /// that transcript rewritten by the new rule. The host uses the pair to repair the retained copy
-    /// in place, so "copy last dictation" hands back the corrected wording rather than the mistake.
-    /// <see cref="CorrectedTranscript"/> is null when the rule changed nothing in that transcript.
-    /// </summary>
+    public sealed record QuickAddWindowOptions(
+        bool AiCleanupEnabled = false,
+        bool DictionaryEnabled = true,
+        bool SettingsOpen = false,
+        Func<QuickAddVocabulary>? LoadVocabulary = null,
+        Func<IEnumerable<string>>? PendingSettingsSpokenForms = null,
+        Action? OpenAdvancedSettings = null,
+        Action<string>? ShowInSettings = null,
+        Action<string>? AddItInSettings = null,
+        Action<string>? FixInstead = null);
+
     public readonly record struct QuickAddResult(
         DictionaryEntry Entry,
         string? SourceTranscript,
-        string? CorrectedTranscript);
+        string? CorrectedTranscript,
+        bool CloseAfterSaving);
 
-    /// <summary>
-    /// Raised after an entry has been written. The host uses this to reload the post-processor:
-    /// without that the new rule sits in the database and does nothing until the next settings save.
-    /// </summary>
+    public sealed record QuickAddSource(Guid? Id, string HistoryText, string Text, DateTimeOffset TimestampUtc, long AddedAtRevision)
+    {
+        public QuickAddSource(Guid? id, string historyText, string text)
+            : this(id, historyText, text, DateTimeOffset.UtcNow, 0)
+        {
+        }
+    }
+
     public event Action<QuickAddResult>? Saved;
 
-    /// <param name="recentTranscripts">Finalized dictations, most recent first.</param>
-    /// <param name="loadExisting">
-    /// Reads the dictionary the popup should check duplicates against. This is a delegate rather
-    /// than the repository because an open settings window holds unsaved rows that the database
-    /// does not know about yet, and the host has to be free to resolve that at save time.
-    /// </param>
-    /// <param name="persist">
-    /// Writes one entry and returns it with its assigned id. Also a delegate, because writing
-    /// straight to the repository while the settings window is open gets the row deleted by that
-    /// window's next save.
-    /// </param>
-    /// <param name="logger">
-    /// Optional. A save failure shows the user a plain sentence, so the exception detail has to land
-    /// somewhere or the only report of a broken dictionary write is "it didn't work".
-    /// </param>
     public QuickAddWindow(
         IReadOnlyList<string> recentTranscripts,
         Func<IReadOnlyList<DictionaryEntry>> loadExisting,
         Func<DictionaryEntry, DictionaryEntry> persist,
-        ILogger? logger = null)
+        TextScaleService? textScale = null,
+        ILogger? logger = null,
+        QuickAddWindowOptions? options = null)
+        : this(recentTranscripts.Select(text => new QuickAddSource(null, text, text)).ToList(), loadExisting, persist, textScale, logger, options)
+    {
+    }
+
+    public QuickAddWindow(
+        IReadOnlyList<QuickAddSource> recentTranscripts,
+        Func<IReadOnlyList<DictionaryEntry>> loadExisting,
+        Func<DictionaryEntry, DictionaryEntry> persist,
+        TextScaleService? textScale = null,
+        ILogger? logger = null,
+        QuickAddWindowOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(recentTranscripts);
         _loadExisting = loadExisting ?? throw new ArgumentNullException(nameof(loadExisting));
         _persist = persist ?? throw new ArgumentNullException(nameof(persist));
+        _textScale = textScale;
         _logger = logger;
+        _options = options ?? new QuickAddWindowOptions();
+        _vocabulary = ReadVocabulary();
+        _currentPlan = new QuickDictionaryAdd.Plan(QuickDictionaryAdd.PlanKind.Empty, null, string.Empty, QuickDictionaryAdd.PlanSeverity.None);
 
-        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
+        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
         InitializeComponent();
-
-        _existing = ReadExisting();
-        Chips.ItemsSource = _chips;
-
-        // A drag can end anywhere, including outside the window, so releasing the button always
-        // ends it rather than leaving the next hover silently extending a stale selection.
-        PreviewMouseLeftButtonUp += (_, _) =>
+        ApplyWindowFit();
+        if (_textScale is not null)
         {
-            if (!_dragging)
-            {
-                return;
-            }
+            _textScale.Changed += TextScale_Changed;
+        }
 
-            _dragging = false;
+        SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
 
-            // Only a finished selection hands the caret over. Unpicking the last word is not the
-            // end of a gesture, and pulling focus then would drag the user away from the chips
-            // just as they were about to pick a different word.
-            if (_first >= 0)
-            {
-                FocusCorrection();
-            }
+        _announcementTimer = new System.Windows.Threading.DispatcherTimer { Interval = QuickAddAnnouncement.AnnouncementDelay };
+        _announcementTimer.Tick += (_, _) =>
+        {
+            _announcementTimer.Stop();
+            var text = _pendingAnnouncementText;
+            _pendingAnnouncementText = null;
+            Announce(StatusText, text);
         };
 
+        WordsList.ItemsSource = _chips;
+        AiVocabularyText.Text = CleanupDisclosure.AddToDictionaryVocabularyLine;
+        AiVocabularyText.Visibility = _options.AiCleanupEnabled ? Visibility.Visible : Visibility.Collapsed;
+        DictionaryOffText.Text = _options.AiCleanupEnabled
+            ? "Your dictionary and snippets are turned off, so Scribe doesn't replace any words with them. AI cleanup still receives your vocabulary when this is off."
+            : "Your dictionary and snippets are turned off, so Scribe saves words here but doesn't use them.";
+        DictionaryOffNotice.Visibility = _options.DictionaryEnabled ? Visibility.Collapsed : Visibility.Visible;
+        if (!_options.DictionaryEnabled)
+        {
+            Loaded += (_, _) => Announce(DictionaryOffNotice, DictionaryOffText.Text);
+        }
+
+        PreviewMouseLeftButtonUp += (_, _) => FinishDrag();
+        Closing += QuickAddWindow_Closing;
+        Closed += QuickAddWindow_Closed;
+
         _sources = recentTranscripts
-            .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Select(t => new TranscriptSource(t))
+            .Where(source => !string.IsNullOrWhiteSpace(source.Text))
+            .Select(source => new TranscriptSource(source.Id, source.HistoryText, source.Text, source.TimestampUtc, source.AddedAtRevision))
             .ToList();
 
         if (_sources.Count == 0)
         {
             SourcePanel.Visibility = Visibility.Collapsed;
-            Chips.Visibility = Visibility.Collapsed;
             NoTranscriptHint.Visibility = Visibility.Visible;
             Loaded += (_, _) => HeardBox.Focus();
         }
@@ -132,10 +160,45 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         {
             RecentPicker.ItemsSource = _sources;
             RecentPicker.DisplayMemberPath = nameof(TranscriptSource.Preview);
-            RecentPicker.SelectedIndex = 0; // fires SelectionChanged, which loads the chips
+            RecentPicker.SelectedIndex = 0;
+            Loaded += (_, _) => FocusWordsAtInitialWord();
         }
 
-        UpdateStatus();
+        UpdateStatus(forceAnnouncement: false);
+    }
+
+    private void TextScale_Changed(object? sender, EventArgs e) => ApplyWindowFit();
+
+    private void QuickAddWindow_Closed(object? sender, EventArgs e)
+    {
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= TextScale_Changed;
+        }
+
+        Closed -= QuickAddWindow_Closed;
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmDpiChanged)
+        {
+            Dispatcher.BeginInvoke(ApplyWindowFit);
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private void ApplyWindowFit()
+    {
+        var area = WindowPlacement.WorkAreaFor(this);
+        var fit = WindowFit.Compute(560, 640, 440, 460, area, Left, Top, _textScale?.Factor ?? 1);
+        MinWidth = fit.MinWidth;
+        MinHeight = fit.MinHeight;
+        Width = fit.Width;
+        Height = fit.Height;
+        Left = fit.Left;
+        Top = fit.Top;
     }
 
     private void RecentPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -153,22 +216,121 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         _anchor = -1;
         _first = -1;
         _last = -1;
+        _focusIndex = _tokens.Count > 0 ? 0 : -1;
         _dragging = false;
+        _fixedTranscript = null;
+        if (SavedDetailText is not null)
+        {
+            SavedDetailText.Visibility = Visibility.Collapsed;
+        }
+
+        if (CopyFixedButton is not null)
+        {
+            CopyFixedButton.Visibility = Visibility.Collapsed;
+        }
 
         _chips.Clear();
         for (var i = 0; i < _tokens.Count; i++)
         {
-            _chips.Add(new WordChip { Text = _tokens[i].Text, Index = i });
+            _chips.Add(new WordChip { Text = _tokens[i].Text, Index = i, PositionInSet = i + 1, SizeOfSet = _tokens.Count });
         }
 
-        // The old selection described the previous transcript. Leaving it in the box would let the
-        // user save a rule for words that are no longer anywhere on screen.
         if (HeardBox is not null)
         {
-            HeardBox.Text = string.Empty;
+            RunWithoutFieldChanged(() => HeardBox.Text = string.Empty);
         }
 
-        UpdateStatus();
+        UpdateFocusedChip();
+        UpdateStatus(forceAnnouncement: false);
+    }
+
+    public void ForgetTranscriptIds(IReadOnlyCollection<Guid> ids)
+    {
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        var current = RecentPicker.SelectedItem as TranscriptSource;
+        var currentRemoved = current?.Id is { } currentId && ids.Contains(currentId);
+        _sources.RemoveAll(source => source.Id is { } id && ids.Contains(id));
+        RecentPicker.Items.Refresh();
+        if (!currentRemoved)
+        {
+            return;
+        }
+
+        var state = QuickAddSources.ClearCurrent(HasUnsavedSavableCorrection());
+        ClearDeletedTranscript(keepCorrection: state.KeepCorrection, state.Message);
+    }
+
+    public void ApplyHistoryDeletion(HistoryDeletion deletion)
+    {
+        var current = RecentPicker.SelectedItem as TranscriptSource;
+        var state = QuickAddSources.ApplyDeletion(
+            _sources,
+            current,
+            deletion,
+            source => source.Original,
+            source => source.TimestampUtc,
+            source => source.AddedAtRevision,
+            HasUnsavedSavableCorrection());
+        _sources.Clear();
+        _sources.AddRange(state.Sources);
+        RecentPicker.Items.Refresh();
+        if (state.CurrentRemoved)
+        {
+            ClearDeletedTranscript(state.KeepCorrection, state.Message);
+        }
+    }
+
+    public void ClearTranscripts()
+    {
+        var state = QuickAddSources.Clear(HasUnsavedSavableCorrection());
+        _sources.Clear();
+        RecentPicker.Items.Refresh();
+        ClearDeletedTranscript(state.KeepCorrection, state.Message);
+    }
+
+    private void ClearDeletedTranscript(bool keepCorrection, string? message)
+    {
+        _transcript = string.Empty;
+        _tokens = [];
+        _chips.Clear();
+        _fixedTranscript = null;
+        SavedDetailText.Visibility = Visibility.Collapsed;
+        CopyFixedButton.Visibility = Visibility.Collapsed;
+        if (keepCorrection)
+        {
+            ShowResult(new QuickDictionaryAdd.Plan(
+                QuickDictionaryAdd.PlanKind.NoChange,
+                null,
+                message ?? QuickAddSources.RemovedMessage,
+                QuickDictionaryAdd.PlanSeverity.Info));
+            return;
+        }
+
+        if (_sources.Count > 0)
+        {
+            RecentPicker.SelectedIndex = 0;
+        }
+        else
+        {
+            LoadTranscript(string.Empty);
+        }
+    }
+
+    public void UseHeardText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        RunWithoutFieldChanged(() => HeardBox.Text = text.Trim());
+        ShouldBeBox.Focus();
+        ShouldBeBox.CaretIndex = ShouldBeBox.Text.Length;
+        UpdateStatus(forceAnnouncement: true);
     }
 
     private void Chip_MouseDown(object sender, MouseButtonEventArgs e)
@@ -178,47 +340,44 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Suppress the ToggleButton's own toggle. IsChecked is bound two-way to the chip model, so
-        // letting the control set it locally would fight the selection ApplySelection writes.
         e.Handled = true;
-
-        // Shift keeps the classic range gesture for anyone who reaches for it.
+        _keyboardFocusInWords = false;
+        _focusIndex = index;
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && _anchor >= 0)
         {
             _dragging = true;
-            ApplySelection(_anchor, index);
+            ApplySelection(_anchor, index, announce: false);
             return;
         }
 
-        ToggleAt(index);
+        ToggleAt(index, announce: false);
     }
 
-    /// <summary>
-    /// Applies one plain click, from the mouse or from assistive tech, to the selected word range.
-    /// The decision itself lives in <see cref="QuickDictionaryAdd.Toggle"/>; this only carries the
-    /// result into the chips and the drag anchor.
-    /// </summary>
-    private void ToggleAt(int index)
+    private void ToggleAt(int index, bool announce)
     {
-        var previous = new QuickDictionaryAdd.WordRange(_first, _last);
+        var previous = CurrentRange;
         var next = QuickDictionaryAdd.Toggle(previous, index);
+        _focusIndex = index;
+        _anchor = AnchorAfterToggle(previous, next, index);
+        _dragging = true;
 
         if (next.IsEmpty)
         {
-            // Still arm the drag. Pressing the only selected word unpicks it, but the press may
-            // equally be the start of a drag from that chip, and refusing to track it would kill
-            // that gesture on exactly the chips where it used to work.
-            _anchor = index;
-            _dragging = true;
-            ClearSelection();
+            ClearSelection(announce);
             return;
         }
 
-        // Anchor the end that did not move, so a shift-click or drag straight afterwards grows from
-        // the stable side rather than from wherever the last click happened to land.
-        _anchor = next.First == previous.First ? next.First : next.Last;
-        _dragging = true;
-        ApplySelection(next.First, next.Last);
+        ApplySelection(next.First, next.Last, announce);
+    }
+
+    private static int AnchorAfterToggle(QuickDictionaryAdd.WordRange previous, QuickDictionaryAdd.WordRange next, int focus)
+    {
+        if (next.IsEmpty || previous.IsEmpty)
+        {
+            return focus;
+        }
+
+        return next.First == previous.First ? next.First : next.Last;
     }
 
     private void Chip_MouseEnter(object sender, MouseEventArgs e)
@@ -228,28 +387,217 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Self-heals a drag whose mouse-up landed somewhere that never reported it. Suppressing the
-        // chip's own mouse handling means nothing captures the mouse, so releasing outside the
-        // window never reaches PreviewMouseLeftButtonUp and the gesture is only finishable here.
         if (e.LeftButton != MouseButtonState.Pressed)
         {
-            _dragging = false;
-
-            if (_first >= 0)
-            {
-                FocusCorrection();
-            }
-
+            FinishDrag();
             return;
         }
 
         if (sender is ToggleButton { Tag: int index } && _anchor >= 0)
         {
-            ApplySelection(_anchor, index);
+            _focusIndex = index;
+            ApplySelection(_anchor, index, announce: false);
         }
     }
 
-    private void ApplySelection(int first, int last)
+    private void FinishDrag()
+    {
+        if (!_dragging)
+        {
+            return;
+        }
+
+        _dragging = false;
+        if (_first >= 0)
+        {
+            FocusCorrection();
+        }
+    }
+
+    private void Chip_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_syncingChips || sender is not ToggleButton { Tag: int index })
+        {
+            return;
+        }
+
+        ToggleAt(index, announce: true);
+        _dragging = false;
+        if (_first >= 0)
+        {
+            FocusCorrection();
+        }
+    }
+
+    private void WordsList_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _keyboardFocusInWords = true;
+        if (_focusIndex < 0)
+        {
+            _focusIndex = CurrentRange.IsEmpty ? 0 : CurrentRange.First;
+            _anchor = _focusIndex;
+        }
+
+        UpdateFocusedChip();
+        UpdateHint();
+    }
+
+    private void WordsList_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!WordsList.IsKeyboardFocusWithin)
+        {
+            _keyboardFocusInWords = false;
+            UpdateHint();
+        }
+    }
+
+    private void FocusWordsAtInitialWord()
+    {
+        if (_chips.Count == 0)
+        {
+            HeardBox.Focus();
+            return;
+        }
+
+        _keyboardFocusInWords = true;
+        _focusIndex = CurrentRange.IsEmpty ? 0 : CurrentRange.First;
+        _anchor = _focusIndex;
+        UpdateFocusedChip();
+        Dispatcher.BeginInvoke(() => FindChipButton(_focusIndex)?.Focus());
+        UpdateHint();
+    }
+
+    private void Chip_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ToggleButton { Tag: int index })
+        {
+            _keyboardFocusInWords = true;
+            _focusIndex = index;
+            UpdateFocusedChip();
+            UpdateHint();
+        }
+    }
+
+    private void Chip_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (!WordsList.IsKeyboardFocusWithin)
+        {
+            _keyboardFocusInWords = false;
+            UpdateHint();
+        }
+    }
+
+    private void WordsList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        var key = ToChipKey(e.Key == Key.System ? e.SystemKey : e.Key);
+        if (key == ChipKey.Other)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var state = new ChipKeyboardState(_focusIndex, _anchor, CurrentRange, ComputeRows());
+        var result = ChipKeyboard.Apply(state, key, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift), _chips.Count);
+        ApplyKeyboardState(result.State);
+        if (result.Outcome == ChipKeyboardOutcome.MoveToWrites)
+        {
+            FocusCorrection();
+        }
+    }
+
+    private void ApplyKeyboardState(ChipKeyboardState state)
+    {
+        var oldRange = CurrentRange;
+        _focusIndex = state.FocusIndex;
+        _anchor = state.AnchorIndex;
+        if (state.Selection.IsEmpty)
+        {
+            ClearSelection(announce: !oldRange.IsEmpty);
+        }
+        else
+        {
+            ApplySelection(state.Selection.First, state.Selection.Last, announce: state.Selection != oldRange);
+        }
+
+        UpdateFocusedChip();
+        FindChipButton(_focusIndex)?.Focus();
+        BringFocusedChipIntoView();
+    }
+
+    private static ChipKey ToChipKey(Key key) => key switch
+    {
+        Key.Left => ChipKey.Left,
+        Key.Right => ChipKey.Right,
+        Key.Up => ChipKey.Up,
+        Key.Down => ChipKey.Down,
+        Key.Home => ChipKey.Home,
+        Key.End => ChipKey.End,
+        Key.Space => ChipKey.Space,
+        Key.Enter => ChipKey.Enter,
+        _ => ChipKey.Other,
+    };
+
+    private IReadOnlyList<int> ComputeRows()
+    {
+        var rows = new int[_chips.Count];
+        var rowByTop = new List<double>();
+        for (var i = 0; i < _chips.Count; i++)
+        {
+            if (FindChipButton(i) is not { } button)
+            {
+                rows[i] = i == 0 ? 0 : rows[i - 1];
+                continue;
+            }
+
+            var top = button.TransformToAncestor(WordsList).Transform(new Point(0, 0)).Y;
+            var row = rowByTop.FindIndex(y => Math.Abs(y - top) < 4);
+            if (row < 0)
+            {
+                row = rowByTop.Count;
+                rowByTop.Add(top);
+            }
+
+            rows[i] = row;
+        }
+
+        return rows;
+    }
+
+    private ToggleButton? FindChipButton(int index)
+    {
+        if (index < 0 || index >= _chips.Count)
+        {
+            return null;
+        }
+
+        if (WordsList.ItemContainerGenerator.ContainerFromIndex(index) is not FrameworkElement container)
+        {
+            return null;
+        }
+
+        return FindDescendant<ToggleButton>(container);
+    }
+
+    private static T? FindDescendant<T>(DependencyObject node) where T : DependencyObject
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(node, i);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindDescendant<T>(child) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private void ApplySelection(int first, int last, bool announce)
     {
         if (first > last)
         {
@@ -258,7 +606,6 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
 
         _first = first;
         _last = last;
-
         _syncingChips = true;
         try
         {
@@ -273,48 +620,20 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         HeardBox.Text = QuickDictionaryAdd.Select(_transcript, _tokens, first, last);
-
-        // TextChanged only fires when the string actually differs, and a transcript can repeat a
-        // word ("V" three times here), so moving between two identical selections would otherwise
-        // leave the hint describing a range that is no longer the one lit.
-        UpdateStatus();
-    }
-
-    /// <summary>
-    /// Handles a chip toggled by anything other than the mouse. Assistive technology drives a
-    /// ToggleButton through the UI Automation Toggle pattern, which never raises the mouse events
-    /// the selection is built on, so without this the chip would light up while the phrase in the
-    /// box below stayed unchanged and the user would save something other than what they saw.
-    /// Routed through the same <see cref="ToggleAt"/> rules the mouse uses, so a screen reader can
-    /// build a multi-word phrase exactly the way a sighted user can.
-    /// </summary>
-    private void Chip_Toggled(object sender, RoutedEventArgs e)
-    {
-        // ApplySelection sets IsSelected on every chip, which raises this event again for each one.
-        if (_syncingChips || sender is not ToggleButton { Tag: int index })
+        _dirtySinceSave = true;
+        if (announce)
         {
-            return;
+            Announce(WordsList, string.IsNullOrWhiteSpace(HeardBox.Text) ? "Nothing selected" : $"Selected: {HeardBox.Text}");
         }
 
-        // The chip has already flipped its own IsChecked. ToggleAt works from the range fields rather
-        // than from chip state, and ApplySelection rewrites every chip afterwards, so whichever way
-        // it flipped gets corrected here and both input paths land on the same selection.
-        ToggleAt(index);
-        _dragging = false;
-
-        // Matches the mouse: unpicking the last word leaves the caret where it was rather than
-        // throwing it into the correction box.
-        if (_first >= 0)
-        {
-            FocusCorrection();
-        }
+        UpdateFocusedChip();
+        UpdateStatus(forceAnnouncement: false);
     }
 
-    private void ClearSelection()
+    private void ClearSelection(bool announce)
     {
         _first = -1;
         _last = -1;
-
         _syncingChips = true;
         try
         {
@@ -329,76 +648,312 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         HeardBox.Text = string.Empty;
-        UpdateStatus();
+        _dirtySinceSave = true;
+        if (announce)
+        {
+            Announce(WordsList, "Nothing selected");
+        }
+
+        UpdateFocusedChip();
+        UpdateStatus(forceAnnouncement: false);
     }
 
-    /// <summary>
-    /// Moves the caret to the correction box once a selection is finished. Deliberately not called
-    /// while a drag is in flight: doing it on every extension stole focus mid-gesture, and the
-    /// SelectAll that went with it meant the next keystroke wiped a correction already typed.
-    /// </summary>
+    private void UpdateFocusedChip()
+    {
+        foreach (var chip in _chips)
+        {
+            chip.IsFocusedChip = chip.Index == _focusIndex;
+        }
+    }
+
+    private void BringFocusedChipIntoView() => FindChipButton(_focusIndex)?.BringIntoView();
+
     private void FocusCorrection()
     {
         ShouldBeBox.Focus();
         ShouldBeBox.CaretIndex = ShouldBeBox.Text.Length;
     }
 
-    private void Field_Changed(object sender, RoutedEventArgs e) => UpdateStatus();
-
-    private void UpdateStatus()
+    private void Field_Changed(object sender, RoutedEventArgs e)
     {
-        // StatusText is resolved by InitializeComponent, but TextChanged can fire while the XAML
-        // tree is still being built, before the later fields exist.
+        if (_suppressFieldChanged)
+        {
+            return;
+        }
+
+        if (RemoveBox is not null && ShouldBeBox is not null)
+        {
+            ShouldBeBox.IsEnabled = RemoveBox.IsChecked != true;
+            ShouldBeBox.PlaceholderText = RemoveBox.IsChecked == true ? "(removes these words)" : "For example, Copilot";
+        }
+
+        if (!_syncingChips && sender == HeardBox)
+        {
+            var selectedText = CurrentRange.IsEmpty ? string.Empty : QuickDictionaryAdd.Select(_transcript, _tokens, CurrentRange.First, CurrentRange.Last);
+            var reconciled = QuickAddSelection.Reconcile(HeardBox.Text, selectedText, CurrentRange);
+            if (reconciled != CurrentRange)
+            {
+                if (reconciled.IsEmpty)
+                {
+                    _first = -1;
+                    _last = -1;
+                    _syncingChips = true;
+                    try
+                    {
+                        foreach (var chip in _chips) chip.IsSelected = false;
+                    }
+                    finally
+                    {
+                        _syncingChips = false;
+                    }
+                }
+            }
+        }
+
+        _dirtySinceSave = true;
+        _fixedTranscript = null;
+        if (SavedDetailText is not null)
+        {
+            SavedDetailText.Visibility = Visibility.Collapsed;
+        }
+
+        if (CopyFixedButton is not null)
+        {
+            CopyFixedButton.Visibility = Visibility.Collapsed;
+        }
+
+        UpdateStatus(forceAnnouncement: false);
+    }
+
+
+    private void RunWithoutFieldChanged(Action action)
+    {
+        _suppressFieldChanged = true;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            _suppressFieldChanged = false;
+        }
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.S && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            e.Handled = true;
+            if (SaveButton.IsEnabled)
+            {
+                Save(closeAfterSaving: false);
+            }
+
+            return;
+        }
+
+        if (e.Key == Key.Escape && !IsOpenDropDown(e.OriginalSource))
+        {
+            e.Handled = true;
+            Close();
+            return;
+        }
+
+        if (e.Key == Key.Enter && IsSaveButtonSource(e.OriginalSource))
+        {
+            e.Handled = true;
+        }
+    }
+    private void TextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void UpdateStatus(bool forceAnnouncement)
+    {
         if (StatusText is null || SaveButton is null || SaveCloseButton is null)
         {
             return;
         }
 
-        var plan = BuildPlan(_existing);
-
-        // An empty correction is a real rule (it deletes the word), and the settings grid supports
-        // it, but it must never be reachable by a reflexive Enter after clicking a chip. Dropping
-        // IsDefault keeps Enter on the common path and makes deletion a deliberate click.
-        var deletes = plan.CanSave && plan.Entry is { Replacement.Length: 0 };
-
+        var previous = _lastPlan;
+        var plan = BuildPlan();
+        _currentPlan = plan;
         StatusText.Text = plan.Message;
-        StatusText.SetResourceReference(
-            System.Windows.Controls.TextBlock.ForegroundProperty,
-            plan.Kind switch
-            {
-                _ when deletes => "SystemFillColorCautionBrush",
-                QuickDictionaryAdd.PlanKind.Update => "SystemFillColorCautionBrush",
-                _ => "TextFillColorSecondaryBrush",
-            });
+        StatusActionButton.Visibility = plan.Action == QuickDictionaryAdd.PlanAction.None ? Visibility.Collapsed : Visibility.Visible;
+        StatusActionButton.Content = ActionText(plan);
+        StatusIcon.Visibility = plan.Severity == QuickDictionaryAdd.PlanSeverity.None ? Visibility.Collapsed : Visibility.Visible;
+        StatusIcon.Symbol = SymbolFor(plan.Severity);
+        StatusIcon.SetResourceReference(ForegroundProperty, BrushFor(plan.Severity));
 
         SaveButton.IsEnabled = plan.CanSave;
-        SaveButton.IsDefault = plan.CanSave && !deletes;
+        SaveButton.IsDefault = false;
         SaveCloseButton.IsEnabled = plan.CanSave;
+        SaveButton.Content = plan.IsRemoval ? "Remove from dictation_s" : "_Save";
+        SaveCloseButton.Content = plan.IsRemoval ? "Remove _and close" : "Save _and close";
+        UpdateHint();
 
-        SaveButton.Content = deletes ? "Leave out" : "Save";
-        SaveCloseButton.Content = deletes ? "Leave out and close" : "Save and close";
-
-        // The hint has to follow the selection. A static line describing a gesture is exactly what
-        // hid multi-select before: it was there, and it still read as "one word is all you get".
-        if (HintText is not null)
+        var timing = forceAnnouncement
+            ? QuickAddAnnouncementTiming.Immediate
+            : QuickAddAnnouncement.ShouldAnnounce(previous, plan);
+        _lastPlan = plan;
+        if (timing == QuickAddAnnouncementTiming.Immediate)
         {
-            HintText.Text = _first < 0
-                ? "Click the word Scribe got wrong, or just type it below."
-                : _first == _last
-                    ? "Click the word beside it to build a phrase, or click it again to unpick it."
-                    // "next to" rather than "either end": clicking an end word is the shrink
-                    // gesture, so telling the user to click an end to grow it would be advice that
-                    // does the opposite of what it says.
-                    : "Click a word next to the phrase to grow it, or an end word to drop it.";
+            _announcementTimer.Stop();
+            _pendingAnnouncementText = null;
+            Announce(StatusText, plan.Message);
+        }
+        else if (timing == QuickAddAnnouncementTiming.Delayed)
+        {
+            ScheduleStatusAnnouncement(plan.Message);
+        }
+        else if (_announcementTimer.IsEnabled)
+        {
+            ScheduleStatusAnnouncement(plan.Message);
         }
     }
 
-    private QuickDictionaryAdd.Plan BuildPlan(IReadOnlyList<DictionaryEntry> existing) =>
-        QuickDictionaryAdd.Build(
-            HeardBox?.Text,
-            ShouldBeBox?.Text,
-            WholeWordBox?.IsChecked == true,
-            existing);
+    private void ScheduleStatusAnnouncement(string? text)
+    {
+        // Cleared first, so an input emptied before the delay never announces the correction it no longer shows.
+        _announcementTimer.Stop();
+        _pendingAnnouncementText = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _pendingAnnouncementText = text;
+        _announcementTimer.Start();
+    }
+
+    private void UpdateHint()
+    {
+        if (HintText is null)
+        {
+            return;
+        }
+
+        HintText.Text = QuickAddHint.For(CurrentRange, _keyboardFocusInWords, _sources.Count > 0, !_referencesAvailable);
+    }
+
+    private QuickDictionaryAdd.Plan BuildPlan() => QuickDictionaryAdd.Build(CurrentRequest(), _vocabulary);
+
+    private QuickDictionaryAdd.QuickAddRequest CurrentRequest() => new(
+        HeardBox?.Text,
+        ShouldBeBox?.Text,
+        RemoveBox?.IsChecked == true,
+        WholeWordBox?.IsChecked == true,
+        _transcript,
+        _options.DictionaryEnabled,
+        _referencesAvailable);
+
+    private static SymbolRegular SymbolFor(QuickDictionaryAdd.PlanSeverity severity) => severity switch
+    {
+        QuickDictionaryAdd.PlanSeverity.Success => SymbolRegular.CheckmarkCircle24,
+        QuickDictionaryAdd.PlanSeverity.Warning => SymbolRegular.Warning24,
+        QuickDictionaryAdd.PlanSeverity.Error => SymbolRegular.ErrorCircle24,
+        _ => SymbolRegular.Info24,
+    };
+
+    private static string BrushFor(QuickDictionaryAdd.PlanSeverity severity) => severity switch
+    {
+        QuickDictionaryAdd.PlanSeverity.Success => "SystemFillColorSuccessBrush",
+        QuickDictionaryAdd.PlanSeverity.Warning => "SystemFillColorCautionBrush",
+        QuickDictionaryAdd.PlanSeverity.Error => "SystemFillColorCriticalBrush",
+        _ => "TextFillColorSecondaryBrush",
+    };
+
+    private static string? ActionText(QuickDictionaryAdd.Plan plan) => plan.Action switch
+    {
+        QuickDictionaryAdd.PlanAction.ShowInSettings => "Show in Settings",
+        QuickDictionaryAdd.PlanAction.FixInstead => string.IsNullOrWhiteSpace(plan.ActionTarget) ? "Fix instead" : $"Fix \"{plan.ActionTarget}\" instead",
+        QuickDictionaryAdd.PlanAction.AddItInSettings => "Add it in Settings",
+        QuickDictionaryAdd.PlanAction.CopyFixedDictation => "Copy fixed dictation",
+        QuickDictionaryAdd.PlanAction.TryAgain => "Try again",
+        _ => null,
+    };
+
+    private void StatusActionButton_Click(object sender, RoutedEventArgs e)
+    {
+        switch (_currentPlan.Action)
+        {
+            case QuickDictionaryAdd.PlanAction.TryAgain:
+                _vocabulary = ReadVocabulary();
+                UpdateStatus(forceAnnouncement: true);
+                break;
+            case QuickDictionaryAdd.PlanAction.ShowInSettings:
+                _options.ShowInSettings?.Invoke(_currentPlan.ActionTarget ?? HeardBox.Text.Trim());
+                break;
+            case QuickDictionaryAdd.PlanAction.FixInstead:
+                if (!string.IsNullOrWhiteSpace(_currentPlan.ActionTarget))
+                {
+                    HeardBox.Text = _currentPlan.ActionTarget;
+                    ShouldBeBox.Clear();
+                    HeardBox.Focus();
+                }
+
+                _options.FixInstead?.Invoke(_currentPlan.ActionTarget ?? string.Empty);
+                break;
+            case QuickDictionaryAdd.PlanAction.AddItInSettings:
+                _options.AddItInSettings?.Invoke(HeardBox.Text.Trim());
+                break;
+            case QuickDictionaryAdd.PlanAction.CopyFixedDictation:
+                CopyFixedTranscript();
+                break;
+        }
+    }
+
+
+    private bool IsOpenDropDown(object originalSource) =>
+        RecentPicker.IsDropDownOpen
+        || FindAncestor<ComboBox>(originalSource as DependencyObject) is { IsDropDownOpen: true };
+
+    private bool IsSaveButtonSource(object originalSource)
+    {
+        var button = FindAncestor<System.Windows.Controls.Button>(originalSource as DependencyObject);
+        return ReferenceEquals(button, SaveButton) || ReferenceEquals(button, SaveCloseButton);
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
+    {
+        while (node is not null)
+        {
+            if (node is T match)
+            {
+                return match;
+            }
+
+            node = System.Windows.Media.VisualTreeHelper.GetParent(node);
+        }
+
+        return null;
+    }
+
+    private static void MakeKeepEditingDefault(Wpf.Ui.Controls.MessageBox dialog)
+    {
+        var primary = MessageBoxTemplate.FindButton(dialog, Wpf.Ui.Controls.MessageBoxButton.Primary);
+        var close = MessageBoxTemplate.FindButton(dialog, Wpf.Ui.Controls.MessageBoxButton.Close);
+        if (primary is null || close is null)
+        {
+            return;
+        }
+
+        primary.IsDefault = false;
+        primary.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+            }
+        };
+        close.IsDefault = true;
+        close.IsCancel = true;
+        close.Focus();
+    }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e) => Save(closeAfterSaving: false);
 
@@ -406,14 +961,11 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
 
     private void Save(bool closeAfterSaving)
     {
-        // Re-read rather than trusting the snapshot taken when the window opened: the settings
-        // window may have saved a conflicting rule while this popup sat on screen, and creating a
-        // second row for the same spoken form would produce a dictionary the grid refuses to save.
-        _existing = ReadExisting();
-        var plan = BuildPlan(_existing);
+        _vocabulary = ReadVocabulary();
+        var plan = BuildPlan();
         if (!plan.CanSave || plan.Entry is null)
         {
-            UpdateStatus();
+            UpdateStatus(forceAnnouncement: true);
             return;
         }
 
@@ -424,75 +976,184 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            // The user gets a sentence they can act on; the detail goes to the log, which is the only
-            // place a broken write can actually be diagnosed from later. By shape and stack, never the
-            // message, which can quote the rule being saved.
-            _logger?.LogError(
-                "Quick add failed to save the dictionary entry: {Failure}",
-                Scribe.Core.Diagnostics.FailureShape.DescribeWithStack(ex));
-            StatusText.Text = "Couldn't save that rule. Try again, or add it in Settings, Dictionary.";
-            StatusText.SetResourceReference(
-                System.Windows.Controls.TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
+            _logger?.LogError("Quick add failed to save the dictionary entry: {Failure}", FailureShape.DescribeWithStack(ex));
+            ShowResult(QuickDictionaryAdd.SaveFailed());
             return;
         }
 
-        // Deliberately outside the catch above. The rule is already stored, so a failure to reload
-        // the post-processor or raise a toast must not tell the user their entry was not saved.
-        var corrected = QuickDictionaryAdd.Apply(_transcript, saved);
-        Saved?.Invoke(new QuickAddResult(
-            saved,
-            _transcript,
-            string.Equals(corrected, _transcript, StringComparison.Ordinal) ? null : corrected));
-
+        var savedRequest = CurrentRequest();
+        var sourceTranscript = _transcript;
+        var corrected = QuickDictionaryAdd.Apply(sourceTranscript, saved);
+        var fixedTranscript = string.Equals(corrected, sourceTranscript, StringComparison.Ordinal) ? null : corrected;
+        Saved?.Invoke(new QuickAddResult(saved, sourceTranscript, fixedTranscript, closeAfterSaving));
         if (closeAfterSaving)
         {
+            _allowClose = true;
             Close();
             return;
         }
 
-        // The retained store repairs every identical source. Keep the picker's copies in sync too,
-        // so switching away and back cannot resurrect stale text or break the next content-keyed repair.
         foreach (var source in _sources)
         {
-            if (string.Equals(source.Text, _transcript, StringComparison.Ordinal))
+            if (string.Equals(source.Text, sourceTranscript, StringComparison.Ordinal))
             {
                 source.Update(corrected);
             }
         }
 
-        _existing = ReadExisting();
-        var scrollOffset = TranscriptScroll.VerticalOffset;
+        _vocabulary = ReadVocabulary();
+        var transcriptScrollOffset = TranscriptScroll.VerticalOffset;
+        var bodyScrollOffset = BodyScroll.VerticalOffset;
         LoadTranscript(corrected);
-        ShouldBeBox.Clear();
-        TranscriptScroll.ScrollToVerticalOffset(scrollOffset);
-        HeardBox.Focus();
-        StatusText.Text = _tokens.Count > 0
-            ? "Saved. Pick another word to correct, or type it below."
-            : "Saved. Type the next words to add.";
-        UIElementAutomationPeer.FromElement(StatusText)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        RunWithoutFieldChanged(() =>
+        {
+            ShouldBeBox.Clear();
+            RemoveBox.IsChecked = false;
+        });
+        _fixedTranscript = fixedTranscript;
+        _dirtySinceSave = false;
+        SavedDetailText.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
+        CopyFixedButton.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
+        TranscriptScroll.ScrollToVerticalOffset(transcriptScrollOffset);
+        ShowResult(QuickDictionaryAdd.Saved(savedRequest));
+        FocusWordsAtInitialWord();
+        Dispatcher.BeginInvoke(() =>
+        {
+            BodyScroll.ScrollToVerticalOffset(bodyScrollOffset);
+            TranscriptScroll.ScrollToVerticalOffset(transcriptScrollOffset);
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
+    private void ShowResult(QuickDictionaryAdd.Plan result)
+    {
+        _announcementTimer.Stop();
+        _pendingAnnouncementText = null;
+        _currentPlan = result;
+        _lastPlan = result;
+        StatusText.Text = result.Message;
+        StatusIcon.Visibility = result.Severity == QuickDictionaryAdd.PlanSeverity.None ? Visibility.Collapsed : Visibility.Visible;
+        StatusIcon.Symbol = SymbolFor(result.Severity);
+        StatusIcon.SetResourceReference(ForegroundProperty, BrushFor(result.Severity));
+        StatusActionButton.Visibility = result.Action == QuickDictionaryAdd.PlanAction.CopyFixedDictation && _fixedTranscript is not null ? Visibility.Visible : Visibility.Collapsed;
+        StatusActionButton.Content = ActionText(result);
+        Announce(StatusText, result.Message);
+    }
 
-    private IReadOnlyList<DictionaryEntry> ReadExisting()
+    private void CopyFixedButton_Click(object sender, RoutedEventArgs e) => CopyFixedTranscript();
+
+    private void CopyFixedTranscript()
+    {
+        if (_fixedTranscript is null)
+        {
+            return;
+        }
+
+        ShowResult(ScribeClipboard.SetText(_fixedTranscript)
+            ? QuickDictionaryAdd.CopySucceeded()
+            : QuickDictionaryAdd.CopyFailed());
+    }
+
+    private void OpenAdvancedButton_Click(object sender, RoutedEventArgs e) => _options.OpenAdvancedSettings?.Invoke();
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void QuickAddWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        _announcementTimer.Stop();
+        _pendingAnnouncementText = null;
+        if (_allowClose || _closePromptActive || !HasUnsavedSavableCorrection())
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        _closePromptActive = true;
+        Dispatcher.BeginInvoke(async () =>
+        {
+            try
+            {
+                var prompt = QuickAddClosePrompt.ForUnsavedWord();
+                var dialog = new Wpf.Ui.Controls.MessageBox
+                {
+                    Title = prompt.Title,
+                    Content = prompt.Body,
+                    PrimaryButtonText = prompt.PrimaryButton,
+                    SecondaryButtonText = prompt.DiscardButton,
+                    CloseButtonText = prompt.CancelButton,
+                    PrimaryButtonAppearance = ControlAppearance.Primary,
+                    CloseButtonAppearance = ControlAppearance.Secondary,
+                };
+                dialog.Loaded += (_, _) => MakeKeepEditingDefault(dialog);
+                var choice = await dialog.ShowDialogAsync();
+                if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
+                {
+                    Save(closeAfterSaving: true);
+                }
+                else if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary)
+                {
+                    _allowClose = true;
+                    Close();
+                }
+            }
+            finally
+            {
+                _closePromptActive = false;
+            }
+        });
+    }
+
+    private bool HasUnsavedSavableCorrection() => _dirtySinceSave && BuildPlan().CanSave;
+
+    private QuickAddVocabulary ReadVocabulary()
     {
         try
         {
-            return _loadExisting();
+            _referencesAvailable = true;
+            if (_options.LoadVocabulary is { } loadVocabulary)
+            {
+                return loadVocabulary();
+            }
+
+            var personal = _loadExisting();
+            var pending = _options.PendingSettingsSpokenForms?.Invoke() ?? [];
+            return QuickAddVocabulary.Compose(personal, pending, Array.Empty<DictionaryLibrary>(), Array.Empty<string>());
         }
         catch
         {
-            // A read failure must not block the popup: the worst case is that a duplicate is
-            // reported as a create, and the settings grid still catches it on the next save.
-            return [];
+            _referencesAvailable = false;
+            return QuickAddVocabulary.Compose(Array.Empty<DictionaryEntry>(), Array.Empty<string>(), Array.Empty<DictionaryLibrary>(), Array.Empty<string>());
         }
     }
 
-    /// <summary>One entry in the recent-dictation picker.</summary>
-    private sealed class TranscriptSource(string text) : INotifyPropertyChanged
-    {
-        public string Text { get; private set; } = text;
+    private QuickDictionaryAdd.WordRange CurrentRange => _first < 0 ? QuickDictionaryAdd.WordRange.None : new QuickDictionaryAdd.WordRange(_first, _last);
 
+    private void Announce(UIElement source, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        AnnouncementText.Text = text;
+        try
+        {
+            var peer = UIElementAutomationPeer.FromElement(AnnouncementText)
+                ?? UIElementAutomationPeer.CreatePeerForElement(AnnouncementText);
+            peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }
+        catch
+        {
+            // UI Automation notifications are best effort for assistive technology.
+        }
+    }
+
+    private sealed class TranscriptSource(Guid? id, string historyText, string text, DateTimeOffset timestampUtc, long addedAtRevision) : INotifyPropertyChanged
+    {
+        public Guid? Id { get; } = id;
+        public string Original { get; } = historyText;
+        public string Text { get; private set; } = text;
+        public DateTimeOffset TimestampUtc { get; } = timestampUtc;
+        public long AddedAtRevision { get; } = addedAtRevision;
         public string Preview => LastTranscriptStore.FormatPreview(Text, maxLength: 64);
 
         public void Update(string text)
@@ -503,40 +1164,44 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
-
-        // The picker uses an ItemTemplate, so without this a screen reader reads the type name
-        // instead of the dictation, leaving the user no way to tell the five entries apart.
         public override string ToString() => Preview;
     }
 
-    /// <summary>One selectable word in the transcript.</summary>
     private sealed class WordChip : INotifyPropertyChanged
     {
         private bool _isSelected;
+        private bool _isFocusedChip;
 
         public required string Text { get; init; }
-
         public required int Index { get; init; }
+        public required int PositionInSet { get; init; }
+        public required int SizeOfSet { get; init; }
 
         public bool IsSelected
         {
             get => _isSelected;
             set
             {
-                if (_isSelected == value)
-                {
-                    return;
-                }
-
+                if (_isSelected == value) return;
                 _isSelected = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
             }
         }
 
-        public event PropertyChangedEventHandler? PropertyChanged;
+        public bool IsFocusedChip
+        {
+            get => _isFocusedChip;
+            set
+            {
+                if (_isFocusedChip == value) return;
+                _isFocusedChip = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFocusedChip)));
+            }
+        }
 
-        // UI Automation names each item of the chip list after its ToString, so without this a screen
-        // reader browsing the list reads the type name once per word instead of the word itself.
+        public event PropertyChangedEventHandler? PropertyChanged;
         public override string ToString() => Text;
     }
 }
+
+

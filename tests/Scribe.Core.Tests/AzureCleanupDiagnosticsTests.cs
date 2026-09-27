@@ -106,7 +106,7 @@ public sealed class AzureCleanupDiagnosticsTests
         var message = TextCleanupService.DescribeAzureFailure(
             new HttpRequestException("no route to host"), useKey: false, AzureAuthMode.AzureCli, "d");
 
-        Assert.Contains("az login", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Check that you're signed in with the Azure CLI", message, StringComparison.Ordinal);
     }
 
     [Fact]

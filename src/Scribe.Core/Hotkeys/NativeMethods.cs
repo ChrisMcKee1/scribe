@@ -1,22 +1,34 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
+using Scribe.Core.TextInjection;
 
 namespace Scribe.Core.Hotkeys;
 
-/// <summary>P/Invoke surface for the low-level keyboard hook and its message pump.</summary>
+/// <summary>P/Invoke surface for the low-level keyboard and mouse hooks and their message pump.</summary>
 internal static partial class NativeMethods
 {
     internal const int WH_KEYBOARD_LL = 13;
+    internal const int WH_MOUSE_LL = 14;
 
     internal const int WM_KEYDOWN = 0x0100;
     internal const int WM_KEYUP = 0x0101;
     internal const int WM_SYSKEYDOWN = 0x0104;
     internal const int WM_SYSKEYUP = 0x0105;
     internal const uint WM_QUIT = 0x0012;
+    internal const uint WM_TIMER = 0x0113;
 
-    // Private thread message that wakes the hook thread to apply queued commands. WM_APP and above
-    // is the range reserved for application-defined messages.
+    // Private thread messages to the hook thread. WM_APP and above is the range reserved for application-defined
+    // messages. The first wakes it to apply queued commands; the second, from the watchdog, also has it register its
+    // mouse hook afresh (see HotkeyService.HookInstallation). The third has it register its keyboard hook afresh, ahead
+    // of a Remote Desktop client's (wParam the foreground revision and lParam the window in front it was judged on), the
+    // fourth release the registrations those moves replaced (wParam 1: whatever their age, for tests), and the fifth retry a
+    // move that waited.
     internal const uint WM_APP = 0x8000;
     internal const uint WM_HOTKEY_COMMANDS = WM_APP + 1;
+    internal const uint WM_HOTKEY_REFRESH = WM_APP + 2;
+    internal const uint WM_HOTKEY_MOVE_AHEAD = WM_APP + 3;
+    internal const uint WM_HOTKEY_RELEASE_RETIRED = WM_APP + 4;
+    internal const uint WM_HOTKEY_MOVE_RETRY = WM_APP + 5;
 
     internal const int VK_SHIFT = 0x10;
     internal const int VK_CONTROL = 0x11;
@@ -26,11 +38,23 @@ internal static partial class NativeMethods
 
     internal delegate nint LowLevelKeyboardProc(int nCode, nint wParam, nint lParam);
 
+    internal delegate nint LowLevelMouseProc(int nCode, nint wParam, nint lParam);
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct KBDLLHOOKSTRUCT
     {
         public uint vkCode;
         public uint scanCode;
+        public uint flags;
+        public uint time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MSLLHOOKSTRUCT
+    {
+        public POINT pt;
+        public uint mouseData;
         public uint flags;
         public uint time;
         public nuint dwExtraInfo;
@@ -59,6 +83,9 @@ internal static partial class NativeMethods
     // classic DllImport; the remaining blittable calls use the source-generated LibraryImport.
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "SetWindowsHookExW")]
     internal static extern nint SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, nint hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "SetWindowsHookExW")]
+    internal static extern nint SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, nint hMod, uint dwThreadId);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -114,11 +141,50 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     internal static partial short GetAsyncKeyState(int vKey);
 
+    // A thread timer for the hook thread (no window, no TimerProc): WM_TIMER arrives in its own message loop.
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial nuint SetTimer(nint hWnd, nuint nIDEvent, uint uElapse, nint lpTimerFunc);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool KillTimer(nint hWnd, nuint uIDEvent);
+
     /// <summary>High bit of <see cref="GetAsyncKeyState"/>: the system's logical "key is down".</summary>
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
+    /// <summary>
+    /// Before either hook exists (the service's constructor): does the runtime's one-time work for the two P/Invokes the
+    /// hook callbacks call, CallNextHookEx in both and GetAsyncKeyState for the modifier rule and an owed button release.
+    /// <see cref="Marshal.Prelink"/> "executes one-time method setup tasks without calling the method", which Learn lists
+    /// as verifying the signature, locating and loading the DLL and locating the entry point, work each P/Invoke's first
+    /// call otherwise does, and which allocated on that call (48 bytes for each of these two, measured in the test host
+    /// before round 8), inside Windows' deadline. Found by the entry point the import names, so a generated wrapper around
+    /// an import is covered too. Returns the entry points it prelinked; for a test.
+    /// </summary>
+    internal static IReadOnlyList<string> PrelinkHookCalls()
+    {
+        var prelinked = new List<string>(2);
+        foreach (var method in typeof(NativeMethods).GetMethods(
+                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+        {
+            if ((method.Attributes & MethodAttributes.PinvokeImpl) != 0 &&
+                method.GetCustomAttribute<DllImportAttribute>()?.EntryPoint is { } entryPoint and
+                    ("CallNextHookEx" or "GetAsyncKeyState"))
+            {
+                Marshal.Prelink(method);
+                prelinked.Add(entryPoint);
+            }
+        }
+
+        return prelinked;
+    }
+
     internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
+
+    // "The foreground window has changed. The system sends this event even if the foreground window has changed to
+    // another window in the same thread." (Event Constants)
+    internal const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 
     internal delegate void WinEventProc(
@@ -279,36 +345,47 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
-    // Right-hand modifiers and the nav/arrow cluster carry the extended-key flag; a synthetic
-    // key-up without it maps to the left-hand sibling and would fail to release the right key.
-    private static bool IsExtendedKey(uint virtualKey) => virtualKey is
-        0xA3 /* RCtrl */ or 0xA5 /* RAlt */ or 0x5B /* LWin */ or 0x5C /* RWin */ or
-        0x21 /* PgUp */ or 0x22 /* PgDn */ or 0x23 /* End */ or 0x24 /* Home */ or
-        0x25 or 0x26 or 0x27 or 0x28 /* arrows */ or
-        0x2D /* Insert */ or 0x2E /* Delete */ or 0x90 /* NumLock */ or 0x6F /* NumDivide */;
-
     /// <summary>
     /// Injects a synthetic key event tagged with <see cref="SyntheticInputMarker"/> so the hook
     /// ignores it for chord state (the liveness probe still ticks the callback counter).
     /// </summary>
-    internal static bool SendMarkedKeyEvent(ushort virtualKey, bool keyUp)
-    {
-        var flags = (keyUp ? KEYEVENTF_KEYUP : 0u) |
-            (IsExtendedKey(virtualKey) ? KEYEVENTF_EXTENDEDKEY : 0u);
-        var input = new INPUT
-        {
-            type = INPUT_KEYBOARD,
-            U = new InputUnion
-            {
-                ki = new KEYBDINPUT
-                {
-                    wVk = virtualKey,
-                    dwFlags = flags,
-                    dwExtraInfo = SyntheticInputMarker.Value,
-                },
-            },
-        };
+    internal static bool SendMarkedKeyEvent(ushort virtualKey, bool keyUp) =>
+        SendInput(1, [MarkedKeyEvent(virtualKey, keyUp)], Marshal.SizeOf<INPUT>()) == 1;
 
-        return SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
-    }
+    /// <summary>The event <see cref="SendMarkedKeyEvent"/> sends, with its scan code from the foreground window's layout.</summary>
+    internal static INPUT MarkedKeyEvent(ushort virtualKey, bool keyUp) =>
+        BuildMarkedKeyEvent(virtualKey, keyUp, MarkedKeyScanCode(virtualKey, KeyScanCodes.ForForegroundLayout));
+
+    /// <summary>
+    /// The scan code a marked key event carries: the layout's for every key (the leaked-key repair's key-ups), so a Remote
+    /// Desktop or virtual machine client, which forwards keys by scan code, forwards the key that was pressed; none for the
+    /// watchdog's probe, an unassigned virtual key the layout is not asked about.
+    /// </summary>
+    internal static KeyScanCode MarkedKeyScanCode(ushort virtualKey, Func<uint, KeyScanCode> scanCodeOf) =>
+        virtualKey == VK_PROBE ? KeyScanCode.None : scanCodeOf(virtualKey);
+
+    /// <summary>
+    /// A marked key event: the virtual key, the scan code and extended flag <paramref name="scan"/> gives it, and never
+    /// KEYEVENTF_SCANCODE, so Windows takes the key from wVk as it always has (see <see cref="KeyScanCodes"/>). Right-hand
+    /// modifiers and the navigation cluster stay extended: a synthetic key-up without the flag maps to the left-hand
+    /// sibling and would fail to release the right key.
+    /// </summary>
+    internal static INPUT BuildMarkedKeyEvent(ushort virtualKey, bool keyUp, KeyScanCode scan) => new()
+    {
+        type = INPUT_KEYBOARD,
+        U = new InputUnion
+        {
+            ki = new KEYBDINPUT
+            {
+                wVk = virtualKey,
+                wScan = scan.Code,
+                dwFlags = KeyScanCodes.Flags(
+                    scan with { Extended = scan.Extended || KeyScanCodes.IsExtendedVirtualKey(virtualKey) }, keyUp),
+                dwExtraInfo = SyntheticInputMarker.Value,
+            },
+        },
+    };
+
+    // The INPUT type for mouse input. Scribe injects none (the leak check covers keys only); the tests build theirs with it.
+    internal const uint INPUT_MOUSE = 0;
 }

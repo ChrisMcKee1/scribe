@@ -19,9 +19,11 @@ internal sealed class HotkeyCommandRouter
 {
     private readonly object _gate;
     private readonly Func<uint, bool>? _isLogicallyDown;
+    private readonly Func<uint, bool>? _buttonDownInWindows;
     private volatile HotkeyBinding _binding;
     private volatile HotkeyBinding? _dictationOnlyBinding;
     private bool _captureMode;
+    private long _captureGeneration;
     private bool _paused;
     private long _latestPauseRequest;
     private long _generation;
@@ -34,8 +36,12 @@ internal sealed class HotkeyCommandRouter
 
     /// <param name="binding">The initial standard binding.</param>
     /// <param name="isLogicallyDown">Windows' view of a key, handed to every engine (see <see cref="HotkeyEngine"/>).</param>
-    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown)
-        : this(binding, new object(), isLogicallyDown)
+    /// <param name="buttonDownInWindows">
+    /// Windows' own view of a mouse button, which every engine reads for the release of a press it swallowed (see
+    /// <see cref="HotkeyEngine"/>). Made by the caller, before any hook exists.
+    /// </param>
+    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, Func<uint, bool>? buttonDownInWindows = null)
+        : this(binding, new object(), isLogicallyDown, buttonDownInWindows)
     {
     }
 
@@ -45,11 +51,17 @@ internal sealed class HotkeyCommandRouter
     /// nothing on the hook path ever needs it.
     /// </param>
     /// <param name="isLogicallyDown">Windows' view of a key, or null to trust the hook's view alone.</param>
-    internal HotkeyCommandRouter(HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null)
+    /// <param name="buttonDownInWindows">
+    /// Windows' own view of a mouse button, or null, for the tests that do not script Windows, to decide an owed release
+    /// by the engine's own state alone.
+    /// </param>
+    internal HotkeyCommandRouter(
+        HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null, Func<uint, bool>? buttonDownInWindows = null)
     {
         _binding = binding;
         _gate = gate;
         _isLogicallyDown = isLogicallyDown;
+        _buttonDownInWindows = buttonDownInWindows;
     }
 
     public HotkeyBinding Binding => _binding;
@@ -58,6 +70,9 @@ internal sealed class HotkeyCommandRouter
 
     /// <summary>Windows' view of a key that every engine is given, or null; for a test of the service's wiring.</summary>
     internal Func<uint, bool>? WindowsKeyState => _isLogicallyDown;
+
+    /// <summary>Windows' view of a mouse button that every engine is given, or null; for a test of the wiring.</summary>
+    internal Func<uint, bool>? WindowsButtonState => _buttonDownInWindows;
 
     /// <summary>The engine that owns the hook right now, or null while the service is stopped.</summary>
     public HotkeyEngine? CurrentEngine => Volatile.Read(ref _engine);
@@ -96,8 +111,35 @@ internal sealed class HotkeyCommandRouter
     {
         lock (_gate)
         {
-            _captureMode = enabled;
-            return Post(HotkeyCommand.CaptureMode(enabled, AdvanceGeneration()));
+            // Published at the request, before the command exists, for CaptureOwnsInput, which reads both without the
+            // gate: the generation first, so a reader that sees the new mode also sees its generation.
+            var generation = AdvanceGeneration();
+            Volatile.Write(ref _captureGeneration, generation);
+            Volatile.Write(ref _captureMode, enabled);
+            return Post(HotkeyCommand.CaptureMode(enabled, generation));
+        }
+    }
+
+    /// <summary>
+    /// Any thread, without the gate. Whether binding capture owns input: from Settings' request for it until the current
+    /// engine has applied the latest capture request with both its machines
+    /// (<see cref="HotkeyEngine.AppliedCaptureGeneration"/>), which for capture's end is the moment both machines have
+    /// left it. Capture tracks no key and each of its edges clears the engine's key view, so the leaked-key repair judges
+    /// no key while this holds (review rounds 8 and 9, A9 and A11); the service also serializes capture's start with the
+    /// repair's key-ups (<c>HotkeyService.AdmitCapture</c>). A request the current engine has not applied yet, start or
+    /// end, counts as owning input: before an engine applies the start, its view is about to be cleared.
+    /// </summary>
+    public bool CaptureOwnsInput
+    {
+        get
+        {
+            if (Volatile.Read(ref _captureMode))
+            {
+                return true;
+            }
+
+            var requested = Volatile.Read(ref _captureGeneration);
+            return CurrentEngine is { } engine && engine.AppliedCaptureGeneration != requested;
         }
     }
 
@@ -165,16 +207,26 @@ internal sealed class HotkeyCommandRouter
     /// the held key's eventual release can no longer be matched to the new engine's fresh state.
     /// Requests that were queued on the replaced engine but never applied are covered, because every
     /// sticky setting is read from the published configuration, and the retired engine can no longer
-    /// act on them.
+    /// act on them. Nothing else is taken from the old engine, the releases it still owed to swallowed
+    /// mouse button presses included: between the old thread's exit and the new registration no hook
+    /// sees the mouse, so, as for a mouse hook found gone, those releases are let through when they come
+    /// (review round 7; <see cref="HotkeyEngine.OnMouseHookLost"/>). The retirement still seals the old
+    /// engine's debts, so a press it is judging as the reinstall lands is swallowed only if its debt was
+    /// committed first, and otherwise reaches the app whole, with its release.
     /// </summary>
     public (HotkeyEngine Engine, HotkeyTrigger? Interrupted) BeginEngine(HotkeyTransitionQueue transitions)
     {
         ArgumentNullException.ThrowIfNull(transitions);
         lock (_gate)
         {
-            var interrupted = _engine?.Retire();
+            var previous = _engine;
+            var interrupted = previous?.Retire();
+
+            // The new engine starts in the published capture mode, so it has in effect applied the latest capture request
+            // already, with both machines.
             var engine = new HotkeyEngine(
-                _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown);
+                _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
+                _buttonDownInWindows, _captureGeneration);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }

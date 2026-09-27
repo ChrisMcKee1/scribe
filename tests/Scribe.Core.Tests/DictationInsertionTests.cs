@@ -366,6 +366,9 @@ public sealed class DictationInsertionTests
         Assert.Contains("typed => _injector.Inject(", call, StringComparison.Ordinal);
         Assert.Contains("typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks", call, StringComparison.Ordinal);
 
+        // The target's process, which paces typing into a Remote Desktop or virtual machine client (TypingPace).
+        Assert.Contains("settings.ShiftEnterLineBreaks, targetApp)", call, StringComparison.Ordinal);
+
         // After AI cleanup (its guards and the dash normalizer run inside CleanAsync), the dictionary and snippets, and the
         // line breaks handled for the target, which trims; the report keeps the text as dictated.
         var cleanup = controller.IndexOf(".CleanAsync(recognized, cancellationToken, cleanupWritingStyle)", StringComparison.Ordinal);
@@ -395,12 +398,12 @@ public sealed class DictationInsertionTests
         var xaml = ReadSource("src", "Scribe.App", "Settings", "SettingsWindow.xaml");
         var code = ReadSource("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs");
 
-        // On the Dictation page, in the Text insertion group, last in its Tab order, named by its title for screen readers.
+        // On the Dictation page, in the Typing section, named by its title for screen readers.
         var page = xaml[xaml.IndexOf("x:Name=\"SectionDictation\"", StringComparison.Ordinal)..
-            xaml.IndexOf("x:Name=\"SectionOverlay\"", StringComparison.Ordinal)];
+            xaml.IndexOf("x:Name=\"SectionAdvanced\"", StringComparison.Ordinal)];
         var toggle = page.IndexOf("x:Name=\"SpaceAfterDictationCheck\"", StringComparison.Ordinal);
-        Assert.True(toggle > page.IndexOf("Text=\"Text insertion\"", StringComparison.Ordinal));
-        Assert.True(toggle > page.IndexOf("x:Name=\"ShiftEnterCheck\"", StringComparison.Ordinal));
+        Assert.True(toggle > page.IndexOf("x:Name=\"RestoreHotkeysButton\"", StringComparison.Ordinal));
+        Assert.True(toggle < page.IndexOf("x:Name=\"OverlayCheck\"", StringComparison.Ordinal));
         Assert.Contains("<TextBlock x:Name=\"SpaceAfterDictationTitle\" Text=\"Add a space after each dictation\"", page, StringComparison.Ordinal);
         Assert.Contains(
             "Text=\"Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space.\"",

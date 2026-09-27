@@ -42,10 +42,10 @@ public static class DefaultHotkeyRestore
         var saveNeeded = !dictation.SameKeysAndBehavior(savedDictation) || !dictationOnly.SameKeysAndBehavior(savedDictationOnly);
         var message = (changed, saveNeeded) switch
         {
-            (true, true) => $"Hotkeys set to the defaults: {Defaults}. Save to apply them.",
-            (true, false) => $"Hotkeys set back to the defaults: {Defaults}. They are already saved.",
-            (false, true) => $"The hotkeys already show the defaults: {Defaults}. Save to apply them.",
-            (false, false) => $"Your hotkeys already match the defaults: {Defaults}.",
+            (true, true) => $"Shortcuts set to the defaults: {Defaults}. Choose Save to use them.",
+            (true, false) => $"Shortcuts set back to the defaults: {Defaults}. They're already saved.",
+            (false, true) => $"The defaults are already shown: {Defaults}. Choose Save to use them.",
+            (false, false) => $"Your shortcuts already match the defaults: {Defaults}.",
         };
         return new Result(dictation, dictationOnly, changed, saveNeeded, message);
     }
@@ -65,18 +65,23 @@ public static class DefaultHotkeyRestore
             var dictation = HotkeyText.Describe(HotkeyBinding.DefaultDictation);
             var dictationOnly = HotkeyText.Describe(HotkeyBinding.DefaultDictationOnly);
             return $"Restores the defaults: {Defaults}. While Scribe runs, {dictation} and {dictationOnly} pressed on " +
-                "their own no longer reach other apps: they stop paging through documents, web pages and terminals, and " +
-                "a presentation remote stops changing slides. With Ctrl, Shift, Alt, Win or the Narrator key held they " +
-                "work in other apps as before. Pause dictation from the tray icon to use them for a while, or choose " +
-                $"other keys here if you present. Most laptops without {dictation} and {dictationOnly} have them on Fn " +
-                $"with the Down and Up arrows, and the keypad's {dictation} and {dictationOnly} with Num Lock off also work.";
+                "their own no longer reach other apps: they stop paging through documents, web pages and command " +
+                "windows, and a presentation remote stops changing slides. With Ctrl, Shift, Alt, Win or the Narrator " +
+                "key held they work in other apps as before. Pause dictation from the tray icon to use them for a " +
+                $"while, or choose other keys here if you present. Most laptops without {dictation} and {dictationOnly} " +
+                $"have them on Fn with the Down and Up arrows, and the keypad's {dictation} and {dictationOnly} with Num " +
+                "Lock off also work.";
         }
     }
 
-    // "hold Page Down for dictation with AI cleanup and hold Page Up for dictation only", built from the bindings.
+    public static string Caption =>
+        "Restores hold Page Down for dictation and hold Page Up for the shortcut without AI cleanup.";
+
+    // "hold Page Down for dictation with AI cleanup and hold Page Up for dictation without AI cleanup", built from the
+    // bindings. Settings calls the second one the shortcut without AI cleanup, so this never says "dictation only".
     private static string Defaults =>
         $"{Phrase(HotkeyBinding.DefaultDictation)} for dictation with AI cleanup and " +
-        $"{Phrase(HotkeyBinding.DefaultDictationOnly)} for dictation only";
+        $"{Phrase(HotkeyBinding.DefaultDictationOnly)} for dictation without AI cleanup";
 
     private static string Phrase(HotkeyBinding binding) =>
         $"{HotkeyText.Verb(binding.Mode).ToLowerInvariant()} {HotkeyText.Describe(binding)}";

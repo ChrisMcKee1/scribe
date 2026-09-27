@@ -1,0 +1,13 @@
+﻿"# name: Team, terms",,,
+# category: Custom,,,
+"# description: Say ""hi"", then go",,,
+# based-on: github,,,
+# formula-guard: 1,,,
+pattern,replacement,whole_word,enabled
+get hub,GitHub,TRUE,TRUE
+sum,'=SUM(A1),TRUE,TRUE
+#tag,#tag,TRUE,TRUE
+pattern,"a,b",FALSE,TRUE
+three four,4-Mar,TRUE,TRUE
+new year,1/2/2026,TRUE,TRUE
+half past,12:30,TRUE,FALSE

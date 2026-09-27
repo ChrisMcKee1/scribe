@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -19,9 +20,10 @@ public static partial class UsageAnalyzer
         /// Whether <see cref="Text"/> may leave this PC as a term label in the opt-in AI usage insight
         /// (<see cref="UsageInsight.BuildSummary"/>). True only for a covered term whose every
         /// replacement is vocabulary as the user wrote it, before it was trimmed into this label
-        /// (<see cref="CleanupPrompt.IsVocabularyReplacement"/>, the rule the AI cleanup glossary applies).
-        /// False by default, so a term built anywhere else shares nothing. The local Usage page shows every
-        /// term either way.
+        /// (<see cref="CleanupPrompt.IsVocabularyReplacement"/>, the rule the AI cleanup glossary applies), and, in a
+        /// usage report, only when every library term behind it is one AI cleanup may carry
+        /// (<see cref="Libraries.LibraryVocabulary.AiEntries"/>, review finding A6). False by default, so a term built
+        /// anywhere else shares nothing. The local Usage page shows every term either way.
         /// </summary>
         public bool Shareable { get; init; }
     }
@@ -46,7 +48,8 @@ public static partial class UsageAnalyzer
         IReadOnlyList<AppUsage> TopApps,
         IReadOnlyList<TrendPoint> Trend,
         IReadOnlyList<TermUsage> Terms,
-        TrendGranularity Granularity = TrendGranularity.Daily);
+        TrendGranularity Granularity = TrendGranularity.Daily,
+        TimeSpan LongestDictation = default);
 
     /// <summary>
     /// Computes one internally consistent snapshot. Every metric uses entries on or after
@@ -57,6 +60,23 @@ public static partial class UsageAnalyzer
         IEnumerable<DictionaryEntry> knownTerms,
         DateTimeOffset sinceUtc,
         DateTimeOffset nowUtc,
+        TimeZoneInfo? timeZone = null,
+        int maxApps = 8,
+        int maxTerms = 16) =>
+        Compute(entries, knownTerms, sinceUtc, nowUtc, mayShare: null, timeZone, maxApps, maxTerms);
+
+    /// <summary>
+    /// <see cref="Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, TimeZoneInfo, int, int)"/>
+    /// with a say in which known terms may make their label shareable: a label is shareable only when every term behind it
+    /// is vocabulary and <paramref name="mayShare"/> allows it (the usage report allows dictionary entries, and library
+    /// entries only when AI cleanup may carry them, review finding A6). Null allows every term.
+    /// </summary>
+    internal static Snapshot Compute(
+        IEnumerable<HistoryEntry> entries,
+        IEnumerable<DictionaryEntry> knownTerms,
+        DateTimeOffset sinceUtc,
+        DateTimeOffset nowUtc,
+        Func<DictionaryEntry, bool>? mayShare,
         TimeZoneInfo? timeZone = null,
         int maxApps = 8,
         int maxTerms = 16)
@@ -77,12 +97,10 @@ public static partial class UsageAnalyzer
 
         var apps = selected
             .GroupBy(
-                entry => string.IsNullOrWhiteSpace(entry.TargetApp) ? "Unknown app" : entry.TargetApp.Trim(),
+                entry => string.IsNullOrWhiteSpace(entry.TargetApp) ? "Unknown app" : AppDisplayName.For(entry.TargetApp.Trim()),
                 StringComparer.OrdinalIgnoreCase)
             .Select(group => new AppUsage(
-                string.IsNullOrWhiteSpace(group.First().TargetApp)
-                    ? "Unknown app"
-                    : group.OrderBy(entry => entry.TargetApp, StringComparer.Ordinal).First().TargetApp!.Trim(),
+                group.Key,
                 group.Count(),
                 group.Sum(entry => wordCounts[entry.Id])))
             .OrderByDescending(app => app.Dictations)
@@ -99,8 +117,9 @@ public static partial class UsageAnalyzer
             AverageWords: selected.Count == 0 ? 0 : words / (double)selected.Count,
             TopApps: apps,
             Trend: trend,
-            Terms: ExtractTerms(selected, knownTerms, maxTerms),
-            Granularity: granularity);
+            Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare),
+            Granularity: granularity,
+            LongestDictation: TimeSpan.FromMilliseconds(selected.Count == 0 ? 0 : selected.Max(entry => Math.Max(0, entry.AudioMilliseconds))));
     }
 
     /// <summary>Counts Unicode letter/number words without assuming a particular language.</summary>
@@ -155,7 +174,8 @@ public static partial class UsageAnalyzer
     private static IReadOnlyList<TermUsage> ExtractTerms(
         IReadOnlyList<HistoryEntry> entries,
         IEnumerable<DictionaryEntry> knownTerms,
-        int maxTerms)
+        int maxTerms,
+        Func<DictionaryEntry, bool>? mayShare)
     {
         var known = knownTerms
             .Where(entry => entry.Enabled && !string.IsNullOrWhiteSpace(entry.Replacement))
@@ -165,8 +185,10 @@ public static partial class UsageAnalyzer
                 Canonical = group.First().Replacement.Trim(),
                 // Judged on every replacement behind the label as written: the trim above can hide a
                 // trailing line break, or the padding that takes one past the cap, and either one
-                // marks a template (a signature, a footer) rather than a term.
-                Shareable = group.All(entry => CleanupPrompt.IsVocabularyReplacement(entry.Replacement)),
+                // marks a template (a signature, a footer) rather than a term. And every term behind it
+                // must be one the caller lets leave the PC: a label also counts the spoken forms behind it.
+                Shareable = group.All(entry =>
+                    CleanupPrompt.IsVocabularyReplacement(entry.Replacement) && (mayShare?.Invoke(entry) ?? true)),
                 Forms = group
                     .SelectMany(entry => new[] { entry.Pattern.Trim(), entry.Replacement.Trim() })
                     .Where(form => form.Length >= 2)
@@ -214,7 +236,7 @@ public static partial class UsageAnalyzer
                 var token = match.Value.TrimEnd('.', ',', ':', ';', '!', '?');
                 if (token.Length < 2 ||
                     coveredForms.Contains(token) ||
-                    !DictionarySuggestionMiner.IsJargonShaped(token))
+                    !DictionarySuggestionMiner.IsCandidate(token))
                 {
                     continue;
                 }

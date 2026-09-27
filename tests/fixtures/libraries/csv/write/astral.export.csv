@@ -1,0 +1,9 @@
+﻿# name: Team 😀
+# category: Music 𝄞
+"# description: Faces 😀, clefs 𝄞"
+# based-on: team-😀
+# formula-guard: 1
+pattern,replacement,whole_word,enabled
+smile 😀,😀,true,true
+𝄞,G clef 𝄞,false,true
+"#😀",'=𝄞,true,true

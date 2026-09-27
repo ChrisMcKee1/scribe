@@ -53,6 +53,10 @@ public sealed class DictationStatsTests
 
         Assert.NotNull(stats);
         Assert.Equal(3, stats!.Count);
+        Assert.Equal(TranscriptionModelCatalog.DefaultId, stats.CurrentModelId);
+        Assert.Equal("Parakeet TDT 0.6B v3 (recommended)", stats.CurrentModelName);
+        Assert.False(stats.HasEarlierModelDictations);
+        Assert.False(stats.ReachedReadLimit);
         Assert.Equal(TimeSpan.FromMilliseconds(35_000), stats.TotalAudio);
         Assert.Equal(3, stats.ParakeetDecodeCount);
         Assert.Equal(5.0 / 3.0 * 1000.0, stats.ParakeetDecodeMs!.Average, precision: 6);
@@ -101,7 +105,7 @@ public sealed class DictationStatsTests
     }
 
     [Fact]
-    public void Compute_parakeet_metrics_exclude_other_and_unstamped_models()
+    public void Compute_groups_metrics_by_current_speech_model()
     {
         var entries = new[]
         {
@@ -110,12 +114,210 @@ public sealed class DictationStatsTests
             Entry(audioMs: 10_000, decodeMs: 9_000, modelId: null),
         };
 
+        var stats = DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7), "moonshine-base-en-int8");
+
+        Assert.NotNull(stats);
+        Assert.Equal(1, stats!.Count);
+        Assert.Equal("moonshine-base-en-int8", stats.CurrentModelId);
+        Assert.Equal("Moonshine Base INT8", stats.CurrentModelName);
+        Assert.True(stats.HasEarlierModelDictations);
+        Assert.Equal(TimeSpan.FromMilliseconds(10_000), stats.TotalAudio);
+        Assert.Equal(1, stats.ParakeetDecodeCount);
+        Assert.Equal(8_000, stats.ParakeetDecodeMs!.Average);
+        Assert.Equal(0.80, stats.RtfP50, precision: 6);
+    }
+
+    [Fact]
+    public void Compute_two_argument_overload_filters_to_the_default_model()
+    {
+        var entries = new[]
+        {
+            Entry(audioMs: 10_000, decodeMs: 1_000, cleanupMs: 400),
+            Entry(audioMs: 10_000, decodeMs: 8_000, cleanupMs: 700, modelId: "moonshine-base-en-int8"),
+            Entry(audioMs: 10_000, decodeMs: 9_000, cleanupMs: 900, modelId: null),
+        };
+
         var stats = DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
 
         Assert.NotNull(stats);
-        Assert.Equal(3, stats!.Count);
+        Assert.Equal(1, stats!.Count);
+        Assert.Equal(TimeSpan.FromMilliseconds(10_000), stats.TotalAudio);
         Assert.Equal(1, stats.ParakeetDecodeCount);
         Assert.Equal(1_000, stats.ParakeetDecodeMs!.Average);
-        Assert.Equal(0.10, stats.RtfP50, precision: 6);
+        Assert.Equal(1, stats.CleanupCount);
+        Assert.Equal(400, stats.CleanupMs!.Average);
+        Assert.Equal(1, stats.CombinedCount);
+        Assert.Equal(1_400, stats.CombinedMs!.Average);
+        Assert.True(stats.HasEarlierModelDictations);
+    }
+
+    [Fact]
+    public void Compute_returns_null_when_only_other_models_exist()
+    {
+        var stats = DictationStats.Compute(
+            [Entry(audioMs: 10_000, decodeMs: 8_000, modelId: "moonshine-base-en-int8")],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId);
+
+        Assert.NotNull(stats);
+        Assert.Equal(0, stats!.Count);
+        Assert.True(stats.HasEarlierModelDictations);
+        Assert.Equal(TranscriptionModelCatalog.DefaultId, stats.CurrentModelId);
+    }
+
+    [Fact]
+    public void Compute_counts_null_model_entries_when_no_other_model_is_recorded()
+    {
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 1_000, modelId: null),
+                Entry(audioMs: 10_000, decodeMs: 2_000, modelId: TranscriptionModelCatalog.DefaultId),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId);
+
+        Assert.NotNull(stats);
+        Assert.Equal(2, stats!.Count);
+        Assert.False(stats.HasEarlierModelDictations);
+        Assert.Equal(1_500, stats.SpeechRecognitionMs!.Average);
+    }
+
+    [Fact]
+    public void Compute_counts_all_null_entries_as_current_model()
+    {
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 1_000, modelId: null),
+                Entry(audioMs: 10_000, decodeMs: 2_000, modelId: null),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId);
+
+        Assert.NotNull(stats);
+        Assert.Equal(2, stats!.Count);
+        Assert.False(stats.HasEarlierModelDictations);
+        Assert.Equal(1_500, stats.SpeechRecognitionMs!.Average);
+    }
+
+    [Fact]
+    public void Compute_leaves_null_entries_out_once_another_model_is_recorded()
+    {
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 1_000, modelId: TranscriptionModelCatalog.DefaultId),
+                Entry(audioMs: 10_000, decodeMs: 2_000, modelId: null),
+                Entry(audioMs: 10_000, decodeMs: 8_000, modelId: "moonshine-base-en-int8"),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId);
+
+        Assert.NotNull(stats);
+        Assert.Equal(1, stats!.Count);
+        Assert.True(stats.HasEarlierModelDictations);
+        Assert.Equal(1_000, stats.SpeechRecognitionMs!.Average);
+    }
+
+    [Fact]
+    public void Compute_returns_exclusion_snapshot_for_nulls_plus_another_model()
+    {
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 2_000, modelId: null),
+                Entry(audioMs: 10_000, decodeMs: 8_000, modelId: "moonshine-base-en-int8"),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId);
+
+        Assert.NotNull(stats);
+        Assert.Equal(0, stats!.Count);
+        Assert.True(stats.HasEarlierModelDictations);
+        Assert.Null(stats.SpeechRecognitionMs);
+    }
+
+    [Fact]
+    public void Compute_uses_newest_history_model_when_selected_model_is_unavailable()
+    {
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 8_000, modelId: "moonshine-base-en-int8", ageHours: 2),
+                Entry(audioMs: 10_000, decodeMs: 1_000, modelId: TranscriptionModelCatalog.DefaultId, ageHours: 1),
+                Entry(audioMs: 10_000, decodeMs: 7_000, modelId: "moonshine-base-en-int8", ageHours: 20),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            "moonshine-base-en-int8",
+            currentModelAvailable: false);
+
+        Assert.NotNull(stats);
+        Assert.Equal(1, stats!.Count);
+        Assert.Equal(TranscriptionModelCatalog.DefaultId, stats.CurrentModelId);
+        Assert.Equal(1_000, stats.SpeechRecognitionMs!.Average);
+        Assert.True(stats.HasEarlierModelDictations);
+    }
+
+    [Fact]
+    public void The_fallback_model_comes_only_from_the_window()
+    {
+        // A recorded model older than the window must not decide which model the window's null-id runs count as.
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 1_000, modelId: null, ageHours: 24),
+                Entry(audioMs: 10_000, decodeMs: 2_000, modelId: TranscriptionModelCatalog.DefaultId, ageHours: 24 * 8),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            "moonshine-base-en-int8",
+            currentModelAvailable: false);
+
+        Assert.NotNull(stats);
+        Assert.Equal("moonshine-base-en-int8", stats!.CurrentModelId);
+        Assert.Equal(1, stats.Count);
+    }
+
+    [Fact]
+    public void Compute_keeps_selected_model_when_unavailable_but_history_has_no_model_id()
+    {
+        var stats = DictationStats.Compute(
+            [Entry(audioMs: 10_000, decodeMs: 1_000, modelId: null)],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            "moonshine-base-en-int8",
+            currentModelAvailable: false);
+
+        Assert.NotNull(stats);
+        Assert.Equal("moonshine-base-en-int8", stats!.CurrentModelId);
+        Assert.Equal(1, stats.Count);
+    }
+
+    [Fact]
+    public void Compute_marks_the_read_limit_when_the_repository_limit_was_hit()
+    {
+        var stats = DictationStats.Compute(
+            [
+                Entry(audioMs: 10_000, decodeMs: 1_000),
+                Entry(audioMs: 10_000, decodeMs: 2_000),
+            ],
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId,
+            readLimit: 2);
+
+        Assert.NotNull(stats);
+        Assert.True(stats!.ReachedReadLimit);
+    }
+
+    [Fact]
+    public void Compute_marks_the_read_limit_from_the_unfiltered_repository_read()
+    {
+        var entries = Enumerable.Range(0, 999)
+            .Select(index => Entry(audioMs: 10_000, decodeMs: 1_000, ageHours: 1 + (index * 0.001)))
+            .Append(Entry(audioMs: 10_000, decodeMs: 9_000, ageHours: 24 * 8))
+            .ToArray();
+
+        var stats = DictationStats.Compute(
+            entries,
+            DateTimeOffset.UtcNow.AddDays(-7),
+            TranscriptionModelCatalog.DefaultId,
+            readLimit: 1000);
+
+        Assert.NotNull(stats);
+        Assert.Equal(999, stats!.Count);
+        Assert.True(stats.ReachedReadLimit);
     }
 }

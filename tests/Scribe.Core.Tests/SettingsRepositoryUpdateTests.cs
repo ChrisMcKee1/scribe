@@ -1,5 +1,6 @@
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.Tests.Concurrency;
 
 namespace Scribe.Core.Tests;
 
@@ -25,6 +26,7 @@ public sealed class SettingsRepositoryUpdateTests : IDisposable
         repository.Save(AppSettings.CreateDefault());
         using var firstInside = new ManualResetEventSlim();
         using var releaseFirst = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseFirst);
         var secondMutated = 0;
 
         // The first writer has read the document and is part way through its change...
@@ -32,7 +34,7 @@ public sealed class SettingsRepositoryUpdateTests : IDisposable
         {
             settings.LaunchOnLogin = true;
             firstInside.Set();
-            Assert.True(releaseFirst.Wait(Generous));
+            releaseFirst.Wait();
         }));
         Assert.True(firstInside.Wait(Generous));
 
@@ -76,12 +78,16 @@ public sealed class SettingsRepositoryUpdateTests : IDisposable
         var repository = new SettingsRepository(db);
         using var holding = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
+
+        // Holds the gate until the test releases it, and only then: an update that waited for the gate would wait for that
+        // release rather than meet a hold that ended by itself.
         var maintenance = new Thread(() =>
         {
             using (db.EnterWriteScope())
             {
                 holding.Set();
-                release.Wait(Generous);
+                release.Wait();
             }
         });
         maintenance.Start();

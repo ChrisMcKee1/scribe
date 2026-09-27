@@ -5,11 +5,15 @@ using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Windows.ApplicationModel;
+using HangGuard = Scribe.Core.Tests.Concurrency.HangGuard;
 
 namespace Scribe.Core.Tests;
 
 public sealed class StartupRegistrationTests
 {
+    // A hang guard, never the verdict: every wait it bounds is for something certain to happen (stream TR round 7b).
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     [Fact]
     public void Package_identity_selects_the_package_backend_not_the_run_key()
     {
@@ -552,7 +556,7 @@ public sealed class StartupRegistrationTests
         var toggle = CreateToggle(backend, _ => { saveStarted.SetResult(); return saving.Task; });
 
         var first = toggle.ApplyAsync(true, new StartupRegistrationStatus(StartupTaskState.Disabled), false);
-        await saveStarted.Task;
+        Assert.True(await HangGuard.Completes(saveStarted.Task, Bound), "The first change never started saving its preference.");
         Assert.True(toggle.IsApplying);
 
         var second = await toggle.ApplyAsync(false, new StartupRegistrationStatus(StartupTaskState.Enabled), true);
@@ -584,7 +588,7 @@ public sealed class StartupRegistrationTests
         Assert.Equal(!requested, result.Status.IsEnabled);
         Assert.Equal(shown, backend.State);
         Assert.Equal(0, backend.EnableCalls + backend.DisableCalls);
-        Assert.Contains("left as it was", result.Status.Message);
+        Assert.Contains("wasn't changed", result.Status.Message);
     }
 
     [Fact]

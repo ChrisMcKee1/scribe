@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "library": "github",
+  "terms": [
+    {
+      "key": "gh cli",
+      "intent": "added",
+      "value": {
+        "spoken": "gh cli",
+        "written": "GitHub CLI",
+        "wholeWord": true,
+        "enabled": true
+      }
+    }
+  ]
+}

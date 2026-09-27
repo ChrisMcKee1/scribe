@@ -16,8 +16,8 @@ public sealed class FoundryStorageReclaimNoticeTests
             Invariant);
 
         Assert.Equal(
-            "Scribe freed 2.3 GB of unused on-device AI files. " +
-            "Foundry Local is not your AI cleanup provider, so its downloads are not needed.",
+            "Scribe freed 2.3 GB of AI files it no longer needs. " +
+            "AI cleanup doesn't run on this PC now, so these downloads aren't needed.",
             notice);
     }
 
@@ -29,8 +29,8 @@ public sealed class FoundryStorageReclaimNoticeTests
             Invariant);
 
         Assert.Equal(
-            "Scribe freed 850 MB of unused on-device AI files. " +
-            "They belonged to Foundry Local models you switched away from.",
+            "Scribe freed 850 MB of AI files it no longer needs. " +
+            "They belonged to AI models on this PC that you switched away from.",
             notice);
     }
 
@@ -42,9 +42,9 @@ public sealed class FoundryStorageReclaimNoticeTests
             Invariant);
 
         Assert.Equal(
-            "Scribe freed 1.5 GB of unused on-device AI files. " +
-            "No Foundry Local model is downloaded and AI cleanup is off. " +
-            "Setting up Foundry Local downloads the runtime again.",
+            "Scribe freed 1.5 GB of AI files it no longer needs. " +
+            "No AI model was downloaded for this PC, and AI cleanup is off. " +
+            "Setting up AI cleanup on this PC downloads these files again.",
             notice);
     }
 
@@ -75,7 +75,7 @@ public sealed class FoundryStorageReclaimNoticeTests
             Reclaim(FoundryStorageReclaimReason.ModelSwitched, 0, models: 1), Invariant);
 
         Assert.Equal(
-            "Scribe removed unused on-device AI files. They belonged to Foundry Local models you switched away from.",
+            "Scribe removed AI files it no longer needs. They belonged to AI models on this PC that you switched away from.",
             notice);
     }
 
@@ -86,7 +86,7 @@ public sealed class FoundryStorageReclaimNoticeTests
             Reclaim(FoundryStorageReclaimReason.ModelSwitched, (long)(2.3 * 1024 * Megabyte), models: 1),
             CultureInfo.GetCultureInfo("de-DE"));
 
-        Assert.StartsWith("Scribe freed 2,3 GB of unused on-device AI files.", notice, StringComparison.Ordinal);
+        Assert.StartsWith("Scribe freed 2,3 GB of AI files it no longer needs.", notice, StringComparison.Ordinal);
     }
 
     [Theory]

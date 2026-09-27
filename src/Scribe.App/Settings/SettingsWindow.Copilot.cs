@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Windows;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Settings;
 using Wpf.Ui.Controls;
 
 namespace Scribe.App.Settings;
@@ -21,6 +22,8 @@ public partial class SettingsWindow
     /// <summary>What the last detection found, so the save path can warn without re-probing.</summary>
     private GitHubCopilotCliStatus _copilotCli = GitHubCopilotCliStatus.Missing;
 
+    private bool _copilotChecked;
+
     /// <summary>
     /// Whether the model list has already been fetched for this window.
     /// </summary>
@@ -35,8 +38,8 @@ public partial class SettingsWindow
     /// Re-detects the CLI and rewrites the banner.
     /// </summary>
     /// <remarks>
-    /// Detection shells out to read a version, so it runs off the UI thread and comes back through
-    /// the dispatcher.
+    /// The browse path only locates the executable on disk. The version probe shells out and is
+    /// reserved for explicit actions, or for the saved active provider that may already contact GitHub.
     /// <para>
     /// The close-while-in-flight case is handled by <see cref="System.Windows.Threading.DispatcherOperation"/>
     /// rather than by a null check on the control. A field generated from <c>x:Name</c> is not set
@@ -46,14 +49,15 @@ public partial class SettingsWindow
     /// and <c>HasShutdownStarted</c> is the condition that actually distinguishes the two cases.
     /// </para>
     /// </remarks>
-    private void RefreshCopilotCliStatus()
+    private void RefreshCopilotCliStatus(bool runVersionProbe = false, bool allowModelList = false)
     {
-        CopilotCliBar.Severity = InfoBarSeverity.Informational;
-        CopilotCliBar.Title = "Checking for the GitHub Copilot CLI…";
-        CopilotCliBar.Message = string.Empty;
-        CopilotRecheckButton.IsEnabled = false;
+        _copilotChecked = false;
+        CopilotLoadModelsButton.IsEnabled = false;
+        UpdateAiEnabledState();
+        var authorizedSettings = _committedSettings.Clone();
+        var authorizedDraft = CurrentAiDraftSettings();
 
-        _ = Task.Run(GitHubCopilotCli.Detect).ContinueWith(
+        _ = Task.Run(() => runVersionProbe ? GitHubCopilotCli.Detect() : GitHubCopilotCli.Locate()).ContinueWith(
             task =>
             {
                 var status = task.Status == TaskStatus.RanToCompletion
@@ -68,48 +72,20 @@ public partial class SettingsWindow
                 _ = Dispatcher.InvokeAsync(() =>
                 {
                     _copilotCli = status;
-                    CopilotRecheckButton.IsEnabled = true;
-
-                    if (status.Found)
-                    {
-                        CopilotCliBar.Severity = InfoBarSeverity.Success;
-                        CopilotCliBar.Title = "GitHub Copilot CLI found";
-                        CopilotCliBar.Message = status.Version is { } version
-                            ? $"{version} at {status.Path}"
-                            : status.Path ?? string.Empty;
-                        CopilotInstallButton.Content = "Update the CLI";
-                    }
-                    else
-                    {
-                        CopilotCliBar.Severity = InfoBarSeverity.Warning;
-                        CopilotCliBar.Title = "GitHub Copilot CLI not found";
-                        CopilotCliBar.Message =
-                            "This provider runs cleanup through the Copilot CLI. Install it, sign in once, " +
-                            "then choose Check again.";
-                        CopilotInstallButton.Content = "Install the CLI";
-                    }
-
-                    // The model list and the sign-in prompt both need the CLI, so they follow it.
+                    _copilotChecked = true;
                     CopilotLoadModelsButton.IsEnabled = status.Found;
-                    CopilotSignInButton.IsEnabled = status.Found;
+                    UpdateAiEnabledState();
 
-                    /*
-                     * Populate the models straight away rather than waiting to be asked.
-                     *
-                     * The list is the whole point of choosing this provider, and everything needed to
-                     * fetch it is known the moment detection succeeds. Making the reader press a
-                     * button first is asking them to do the work the panel already knows how to do,
-                     * and an empty dropdown reads as "no models available" rather than "not fetched
-                     * yet". The button stays for the case the button is actually for: re-reading
-                     * after an install or a sign-in changed the answer.
-                     */
-                    if (status.Found && !_copilotModelsLoaded)
+                    var authorization = status.Found && allowModelList
+                        ? RemoteActivityPolicy.CaptureAutomaticContact(authorizedSettings, authorizedDraft, RemoteActivityTrigger.WindowOpen, status.Path)
+                        : null;
+                    if (status.Found && !_copilotModelsLoaded &&
+                        RemoteActivityPolicy.IsStillAuthorized(authorization, _committedSettings, CurrentAiDraftSettings(), status.Path))
                     {
                         LoadCopilotModels();
                     }
                     else if (!status.Found)
                     {
-                        // A CLI that went away invalidates whatever was listed from the old one.
                         _copilotModelsLoaded = false;
                     }
                 });
@@ -117,7 +93,7 @@ public partial class SettingsWindow
             TaskScheduler.Default);
     }
 
-    private void CopilotRecheckButton_Click(object sender, RoutedEventArgs e) => RefreshCopilotCliStatus();
+    private void CopilotRecheckButton_Click(object sender, RoutedEventArgs e) => RefreshCopilotCliStatus(runVersionProbe: true);
 
     /// <summary>
     /// Hands the install to WinGet, in a terminal the user can see.
@@ -138,16 +114,15 @@ public partial class SettingsWindow
             ? "winget upgrade --id GitHub.Copilot --accept-source-agreements"
             : "winget install --id GitHub.Copilot --accept-source-agreements --accept-package-agreements";
 
-        if (!TryRunInTerminal(command, "Could not start the installer."))
+        if (!TryRunInTerminal(command, "Couldn't start the installer."))
         {
             return;
         }
 
-        CopilotCliBar.Severity = InfoBarSeverity.Informational;
-        CopilotCliBar.Title = "Installer running";
-        CopilotCliBar.Message =
-            "Finish in the terminal window, then choose Check again. A new install also needs `copilot` " +
-            "run once to sign in.";
+        ShowInfo("The installer is open. Finish it, then choose Check again.");
+        _copilotChecked = true;
+        UpdateAiEnabledState();
+        RefreshCopilotCliStatus(runVersionProbe: true);
     }
 
     /// <summary>
@@ -164,11 +139,11 @@ public partial class SettingsWindow
             return;
         }
 
-        if (TryRunInTerminal($"\"{_copilotCli.Path}\"", "Could not start the Copilot CLI."))
+        if (TryRunInTerminal($"\"{_copilotCli.Path}\"", "Couldn't start GitHub Copilot."))
         {
-            CopilotCliBar.Severity = InfoBarSeverity.Informational;
-            CopilotCliBar.Title = "Copilot CLI opened";
-            CopilotCliBar.Message = "Sign in there if prompted, then close it and choose Refresh models.";
+            ShowInfo("Sign in there if prompted, then close it and choose Get models.");
+            _copilotChecked = true;
+            UpdateAiEnabledState();
         }
     }
 
@@ -205,7 +180,7 @@ public partial class SettingsWindow
         // can fire again while a fetch is still in flight.
         _copilotModelsLoaded = true;
         CopilotLoadModelsButton.IsEnabled = false;
-        CopilotModelHint.Text = "Reading the models your Copilot licence allows…";
+        CopilotModelHint.Text = "Reading the models your Copilot subscription allows...";
 
         var cliPath = _copilotCli.Path;
         _ = Task.Run(async () => await GitHubCopilotModels.ListAsync(cliPath, CancellationToken.None)
@@ -244,15 +219,8 @@ public partial class SettingsWindow
                         CopilotModelCombo.ItemsSource = models.Select(m => m.Id).ToArray();
                         CopilotModelCombo.Text = typed;
 
-                        var withEfforts = models
-                            .Where(m => m.SupportedReasoningEfforts.Count > 0)
-                            .Select(m => $"{m.Id} ({string.Join('/', m.SupportedReasoningEfforts)})")
-                            .Take(4)
-                            .ToArray();
-
-                        CopilotModelHint.Text = withEfforts.Length > 0
-                            ? $"{models.Count} model(s) available. Reasoning levels: {string.Join(", ", withEfforts)}."
-                            : $"{models.Count} model(s) available. Leave blank to use your account's default.";
+                        CopilotModelHint.Text =
+                            $"{models.Count} model(s) available. Leave empty to use your account's default.";
                     });
                 },
                 TaskScheduler.Default);
@@ -276,9 +244,7 @@ public partial class SettingsWindow
         catch (Exception ex)
         {
             _log.LogWarning("Could not launch a terminal for the Copilot CLI ({Failure}).", FailureShape.Describe(ex));
-            CopilotCliBar.Severity = InfoBarSeverity.Error;
-            CopilotCliBar.Title = failureTitle;
-            CopilotCliBar.Message = "Run it yourself in a terminal: " + command;
+            ShowInfo(failureTitle + " Run it yourself in a command window.", InfoBarSeverity.Error);
             return false;
         }
     }

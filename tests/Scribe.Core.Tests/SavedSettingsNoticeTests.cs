@@ -9,12 +9,12 @@ public sealed class SavedSettingsNoticeTests
     {
         // The tray shows every message after "Scribe: "; the Settings window shows a whole sentence.
         Assert.Equal(
-            "couldn't use your saved settings. Open Settings, review them and save before changing AI cleanup.",
+            "Scribe couldn't use your saved settings, so it's using defaults. Open Settings, review them and choose Save. Then you can change AI cleanup here.",
             SavedSettingsNotice.FromTray("AI cleanup"));
         Assert.Equal(
             "Scribe couldn't use your saved settings. Review them and save before changing Start with Windows.",
             SavedSettingsNotice.InSettings("Start with Windows"));
-        Assert.Equal("couldn't use your saved settings. Open Settings, review them and save.", SavedSettingsNotice.AtStartup);
+        Assert.Equal("Scribe couldn't use your saved settings, so it's using defaults for now. Open Settings, review them and choose Save to keep them.", SavedSettingsNotice.AtStartup);
     }
 
     [Fact]
@@ -26,11 +26,20 @@ public sealed class SavedSettingsNoticeTests
                      SavedSettingsNotice.AtStartup,
                      SavedSettingsNotice.FromTray("AI cleanup"),
                      SavedSettingsNotice.InSettings("Start with Windows"),
+                     SavedSettingsNotice.ForWindow(),
                  })
         {
             Assert.DoesNotContain("recover", text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain('\u2013', text);
             Assert.DoesNotContain('\u2014', text);
         }
+    }
+
+    [Fact]
+    public void Window_notice_matches_the_redesign_inline_warning()
+    {
+        Assert.Equal(
+            "Scribe couldn't use your saved settings, so it's using defaults. Review them and choose Save to keep them.",
+            SavedSettingsNotice.ForWindow());
     }
 }

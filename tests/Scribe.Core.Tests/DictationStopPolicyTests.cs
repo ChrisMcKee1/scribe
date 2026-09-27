@@ -22,6 +22,7 @@ public sealed class DictationStopPolicyTests
     [Theory]
     [InlineData(DictationStopReason.HotkeyReleased)]
     [InlineData(DictationStopReason.DesktopSwitch)]
+    [InlineData(DictationStopReason.MouseHookLost)]
     public void A_stop_the_hook_sent_itself_leaves_the_toggle_alone(DictationStopReason reason) =>
         Assert.False(DictationStopPolicy.ReleasesHotkeyToggle(reason));
 
@@ -37,6 +38,7 @@ public sealed class DictationStopPolicyTests
             DictationStopReason.DurationLimit,
             DictationStopReason.HotkeyReleased,
             DictationStopReason.DesktopSwitch,
+            DictationStopReason.MouseHookLost,
         ];
         Assert.Equal(Enum.GetValues<DictationStopReason>().Order(), classified.Order());
     }
@@ -62,6 +64,7 @@ public sealed class DictationStopPolicyTests
     [Theory]
     [InlineData(DictationStopReason.HotkeyReleased)]
     [InlineData(DictationStopReason.DesktopSwitch)]
+    [InlineData(DictationStopReason.MouseHookLost)]
     public void A_stop_the_hook_sent_is_admitted_and_releases_nothing(DictationStopReason reason)
     {
         var lifecycle = RecordingStartedBy(activation: 42);

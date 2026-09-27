@@ -12,6 +12,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public class HotkeyEngineTests
 {
+    // A hang guard, never the verdict: every wait below is for something certain to happen.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
     private const uint RightCtrl = 0xA3;
     private const uint F8 = 0x77;
     private const uint F9 = 0x78;
@@ -42,7 +45,7 @@ public class HotkeyEngineTests
             Assert.False(writer.IsCompleted);
         }
 
-        await writer.WaitAsync(TimeSpan.FromSeconds(10));
+        await writer.WaitAsync(Bound);
         Assert.True(press.Down.Suppress);
         Assert.True(press.Up.Suppress);
         Assert.True(press.Up.RequestReconcile);
@@ -514,13 +517,13 @@ public class HotkeyEngineTests
         var spinning = System.Diagnostics.Stopwatch.StartNew();
         while ((waiter.ThreadState & ThreadState.WaitSleepJoin) == 0)
         {
-            Assert.True(spinning.Elapsed < TimeSpan.FromSeconds(10), "The dispatcher never started waiting.");
+            Assert.True(spinning.Elapsed < Bound, "The dispatcher never started waiting.");
             Thread.Yield();
         }
 
         queue.TryEnqueue(item);
 
-        var returned = waiter.Join(TimeSpan.FromSeconds(10));
+        var returned = waiter.Join(Bound);
         if (!returned)
         {
             queue.Complete(); // release the stuck waiter before failing
@@ -551,11 +554,11 @@ public class HotkeyEngineTests
             Name = "hotkey-test-message-queue",
         };
         pump.Start();
-        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(ready.Wait(Bound));
 
         Assert.True(NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_COMMANDS, 0, 0));
 
-        Assert.True(pump.Join(TimeSpan.FromSeconds(10)));
+        Assert.True(pump.Join(Bound));
         Assert.True(result > 0);
         Assert.Equal(nint.Zero, received.hwnd);
         Assert.Equal(NativeMethods.WM_HOTKEY_COMMANDS, received.message);
@@ -577,23 +580,44 @@ public class HotkeyEngineTests
     public async Task Leak_check_signal_runs_the_check_on_the_pool_and_rearms_after_each_run()
     {
         using var checks = new SemaphoreSlim(0);
-        using var signal = new HotkeyReconcileSignal(() => checks.Release());
+        using var signal = new HotkeyReconcileSignal(_ => checks.Release());
 
         // The dispatcher plays no part: the hook callback's SetEvent alone gets the check run.
-        signal.Signal();
-        Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
+        signal.Signal(1);
+        Assert.True(await checks.WaitAsync(Bound));
 
-        signal.Signal();
-        Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
+        signal.Signal(1);
+        Assert.True(await checks.WaitAsync(Bound));
     }
 
     [Fact]
     public void A_released_leak_check_signal_never_throws_at_the_hook()
     {
-        var signal = new HotkeyReconcileSignal(() => { });
+        var signal = new HotkeyReconcileSignal(_ => { });
         signal.Dispose();
 
-        signal.Signal();
+        signal.Signal(1);
+    }
+
+    [Fact]
+    public void An_exception_from_the_pass_never_leaves_the_signal_s_pool_callback()
+    {
+        // Review round 3, item 6: a test's recorder, disposed while a pass that coalesced late was still on its way, threw
+        // out of this callback on a pool thread and took the whole test host down; in the app the same would end Scribe.
+        // The pool callback is run here on the test's own thread (it is what the registered wait runs), so an exception it
+        // let out fails this test instead of the process.
+        var calls = 0;
+        using var signal = new HotkeyReconcileSignal(_ =>
+        {
+            calls++;
+            throw new ObjectDisposedException("recorder");
+        });
+        var runPass = typeof(HotkeyReconcileSignal).GetMethod(
+            "RunPass", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+        runPass.Invoke(signal, null);
+
+        Assert.Equal(1, calls);
     }
 
     [Fact]

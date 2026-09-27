@@ -97,7 +97,7 @@ public sealed record ComputeCapabilityReport
             ? $"{Format(ProcessArchitecture)} emulated on {Format(OsArchitecture)}"
             : $"{Format(ProcessArchitecture)} native";
 
-        return $"CPU decode; {mode}; NPU: {npu}";
+        return $"Speech recognition on the CPU; {mode}; NPU: {npu}";
     }
 
     private static string Format(Architecture architecture) => architecture switch

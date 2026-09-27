@@ -68,6 +68,22 @@ public static class GitHubCopilotCli
     internal const int MaxVersionChars = 128;
 
     /// <summary>
+    /// Finds the CLI without running it. Never throws: a detection failure is reported as "not found".
+    /// </summary>
+    public static GitHubCopilotCliStatus Locate()
+    {
+        try
+        {
+            var path = ResolvePath();
+            return string.IsNullOrWhiteSpace(path) ? GitHubCopilotCliStatus.Missing : new(true, path, null);
+        }
+        catch (Exception)
+        {
+            return GitHubCopilotCliStatus.Missing;
+        }
+    }
+
+    /// <summary>
     /// Finds the CLI, and reads its version when it can. Never throws: a detection failure is
     /// reported as "not found" so Settings can offer the install path rather than an error.
     /// </summary>
@@ -177,38 +193,69 @@ public static class GitHubCopilotCli
 
         foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
-            string candidateDirectory;
-            try
+            var found = FindInDirectory(directory, extensions);
+            if (found is not null)
             {
-                candidateDirectory = directory.Trim().Trim('"');
-                if (candidateDirectory.Length == 0)
-                {
-                    continue;
-                }
+                return found;
             }
-            catch (Exception)
-            {
-                continue;
-            }
+        }
 
-            foreach (var extension in extensions)
+        foreach (var directory in KnownInstallDirectories())
+        {
+            var found = FindInDirectory(directory, extensions);
+            if (found is not null)
             {
-                var candidate = Path.Combine(candidateDirectory, ExecutableName + extension);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            // A bare, extensionless executable, which is what a non-Windows install looks like.
-            var bare = Path.Combine(candidateDirectory, ExecutableName);
-            if (File.Exists(bare))
-            {
-                return bare;
+                return found;
             }
         }
 
         return null;
+    }
+
+    private static string? FindInDirectory(string directory, IReadOnlyList<string> extensions)
+    {
+        string candidateDirectory;
+        try
+        {
+            candidateDirectory = directory.Trim().Trim('"');
+            if (candidateDirectory.Length == 0)
+            {
+                return null;
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        foreach (var extension in extensions)
+        {
+            var candidate = Path.Combine(candidateDirectory, ExecutableName + extension);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        var bare = Path.Combine(candidateDirectory, ExecutableName);
+        return File.Exists(bare) ? bare : null;
+    }
+
+    private static IEnumerable<string> KnownInstallDirectories()
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(local))
+        {
+            yield return Path.Combine(local, "npm");
+            yield return Path.Combine(local, "Programs", "GitHub Copilot");
+            yield return Path.Combine(local, "GitHub Copilot");
+        }
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        if (!string.IsNullOrWhiteSpace(programFiles))
+        {
+            yield return Path.Combine(programFiles, "GitHub Copilot");
+        }
     }
 
     /// <summary>

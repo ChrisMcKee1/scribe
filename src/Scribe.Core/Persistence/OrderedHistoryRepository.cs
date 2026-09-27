@@ -78,6 +78,18 @@ public sealed class OrderedHistoryRepository : IHistoryRepository
         return _inner.GetRecent(limit);
     }
 
+    public IReadOnlyList<HistoryEntry> GetOlder(DateTimeOffset beforeUtc, long beforeId, int limit)
+    {
+        AwaitAcceptedWrites(_readWait, nameof(GetOlder));
+        return _inner.GetOlder(beforeUtc, beforeId, limit);
+    }
+
+    public IReadOnlyList<HistoryEntry> Search(string query, int limit)
+    {
+        AwaitAcceptedWrites(_readWait, nameof(Search));
+        return _inner.Search(query, limit);
+    }
+
     public CapturedAudio? GetAudio(long blobId) => _inner.GetAudio(blobId);
 
     public void SetAiRating(long id, AiRating rating) => _inner.SetAiRating(id, rating);

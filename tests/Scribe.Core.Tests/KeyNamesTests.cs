@@ -58,6 +58,9 @@ public sealed class KeyNamesTests
     [InlineData(0x5Cu, "Right Win")]
     [InlineData(0xADu, "Volume Mute")]
     [InlineData(0xB3u, "Play/Pause")]
+    [InlineData(0x04u, "Middle mouse button")]
+    [InlineData(0x05u, "Mouse Back (button 4)")]
+    [InlineData(0x06u, "Mouse Forward (button 5)")]
     public void A_layout_independent_key_has_its_canonical_name(uint virtualKey, string name)
     {
         Assert.Equal(name, KeyNames.Of(virtualKey));
@@ -317,11 +320,13 @@ public sealed class KeyNamesTests
     [Fact]
     public void The_welcome_teaches_both_default_keys_and_where_a_laptop_has_them()
     {
-        var (title, body) = HotkeyText.Gesture(AppSettings.CreateDefault());
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+        var (title, body) = HotkeyText.Gesture(settings);
 
-        Assert.Equal("Hold, speak, release", title);
+        Assert.Equal("Hold, speak, let go", title);
         Assert.Equal(
-            "Hold Page Down and start talking. Release when you are done, and the text appears wherever your cursor " +
+            "Hold Page Down and start talking. Let go when you're done, and your words appear wherever your cursor " +
             "is. Hold Page Up instead to dictate without AI cleanup. No Page Down or Page Up key? Most laptops have " +
             "them on Fn with the Down and Up arrows.",
             body);
@@ -332,6 +337,7 @@ public sealed class KeyNamesTests
     {
         var legacy = AppSettings.CreateForExistingInstall();
         var toggled = AppSettings.CreateDefault();
+        toggled.EnableAiCleanup = true;
         toggled.Hotkey = toggled.Hotkey with { Mode = HotkeyMode.Toggle, DisplayName = "Next" };
         toggled.DictationOnlyHotkey = toggled.DictationOnlyHotkey! with { Mode = HotkeyMode.Toggle };
 
@@ -339,17 +345,17 @@ public sealed class KeyNamesTests
         var (toggleTitle, toggleBody) = HotkeyText.Gesture(toggled);
         var (unknownTitle, unknownBody) = HotkeyText.Gesture(settings: null);
 
-        Assert.Equal("Hold, speak, release", legacyTitle);
+        Assert.Equal("Hold, speak, let go", legacyTitle);
         Assert.StartsWith("Hold Right Ctrl and start talking.", legacyBody);
         Assert.DoesNotContain("without AI cleanup", legacyBody);
         Assert.DoesNotContain("Fn", legacyBody);
 
         Assert.Equal("Press, speak, press again", toggleTitle);
-        Assert.StartsWith("Press Page Down and start talking. Press it again when you are done", toggleBody);
+        Assert.StartsWith("Press Page Down and start talking. Press it again when you're done", toggleBody);
         Assert.Contains("Press Page Up instead to dictate without AI cleanup.", toggleBody);
 
-        Assert.Equal("Hold, speak, release", unknownTitle);
-        Assert.StartsWith("Hold your push-to-talk key", unknownBody);
+        Assert.Equal("Hold, speak, let go", unknownTitle);
+        Assert.StartsWith("Hold your shortcut", unknownBody);
         Assert.DoesNotContain("Fn", unknownBody);
     }
 

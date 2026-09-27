@@ -58,6 +58,29 @@ public class AiContentReportTests
     }
 
     [Fact]
+    public void The_report_says_when_attribution_was_not_recorded()
+    {
+        var report = AiContentReport.Build(
+            "out", provider: null, model: null, "0.3.14", When);
+
+        Assert.Contains(AiContentReport.UnrecordedAttribution, report, StringComparison.Ordinal);
+        Assert.DoesNotContain("Provider       :", report, StringComparison.Ordinal);
+        Assert.DoesNotContain("Model          :", report, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Report_explanation_matches_attribution()
+    {
+        Assert.Equal(
+            "The report contains the AI result, the AI service and model, and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.",
+            AiContentReport.Explanation(hasAttribution: true));
+        Assert.Equal(
+            "The report contains the AI result and your Scribe version. It doesn't include what you originally said, your audio, or any other dictation.",
+            AiContentReport.Explanation(hasAttribution: false));
+        Assert.Equal("Couldn't copy the report. Select the text and copy it yourself.", AiContentReport.CopyFailed);
+    }
+
+    [Fact]
     public void The_mailto_escapes_the_body_so_a_client_cannot_truncate_it()
     {
         // An unescaped newline or ampersand ends the URI early, and the failure is silent: the user

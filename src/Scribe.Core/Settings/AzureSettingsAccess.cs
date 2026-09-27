@@ -15,7 +15,12 @@ public static class AzureSettingsAccess
         bool CanStartSignIn,
         bool HasUsableAuthentication,
         bool ShowServicePrincipalFields,
-        bool ShowCliTenant);
+        bool ShowCliTenant,
+        bool ShowManualDetails,
+        bool ManualDetailsExpanded,
+        bool ShowEndpointPanel,
+        bool ShowApiKeyPanel,
+        bool ShowManualToggleButton);
 
     public enum ValidationIssue
     {
@@ -24,6 +29,7 @@ public static class AzureSettingsAccess
         EndpointRequired,
         DeploymentRequired,
         ServicePrincipalIncomplete,
+        ApiKeyRequired,
     }
 
     /// <summary>Decides which parts of the Microsoft Foundry settings show for the current sign-in state.</summary>
@@ -72,22 +78,34 @@ public static class AzureSettingsAccess
                 CanStartSignIn: servicePrincipalComplete,
                 HasUsableAuthentication: servicePrincipalComplete || signedIn || hasApiKey,
                 ShowServicePrincipalFields: true,
-                ShowCliTenant: false);
+                ShowCliTenant: false,
+                ShowManualDetails: true,
+                ManualDetailsExpanded: true,
+                ShowEndpointPanel: true,
+                ShowApiKeyPanel: false,
+                ShowManualToggleButton: false);
         }
 
         // The tenant is what an az login authenticates against: signing in passes it on whenever no
         // subscription is selected. It therefore shows whatever the sign-in state, because someone who
         // is not signed in yet, or whose saved tenant is the wrong one, has to be able to set it before
         // signing in. An API key never asks Entra for a token, so there is nothing for it to pin.
+        var manualDetails = apiKeySelected || signedIn;
+        var manualExpanded = apiKeySelected || manualConfigurationRequested || hasApiKey;
         return new State(
             ShowCliSetup: !cliInstalled,
             ShowDiscovery: signedIn,
-            ShowConfiguration: signedIn || manualConfigurationAvailable,
+            ShowConfiguration: apiKeySelected || signedIn || manualConfigurationAvailable,
             ShowManualConfigurationAction: !signedIn && !manualConfigurationAvailable,
             CanStartSignIn: cliInstalled,
             HasUsableAuthentication: signedIn || hasApiKey,
             ShowServicePrincipalFields: false,
-            ShowCliTenant: !apiKeySelected);
+            ShowCliTenant: !apiKeySelected,
+            ShowManualDetails: manualDetails,
+            ManualDetailsExpanded: manualExpanded,
+            ShowEndpointPanel: apiKeySelected || (signedIn && manualExpanded),
+            ShowApiKeyPanel: apiKeySelected,
+            ShowManualToggleButton: !apiKeySelected && signedIn);
     }
 
     public static ValidationIssue ValidateCleanup(
@@ -118,10 +136,9 @@ public static class AzureSettingsAccess
             return ValidationIssue.ServicePrincipalIncomplete;
         }
 
-        // A complete service principal counts as authentication even when it has not been verified
-        // in this session. Verification is a live network call, so requiring it to save would let a
-        // dropped connection block edits to unrelated settings, and cleanup already falls back to
-        // the raw transcript when a credential stops working.
+        // This method is still called by the shipping Settings window, which represents API-key
+        // selection as AzureCli plus the typed key. Keep the pre-redesign live-auth gate here until
+        // the window switches to ValidateCleanupForSave and can pass apiKeySelected explicitly.
         if (!signedIn && !hasApiKey && !servicePrincipalComplete)
         {
             return ValidationIssue.AuthenticationRequired;
@@ -135,5 +152,66 @@ public static class AzureSettingsAccess
         return string.IsNullOrWhiteSpace(deployment)
             ? ValidationIssue.DeploymentRequired
             : ValidationIssue.None;
+    }
+
+    public static ValidationIssue ValidateCleanupForSave(
+        bool enabled,
+        bool usesAzureProvider,
+        bool signedIn,
+        string? apiKey,
+        string? endpoint,
+        string? deployment,
+        bool apiKeySelected,
+        AzureAuthMode authMode = AzureAuthMode.AzureCli,
+        string? tenantId = null,
+        string? clientId = null,
+        string? clientSecret = null)
+    {
+        if (!enabled || !usesAzureProvider)
+        {
+            return ValidationIssue.None;
+        }
+
+        var hasApiKey = !string.IsNullOrWhiteSpace(apiKey);
+        if (apiKeySelected && !hasApiKey)
+        {
+            return ValidationIssue.ApiKeyRequired;
+        }
+
+        var servicePrincipalComplete = authMode == AzureAuthMode.ServicePrincipal
+            && AzureServicePrincipalValidator.IsComplete(tenantId, clientId, clientSecret);
+
+        if (authMode == AzureAuthMode.ServicePrincipal && !apiKeySelected && !servicePrincipalComplete)
+        {
+            return ValidationIssue.ServicePrincipalIncomplete;
+        }
+
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return ValidationIssue.EndpointRequired;
+        }
+
+        return string.IsNullOrWhiteSpace(deployment)
+            ? ValidationIssue.DeploymentRequired
+            : ValidationIssue.None;
+    }
+
+    public static bool HasCompleteLocalSetup(
+        string? endpoint,
+        string? deployment,
+        string? apiKey,
+        AzureAuthMode authMode = AzureAuthMode.AzureCli,
+        string? tenantId = null,
+        string? clientId = null,
+        string? clientSecret = null)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(deployment))
+        {
+            return false;
+        }
+
+        return authMode != AzureAuthMode.ServicePrincipal ||
+            !string.IsNullOrWhiteSpace(apiKey) ||
+            AzureServicePrincipalValidator.IsComplete(tenantId, clientId, clientSecret);
     }
 }

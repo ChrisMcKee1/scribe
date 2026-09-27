@@ -27,7 +27,7 @@ namespace Scribe.Core.Cleanup;
 /// Local CLI's own <c>%USERPROFILE%\.foundry</c>, and never another application's directory.
 /// </para>
 /// </remarks>
-internal sealed class FoundryLocalStorage
+public sealed class FoundryLocalStorage
 {
     /// <summary>The Foundry Local application name Scribe registers with, and so its directory name.</summary>
     public const string AppName = "Scribe";
@@ -37,7 +37,7 @@ internal sealed class FoundryLocalStorage
 
     internal const string MarkerFileName = "foundry-local-storage.json";
 
-    public FoundryLocalStorage(string appDataDir, string markerPath, FoundryStorageJanitor janitor)
+    internal FoundryLocalStorage(string appDataDir, string markerPath, FoundryStorageJanitor janitor)
     {
         if (string.IsNullOrWhiteSpace(appDataDir) || !Path.IsPathFullyQualified(appDataDir))
         {
@@ -63,7 +63,19 @@ internal sealed class FoundryLocalStorage
     /// <summary>Persisted pending-reclaim state, beside Scribe's other settings files.</summary>
     public string MarkerPath { get; }
 
-    public FoundryStorageJanitor Janitor { get; }
+    internal FoundryStorageJanitor Janitor { get; }
+
+    /// <summary>
+    /// True only when the model cache definitely holds a downloaded model. Unknown and empty both return false, so a tray
+    /// menu can safely open Settings rather than risk starting a setup action from a stale assumption.
+    /// </summary>
+    public static bool HoldsDownloadedModel(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        var storage = For(paths);
+        return storage is not null &&
+            storage.Janitor.InspectModelCache(storage.AppDataDir, storage.ModelCacheDir) == FoundryModelCache.HasModels;
+    }
 
     /// <summary>
     /// The Foundry Local application data directory for this profile, or null when it cannot be

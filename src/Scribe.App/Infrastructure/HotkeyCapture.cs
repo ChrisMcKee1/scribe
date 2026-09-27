@@ -2,46 +2,45 @@ using System.Runtime.InteropServices;
 using System.Windows.Input;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
+using Scribe.Core.Settings;
 
 namespace Scribe.App.Infrastructure;
 
 /// <summary>
-/// Translates WPF keyboard events from the settings UI into a <see cref="HotkeyBinding"/> the
-/// low-level hook can match, and renders a binding as friendly text. Right/left modifier
-/// variants are preserved (the hook receives distinct virtual-key codes such as VK_RCONTROL),
-/// and Alt-involved presses are resolved through <see cref="KeyEventArgs.SystemKey"/>. Keys are
-/// named by virtual-key code through <see cref="HotkeyText"/>, never by WPF's <see cref="Key"/>
-/// names: that enum gives several keys two names (Page Down is also <c>Key.Next</c>) and does not
-/// promise which one <c>ToString</c> returns.
+/// Maps WPF key and mouse events from the settings UI to the virtual-key codes the low-level hooks
+/// match, and renders a binding as friendly text. Right/left modifier variants are preserved (the
+/// hook receives distinct virtual-key codes such as VK_RCONTROL), and Alt-involved presses are
+/// resolved through <see cref="KeyEventArgs.SystemKey"/>. What those codes become is decided in Core
+/// (<see cref="HotkeyCaptureSession"/>). Keys are named by virtual-key code through
+/// <see cref="HotkeyText"/>, never by WPF's <see cref="Key"/> or <see cref="MouseButton"/> names: that
+/// enum gives several keys two names (Page Down is also <c>Key.Next</c>) and does not promise which one
+/// <c>ToString</c> returns.
 /// </summary>
 internal static class HotkeyCapture
 {
     private const uint MapVkToChar = 2; // MAPVK_VK_TO_CHAR
     private const uint MapVkToVscEx = 4; // MAPVK_VK_TO_VSC_EX
 
-    /// <summary>Builds an exact physical one- or two-key binding in the order keys were pressed.</summary>
-    public static HotkeyBinding FromKeys(IReadOnlyList<Key> keys, HotkeyMode mode)
+    /// <summary>A capture that names keys by the current keyboard layout, as Settings shows them.</summary>
+    public static HotkeyCaptureSession NewSession() => new(LayoutKeyName);
+
+    /// <summary>The virtual-key code of the key a WPF key event is for, Alt-involved presses included.</summary>
+    public static uint VirtualKeyOf(KeyEventArgs e) =>
+        (uint)KeyInterop.VirtualKeyFromKey(e.Key == Key.System ? e.SystemKey : e.Key);
+
+    /// <summary>
+    /// The virtual-key code of a WPF mouse button: WPF names the side buttons XButton1 and XButton2, which are Back
+    /// (VK_XBUTTON1) and Forward (VK_XBUTTON2). The left and right buttons map too, so the capture can refuse them.
+    /// </summary>
+    public static uint VirtualKeyOf(MouseButton button) => button switch
     {
-        ArgumentNullException.ThrowIfNull(keys);
-        if (keys.Count is < 1 or > 2)
-        {
-            throw new ArgumentException("A hotkey must contain one or two keys.", nameof(keys));
-        }
-
-        var primary = (uint)KeyInterop.VirtualKeyFromKey(keys[0]);
-        uint? secondary = keys.Count == 2 ? (uint)KeyInterop.VirtualKeyFromKey(keys[1]) : null;
-
-        // Stored for older builds to show; Describe names the keys afresh from their codes.
-        var display = string.Join("+", keys.Select(KeyName));
-        return new HotkeyBinding(
-            primary,
-            KeyModifiers.None,
-            mode,
-            Suppress: true,
-            display,
-            SecondaryVirtualKey: secondary,
-            SuppressChordMembers: secondary is not null);
-    }
+        MouseButton.Left => MouseButtons.Left,
+        MouseButton.Right => MouseButtons.Right,
+        MouseButton.Middle => MouseButtons.Middle,
+        MouseButton.XButton1 => MouseButtons.Back,
+        MouseButton.XButton2 => MouseButtons.Forward,
+        _ => 0,
+    };
 
     /// <summary>
     /// Builds a binding from a captured key press. A lone modifier key (the common push-to-talk

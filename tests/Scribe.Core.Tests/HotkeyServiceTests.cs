@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Scribe.Core.Tests;
 
-public class HotkeyServiceTests
+public partial class HotkeyServiceTests
 {
     [Fact]
     public void Start_installs_hook_and_Stop_removes_it()
@@ -33,6 +33,30 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void A_service_s_watchdog_ticks_every_30_seconds_unless_a_test_sets_its_period()
+    {
+        // What production runs (review round 4 of stream TR): the period every service starts with, which Start arms the
+        // timer with (Start_arms_the_watchdog_at_the_service_s_own_period), and which nothing outside the tests sets.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+        Assert.Equal(TimeSpan.FromSeconds(30), service.WatchdogPeriodForTests);
+
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        var setters = Directory.EnumerateFiles(Path.Combine(root.FullName, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .SelectMany(path => File.ReadAllLines(path).Select(line => (path, line)))
+            .Where(entry => entry.line.Contains(nameof(HotkeyService.WatchdogPeriodForTests), StringComparison.Ordinal))
+            .Select(entry => Path.GetFileName(entry.path) + ": " + entry.line.Trim())
+            .ToArray();
+        Assert.Equal(["HotkeyService.cs: internal TimeSpan WatchdogPeriodForTests"], setters);
+    }
+
+    [Fact]
     public void Start_hands_desktop_switch_notices_to_the_engine()
     {
         // The hook thread also listens for EVENT_SYSTEM_DESKTOPSWITCH, so the engine can end a recording and reset its key
@@ -41,7 +65,7 @@ public class HotkeyServiceTests
         // hook thread; it then checks again and applies the switch only if this thread's desktop has lost input, so on a
         // desktop that still receives input (an installed Scribe dictating beside this test included) nothing stops.
         // Like the other Start_ tests it needs an interactive desktop, and the local desktop filter leaves it to CI.
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance) { WatchdogPeriodForTests = NoWatchdog };
         service.Start();
         var receivesInput = NativeMethods.ThreadDesktopReceivesInput(); // the hook thread shares this thread's desktop
 
@@ -50,13 +74,13 @@ public class HotkeyServiceTests
         NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
 
         Assert.True(
-            SpinWait.SpinUntil(() => service.DesktopSwitchNoticesSeen >= 2, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => service.DesktopSwitchNoticesSeen >= 2, HookTimeout),
             "The hook thread never received the desktop-switch notices.");
         if (receivesInput == false)
         {
             // A desktop that is not the input desktop, such as one created for a test run and never switched to.
             Assert.True(
-                SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 2, TimeSpan.FromSeconds(10)),
+                SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 2, HookTimeout),
                 "The hook thread did not apply a notice on a desktop that is not receiving input.");
         }
         else
@@ -81,18 +105,21 @@ public class HotkeyServiceTests
             {
                 askedOn.Enqueue(Thread.CurrentThread.Name);
                 return receivesInput;
-            });
+            })
+        {
+            WatchdogPeriodForTests = NoWatchdog,
+        };
         service.Start();
 
         NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
         NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
 
         Assert.True(
-            SpinWait.SpinUntil(() => askedOn.Count >= 2, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => askedOn.Count >= 2, HookTimeout),
             "The hook thread never asked whether its desktop receives input.");
         var expected = receivesInput == false ? 2 : 0;
         Assert.True(
-            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == expected, TimeSpan.FromSeconds(10)),
+            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == expected, HookTimeout),
             $"Expected {expected} applied switch(es), saw {service.DesktopSwitchesSeen}.");
         Assert.Equal(2, service.DesktopSwitchNoticesSeen);
         Assert.All(askedOn, name => Assert.Equal("Scribe.HotkeyHook", name));

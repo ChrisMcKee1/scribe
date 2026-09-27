@@ -422,16 +422,18 @@ public sealed class StorageMaintenancePolicyTests : IDisposable
                      StorageRetentionPolicy.DataFileHint,
                  })
         {
-            Assert.Contains($"{StorageRetentionPolicy.AudioRetentionDays} days", hint);
-            Assert.Contains($"{StorageRetentionPolicy.MaxStoredAudioMegabytes} MB", hint);
             Assert.DoesNotContain('\u2014', hint);
             Assert.DoesNotContain('\u2013', hint);
             Assert.DoesNotContain('-', hint);
         }
 
-        Assert.Contains("compact", StorageRetentionPolicy.StoredAudioHint);
-        Assert.Contains("Set to 0 to keep text forever", StorageRetentionPolicy.TextRetentionHint);
-        Assert.Contains("Audio already saved is removed after", StorageRetentionPolicy.DataFileHint);
+        Assert.Contains($"{StorageRetentionPolicy.AudioRetentionDays} days", StorageRetentionPolicy.StoredAudioHint);
+        Assert.Contains($"{StorageRetentionPolicy.MaxStoredAudioMegabytes} MB", StorageRetentionPolicy.StoredAudioHint);
+        Assert.Contains($"{StorageRetentionPolicy.AudioRetentionDays} days", StorageRetentionPolicy.DataFileHint);
+        Assert.Contains($"{StorageRetentionPolicy.MaxStoredAudioMegabytes} MB", StorageRetentionPolicy.DataFileHint);
+        Assert.Contains("Scribe doesn't play recordings back", StorageRetentionPolicy.StoredAudioHint);
+        Assert.Equal("Older dictations are deleted automatically.", StorageRetentionPolicy.TextRetentionHint);
+        Assert.Contains("One file holds your history, dictionary, snippets, profiles, settings and any saved recordings", StorageRetentionPolicy.DataFileHint);
         Assert.Equal(7, StorageRetentionPolicy.AudioRetentionDays);
         Assert.Equal(250L * 1024 * 1024, StorageRetentionPolicy.MaxStoredAudioBytes);
         Assert.Equal(14, StorageRetentionPolicy.DamagedCopyRetentionDays);

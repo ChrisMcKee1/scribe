@@ -1,0 +1,84 @@
+using System.Text.RegularExpressions;
+
+namespace Scribe.Core.Tests;
+
+/// <summary>
+/// Words in the app's code-behind that the 0.5.0 redesign renamed on the page, pinned by source because the app has no
+/// tests of its own. Each of these once kept a name the page no longer showed.
+/// </summary>
+public sealed class SettingsCopySourceTests
+{
+    private static readonly string Root = FindRoot();
+
+    [Fact]
+    public void Learn_from_history_puts_back_the_tooltip_the_page_gave_it()
+    {
+        // The tooltip is cleared while a run is busy. Putting back a literal restored the 0.4.4 wording after the first run.
+        var code = Read("SettingsWindow.YourWords.cs");
+        var run = code[code.IndexOf("private async Task RunDictionarySuggestionAsync(", StringComparison.Ordinal)..];
+        run = run[..run.IndexOf("\n    }", StringComparison.Ordinal)];
+
+        Assert.Contains("var toolTip = DictionarySuggestButton.ToolTip;", run, StringComparison.Ordinal);
+        Assert.Contains("DictionarySuggestButton.ToolTip = toolTip;", run, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"DictionarySuggestButton\.ToolTip\s*=\s*""", code);
+    }
+
+    [Fact]
+    public void The_clean_up_window_calls_them_word_packs()
+    {
+        var literals = UserFacingLiterals(Read("DictionaryCleanupWindow.xaml.cs"));
+
+        Assert.Contains(literals, text => text.Contains("word pack", StringComparison.Ordinal));
+        Assert.DoesNotContain(literals, text => Regex.IsMatch(text, @"\b[Ll]ibrar(y|ies)\b"));
+    }
+
+    [Fact]
+    public void Restoring_the_ai_instructions_uses_the_names_on_the_page()
+    {
+        // The page shows "Detailed instructions" and "Short instructions"; the confirmations said frontier and local prompt.
+        var literals = UserFacingLiterals(Read("SettingsWindow.xaml.cs"));
+
+        Assert.Contains("Restore Scribe's detailed instructions?", literals);
+        Assert.Contains("Restore Scribe's short instructions?", literals);
+        Assert.DoesNotContain(literals, text => Regex.IsMatch(text, @"\b(frontier|local) prompt\b", RegexOptions.IgnoreCase));
+    }
+
+    [Fact]
+    public void The_preset_menu_asks_the_preset_whether_a_profile_is_it()
+    {
+        // A preset renamed in 0.5.0 keeps matching the profiles added under its former name (ProfilePresetsTests), but
+        // only if the menu asks the preset rather than comparing names itself.
+        var code = Read("SettingsWindow.Profiles.cs");
+
+        Assert.Contains("_profileRows.FirstOrDefault(r => preset.IsNamed(r.Name))", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("FindProfileRow(preset.Profile.Name)", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_message_split_across_literals_is_read_whole()
+    {
+        var literals = UserFacingLiterals("var text = \"Your local \" +\n    \"prompt is not affected.\";\n_log.LogWarning(\"Your local prompt\");");
+
+        Assert.Equal(["Your local prompt is not affected."], literals);
+    }
+
+    private static string Read(string file) =>
+        File.ReadAllText(Path.Combine(Root, "src", "Scribe.App", "Settings", file));
+
+    // The text a person can read, with the glossary guard's reader: literals outside comments, log calls and exceptions,
+    // and pieces joined with + read as one text, so a message split across lines is judged whole.
+    private static List<string> UserFacingLiterals(string code) =>
+        GlossarySourceTests.SourceLiterals.Read(code, []).Select(literal => literal.Text).ToList();
+
+    private static string FindRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return root.FullName;
+    }
+}

@@ -1,0 +1,1 @@
+{ "version": 1, "library": "github", "terms": [ { "key": "octo cat", "intent": "off", "base": { "spoken": "get hub", "written": "GitHub", "wholeWord": true, "enabled": true }, "value": null, "acknowledged": null } ] }

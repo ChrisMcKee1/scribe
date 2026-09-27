@@ -17,6 +17,15 @@ public sealed record DictionaryLibrary(
     bool BuiltIn,
     IReadOnlyList<DictionaryEntry> Entries)
 {
+    /// <summary>
+    /// For a custom library, the file name it is stored under in the libraries folder, which is what it ranks by among
+    /// custom libraries (<see cref="Libraries.LibraryPrecedence"/>); null means <c>Id + ".csv"</c>, which is every custom
+    /// library's file name except a hand-placed one whose logical id is not its stem: remapped away from a built-in id
+    /// (review finding A16), or suffixed because its stem is an id recorded for another file that still exists (review
+    /// finding A10 on the storage stream). Always null for a built-in.
+    /// </summary>
+    public string? FileName { get; init; }
+
     /// <summary>Only the entries whose <see cref="DictionaryEntry.Enabled"/> flag is set.</summary>
     public IEnumerable<DictionaryEntry> EnabledEntries => Entries.Where(e => e is { Enabled: true });
 

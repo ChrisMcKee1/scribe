@@ -136,4 +136,22 @@ public sealed class MicrophoneChoicesTests
         Assert.Equal("Blue Yeti", MicrophoneChoices.Describe(new MicrophoneSelection("yeti", "Blue Yeti")));
         Assert.Equal("the saved microphone", MicrophoneChoices.Describe(new MicrophoneSelection("yeti", null)));
     }
+
+
+    [Fact]
+    public void Tray_choices_do_not_repeat_the_default_suffix()
+    {
+        var menu = MicrophoneChoices.Build([Insta, Elgato], MicrophoneSelection.WindowsDefault, markWindowsDefault: false);
+
+        Assert.Contains(menu.Choices, choice => choice.Label == "Microphone (6- Insta360 Link 2 Pro)");
+        Assert.DoesNotContain(menu.Choices, choice => choice.Label.EndsWith(MicrophoneChoices.DefaultSuffix, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Settings_choices_keep_the_default_suffix()
+    {
+        var menu = MicrophoneChoices.Build([Insta, Elgato], MicrophoneSelection.WindowsDefault);
+
+        Assert.Contains(menu.Choices, choice => choice.Label == "Microphone (6- Insta360 Link 2 Pro)" + MicrophoneChoices.DefaultSuffix);
+    }
 }

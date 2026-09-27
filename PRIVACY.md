@@ -1,6 +1,6 @@
 # Scribe AI Privacy Policy
 
-**Effective date:** September 25, 2026
+**Effective date:** September 26, 2026
 **Publisher:** Chris McKee
 
 This Privacy Policy applies to Scribe AI, also known as Scribe, a Windows voice
@@ -76,8 +76,8 @@ until you review and save your settings.
 
 Scribe locally stores information that you provide, including dictionary terms,
 replacement text, snippet templates, per-application profiles, writing-style
-instructions, hotkey choices, provider configuration, and other preferences.
-Imported dictionaries and libraries are also stored locally.
+instructions, shortcut choices, provider configuration, and other preferences.
+Imported dictionaries and word packs are also stored locally.
 
 ### Cleanup failure samples
 
@@ -87,11 +87,21 @@ improve the local cleanup configuration. These samples are stored locally and
 are deleted automatically after seven days, whether or not later cleanups
 succeed. You can also clear them from the application.
 
-### Clipboard and keyboard access
+### Clipboard, keyboard and mouse access
 
-Scribe listens for the global hotkey or key combination you configure. It uses
+Scribe listens for the dictation shortcut or key combination you configure. It uses
 those key events only to start and stop dictation and does not record the text
 you type.
+
+If one of your shortcuts uses a mouse button (the middle, Back or Forward button),
+Scribe also watches the mouse through a Windows mouse hook, while such a shortcut
+is set and, after you remove one, until it sees a button you were holding let go.
+With keys only, Scribe does not watch the mouse. While it does, Windows passes
+every mouse event through Scribe, pointer movement included. Scribe acts on the
+middle, Back and Forward buttons alone, passes everything else on at once without
+reading it, and records no pointer movement and no other clicks. Its logs say
+whether each shortcut uses a key or a mouse button, and when the mouse hook is
+added, removed or found gone.
 
 If clipboard-paste injection is selected or used as a fallback, Scribe may
 temporarily read the existing text clipboard so it can restore that content
@@ -110,7 +120,7 @@ Scribe writes diagnostic logs locally. Logs may include application lifecycle
 events, the selected audio device, the name of the focused application,
 performance measurements, model and provider configuration identifiers, and
 error details. Scribe does not write microphone audio, transcripts, dictionary
-entries, snippet contents, custom dictionary library names, custom prompts, API
+entries, snippet contents, custom word pack names, custom prompts, API
 keys, or service-principal secrets to its diagnostic log files. Configured
 endpoint addresses, and Azure deployment, account and subscription names, are
 recorded only as configured or unset, never as the value itself. When something
@@ -172,8 +182,9 @@ endpoint.
 AI features are optional. The default Foundry Local provider runs on the device,
 so the text it cleans, its instructions and your vocabulary stay on the device.
 
-If you turn on AI cleanup with Microsoft Foundry, an OpenAI-compatible endpoint,
-or GitHub Copilot, every cleanup request sends that provider:
+If you turn on AI cleanup with Microsoft Foundry, another AI service that works
+like the OpenAI API, or GitHub Copilot, every cleanup request sends that
+provider:
 
 - The text Scribe recognized for the dictation, before your dictionary and
   snippets are applied to it. A long dictation can be sent in several parts,
@@ -181,16 +192,18 @@ or GitHub Copilot, every cleanup request sends that provider:
 - Scribe's cleanup instructions, including your writing style or, when a
   per-application profile matches the focused application, that profile's
   writing style. The name of the application is not sent.
-- Your vocabulary: the enabled entries of your dictionary and of every enabled
-  dictionary library, each as its written form and, where that differs, its
-  spoken form. Scribe includes this vocabulary whether or not the dictation
-  mentions any of it, and whether or not post-processing is switched on, since
-  that switch only decides whether the dictionary is applied on this PC. An
+- Your vocabulary: the enabled entries of your dictionary and of the word
+  packs you let AI cleanup use, each as its written form and, where that
+  differs, its spoken form. Scribe includes this vocabulary whether or not the
+  dictation
+  mentions any of it, and whether or not "Apply your dictionary and snippets" is
+  turned on, since that setting only decides whether the dictionary is applied on
+  this PC. An
   entry whose written form spans more than one line or runs past 100
   characters, such as a signature or an address, is not vocabulary: the
   dictionary still applies it on this PC, but it is not sent. Your own entries
   come first, and the list holds up to 5,000 terms and 24,000 characters (80
-  terms when the Local prompt style is in use), with each spoken form put on one
+  terms when AI cleanup uses the short instructions), with each spoken form put on one
   line and shortened to 100 characters.
 
 Each time AI cleanup connects to such a provider, for example when Scribe starts
@@ -207,8 +220,8 @@ If you request AI dictionary suggestions while AI cleanup runs anywhere but on
 this PC, Scribe first asks, naming where the request goes, then sends its
 standard suggestion request and up to 6,000 characters of your most recent
 dictations as they were inserted, which can include text your dictionary and
-snippets added. It sends them only to the provider it named: if your AI cleanup
-provider changes before the request goes out, nothing is sent. It does not send
+snippets added. It sends them only to the provider it named: if where AI cleanup
+runs changes before the request goes out, nothing is sent. It does not send
 your dictionary itself or your writing style. If you request an AI usage insight,
 Scribe sends aggregate usage totals and the labels of recurring terms your
 dictionary covers, leaving out any label whose replacement text spans more than
@@ -217,8 +230,8 @@ focused application names, or dictation timestamps.
 
 The remote provider processes this information under the account, terms, data
 retention settings, and privacy policy associated with that provider. Depending
-on your configuration, the provider may be Microsoft, GitHub, or the operator of
-an OpenAI-compatible endpoint. The publisher of Scribe does not receive this
+on your configuration, the provider may be Microsoft, GitHub, or whoever runs the
+other AI service you set up. The publisher of Scribe does not receive this
 information. For Microsoft Foundry, Scribe asks the service not to store its
 responses, but Microsoft's abuse monitoring can still keep a sample of prompts
 and responses it flags for review, as Microsoft's data privacy documentation for
@@ -226,17 +239,17 @@ Foundry models describes.
 
 The GitHub Copilot provider differs from the others in how it connects. There is
 no endpoint you configure and no key Scribe stores. Scribe runs the GitHub
-Copilot CLI that is already installed and signed in on this device, so requests
+Copilot command-line tool that is already installed and signed in on this device, so requests
 travel under your own GitHub identity and are processed by GitHub under your
 Copilot subscription terms and privacy policy. Scribe never sees or stores a
-GitHub token. Asking Settings to list the models your licence allows also
+GitHub token. Asking Settings to list the models your subscription includes also
 contacts GitHub. Which model handles a request is whichever one you select, or
 your account default when you leave that blank.
 
 You can stop this transmission at any time by turning off AI cleanup, selecting
 Foundry Local, not invoking AI suggestions or insights, or removing the remote
 provider configuration. For GitHub Copilot, selecting a different provider stops
-Scribe using it; signing out of the Copilot CLI removes its access entirely.
+Scribe using it; signing out of the GitHub Copilot command-line tool removes its access entirely.
 
 ## Provider credentials and account information
 
@@ -308,7 +321,7 @@ deleted automatically 14 days after Scribe first finds them. These copies can
 contain the same history, recordings, settings and saved credentials as the
 database itself, with credentials still protected as described above.
 
-If you use the on-device Foundry Local provider, the Foundry Local runtime and
+If you use Foundry Local, which runs on this PC, the Foundry Local runtime and
 models Scribe downloads are stored in `%USERPROFILE%\.Scribe` (for an isolated
 profile started with the `SCRIBE_DATA_DIR` environment variable, in a `foundry`
 folder inside that data folder instead). Scribe removes them after you save a
@@ -324,10 +337,13 @@ settings appropriate for the material you dictate.
 You can:
 
 - Choose when Scribe accesses the microphone by starting and stopping dictation
-- Disable AI cleanup or select the on-device Foundry Local provider
-- Turn off dictionary entries or libraries you do not want sent to a remote AI
-  provider as vocabulary (a term that is off is also no longer applied on this
+- Disable AI cleanup or select Foundry Local, which runs on this PC
+- Turn off dictionary entries or word packs you do not want sent to a remote AI
+  provider as vocabulary (anything you turn off is also no longer applied on this
   PC)
+- Keep a word pack out of AI cleanup's vocabulary while still using it on this PC,
+  with that word pack's Use in AI cleanup setting (word packs you create or import
+  start with it off, and the built-in ones with it on)
 - Avoid invoking AI dictionary suggestions and AI usage insights
 - Disable audio history
 - Review and delete individual history entries

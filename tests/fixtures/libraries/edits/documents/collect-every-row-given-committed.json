@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "library": "github",
+  "terms": [
+    {
+      "key": "get hub",
+      "intent": "edited",
+      "base": {
+        "spoken": "get hub",
+        "written": "GitHub",
+        "wholeWord": true,
+        "enabled": true
+      },
+      "value": {
+        "spoken": "get hub",
+        "written": "GitHub Enterprise",
+        "wholeWord": true,
+        "enabled": true
+      }
+    },
+    {
+      "key": "copilot",
+      "intent": "off",
+      "base": {
+        "spoken": "copilot",
+        "written": "Copilot",
+        "wholeWord": true,
+        "enabled": true
+      }
+    },
+    {
+      "key": "zulu",
+      "intent": "added",
+      "value": {
+        "spoken": "zulu",
+        "written": "Zulu",
+        "wholeWord": true,
+        "enabled": true
+      }
+    },
+    {
+      "key": "octo cat",
+      "intent": "edited",
+      "base": {
+        "spoken": "octo cat",
+        "written": "Octocat",
+        "wholeWord": true,
+        "enabled": true
+      },
+      "value": {
+        "spoken": "octo cat",
+        "written": "The Octocat",
+        "wholeWord": true,
+        "enabled": true
+      }
+    },
+    {
+      "key": "old term",
+      "intent": "off",
+      "base": {
+        "spoken": "old term",
+        "written": "Old",
+        "wholeWord": true,
+        "enabled": true
+      }
+    }
+  ]
+}

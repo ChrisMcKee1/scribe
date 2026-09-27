@@ -1,0 +1,8 @@
+﻿"# name: a""b",,,
+"# category: c""d",,,
+"# description: e, f",,,
+# formula-guard: 1,,,
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+"say ""hi""","Hello, world",false,true
+kube,K8s,true,false

@@ -1,0 +1,10 @@
+# name: Edited
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+# a comment someone added
+x,X,true,true
+  #another comment
+pattern,replacement,true,true
+,,,
+" q ", w ,true,true
+lonely

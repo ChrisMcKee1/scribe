@@ -1,5 +1,4 @@
 using Scribe.Core.PostProcessing;
-using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests.Libraries;
 
@@ -8,11 +7,11 @@ namespace Scribe.Core.Tests.Libraries;
 /// outputs captured before the Libraries list became alphabetical (see <see cref="LibraryGolden"/>).
 /// </summary>
 /// <remarks>
-/// The golden file was rendered at d42d683 with the badge and prompt inputs taken from verbatim copies of the two loops
-/// the Settings window ran then (<c>UpdateDictionaryCoverage</c> and <c>ConfirmDictionaryOverlapAsync</c>). It is
-/// rendered here from <see cref="DictionaryLibraryOverlapAnalyzer.Coverage"/> and
-/// <see cref="DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries"/>, which replaced them, so the same file proves
-/// the move changed nothing.
+/// The golden file was first rendered at d42d683 from 0.4.3's composition and verbatim copies of the two loops the
+/// Settings window ran then (<c>UpdateDictionaryCoverage</c> and <c>ConfirmDictionaryOverlapAsync</c>). It is rendered
+/// here through <see cref="Scribe.Core.Libraries.LibraryComposition"/> over the catalog the first start of the library
+/// editor's version adopts, so the same file proves that composition changes only what W1b contracts 9.2 allows: no
+/// winner and no finished text moves.
 /// </remarks>
 public sealed class LibraryCompositionGoldenTests
 {
@@ -37,13 +36,7 @@ public sealed class LibraryCompositionGoldenTests
     {
         using var fixture = new LibraryFixture();
 
-        var actual = LibraryGolden.Render(
-            fixture,
-            (libraries, enabledIds) => DictionaryLibraryOverlapAnalyzer.Coverage(libraries, enabledIds)
-                .ToDictionary(pair => pair.Key, pair => (pair.Value.Entry, pair.Value.LibraryName), StringComparer.OrdinalIgnoreCase),
-            DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries);
-
-        LibraryGolden.AssertMatchesGolden(actual);
+        LibraryGolden.AssertMatchesGolden(LibraryGolden.Render(fixture));
     }
 
     [Fact]

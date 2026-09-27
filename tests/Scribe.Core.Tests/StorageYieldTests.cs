@@ -10,17 +10,13 @@ namespace Scribe.Core.Tests;
 /// <summary>
 /// Maintenance yields to dictation. A dictation starting, or its history write arriving, stops heavy
 /// work at once: a running VACUUM is interrupted and rolls back, a batch of deletions ends at its next
-/// slice, and the write gets the gate within a short bound instead of queueing behind the whole job.
+/// slice, and the write gets the gate as soon as that step ends instead of queueing behind the whole job.
 /// Heavy work comes back only after a backoff that doubles with each consecutive yield, and only once
 /// the app is idle and the database quiet again.
 /// </summary>
 public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
 {
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(30);
-
-    // Far inside the history writer's 5 s producer bound, and loose enough for a loaded machine.
-    // What the writes actually took goes to the test output.
-    private static readonly TimeSpan WriteBound = TimeSpan.FromSeconds(2);
 
     private static readonly TimeSpan Quiet = StorageMaintenanceOptions.Default.ConversionQuietPeriod;
 
@@ -39,12 +35,14 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
     public void Dispose() => _folder.Dispose();
 
     [Fact]
-    public void A_history_write_arriving_mid_vacuum_interrupts_it_commits_within_the_bound_and_the_vacuum_completes_later_when_idle()
+    public void A_history_write_arriving_mid_vacuum_interrupts_it_commits_once_it_stops_and_the_vacuum_completes_later_when_idle()
     {
         LegacyDatabase.Seed(_folder.DatabasePath, _now, recent: 400, old: 40);
         using var db = _folder.Open();
         db.Initialize();
         var history = new HistoryRepository(db);
+        var hooked = new HookedHistory(history);
+        var hold = new PassEndHold(hooked);
         var time = new ManualTimeProvider(_now);
         var idle = true;
         Thread? writer = null;
@@ -64,10 +62,11 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
                     writeTook = Stopwatch.GetElapsedTime(started);
                 });
                 writer.Start();
+                hold.Arm(writer);
             },
             until: () => db.WaitingWriters == 1);
         db.PreemptibleProgressHook = midVacuum.OnProgress;
-        using var maintenance = Create(db, history, time, ConversionOptions);
+        using var maintenance = Create(db, hooked, time, ConversionOptions);
         maintenance.Start(() => SettingsWith(90), () => idle);
         time.Advance(Quiet);
 
@@ -75,9 +74,9 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
 
         Assert.True(midVacuum.Fired);
         Assert.Null(midVacuum.Failure);
+        hold.AssertTheWriteCommittedWhileHeld();
         Assert.True(writer!.Join(Generous));
         output.WriteLine($"history write arriving mid-VACUUM committed in {writeTook!.Value.TotalMilliseconds:F1} ms");
-        Assert.True(writeTook < WriteBound, $"the write took {writeTook.Value.TotalMilliseconds:F0} ms");
         Assert.Equal(ReclaimMethod.Yielded, first.Reclaim.Method);
         Assert.True(first.Yielded);
         Assert.Equal(Quiet, first.RetryIn);
@@ -182,6 +181,7 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
         db.Initialize();
         var history = new HistoryRepository(db);
         var hooked = new HookedHistory(history);
+        var hold = new PassEndHold(hooked);
         var time = new ManualTimeProvider(_now);
         Thread? writer = null;
         TimeSpan? writeTook = null;
@@ -203,6 +203,7 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
             });
             writer.Start();
             queued = SpinWait.SpinUntil(() => db.WaitingWriters == 1, Generous);
+            hold.Arm(writer);
         }
 
         if (cap)
@@ -227,9 +228,9 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
         var first = maintenance.RunOnce(SettingsWith(90))!;
 
         Assert.True(queued);
+        hold.AssertTheWriteCommittedWhileHeld();
         Assert.True(writer!.Join(Generous));
         output.WriteLine($"history write arriving mid-batch committed in {writeTook!.Value.TotalMilliseconds:F1} ms");
-        Assert.True(writeTook < WriteBound, $"the write took {writeTook.Value.TotalMilliseconds:F0} ms");
         Assert.True(first.Yielded);
         Assert.Equal(3, cap ? first.Evicted.BlobsDeleted : first.Unreferenced.BlobsDeleted);
         Assert.Single(history.GetRecent(1000), e => e.Text == "dictated mid-batch" && e.AudioBlobId is not null);
@@ -485,8 +486,36 @@ public sealed class StorageYieldTests(ITestOutputHelper output) : IDisposable
     }
 
     private static StorageMaintenance Create(
-        ScribeDatabase db, HistoryRepository history, ManualTimeProvider time, StorageMaintenanceOptions options) =>
+        ScribeDatabase db, IHistoryMaintenance history, ManualTimeProvider time, StorageMaintenanceOptions options) =>
         new(db, history, new CleanupFailureLog(db), NullLogger.Instance, time, options);
+
+    /// <summary>
+    /// A write that arrives mid-step must get the gate when that step ends, not queue behind the rest of the job. That is
+    /// checked by what maintenance still holds, never by how long the write took, which is the disk's: on CI, under the
+    /// parallel suite, a mid-batch write took 2.6 s and 3.7 s against the 2 s bound this replaces. Maintenance is held at
+    /// the last step of its pass, outside the gate, until the write commits, which it can do only if maintenance kept
+    /// neither the gate nor a write transaction; after a yield the only step that can come before it is the PASSIVE WAL
+    /// backfill, which never blocks a writer. What the write took still goes to the test output.
+    /// </summary>
+    private sealed class PassEndHold(HookedHistory hooked)
+    {
+        private bool? _committed;
+
+        public void Arm(Thread writer) => hooked.OnAudioUsage = () =>
+        {
+            hooked.OnAudioUsage = null;
+            _committed = writer.Join(Generous);
+        };
+
+        public void AssertTheWriteCommittedWhileHeld()
+        {
+            Assert.True(_committed is not null, "Maintenance's pass never reached its last step after the write arrived.");
+            Assert.True(
+                _committed == true,
+                "The write could not commit while maintenance waited at the end of its pass, so maintenance kept the write " +
+                "gate or a write transaction after it yielded.");
+        }
+    }
 
     private static AppSettings SettingsWith(int retentionDays)
     {

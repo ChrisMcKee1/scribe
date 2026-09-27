@@ -16,7 +16,8 @@ public sealed class LogPrivacyGuardTests
 {
     // The whole app shell (Settings verifies endpoints, keys and Azure sign-in; the tray, quick add and dictation
     // relay cleanup), every Core folder whose code talks to a provider or handles what one returned, the folder that
-    // holds library names and terms, and the provider-facing files of Core folders that are otherwise local.
+    // holds library names and terms, the folder that builds and publishes every dictation's vocabulary, and the
+    // provider-facing files of Core folders that are otherwise local.
     private static readonly string[] GuardedFolders =
     [
         Path.Combine("src", "Scribe.App"),
@@ -25,12 +26,21 @@ public sealed class LogPrivacyGuardTests
         Path.Combine("src", "Scribe.Core", "Feedback"),
         Path.Combine("src", "Scribe.Core", "Libraries"),
         Path.Combine("src", "Scribe.Core", "Settings"),
+        Path.Combine("src", "Scribe.Core", "Vocabulary"),
     ];
 
+    // TextPostProcessor logs a library read's failure, whose I/O text named the library's file (stream W-V's request).
     private static readonly string[] GuardedFiles =
     [
         Path.Combine("src", "Scribe.Core", "PostProcessing", "AiDictionarySuggester.cs"),
+        Path.Combine("src", "Scribe.Core", "PostProcessing", "TextPostProcessor.cs"),
         Path.Combine("src", "Scribe.Core", "Transcription", "TranscriptionModelInstaller.cs"),
+    ];
+
+    // Every file of the library service family (contract 3.1.7): it handles library names, ids and terms.
+    private static readonly (string Folder, string Pattern)[] GuardedFilePatterns =
+    [
+        (Path.Combine("src", "Scribe.Core", "PostProcessing"), "DictionaryLibrary*.cs"),
     ];
 
     [Fact]
@@ -39,15 +49,28 @@ public sealed class LogPrivacyGuardTests
         var root = RepositoryRoot();
         var offenders = new List<string>();
         var appCalls = 0;
+        var vocabularyCalls = 0;
+        var postProcessorCalls = 0;
         var files = GuardedFolders
             .SelectMany(folder => SourceFiles(Path.Combine(root, folder)))
-            .Concat(GuardedFiles.Select(file => Path.Combine(root, file)));
+            .Concat(GuardedFiles.Select(file => Path.Combine(root, file)))
+            .Concat(GuardedFilePatterns.SelectMany(pattern =>
+                Directory.EnumerateFiles(Path.Combine(root, pattern.Folder), pattern.Pattern, SearchOption.TopDirectoryOnly)));
         foreach (var file in files)
         {
             var source = File.ReadAllText(file);
+            var calls = LogCallScanner.Find(source).Count();
             if (file.Contains(Path.Combine("src", "Scribe.App") + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             {
-                appCalls += LogCallScanner.Find(source).Count();
+                appCalls += calls;
+            }
+            else if (file.Contains(Path.Combine("src", "Scribe.Core", "Vocabulary") + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                vocabularyCalls += calls;
+            }
+            else if (file.EndsWith(Path.Combine("PostProcessing", "TextPostProcessor.cs"), StringComparison.Ordinal))
+            {
+                postProcessorCalls += calls;
             }
 
             foreach (var offence in LogCallScanner.Check(source))
@@ -57,6 +80,8 @@ public sealed class LogPrivacyGuardTests
         }
 
         Assert.True(appCalls > 100, $"The scanner found only {appCalls} log calls in the app, so it is not reading the source.");
+        Assert.True(vocabularyCalls >= 6, $"The scanner found only {vocabularyCalls} log calls in the vocabulary folder, so it is not reading it.");
+        Assert.True(postProcessorCalls >= 4, $"The scanner found only {postProcessorCalls} log calls in TextPostProcessor.cs, so it is not reading it.");
         Assert.True(offenders.Count == 0, string.Join(Environment.NewLine, offenders));
     }
 
@@ -164,6 +189,50 @@ public sealed class LogPrivacyGuardTests
             "private static void TryLogTo(object log, System.Exception? ex, string message) { } }";
 
         Assert.Empty(LogCallScanner.FindHelperCalls(Source));
+    }
+
+    [Fact]
+    public void The_library_service_family_is_guarded()
+    {
+        var root = RepositoryRoot();
+        var family = GuardedFilePatterns
+            .SelectMany(pattern => Directory.EnumerateFiles(Path.Combine(root, pattern.Folder), pattern.Pattern, SearchOption.TopDirectoryOnly))
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.Contains("DictionaryLibraryService.cs", family);
+        Assert.Contains("DictionaryLibraryComposer.cs", family);
+        Assert.Contains("DictionaryLibraryCsv.cs", family);
+    }
+
+    // The journal's failure line carries a LibraryFileOperation and FailureShape.Describe output and nothing else (review
+    // finding G8): these are the shapes a path, a file name or an exception's text would have reached it in.
+    [Theory]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", path, FailureShape.Describe(ex));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read, Path.GetFileName(path));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read, FailureShape.Describe(ex), path);")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", fileName, FailureShape.Describe(ex));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read);")]
+    [InlineData("TryLog(LogLevel.Warning, \"Library file operation {Operation} failed: {Failure}\", path, FailureShape.Describe(ex));")]
+    public void The_file_operation_line_refuses_anything_but_an_operation_and_a_failure_shape(string call)
+    {
+        var source = "class C { void M(string path, string fileName, LibraryFileOperation operation) " +
+            "{ try { } catch (System.Exception ex) { " + call + " } } }";
+
+        Assert.NotEmpty(LogCallScanner.CheckFileOperationLines(source));
+        Assert.NotEmpty(LogCallScanner.Check(source));
+    }
+
+    [Theory]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read, FailureShape.Describe(ex));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", operation, FailureShape.Describe(exception));")]
+    public void The_file_operation_line_allows_an_operation_and_a_failure_shape(string call)
+    {
+        var source = "class C { void M(LibraryFileOperation operation, System.Exception exception) " +
+            "{ try { } catch (System.Exception ex) { " + call + " } } }";
+
+        Assert.Empty(LogCallScanner.CheckFileOperationLines(source));
+        Assert.Empty(LogCallScanner.Check(source));
     }
 
     private static string RepositoryRoot()

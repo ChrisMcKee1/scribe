@@ -232,7 +232,7 @@ public sealed class CleanupFailureDiagnosticsTests
 
         var custom = TextCleanupService.DescribeFailure(
             new HttpRequestException("connection refused"), CleanupProvider.OpenAiCompatible);
-        Assert.Contains("endpoint URL", custom, StringComparison.Ordinal);
+        Assert.Contains("Couldn't reach the AI service. Check your network and the service's address.", custom, StringComparison.Ordinal);
     }
 
     [Fact]

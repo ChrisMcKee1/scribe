@@ -357,8 +357,8 @@ public class DictionaryUsageAnalyzerTests
             NoLibraries);
 
         Assert.Equal(
-            $"Checked 1 term against your last {own.TranscriptsScanned:N0} dictations. "
-                + "1 of your own entries did not appear.",
+            $"Checked 1 word against your last {own.TranscriptsScanned:N0} dictations. "
+                + "1 of your own words did not appear.",
             own.Summary);
 
         var library = DictionaryUsageAnalyzer.Analyze(
@@ -367,8 +367,8 @@ public class DictionaryUsageAnalyzerTests
             [Library("legal", "Legal", new DictionaryEntry(0, "voir dire", "voir dire"))]);
 
         Assert.Equal(
-            $"Checked 1 term against your last {library.TranscriptsScanned:N0} dictations. "
-                + "1 term across 1 library did not appear.",
+            $"Checked 1 word against your last {library.TranscriptsScanned:N0} dictations. "
+                + "1 word across 1 word pack did not appear.",
             library.Summary);
     }
 
@@ -384,8 +384,8 @@ public class DictionaryUsageAnalyzerTests
             ]);
 
         Assert.Equal(
-            $"Checked 4 terms against your last {report.TranscriptsScanned:N0} dictations. "
-                + "2 of your own entries and 2 terms across 2 libraries did not appear.",
+            $"Checked 4 words against your last {report.TranscriptsScanned:N0} dictations. "
+                + "2 of your own words and 2 words across 2 word packs did not appear.",
             report.Summary);
     }
 

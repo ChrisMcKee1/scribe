@@ -27,24 +27,29 @@ internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool Sh
 /// the owner applies. <see cref="IsPressed"/> is the one member any thread may call.
 ///
 /// Page Up or Page Down bound on its own (no modifier and no second key: the shipped defaults, or either
-/// key chosen in Settings) starts only when no modifier is held. Pressed with any Ctrl, Alt, Shift or
-/// Windows key, or with a Narrator key held (Caps Lock or Insert, or NonConvert, which a Japanese 106
-/// keyboard uses instead of Caps Lock), it is another command (Ctrl+Page Down switches tabs,
-/// Shift+Page Down selects a page, Narrator with Page Down changes views), so that keystroke reaches
-/// the app whole and starts nothing. The check is made only as the binding becomes satisfied: a
-/// modifier pressed during a dictation neither ends it nor stops the key being swallowed. Every other
-/// binding (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as it always has,
-/// whatever else is held: no binding but a bare Page Up or Page Down behaves differently, and an install
-/// that had already bound either key on its own (0.4.3 stored it exactly so) gets the pass-through too.
+/// key chosen in Settings) starts only when no modifier is held, and so does a middle, Back or Forward
+/// mouse button bound on its own. Pressed with any Ctrl, Alt, Shift or Windows key, or with a Narrator key
+/// held (Caps Lock or Insert, or NonConvert, which a Japanese 106 keyboard uses instead of Caps Lock), it
+/// is another command (Ctrl+Page Down switches tabs, Shift+Page Down selects a page, Narrator with Page
+/// Down changes views, and a modified click means something to the app under the pointer), so that
+/// keystroke or click reaches the app whole and starts nothing. The check is made only as the binding
+/// becomes satisfied: a modifier pressed during a dictation neither ends it nor stops the input being
+/// swallowed. Every other binding (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord, a key and a
+/// mouse button together) matches exactly as it always has, whatever else is held: no binding but a bare
+/// Page Up, Page Down or mouse button behaves differently, and an install that had already bound either
+/// Page key on its own (0.4.3 stored it exactly so) gets the pass-through too.
+///
+/// A mouse button is one more key here, under its virtual-key code (<see cref="MouseButtons"/>): the
+/// mouse hook feeds the same engine, and so the same machine, as the keyboard hook.
 ///
 /// A Ctrl, Alt, Shift or Windows key counts as held only while Windows agrees it is down, when the
 /// machine is given Windows' view (<c>isLogicallyDown</c>, GetAsyncKeyState in the service). A hook is
 /// called only for input on its own desktop, so it never sees a release made on the lock screen or the
 /// secure desktop (Ctrl+Alt+Del, a UAC prompt), and after Win+L its own view would keep that modifier
 /// held and refuse every bare press until the key was pressed again. Windows' view is asked only when
-/// the hook's view shows such a modifier on the press that completes a bare Page Up or Page Down
-/// binding, and never about that press's own key, whose asynchronous state Windows updates only after
-/// the callback returns.
+/// the hook's view shows such a modifier on the press that completes a bare Page Up, Page Down or mouse
+/// button binding, and never about that press's own key or button, whose asynchronous state Windows
+/// updates only after the callback returns.
 ///
 /// A Narrator key is judged by the hook's view alone. Narrator keeps its key from the rest of Windows
 /// (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook installed later
@@ -96,7 +101,33 @@ internal sealed class ChordStateMachine
     /// <summary>The current state epoch; bumped by every state-clearing operation.</summary>
     public long Generation => _generation;
 
-    public ChordUpdate Process(uint virtualKey, bool isDown)
+    /// <summary>Owner thread: whether this machine's binding presses a mouse button.</summary>
+    public bool UsesMouseButtons => MouseButtons.Uses(_binding);
+
+    /// <summary>
+    /// Owner thread: Windows had removed the mouse hook, so a button this machine holds may have been released where no
+    /// hook could see it (see <see cref="HotkeyEngine.OnMouseHookLost"/>). The buttons are forgotten; every key stays as
+    /// the keyboard hook, which was not removed, saw it. A binding that presses a button gives up its hold or toggle
+    /// latch as well, because the dictation it drove is ended, so its next press starts afresh; any other binding keeps
+    /// its latch. A release still owed to a swallowed press is the engine's to keep, not this machine's.
+    /// </summary>
+    public void ForgetMouseButtons()
+    {
+        _pressed.Remove(MouseButtons.Middle);
+        _pressed.Remove(MouseButtons.Back);
+        _pressed.Remove(MouseButtons.Forward);
+        _suppressed.Remove(MouseButtons.Middle);
+        _suppressed.Remove(MouseButtons.Back);
+        _suppressed.Remove(MouseButtons.Forward);
+        _satisfied = IsSatisfied(_binding);
+        if (UsesMouseButtons)
+        {
+            _active = false;
+            _generation++;
+        }
+    }
+
+    public ChordUpdate Process(uint virtualKey, bool isDown, bool mayBeSwallowed = true)
     {
         // Binding capture in Settings owns the keyboard: every event passes through untouched
         // so the capture box can see the current push-to-talk key, and nothing can start a
@@ -122,8 +153,8 @@ internal sealed class ChordStateMachine
         // Paused, the binding stands down: nothing activates and no new press is swallowed. Key
         // tracking carries on regardless, because the physical view has to stay true for the
         // leak reconciler, and because a chord still held when dictation resumes must wait for a
-        // fresh press rather than firing on the next autorepeat. A bare Page Up or Page Down
-        // pressed with a modifier held stands down the same way for that press (see the class
+        // fresh press rather than firing on the next autorepeat. A bare Page Up, Page Down or mouse
+        // button pressed with a modifier held stands down the same way for that press (see the class
         // summary); paused, there is nothing to refuse, so Windows is not asked.
         var satisfied = IsSatisfied(_binding);
         var otherCommand = !_paused && !wasSatisfied && satisfied && IsAnotherCommand();
@@ -135,9 +166,11 @@ internal sealed class ChordStateMachine
         // the pairing). Letting half of one through leaves other apps holding an orphaned key-up,
         // or a key the system believes is stuck down. So pre-emption judges only a fresh press: a
         // Windows key pressed while paused and still held at resume must not have a later repeat
-        // pre-empted, or its release is swallowed too and the shell keeps Win held down.
+        // pre-empted, or its release is swallowed too and the shell keeps Win held down. An event that
+        // may not be swallowed (see HotkeyEngine.OnKeyEvent) is passed and leaves nothing swallowed, so
+        // the rest of its keystroke passes too.
         var shouldSuppress = false;
-        if (isDown && _binding.Suppress && isBindingKey &&
+        if (mayBeSwallowed && isDown && _binding.Suppress && isBindingKey &&
             ((!repeated && !_paused && _binding.SuppressChordMembers && NeedsPreemptiveSuppression(virtualKey)) ||
              (!_paused && !otherCommand && !wasSatisfied && satisfied) ||
              (repeated && _suppressed.Contains(virtualKey))))
@@ -147,7 +180,7 @@ internal sealed class ChordStateMachine
         }
         else if (!isDown && _suppressed.Remove(virtualKey))
         {
-            shouldSuppress = true;
+            shouldSuppress = mayBeSwallowed;
         }
 
         return new ChordUpdate(transition, shouldSuppress, _generation);
@@ -220,6 +253,12 @@ internal sealed class ChordStateMachine
     public bool IsLatched => _active;
 
     /// <summary>
+    /// Owner thread: whether a key whose press this machine swallowed is still held, so its release will be swallowed too.
+    /// A mouse button is not a key: the keyboard hook's place in the chain decides nothing about it.
+    /// </summary>
+    public bool HoldsSwallowedKey => _suppressed.ContainsAnyExcept(MouseButtons.Middle, MouseButtons.Back, MouseButtons.Forward);
+
+    /// <summary>
     /// Enters or leaves pause. Pausing cancels a hold or toggle latch WITHOUT reporting a
     /// deactivation, because the caller owns stopping a dictation that was already running; it
     /// deliberately keeps every other piece of key state, so a key swallowed before the pause is
@@ -260,30 +299,34 @@ internal sealed class ChordStateMachine
     public static bool IsBindingKey(HotkeyBinding binding, uint virtualKey) =>
         virtualKey == binding.VirtualKey ||
         virtualKey == binding.SecondaryVirtualKey ||
-        (binding.Modifiers.HasFlag(KeyModifiers.Control) && IsControl(virtualKey)) ||
-        (binding.Modifiers.HasFlag(KeyModifiers.Alt) && IsAlt(virtualKey)) ||
-        (binding.Modifiers.HasFlag(KeyModifiers.Shift) && IsShift(virtualKey)) ||
-        (binding.Modifiers.HasFlag(KeyModifiers.Win) && IsWin(virtualKey));
+        (Has(binding.Modifiers, KeyModifiers.Control) && IsControl(virtualKey)) ||
+        (Has(binding.Modifiers, KeyModifiers.Alt) && IsAlt(virtualKey)) ||
+        (Has(binding.Modifiers, KeyModifiers.Shift) && IsShift(virtualKey)) ||
+        (Has(binding.Modifiers, KeyModifiers.Win) && IsWin(virtualKey));
 
     // Explicit membership tests rather than LINQ over the set: this runs for every key event on
     // the hook thread, and an enumerator per modifier check is garbage the callback can do without.
     private bool IsSatisfied(HotkeyBinding binding) =>
         _pressed.Contains(binding.VirtualKey) &&
         (binding.SecondaryVirtualKey is not { } second || _pressed.Contains(second)) &&
-        (!binding.Modifiers.HasFlag(KeyModifiers.Control) || AnyPressed(VkControl, VkLeftControl, VkRightControl)) &&
-        (!binding.Modifiers.HasFlag(KeyModifiers.Alt) || AnyPressed(VkAlt, VkLeftAlt, VkRightAlt)) &&
-        (!binding.Modifiers.HasFlag(KeyModifiers.Shift) || AnyPressed(VkShift, VkLeftShift, VkRightShift)) &&
-        (!binding.Modifiers.HasFlag(KeyModifiers.Win) || _pressed.Contains(VkLeftWin) || _pressed.Contains(VkRightWin));
+        (!Has(binding.Modifiers, KeyModifiers.Control) || AnyPressed(VkControl, VkLeftControl, VkRightControl)) &&
+        (!Has(binding.Modifiers, KeyModifiers.Alt) || AnyPressed(VkAlt, VkLeftAlt, VkRightAlt)) &&
+        (!Has(binding.Modifiers, KeyModifiers.Shift) || AnyPressed(VkShift, VkLeftShift, VkRightShift)) &&
+        (!Has(binding.Modifiers, KeyModifiers.Win) || _pressed.Contains(VkLeftWin) || _pressed.Contains(VkRightWin));
+
+    // A bit test rather than Enum.HasFlag, for the same reason: without the JIT's optimization (a Debug build) HasFlag
+    // boxes both enums on every call, which put garbage on the hook path of every key and button event.
+    private static bool Has(KeyModifiers modifiers, KeyModifiers flag) => (modifiers & flag) != 0;
 
     private bool AnyPressed(uint generic, uint left, uint right) =>
         _pressed.Contains(generic) || _pressed.Contains(left) || _pressed.Contains(right);
 
-    // Whether this press of a bare Page Up or Page Down binding is another command because a modifier or a Narrator key
-    // is held (see the class summary). No other binding is judged, so each matches exactly as it did before the rule
-    // existed. A bare binding has no modifier of its own, and its key is neither a modifier nor a Narrator key, so the
-    // key this press is for is never one of those asked about.
+    // Whether this press of a bare Page Up, Page Down or mouse button binding is another command because a modifier or a
+    // Narrator key is held (see the class summary). No other binding is judged, so each matches exactly as it did before
+    // the rule existed. A bare binding has no modifier of its own, and its input is neither a modifier nor a Narrator
+    // key, so the input this press is for is never one of those asked about.
     private bool IsAnotherCommand() =>
-        IsBarePageKey(_binding) &&
+        IsBarePassThroughBinding(_binding) &&
         (Held(VkControl, VkLeftControl, VkRightControl) ||
          Held(VkAlt, VkLeftAlt, VkRightAlt) ||
          Held(VkShift, VkLeftShift, VkRightShift) ||
@@ -293,9 +336,11 @@ internal sealed class ChordStateMachine
          _pressed.Contains(VkInsert) ||
          _pressed.Contains(VkNonConvert));
 
-    // Page Up or Page Down with no modifier and no second key: the shipped defaults, or either key bound in Settings.
-    private static bool IsBarePageKey(HotkeyBinding binding) =>
-        (binding.VirtualKey is VkPrior or VkNext) &&
+    // Page Up, Page Down or a middle, Back or Forward mouse button with no modifier and no second input: the shipped
+    // defaults, or either Page key or a mouse button bound in Settings. One rule for both: a button pressed with a
+    // modifier held is meant for the app under the pointer, just as a Page key pressed with one is.
+    private static bool IsBarePassThroughBinding(HotkeyBinding binding) =>
+        (binding.VirtualKey is VkPrior or VkNext || MouseButtons.IsBindable(binding.VirtualKey)) &&
         binding.SecondaryVirtualKey is null &&
         binding.Modifiers == KeyModifiers.None;
 

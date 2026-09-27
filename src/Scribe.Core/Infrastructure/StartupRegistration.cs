@@ -21,8 +21,8 @@ public sealed record StartupRegistrationStatus(StartupTaskState? State, string? 
             "Startup is disabled by your organization. Contact your administrator to change it.",
         StartupTaskState.EnabledByPolicy =>
             "Startup is enabled by your organization and cannot be changed here.",
-        null => "Could not read the Windows startup setting. Reopen Settings to try again.",
-        _ => "Launch Scribe automatically when you sign in.",
+        null => "Couldn't read the Windows startup setting. Close and reopen Settings to try again.",
+        _ => "Start Scribe automatically when you sign in to Windows.",
     };
 
     public bool Matches(bool enabled) => IsKnown && Error is null && IsEnabled == enabled;
@@ -180,7 +180,7 @@ public sealed class StartupRegistration
                 return status with
                 {
                     Error = status.CanChange
-                        ? "Windows did not accept the Start with Windows change. Check Windows Settings > Apps > Startup."
+                        ? "Windows didn't accept the change. Check Windows Settings > Apps > Startup."
                         : status.Message,
                 };
             }
@@ -194,8 +194,8 @@ public sealed class StartupRegistration
             // switch disabled on "Checking..." with nothing on screen to say why.
             _log.LogWarning(ex, "Could not access startup registration; packaged={Packaged}.", IsPackaged);
             return new StartupRegistrationStatus(null,
-                "Could not access the Windows startup setting. Reopen Settings to try again. " +
-                "If this continues, save diagnostics from About.");
+                "Couldn't reach the Windows startup setting. Close and reopen Settings to try again. " +
+                "If it keeps happening, save diagnostics from Diagnostics.");
         }
         finally
         {

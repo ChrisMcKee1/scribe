@@ -249,7 +249,8 @@ public static class SessionBanner
 
         static string Describe(HotkeyBinding binding) =>
             $"'{HotkeyText.Describe(binding)}'(vk=0x{binding.VirtualKey:X2} mods={binding.Modifiers} " +
-            $"mode={binding.Mode} suppress={binding.Suppress} chord={binding.IsPhysicalChord})";
+            $"mode={binding.Mode} suppress={binding.Suppress} chord={binding.IsPhysicalChord} " +
+            $"input={MouseButtons.InputKind(binding)})";
     }
 
     private static string DescribePipeline(AppSettings settings) =>
@@ -299,5 +300,6 @@ public static class SessionBanner
 
     private static string DescribeInjection(AppSettings settings) =>
         $"method={settings.InjectionMethod} newlines={settings.NewlineHandling} " +
-        $"shiftEnter={settings.ShiftEnterLineBreaks} spaceAfter={settings.AddSpaceAfterDictation}";
+        $"shiftEnter={settings.ShiftEnterLineBreaks} spaceAfter={settings.AddSpaceAfterDictation} " +
+        $"accent={settings.AccentSource}";
 }

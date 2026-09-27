@@ -135,6 +135,71 @@ internal static partial class LogCallScanner
             }
         }
 
+        offences.AddRange(CheckFileOperationLines(source));
+        return offences;
+    }
+
+    /// <summary>The library journal's failure line, whose two values are the only ones it may carry (review finding G8).</summary>
+    internal const string FileOperationTemplate = "\"Library file operation {Operation} failed: {Failure}\"";
+
+    // A LibraryFileOperation-typed parameter or local, the one kind of variable {Operation} may name.
+    [GeneratedRegex(@"\bLibraryFileOperation\??\s+(?<name>[A-Za-z_]\w*)\s*[),;=]")]
+    private static partial Regex FileOperationDeclaration();
+
+    [GeneratedRegex(@"^LibraryFileOperation\.[A-Za-z_]\w*$")]
+    private static partial Regex FileOperationValue();
+
+    [GeneratedRegex(@"^FailureShape\.Describe\s*\(.*\)$", RegexOptions.Singleline)]
+    private static partial Regex FailureShapeValue();
+
+    /// <summary>
+    /// Every call, direct or through a helper, that writes <see cref="FileOperationTemplate"/> must hand it exactly two
+    /// values: a <c>LibraryFileOperation</c> (a member of the enum, or a variable declared with that type) and
+    /// <c>FailureShape.Describe(...)</c>. Anything else there, a path, a file name or an id above all, is an offence.
+    /// </summary>
+    internal static IReadOnlyList<Offence> CheckFileOperationLines(string source)
+    {
+        var operationNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match declaration in FileOperationDeclaration().Matches(source))
+        {
+            operationNames.Add(declaration.Groups["name"].Value);
+        }
+
+        var offences = new List<Offence>();
+        foreach (var call in Find(source).Concat(FindHelperCalls(source)))
+        {
+            var template = -1;
+            for (var i = 0; i < call.Arguments.Count && template < 0; i++)
+            {
+                if (call.Arguments[i] == FileOperationTemplate)
+                {
+                    template = i;
+                }
+            }
+
+            if (template < 0)
+            {
+                continue;
+            }
+
+            var values = call.Arguments.Skip(template + 1).Select(Unwrap).ToList();
+            if (values.Count != 2)
+            {
+                offences.Add(new Offence(Collapse(call.Text), "the file operation line takes exactly {Operation} and {Failure}"));
+                continue;
+            }
+
+            if (!FileOperationValue().IsMatch(values[0]) && !operationNames.Contains(values[0]))
+            {
+                offences.Add(new Offence(Collapse(call.Text), $"{{Operation}} is not a LibraryFileOperation ({values[0]})"));
+            }
+
+            if (!FailureShapeValue().IsMatch(values[1]))
+            {
+                offences.Add(new Offence(Collapse(call.Text), $"{{Failure}} is not FailureShape.Describe output ({values[1]})"));
+            }
+        }
+
         return offences;
     }
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.Tests.StorageTime;
+using ReleaseAtExit = Scribe.Core.Tests.Concurrency.ReleaseAtExit;
 
 namespace Scribe.Core.Tests;
 
@@ -90,9 +91,11 @@ public sealed class StoragePreemptionTests : IDisposable
         var settings = new SettingsRepository(db);
         using var running = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         int? statementError = null;
 
-        // Holds the gate for the whole test: the settings write must never need it.
+        // Holds the gate for the whole test, and lets go only when the test releases it: the settings write must never need
+        // it, and one that did would wait for that release rather than meet a hold that ended by itself.
         var maintenance = new Thread(() =>
         {
             using var connection = db.Open();
@@ -111,7 +114,7 @@ public sealed class StoragePreemptionTests : IDisposable
                     statementError = ex.SqliteErrorCode;
                 }
 
-                release.Wait(Generous);
+                release.Wait();
             }
         });
         maintenance.Start();
@@ -410,12 +413,13 @@ public sealed class StoragePreemptionTests : IDisposable
         // A writer that had to wait: the gate is held until it is queued.
         using var holding = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(release);
         var holder = new Thread(() =>
         {
             using (db.EnterWriteScope())
             {
                 holding.Set();
-                release.Wait(Generous);
+                release.Wait();
             }
         });
         holder.Start();

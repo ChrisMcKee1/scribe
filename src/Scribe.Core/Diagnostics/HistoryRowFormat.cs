@@ -14,6 +14,10 @@ public static class HistoryRowFormat
 {
     /// <summary>Shown when a value does not apply, matching the target-app column's convention.</summary>
     public const string NotApplicable = "n/a";
+    /// <summary>Shown when AI cleanup did not leave a duration for this entry.</summary>
+    public const string NotRecorded = "Not recorded";
+
+    public const int RecentLimit = 200;
 
     /// <summary>
     /// Spoken length, in seconds to one decimal. Sub-100 ms clips would render as "0.0 s", so they
@@ -41,4 +45,151 @@ public static class HistoryRowFormat
     /// </param>
     public static string Latency(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? $"{value:N0} ms" : NotApplicable;
+
+    /// <summary>AI cleanup duration for the History column, in seconds, or the not-recorded state.</summary>
+    public static string CleanupTime(int? milliseconds) =>
+        milliseconds is { } value && value >= 0 ? Seconds(value) : NotRecorded;
+
+    public static HistoryPageLine PageLine(
+        int shownCount,
+        int limit,
+        bool loadedOlder,
+        bool mayHaveOlder,
+        bool olderLoadFailed)
+    {
+        if (olderLoadFailed)
+        {
+            return new HistoryPageLine("Couldn't load older dictations.", ShowLoadOlder: true, LoadOlderButtonText: "Try again");
+        }
+
+        if (shownCount <= 0)
+        {
+            return HistoryPageLine.Hidden;
+        }
+
+        if (!loadedOlder && shownCount >= limit)
+        {
+            return new HistoryPageLine($"Showing your latest {limit:N0} dictations.", mayHaveOlder, "Load older");
+        }
+
+        if (loadedOlder || mayHaveOlder)
+        {
+            return new HistoryPageLine($"Showing {shownCount:N0} dictations.", mayHaveOlder, "Load older");
+        }
+
+        return HistoryPageLine.Hidden;
+    }
+
+    public static HistorySearchLine SearchLine(int matchCount, int cap)
+    {
+        if (matchCount <= 0)
+        {
+            return new HistorySearchLine("No dictations match your search.", ShowClearSearch: true);
+        }
+
+        if (matchCount >= cap)
+        {
+            return new HistorySearchLine($"The first {cap:N0} matches are shown.", ShowClearSearch: false);
+        }
+
+        return matchCount == 1
+            ? new HistorySearchLine("1 dictation matches.", ShowClearSearch: false)
+            : new HistorySearchLine($"{matchCount:N0} dictations match.", ShowClearSearch: false);
+    }
+
+    public static string EmptyState(string verb, string shortcut) =>
+        $"No dictations yet. {verb} {shortcut} in any app and speak.";
+
+    public const string NoSearchMatches = "No dictations match your search.";
+
+    public const string LoadingText = "Loading history...";
+
+    public const string LoadFailedText = "Couldn't load your history.";
+
+    public const string ClearSearch = "Clear search";
+
+    public static HistoryToolbarState Toolbar(bool hasRows, bool hasSelection) =>
+        new(CanCopy: hasSelection, CanDelete: hasSelection, CanDeleteAll: hasRows);
+
+    /// <summary>
+    /// Which parts of the History list show. A failure or a load in progress is said on a line above rows already shown
+    /// (they stay as they are), and in the centred panel only when there are none; Try again goes with a failure only.
+    /// </summary>
+    public static HistoryLoadState LoadState(bool hasRows, bool loadFailed, bool searchActive, bool loading = false)
+    {
+        if (loadFailed || loading)
+        {
+            return new HistoryLoadState(
+                ShowGrid: hasRows,
+                ShowToolbar: hasRows,
+                ShowCenteredStatus: !hasRows,
+                ShowInlineStatus: hasRows,
+                ShowSearchNoMatches: false,
+                ShowRetry: loadFailed && !loading);
+        }
+
+        return new HistoryLoadState(
+            ShowGrid: hasRows,
+            ShowToolbar: hasRows,
+            ShowCenteredStatus: !hasRows,
+            ShowInlineStatus: false,
+            ShowSearchNoMatches: hasRows && searchActive,
+            ShowRetry: false);
+    }
+
+    public static string Details(int audioMilliseconds, int decodeMilliseconds, int? cleanupMilliseconds)
+    {
+        var recorded = Audio(audioMilliseconds);
+        var recognized = Seconds(decodeMilliseconds);
+        var cleanup = cleanupMilliseconds is { } value and >= 0
+            ? $"AI cleanup took {Seconds(value)}."
+            : "No AI cleanup time was recorded.";
+        return $"Recorded {recorded}. Recognized in {recognized}. {cleanup}";
+    }
+
+    private static string Seconds(int milliseconds)
+    {
+        if (milliseconds <= 0)
+        {
+            return "0.0 s";
+        }
+
+        var seconds = milliseconds / 1000.0;
+        return seconds < 0.1 ? "0.1 s" : $"{seconds:0.0} s";
+    }
+}
+
+public sealed record HistoryToolbarState(bool CanCopy, bool CanDelete, bool CanDeleteAll);
+
+public sealed record HistoryPageLine(string Text, bool ShowLoadOlder, string LoadOlderButtonText)
+{
+    public static HistoryPageLine Hidden { get; } = new(string.Empty, ShowLoadOlder: false, LoadOlderButtonText: "Load older");
+}
+
+public sealed record HistorySearchLine(string Text, bool ShowClearSearch);
+
+public sealed record HistoryLoadState(
+    bool ShowGrid,
+    bool ShowToolbar,
+    bool ShowCenteredStatus,
+    bool ShowInlineStatus,
+    bool ShowSearchNoMatches,
+    bool ShowRetry = false);
+
+public static class HistorySettingsSummary
+{
+    public static string Describe(int retentionDays, bool storeAudio)
+    {
+        var retention = retentionDays switch
+        {
+            0 => "Keeps dictations until you delete them.",
+            1 => "Keeps dictations for 1 day.",
+            365 => "Keeps dictations for 1 year.",
+            _ => $"Keeps dictations for {retentionDays:N0} days.",
+        };
+        var recordings = storeAudio
+            ? "Saves a recording with each dictation for up to 7 days."
+            : "Doesn't save recordings.";
+        return $"{retention} {recordings}";
+    }
 }

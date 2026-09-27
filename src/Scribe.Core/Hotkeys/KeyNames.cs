@@ -3,7 +3,8 @@ using System.Globalization;
 namespace Scribe.Core.Hotkeys;
 
 /// <summary>
-/// The name Scribe shows for a key, taken from its virtual-key code and nothing else.
+/// The name Scribe shows for a key, or for a mouse button a hotkey uses, taken from its virtual-key code and nothing
+/// else.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -126,6 +127,10 @@ public static class KeyNames
         var names = new Dictionary<uint, string>
         {
             [0x03] = "Break", // VK_CANCEL: Ctrl+Pause
+            // The mouse buttons a hotkey can use (MouseButtons), named with the button numbers mouse software shows.
+            [0x04] = "Middle mouse button", // VK_MBUTTON
+            [0x05] = "Mouse Back (button 4)", // VK_XBUTTON1
+            [0x06] = "Mouse Forward (button 5)", // VK_XBUTTON2
             [0x08] = "Backspace",
             [0x09] = "Tab",
             [0x0C] = "Clear", // VK_CLEAR: numeric keypad 5 with Num Lock off

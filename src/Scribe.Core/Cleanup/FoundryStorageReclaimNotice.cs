@@ -13,6 +13,8 @@ public static class FoundryStorageReclaimNotice
     /// </summary>
     public const int MaxLength = 255;
 
+    public const string Title = "AI files removed";
+
     private const long Megabyte = 1024L * 1024;
 
     // Four digits of megabytes read worse than a gigabyte figure, so the unit changes at 1000 MB.
@@ -35,16 +37,16 @@ public static class FoundryStorageReclaimNotice
         }
 
         var freed = size is null
-            ? "Scribe removed unused on-device AI files."
-            : $"Scribe freed {size} of unused on-device AI files.";
+            ? "Scribe removed AI files it no longer needs."
+            : $"Scribe freed {size} of AI files it no longer needs.";
         var why = reclaim.Reason switch
         {
             FoundryStorageReclaimReason.ProviderIsNotFoundryLocal =>
-                "Foundry Local is not your AI cleanup provider, so its downloads are not needed.",
+                "AI cleanup doesn't run on this PC now, so these downloads aren't needed.",
             FoundryStorageReclaimReason.ModelSwitched =>
-                "They belonged to Foundry Local models you switched away from.",
+                "They belonged to AI models on this PC that you switched away from.",
             FoundryStorageReclaimReason.RuntimeWithoutModel =>
-                "No Foundry Local model is downloaded and AI cleanup is off. Setting up Foundry Local downloads the runtime again.",
+                "No AI model was downloaded for this PC, and AI cleanup is off. Setting up AI cleanup on this PC downloads these files again.",
             _ => "They were no longer needed.",
         };
         var notice = $"{freed} {why}";

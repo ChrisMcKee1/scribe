@@ -1,0 +1,3 @@
+# The CSV fixtures are byte-exact inputs and expected outputs (line ends, byte order marks and ANSI bytes included), so
+# git must never convert them.
+*.csv -text

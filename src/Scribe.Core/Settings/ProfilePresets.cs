@@ -19,19 +19,32 @@ namespace Scribe.Core.Settings;
 /// </summary>
 public static class ProfilePresets
 {
-    /// <summary>A template: the profile itself plus a one-line explanation for the menu.</summary>
-    public readonly record struct Preset(string Description, AppProfile Profile);
+    /// <summary>
+    /// A template: the profile itself plus a one-line explanation for the menu, and any name the preset had in an earlier
+    /// release, which a profile added then still carries.
+    /// </summary>
+    public readonly record struct Preset(string Description, AppProfile Profile, IReadOnlyList<string>? FormerNames = null)
+    {
+        /// <summary>
+        /// Whether a profile named <paramref name="name"/> is this preset already added. The menu greys out a preset by
+        /// this name match, so a renamed preset keeps matching the profiles added under its former name.
+        /// </summary>
+        public bool IsNamed(string? name) =>
+            name is not null &&
+            (string.Equals(name, Profile.Name, StringComparison.OrdinalIgnoreCase) ||
+             (FormerNames ?? []).Any(former => string.Equals(name, former, StringComparison.OrdinalIgnoreCase)));
+    }
 
     /// <summary>
-    /// Terminals and shells. Enter submits the command line, so a dictation the AI cleanup split
+    /// Command windows (terminals and shells). Enter submits the command line, so a dictation the AI cleanup split
     /// into paragraphs would run several partial commands. The plain-text writing style is safe
     /// here because a shell has no use for markdown, bullets or code fences.
     /// </summary>
     public static Preset TerminalsAndShells => new(
-        "Windows Terminal, PowerShell, cmd and other shells. Keeps a dictation on one line so it is not run early, and asks AI cleanup for plain text.",
+        "Windows Terminal, PowerShell, Command Prompt and other command windows. Keeps a dictation on one line so it isn't run early, and asks AI cleanup for plain text.",
         new AppProfile
         {
-            Name = "Terminals and shells",
+            Name = "Command windows",
             NewlineHandling = NewlineInjectionMode.AlwaysFlatten,
             WritingStyle = "Plain text only. No markdown, no bullet points, no headings and no code fences.",
             ProcessNames =
@@ -40,7 +53,8 @@ public static class ProfilePresets
                 "alacritty", "wezterm-gui", "ConEmu64", "mintty", "Hyper", "Tabby", "warp",
                 "kitty", "putty",
             ],
-        });
+        },
+        FormerNames: ["Terminals and shells"]);
 
     /// <summary>
     /// Editors and IDEs, kept separate from terminals and deliberately blunt about the trade-off.
@@ -50,10 +64,10 @@ public static class ProfilePresets
     /// editor is exactly where markdown and code fences are wanted.
     /// </summary>
     public static Preset IdeIntegratedTerminals => new(
-        "For dictating into an IDE's integrated terminal. Warning: a process name cannot tell the terminal from the editor, so this removes line breaks in your source files too.",
+        "For dictating into the command window inside a code editor, such as Visual Studio Code. Warning: this also removes line breaks while you edit code in that editor.",
         new AppProfile
         {
-            Name = "IDE integrated terminals",
+            Name = "Command windows in code editors",
             NewlineHandling = NewlineInjectionMode.AlwaysFlatten,
             ProcessNames =
             [
@@ -61,7 +75,8 @@ public static class ProfilePresets
                 "rider64", "idea64", "pycharm64", "goland64", "clion64", "webstorm64",
                 "sublime_text", "notepad++", "zed",
             ],
-        });
+        },
+        FormerNames: ["IDE integrated terminals"]);
 
     /// <summary>
     /// Desktop AI assistants and chat clients whose composer sends on Enter. This is the preset
@@ -69,7 +84,7 @@ public static class ProfilePresets
     /// recognition never contains, and each one submitted a partial message.
     /// </summary>
     public static Preset AiChatAndAgents => new(
-        "Claude, ChatGPT, GitHub Copilot, Microsoft 365 Copilot and Scout. Stops a multi-paragraph dictation being sent as several separate messages.",
+        "Claude, ChatGPT, GitHub Copilot, Microsoft 365 Copilot and Scout. Keeps a multi-paragraph dictation in one message.",
         new AppProfile
         {
             Name = "AI chat and agents",
@@ -89,7 +104,7 @@ public static class ProfilePresets
     /// rather than something bundled into a broader preset.
     /// </summary>
     public static Preset Teams => new(
-        "Only if Teams still sends your dictation early. Teams normally accepts Shift+Enter as a line break, so try it without this first.",
+        "Only if Teams still sends your dictation early. Teams usually accepts Shift+Enter as a line break, so try it without this first.",
         new AppProfile
         {
             Name = "Microsoft Teams",
@@ -102,7 +117,7 @@ public static class ProfilePresets
     /// user who has set the global mode to always flatten still gets real paragraphs in Word.
     /// </summary>
     public static Preset Documents => new(
-        "Word, Excel, PowerPoint, OneNote and Notepad. Keeps paragraph breaks even when the global setting flattens them.",
+        "Word, Excel, PowerPoint, OneNote and Notepad. Keeps paragraph breaks even when your Advanced setting uses one line.",
         new AppProfile
         {
             Name = "Documents",

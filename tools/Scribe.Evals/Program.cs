@@ -108,6 +108,11 @@ internal static class Program
         foreach (var scenario in EvalScenarios.All)
         {
             var options = opts.BuildOptions(model, scenario.WritingStyle);
+            if (scenario.Glossary is { } glossary)
+            {
+                options = options with { Glossary = glossary };
+            }
+
             svc.Configure(options);
 
             var ready = await WaitForReadyAsync(svc, opts.ReadyTimeout, ct);

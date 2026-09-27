@@ -1,0 +1,12 @@
+﻿"# name: Team, terms"
+# category: Custom
+"# description: Say ""hi"", then go"
+# based-on: github
+# formula-guard: 1
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+sum,'=SUM(A1),true,true
+quote,''=literal,true,true
+"#tag",#tag,true,true
+"pattern","a,b",false,true
+at,'@user,true,false

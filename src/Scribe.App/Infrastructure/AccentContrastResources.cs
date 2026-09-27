@@ -5,6 +5,7 @@ using System.Windows.Media;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Appearance;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Models;
 using Wpf.Ui.Appearance;
 
 namespace Scribe.App.Infrastructure;
@@ -49,6 +50,18 @@ internal static class AccentContrastKeys
 
     /// <summary>The outline of a selected list item where its accent fill is faint, else transparent.</summary>
     public const string SelectedItemOutline = "ScribeSelectedItemOutline";
+
+    /// <summary>The text of a selected list item in the Phase 2 subtle-fill treatment.</summary>
+    public const string SelectedItemForeground = "ScribeSelectedItemForeground";
+
+    /// <summary>The accent indicator of a selected list item in the Phase 2 subtle-fill treatment.</summary>
+    public const string SelectedItemIndicator = "ScribeSelectedItemIndicator";
+
+    /// <summary>A usage chart bar.</summary>
+    public const string ChartBar = "ScribeChartBarBrush";
+
+    /// <summary>The current-period usage chart bar.</summary>
+    public const string ChartBarCurrent = "ScribeChartBarCurrentBrush";
 }
 
 /// <summary>
@@ -99,6 +112,7 @@ internal static class AccentContrastResources
         (ThemeColor.CardBackground, "CardBackgroundFillColorDefault"),
         (ThemeColor.ControlFill, "ControlFillColorDefault"),
         (ThemeColor.ControlFillSecondary, "ControlFillColorSecondary"),
+        (ThemeColor.SubtleFillSecondary, "SubtleFillColorSecondary"),
         (ThemeColor.StrongStroke, "ControlStrongStrokeColorDefault"),
         (ThemeColor.BodyText, "TextFillColorPrimary"),
         (ThemeColor.BodyTextSecondary, "TextFillColorSecondary"),
@@ -167,6 +181,7 @@ internal static class AccentContrastResources
 
     private const string StrongStrokeKey = "ControlStrongStrokeColorDefaultBrush";
     private const string ButtonPressedFillKey = "ButtonBackgroundPressed";
+    private const string TextPrimaryKey = "TextFillColorPrimaryBrush";
 
     // What this class last wrote to each key it overrides, so it knows which of the values now there are its own.
     private static readonly Dictionary<string, object> Written = new(StringComparer.Ordinal);
@@ -177,7 +192,16 @@ internal static class AccentContrastResources
     private static Application? _app;
     private static ILogger? _log;
     private static string? _lastOutcome;
+    private static string? _lastResolverOutcome;
     private static int _lastMissing = -1;
+    private static bool _refreshing;
+    private static bool _refreshRequested;
+
+    internal static Func<Color> WindowsAccent { get; set; } = ApplicationAccentColorManager.GetColorizationColor;
+
+    internal static AccentSource Source { get; private set; } = AccentSource.Scribe;
+
+    public static event Action? Replanned;
 
     /// <summary>
     /// Starts following WPF-UI's theme changes and Windows' contrast setting. Call once, before the first theme is
@@ -200,6 +224,35 @@ internal static class AccentContrastResources
         }
     }
 
+    public static void UseSource(AccentSource source)
+    {
+        if (Source == source)
+        {
+            return;
+        }
+
+        Source = source;
+        if (_app is not { } app)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!app.Dispatcher.CheckAccess())
+            {
+                app.Dispatcher.BeginInvoke(new Action(() => Refresh()));
+                return;
+            }
+
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            TryLogFailure(ex);
+        }
+    }
+
     /// <summary>Plans and writes the foregrounds for the theme as it is now. Never throws.</summary>
     public static AccentContrastPlan? Refresh()
     {
@@ -208,15 +261,37 @@ internal static class AccentContrastResources
             return null;
         }
 
+        if (!app.Dispatcher.CheckAccess())
+        {
+            app.Dispatcher.BeginInvoke(new Action(() => Refresh()));
+            return null;
+        }
+
+        if (_refreshing)
+        {
+            _refreshRequested = true;
+            return null;
+        }
+
         try
         {
-            if (!app.Dispatcher.CheckAccess())
+            // Replanned subscribers can synchronously ask for another refresh. Queue that as a follow-up pass instead
+            // of nesting plans forever, and cap it so a broken subscriber cannot starve the UI thread.
+            _refreshing = true;
+            AccentContrastPlan? plan = null;
+            var extraPasses = 0;
+            while (true)
             {
-                app.Dispatcher.BeginInvoke(new Action(() => Refresh()));
-                return null;
-            }
+                _refreshRequested = false;
+                plan = Apply(app.Resources);
+                if (!_refreshRequested || extraPasses >= 2)
+                {
+                    _refreshRequested = false;
+                    return plan;
+                }
 
-            return Apply(app.Resources);
+                extraPasses++;
+            }
         }
         catch (Exception ex)
         {
@@ -224,6 +299,10 @@ internal static class AccentContrastResources
             // would stop the tray's own handler and fail the theme change that raised it.
             TryLogFailure(ex);
             return null;
+        }
+        finally
+        {
+            _refreshing = false;
         }
     }
 
@@ -243,13 +322,16 @@ internal static class AccentContrastResources
 
     private static AccentContrastPlan Apply(ResourceDictionary resources)
     {
-        var theme = ApplicationThemeManager.GetAppTheme() switch
+        var wpfTheme = ApplicationThemeManager.GetAppTheme();
+        var theme = wpfTheme switch
         {
             ApplicationTheme.Light => AppearanceTheme.Light,
             ApplicationTheme.Dark => AppearanceTheme.Dark,
             ApplicationTheme.HighContrast => AppearanceTheme.HighContrast,
             _ => AppearanceTheme.Unknown,
         };
+
+        ResolveAccent(wpfTheme, theme);
 
         var colors = new Dictionary<ThemeColor, SrgbColor>();
         foreach (var (color, key) in ColorKeys)
@@ -272,10 +354,6 @@ internal static class AccentContrastResources
         {
             colors[ThemeColor.ControlText] = drawn;
         }
-
-        // WPF's own Hyperlink style: HotTrackBrush at rest and a literal red while hovered.
-        colors[ThemeColor.Hyperlink] = From(SystemColors.HotTrackColor);
-        colors[ThemeColor.HyperlinkHover] = From(Colors.Red);
 
         foreach (var (_, color, key) in ManagerShades)
         {
@@ -325,15 +403,23 @@ internal static class AccentContrastResources
         }
 
         WriteScribe(resources, AccentContrastKeys.HyperlinkForeground,
-            plan.For(AccentShadeRole.Hyperlink) is { Changed: true } link ? Frozen(link.Color) : SystemColors.HotTrackBrush);
+            plan.For(AccentShadeRole.Hyperlink) is { } link ? Frozen(link.Color) : LinkFallback(resources, "AccentTextFillColorPrimaryBrush"));
         WriteScribe(resources, AccentContrastKeys.HyperlinkHoverForeground,
-            plan.For(AccentShadeRole.HyperlinkHover) is { Changed: true } hover ? Frozen(hover.Color) : Brushes.Red);
+            plan.For(AccentShadeRole.HyperlinkHover) is { } hover ? Frozen(hover.Color) : LinkFallback(resources, "AccentTextFillColorSecondaryBrush"));
+        WriteScribe(resources, AccentContrastKeys.ChartBar,
+            plan.For(AccentShadeRole.ChartBar) is { } chart ? Frozen(chart.Color) : SystemColors.HighlightBrush);
+        WriteScribe(resources, AccentContrastKeys.ChartBarCurrent,
+            plan.For(AccentShadeRole.ChartBarCurrent) is { } current ? Frozen(current.Color) : SystemColors.HighlightBrush);
 
         WriteScribe(resources, AccentContrastKeys.SelectedRowOutline,
             plan.SelectedRowCue ? resources[StrongStrokeKey] ?? Brushes.Transparent : Brushes.Transparent);
         WriteScribe(resources, AccentContrastKeys.SelectedRowNameWeight, plan.SelectedRowCue ? FontWeights.SemiBold : FontWeights.Normal);
         WriteScribe(resources, AccentContrastKeys.SelectedItemOutline,
             plan.SelectedItemOutline is { } outline ? Frozen(outline.Color) : Brushes.Transparent);
+        WriteScribe(resources, AccentContrastKeys.SelectedItemForeground,
+            plan.For(AccentForegroundRole.SelectedSubtleItem) is { } selectedText ? Frozen(selectedText.Foreground) : resources[TextPrimaryKey] ?? Brushes.Black);
+        WriteScribe(resources, AccentContrastKeys.SelectedItemIndicator,
+            plan.SelectedSubtleItemCue is { } subtleCue ? Frozen(subtleCue.Indicator) : Brushes.Transparent);
 
         // On last when entering one, once every value its triggers read is in place.
         if (plan.Applies)
@@ -342,7 +428,63 @@ internal static class AccentContrastResources
         }
 
         LogOutcome(plan, plan.Applies ? MissingWpfUiKeys(resources) : 0);
+        RaiseReplanned();
         return plan;
+    }
+
+    private static void ResolveAccent(ApplicationTheme wpfTheme, AppearanceTheme theme)
+    {
+        var resolution = AccentResolver.Decide(Source, theme, SystemParameters.HighContrast);
+        try
+        {
+            switch (resolution.Kind)
+            {
+                case AccentResolverKind.ScribeSet when resolution.ScribeAccent is { } set:
+                    ApplicationAccentColorManager.Apply(ToWpf(set.System), ToWpf(set.Primary), ToWpf(set.Secondary), ToWpf(set.Tertiary));
+                    break;
+                case AccentResolverKind.WindowsDerived:
+                    ApplicationAccentColorManager.Apply(WindowsAccent(), wpfTheme, false);
+                    break;
+            }
+
+            LogResolverOutcome(resolution, theme);
+        }
+        catch (Exception ex)
+        {
+            TryLogAccentFailure(ex);
+        }
+    }
+
+    private static Brush LinkFallback(ResourceDictionary resources, string accentKey) =>
+        resources[accentKey] as Brush ?? SystemColors.HotTrackBrush;
+
+    private static Color ToWpf(SrgbColor color) => Color.FromArgb(color.A, color.R, color.G, color.B);
+
+    private static void RaiseReplanned()
+    {
+        var handler = Replanned;
+        if (handler is null)
+        {
+            return;
+        }
+
+        foreach (Action subscriber in handler.GetInvocationList().Cast<Action>())
+        {
+            try
+            {
+                subscriber();
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    _log?.LogWarning("An accent replan subscriber failed ({Failure}).", FailureShape.Describe(ex));
+                }
+                catch
+                {
+                }
+            }
+        }
     }
 
     // A theme dictionary brush: overridden in the application dictionary while the plan changes it, and the override
@@ -532,6 +674,57 @@ internal static class AccentContrastResources
         catch
         {
             // Logging is best effort and must never be why a theme change fails.
+        }
+    }
+
+    private static void LogResolverOutcome(AccentResolution resolution, AppearanceTheme theme)
+    {
+        if (_log is not { } log)
+        {
+            return;
+        }
+
+        try
+        {
+            var outcome = $"{Source}|{theme}|{resolution.Kind}|{SystemParameters.HighContrast}";
+            if (outcome == _lastResolverOutcome)
+            {
+                return;
+            }
+
+            _lastResolverOutcome = outcome;
+            var themeText = theme == AppearanceTheme.HighContrast || SystemParameters.HighContrast
+                ? "contrast theme"
+                : theme.ToString();
+            switch (resolution.Kind)
+            {
+                case AccentResolverKind.ScribeSet:
+                    log.LogInformation("Accent: Scribe blue ({Theme}).", themeText);
+                    break;
+                case AccentResolverKind.WindowsDerived:
+                    log.LogInformation("Accent: the Windows accent ({Theme}).", themeText);
+                    break;
+                default:
+                    log.LogInformation("Accent: unchanged ({Theme}).", themeText);
+                    break;
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryLogAccentFailure(Exception ex)
+    {
+        try
+        {
+            _log?.LogWarning(
+                "Could not apply the accent; the previous accent colours stay ({Failure}).",
+                FailureShape.Describe(ex));
+        }
+        catch
+        {
+            // As above.
         }
     }
 

@@ -75,6 +75,18 @@ public sealed class ExternalChoiceSync<T>
     /// </summary>
     public void Saved() => _newest = 0;
 
+    /// <summary>
+    /// The window saved changes up to <paramref name="revision"/>. A newer change made while the save waited stays as
+    /// this window's intent and must not be replaced by the older stored value the save just wrote.
+    /// </summary>
+    public void SavedThrough(long revision)
+    {
+        if (_newest <= revision)
+        {
+            _newest = 0;
+        }
+    }
+
     /// <summary>What a save writes: an outside change still waiting to be shown, otherwise what the window shows.</summary>
     public T ForSave(T shown) => _waiting ?? shown;
 }

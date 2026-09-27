@@ -12,24 +12,27 @@ speak, release: punctuated text is typed into whatever app has focus. Audio is c
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
-text, the cleanup instructions and the vocabulary glossary (every enabled dictionary and library term,
-within its budget), whether or not the dictation mentions them; see
+text, the cleanup instructions and the vocabulary glossary (your dictionary and the word packs you let
+AI cleanup use, within its budget), whether or not the dictation mentions them; see
 [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
-suggestions); **dictionary libraries** (eleven built-in packs plus imported CSVs, shown as one A to Z
-list; see the libraries section below); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
+suggestions); **word packs** (the dictionary libraries, renamed: eleven built-in packs plus your own and imported CSVs,
+edited on the Dictionary page's Word packs tab and shown as one A to Z list; see the word pack sections below); **voice
+snippets** (spoken trigger → saved template); **per‑app profiles**
 (writing style + newline mode by focused process); **AI cleanup** across four providers
-(Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, or
-any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
-**playground** for testing normal push-to-talk with raw recognition, dictionary/library/snippet
-replacement highlights, and per-step timings across the full pipeline;
-**diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
+(Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, GitHub Copilot, or
+any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter), with **Test connection** for the remote ones;
+**silence auto‑stop** for toggle mode;
+**Try dictation** (the Playground until 0.4.4) for testing normal push-to-talk with raw recognition,
+dictionary/library/snippet replacement highlights, and per-step timings across the full pipeline;
+**Find a setting** (a search box over every page); Settings and the recording indicator follow Windows text size;
+**diagnostics** panel (P50/P95 decode latency + RTF from local history, per speech model); **usage insights**
 (local totals/trend chart/top apps/recurring terms with one-click dictionary add; opt-in AI
 insight sends aggregate totals + dictionary-covered term labels ONLY, and withholds a label whose
 replacement is multi-line or over 100 characters as written; novel mined terms never
-leave the machine); **space after each dictation** (on by default, Settings > Dictation > Text insertion; only the
+leave the machine); **space after each dictation** (on by default, Settings > Dictation > Typing; only the
 target gets it, so history, the tray's recent dictations, the recovery copy and quick add keep the text as dictated;
 see [Text insertion](#text-insertion-the-space-after-a-dictation-read-before-touching-dictationinsertion));
 **dictation recovery** (last 5 transcripts in a tray submenu, injection
@@ -38,7 +41,10 @@ over a recent dictation that saves the fix and repairs that transcript in place)
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
 disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause), a tray Microphone
 submenu (the Windows default or a specific device, plus Sound settings) and a
-first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
+first-run **welcome**; push-to-talk on any key, two-key chord, key with Ctrl, Alt or Shift, or a spare **mouse
+button** (middle, back or forward, alone or in a chord with a key; any other button through the key its software
+sends, such as F13; see the hook section); an **About** page links privacy, support, source, and
+the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
 benchmark‑validated optimum (see `docs/model-leaderboard.md`; a stricter A/B regressed it).
@@ -190,11 +196,13 @@ them. Until this was fixed the AI cleanup page said remote providers get only th
 dictation, while every request carried the whole glossary and the readiness probe carried it too, before
 anything was dictated.
 
-- **Every cleanup request carries the glossary**: every enabled dictionary and library term, merged
-  personal first (`DictationController.BuildGlossary`), up to 5,000 terms and 24,000 characters (80
-  terms under the Local prompt style), whether or not the dictation mentions them. The libraries are those
-  the settings in use enable, the selection the post-processor was given, never a fresh read of the stored
-  document (see "The library selection is the one in use" below). A template (a written
+- **Every cleanup request carries the glossary**: every enabled dictionary term and every term of the word packs
+  AI cleanup may receive, merged personal first, up to 5,000 terms and 24,000 characters (80 terms under the
+  Local prompt style), whether or not the dictation mentions them. It comes from the vocabulary generation the
+  dictation was admitted with (`VocabularyGeneration.GlossaryEntries`, `CleanupPrompt.ComposeVocabulary` of the
+  personal dictionary and the committed `LibraryVocabulary.AiEntries`), never from a fresh read of the stored
+  document (see "The library vocabulary is the committed one" below, and "Library vocabulary admission"). A word
+  pack kept from AI cleanup still applies on this PC and never reaches it. A template (a written
   form spanning lines or past 100 characters, judged before trimming) is not vocabulary and stays out,
   by `CleanupPrompt.IsVocabularyReplacement`, the one rule the usage insight's labels follow too
   (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
@@ -209,11 +217,16 @@ anything was dictated.
   suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
   glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
   collation, `SqliteBinaryCollation`), the enabled libraries' entries as the page composes them
-  (`DictionaryLibraryComposer.ComposeLibraries`, precedence order, as the library service gives dictation),
-  which it counts as given and never reorders, then the shared
-  `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
-  `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
-  and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
+  (`DictionaryLibraryComposer.ComposeLibraries`, precedence order), which it counts as given and never reorders, then
+  the shared `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
+  `CleanupPrompt.BuildGlossary`). Dictation takes the committed `LibraryVocabulary.AiEntries` in composition's tiers
+  instead, and the old page's count is not an account of them: it composes the page's committed selection (the stored
+  projection, see Word packs), which lists only libraries both on and permitted for AI cleanup and withholds a shared
+  legacy id when not every library under it is (a built-in and a hand-placed twin with its id, one of them adopted off,
+  while `AiEntries` still carries the permitted one), so its word packs, its order and its count can differ from what
+  cleanup sends even below either budget; the Word packs page hands the hint the committed AI list (W2-1). Every control
+  it reads (the AI switch, provider, prompt style, post-processing switch and the libraries) refreshes it. Both quote
+  their limits from the constants that enforce them.
   `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if a
   retired claim (that cleanup sends only the transcript, or only the terms that matter to a dictation)
   comes back in `PRIVACY.md`, the README, this file, the privacy review lens, the Foundry,
@@ -235,21 +248,24 @@ anything was dictated.
 
 ### GitHub Copilot provider (the parent environment is never touched)
 
-- **The model travels in `SessionConfig.Model`**, through Agent Framework's typed
-  `AsAIAgent(client, SessionConfig, ownsClient: false)` overload (`GitHubCopilotAgentFactory`), with the
-  instructions as an appended system message, no tools and no permission handler, so nothing in the
-  Copilot runtime's coding-agent toolset is approved. A blank model stays null and leaves the choice to
-  the CLI. `ownsClient` stays false: the client is released with the service, and an owning agent would
-  dispose it every time a setting changed.
+- **The model travels in `SessionConfig.Model`**, and Scribe runs the session itself (`GitHubCopilotCleanupAgent`, built
+  by `GitHubCopilotAgentFactory`) rather than through Agent Framework's `GitHubCopilotAgent`, whose run creates the
+  session and sends to it with no step in between: Scribe hands the session's creation and its send over separately
+  through the library vocabulary's admission point. The configuration is what Agent Framework built (instructions as an
+  appended system message, no tools, no permission handler, streaming on), so nothing in the Copilot runtime's
+  coding-agent toolset is approved. A blank model stays null and leaves the choice to the CLI. The agent never owns the
+  client: the client is released with the service. `GitHubCopilotCleanupAgentTests` pins wire and answer parity with
+  Agent Framework's agent against a loopback fake runtime.
 - **The runtime's child process gets its own environment.** `GitHubCopilotCli.BuildRuntimeEnvironment`
   copies this process's environment, minus `GITHUB_COPILOT_MODEL`, plus the selected model when there
   is one, into `CopilotClientOptions.Environment`, which replaces the child's environment wholesale. The
   parent process is never mutated; the old approach set and restored a process-wide variable around
   startup, which a concurrent reader could observe and a cancelled startup skipped restoring.
-- On any bump of `GitHub.Copilot.SDK` or `Microsoft.Agents.AI.GitHub.Copilot`, re-check in their source
-  that a non-null `Environment` still replaces the child environment, that `SessionConfig.Model` is still
-  forwarded to the create-session request, and that the agent still disposes the client only when
-  `ownsClient` is true.
+- On any bump of `GitHub.Copilot.SDK` or `Microsoft.Agents.AI.GitHub.Copilot`, re-check in their source that a non-null
+  `Environment` still replaces the child environment, that `SessionConfig.Model` is still forwarded to the
+  create-session request, and that the session events `GitHubCopilotCleanupAgent` maps still carry the answer (the
+  parity test compares against Agent Framework's agent, so run it after the bump). Production no longer calls into
+  `Microsoft.Agents.AI.GitHub.Copilot`; it stays referenced because `GitHub.Copilot.SDK` arrives through it.
 
 ## Commands (run these, including the flags)
 
@@ -266,12 +282,15 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows: 3756 as of 0.4.4, 3747 with the filter below).
+# Run the unit tests (must stay green; the count only ever grows: 7013 as of 0.5.0, 6940 with the filter below).
 # Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
 # session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
 # or src/Scribe.App/models found from the test output); without models they pass vacuously. CI sets
 # SCRIBE_MODELS_DIR, so they run there.
+# The Start_ tests that inject mouse clicks and keys into the real hooks (HotkeyServiceMouseTests.cs) run only on CI
+# (GITHUB_ACTIONS) or with SCRIBE_INPUT_INJECTION_TESTS=1, and then require the input desktop: injected input lands
+# under the pointer, so never opt in on a desktop someone is using. Elsewhere they return at once.
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -353,26 +372,50 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Audio/ Vad/ Transcription/      capture → 16 kHz mono (pooled capture buffer), Silero VAD, Parakeet ASR
                                     (TranscriptionChunker plans long-capture seams)
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
-                                    Local storage policy and janitor
+                                    Local storage policy and janitor; the admission point every outbound
+                                    request is handed over through (VocabularyHandOff, GitHubCopilotCleanupAgent)
+    Vocabulary/                     VocabularyPublisher (one builder, every generation off the dispatcher),
+                                    VocabularyGeneration, DictationPostProcessor, VocabularyRefresh, and the
+                                    Settings save's draft (StoredChangeAcknowledgement, DraftSnapshot)
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
-                                    (which library wins a spoken form: frozen built-in ids, then file names)
+                                    (which library wins a spoken form: frozen built-in ids, then file names),
+                                    LibraryTermKey (one key per spoken form), LibraryMetadata (names 0.4.3 reads
+                                    back), the library model's shared types (the committed LibraryCatalog, the
+                                    editor's LibraryDraft, LibraryChangeSet, the save payload, LibraryVocabulary),
+                                    and the parts behind them: the CSV codec and lint (LibraryCsvCodec), the
+                                    built-in overlay and its edits documents (BuiltInLibraryOverlay), composition
+                                    and policy (LibraryComposition, AiVocabularyPolicy, LibraryComposer,
+                                    LibraryDecisions), and storage (LibraryJournal, LibraryInstaller, the custom
+                                    and Recently deleted stores, the janitor and LibraryRecoveryRetry); see Word packs
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
                                     CaptureTriggerBinding, StartupFailureNotice
-    Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
-                                    OverlayPreviewGate
+    Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision: keep, trim,
+                                    suspend, relaunch), OverlayWarmup (when the shell warms the helper, and
+                                    when it keeps it resident),
+                                    OverlayPreviewGate, PillOutcome (what a finished dictation shows on the
+                                    pill), PillTiming, OverlayPipeProtocol (every pipe verb and line),
+                                    PillGeometry and PillTextScale (the pill's text-scaled size and place, and
+                                    when a new text scale applies; the overlay compiles both files itself)
     Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
                                     SrgbColor: the foreground on every accent and palette fill, and the lightness
-                                    of accent text, links and switch tracks (see Accent contrast)
+                                    of accent text, links and switch tracks (see Accent contrast); AccentResolver
+                                    (which accent to apply); ScribeBrand (every brand colour); PillPalette,
+                                    the recording pill's colours over ScribeBrand
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
-                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
+                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync;
+                                    the word pack editor's deciders (LibraryWorkspace, LibraryEditor,
+                                    LibraryImportPlanner, LibraryNaming, LibraryLayoutPlanner, SettingsCloseGuard,
+                                    LibrarySearch, LibraryTermSort)
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
     TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower; DictationInsertion adds the
-                                    space after a dictation); push-to-talk hotkeys
-                                    (HotkeyEngine, HotkeyCommandRouter; KeyNames and HotkeyText name the keys)
+                                    space after a dictation; RemoteClientProcesses, TypingPace and KeyScanCodes for
+                                    Remote Desktop and virtual machine targets); push-to-talk hotkeys
+                                    (HotkeyEngine, HotkeyCommandRouter, KeyboardHookPrecedence; KeyNames and
+                                    HotkeyText name the keys)
     Persistence/                    SQLite store, HistoryWriter + OrderedHistoryRepository, StorageMaintenance
     Security/ Infrastructure/ Models/ DependencyInjection/
   src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
@@ -383,13 +426,17 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     AccentContrastResources (writes the accent colours), ButtonLabelContrast
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
-    OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
+    OverlayWindow.xaml(.cs)         the pill's visuals (its 264 x 110 DIP layout in a Viewbox), states, motion
+    App.xaml                        the pill's theme brushes (Default, Light, HighContrast)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
-  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
+  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
+                                    Libraries/Integration/ the word pack parts together, over real files)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
-                                    will read in stream M1) and composition-golden.txt (what the libraries
-                                    decide, captured from 0.4.3)
+                                    will read in stream M1), term-keys.json (the library term key's answers, for
+                                    the same port), slugs.json (the id rule), csv/ and edits/ (the CSV and edits
+                                    document formats) and composition-golden.txt (what the libraries decide,
+                                    captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
@@ -399,6 +446,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   tools/Scribe.InjectionLab/        times each injection path into a real focused Win32 control
   scripts/Download-Models.ps1       fetches ASR + VAD models
   scripts/New-ScenarioFixtures.ps1  regenerates the scenario WAVs (local only)
+  scripts/New-TrayIcons.ps1         generates the tray state icons from ScribeBrand (commit its output)
+  scripts/New-WelcomeMark.ps1       makes the Welcome window's brand mark without its bars
   scripts/Velopack-Cli.ps1          keeps vpk at the Velopack package version (used by pack.ps1)
   build/pack.ps1                    Velopack installer + GitHub-release publisher
   build/pack-msix.ps1               Microsoft Store MSIX package (Store path; no MSI is built)
@@ -442,6 +491,15 @@ back into the code-behind; that is a recurring smell.
   before moving, damaging, copying or deleting it, call `DatabasePools.Release(new AppPaths(root))` (or
   `TempDatabaseFolder.ReleasePooledConnections()`) from `StorageTestSupport`, which clears only the pool
   keyed by `ScribeDatabase.BuildFileConnectionString` for that file.
+- **Every string a person reads uses the Settings glossary's words.** `GlossarySourceTests` reads every
+  C# string literal in `src` (regular, verbatim, interpolated and raw, with interpolation holes dropped as
+  code) and every XAML text attribute and element text. It fails on a word the glossary retires: hotkey
+  or chord for a shortcut, pill or overlay for the recording indicator, library for a word pack,
+  provider for where AI cleanup runs, post-processing, transcribing, polish, endpoint URL, on-device, and
+  the rest of the "Don't say" column. Log calls and logging helpers, exceptions, regexes, `nameof`,
+  telemetry tags, test-seam step names, SQL and single-token keys are exempt, and so are product names
+  (Azure CLI, MIT License). Reword a new string, or add it to the allowlist with its reason; a stale
+  allowlist entry fails the test too. Code, logs and wire tokens keep their internal names.
 - Example of the expected style (descriptive names, real error handling, `why` comment):
 
 ```csharp
@@ -516,8 +574,9 @@ cause of one.**
   `FailureShape.DescribeWithStack` adds the stack frames, frame lines only, for failures that point at
   a defect, such as crashes, unhandled exceptions and handlers that threw.
   `LogPrivacyGuardTests` runs `LogCallScanner`, a source-level guard, over all of `src/Scribe.App`, the
-  Core folders `Cleanup`, `Diagnostics`, `Feedback` and `Settings`, and
-  `PostProcessing/AiDictionarySuggester.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
+  Core folders `Cleanup`, `Diagnostics`, `Feedback`, `Libraries`, `Settings` and `Vocabulary`, the library
+  service family (`PostProcessing/DictionaryLibrary*.cs`), and `PostProcessing/AiDictionarySuggester.cs`,
+  `PostProcessing/TextPostProcessor.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
   a log call that passes an exception object (cast or not), reads an exception's `.Message`,
   `.StackTrace`, inner exceptions or `.Data`, renders an object with `.ToString()`, interpolates an
   exception, or does not start with a literal message template, and on a logging helper handed an
@@ -539,7 +598,10 @@ matter are intermittent and hardware‑specific.
   cleanup/injection settings. A daily file rolls at midnight, so without this the file a user hands
   over frequently has no record of how the process started. `OnExit` writes the matching
   `session end` line; its absence before the next banner means the process died.
-- **Every dictation is stamped `#<n>`** and logs its start (trigger, mode, key, device, target app),
+- **Every dictation is stamped `#<n>`** and logs its start (trigger, mode, key, device, target app, and how long
+  the microphone took to open, `opened in N ms`: the pill shows only once the microphone records, so a report can
+  show the whole wait from a press to the pill; 4 of 472 opens in Chris's logs took over 400 ms, 3 of them on the
+  first press after launch),
   its stop (**with a reason**: `HotkeyReleased`, `SilenceAutoStop`, `MicrophoneFault`, `Paused`,
   `DurationLimit`, `DesktopSwitch`)
   and the hold duration. `DictationController` warns when the captured audio is shorter
@@ -560,7 +622,7 @@ matter are intermittent and hardware‑specific.
   names, `configured`/`unset`. Azure deployment, account and subscription names count as
   configuration: report presence, never the name. `SessionBannerTests.Banner_never_contains_a_secret`
   asserts it; keep it passing.
-- **Users export logs from Settings > About > "Save diagnostics…"** (`DiagnosticsBundle`), which
+- **Users export logs from Settings > Diagnostics > "Save diagnostics..."** (also offered on About) (`DiagnosticsBundle`), which
   writes the retained logs, redacted as described above, plus `report.txt` (what is inside, and the
   recognized formats with their version ranges and replacement counts) to a zip wherever they choose.
   Never add `scribe.db` to that bundle: it holds every dictation and the saved API keys.
@@ -665,8 +727,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   refused). A press the user made meanwhile, still queued behind the consumer, keeps its latch, so the
   recording it starts is still ended by its own release; releasing whatever the hook held, before the
   admission, cleared that latch and left the microphone recording. A stop the lifecycle turns away
-  releases nothing. The two stops the hook sends itself, a release or second press and a desktop switch,
-  release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
+  releases nothing. The stops the hook sends itself, a release or second press, a desktop switch and a mouse
+  hook found removed, release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
   turns away because the previous dictation is still processing releases its own latch the same way
   (`DictationStartPolicy.BeginRecording`): it started nothing, and after a stop Scribe made itself, whose
   release had just made that tap a new start, a latch left on cost the user a third tap. The other
@@ -708,10 +770,27 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 
 ## Hotkey hook threading (read before touching the hook)
 
-- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard hook that
-  answers too slowly. The callback takes no lock, logs nothing, queues nothing to the thread pool and
-  uses no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
-  those can take a lock shared with another thread. One hook thread owns all key state.
+- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard or mouse hook
+  that answers too slowly. The callbacks take no lock, log nothing, queue nothing to the thread pool and
+  use no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
+  those can take a lock shared with another thread. One hook thread owns all key and button state. The
+  only allocations on the callbacks' path are the node `LockFreeInbox` pushes for a transition (a press or
+  release that starts or ends a dictation, or a state clear a command makes) and a new machine when a
+  command adds a dictation-only binding; the mouse callback's move and wheel fast path, an unbound
+  button, the owed-release decision and a key no binding uses allocate nothing (`MouseButtonHotkeyTests`
+  measures it warm, and `MouseButtonRound8Tests` measures the first call of each cold, in a load context
+  of its own with fresh copies of Scribe.Core and the tests, so no other test can have warmed it;
+  `RemoteDesktopHookPathTests` does the same for what stream RD added to the keyboard callback: the
+  field reads, the echo check, the route through either registration, an uncertain key-down's route right after a
+  move, and the foreground notice's hop). The
+  runtime's one-time work for the two P/Invokes the callbacks call, `CallNextHookEx` and
+  `GetAsyncKeyState`, is done before either hook exists (`NativeMethods.PrelinkHookCalls`,
+  `Marshal.Prelink`: "Executes one-time method setup tasks without calling the method"); on a first
+  call inside a callback it allocated 48 bytes each. None of those calls is promised a time:
+  `CallNextHookEx` "calls the next hook in the chain" and returns that hook's result, so it lasts as
+  long as that hook does, and `GetAsyncKeyState` and `SetEvent` do not wait for another thread, but
+  Learn gives neither a time bound. The chord machine tests modifiers with bit
+  tests, because `Enum.HasFlag` boxes both enums whenever the JIT does not optimize it (a Debug build).
 - **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
   during a reinstall never shares key state, or the desktop-switch activation epoch, with its
   replacement. A replaced engine is retired: it passes every key through, requests no leak check,
@@ -725,24 +804,395 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
   keep command order and epoch order in step. Other threads read published state lock-free.
   Transitions leave through a lock-free queue woken by a kernel event, and the leaked-key check runs
-  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`.
+  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`, after
+  interlocked writes that count the request and say which key view the pass should repair keys in, if
+  any (`HotkeyReconcileSignal`, one per hook installation).
 - **The hook thread creates its message queue first** (`NativeMethods.EnsureMessageQueue`, the
   `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
   other threads can only post the router's wake to a thread that already has a queue, and the
   documentation is not consistent about whether `SetWindowsHookEx` creates one.
+- **A Remote Desktop or virtual machine client's keyboard hook runs before Scribe's until Scribe moves ahead of it**
+  (stream RD). Windows calls the newest hook first: `SetWindowsHookEx` "always installs a hook procedure at the beginning
+  of a hook chain", and a procedure passes an event on only by calling `CallNextHookEx` (Hooks Overview). A Remote Desktop
+  client can register a low-level keyboard hook of its own (`mstscax.dll`, the Remote Desktop control that mstsc,
+  VMConnect and RDCMan host, imports `SetWindowsHookExW`, `UnhookWindowsHookEx` and `CallNextHookEx`, and its
+  `KeyboardHookMode` applies Windows key combinations such as Alt+Tab in the remote session when in focus or in full
+  screen; the hook itself is not documented by Microsoft, and AutoHotkey documents reinstalling a hook "has the effect of
+  giving it precedence over any hooks previously installed by other processes"), and once it has registered after
+  Scribe's, it sees every key first: the push-to-talk key reaches the remote session before Scribe can swallow it, or
+  never reaches Scribe, and the probe goes unanswered. The user's 0.4.3 log showed the watchdog reinstalling every 1 to
+  10 minutes all day in front of msrdc. So the hook thread also listens for `EVENT_SYSTEM_FOREGROUND` (a WinEvent on its
+  own thread, like the desktop switch's, whose callback only hands the window to the pool through `ForegroundNotice`);
+  the service hands it the window in front too as each hook installs; and `KeyboardHookPrecedence`, on the pool, looks
+  the window's process up (`WindowOwners`, `RemoteClientProcesses`; never on the hook thread) and asks the hook thread to
+  **move ahead** 250 ms later, after the client's own registration, again 2 s after that in case it registered late, then
+  to release what the moves replaced, and for as long as the client stays in front, to move ahead again every 30 s, each
+  followed by its release, in case the client registers once more without leaving the front. That keeps Scribe's hook
+  ahead as a bound, not a seal: until the first move, and until the next one after a registration the client makes while
+  it stays in front, the client's hook is still first, and a press in that gap can reach the session. Every step is taken
+  only if a remote client is still in front when it falls due, and the same remote window noticed again, with no other
+  window published since the last decision, keeps its sequence as scheduled rather than start it over (review round 2,
+  item 3); a window in between, or a step that finds no remote client in front, forgets it, so its return starts over.
+  Notices coalesce (the handler reads only the latest window), so the same window alone does not prove that nothing
+  else was in front: `ForegroundPublication` counts each publication whose window differs from the one it replaces, and
+  the count travels with the notice (review round 3, item 2). Notices and ticks are decided by revision (round 2, item
+  4): `ForegroundNotice` publishes each notice with a revision (an interlocked exchange of the window, the change count
+  when it differs, then the revision, then the SetEvent; the handler reads the revision, then the count, then the
+  window), a notice no newer than the last one decided changes nothing (the notice's pool callbacks can overlap: a
+  repeating registered wait re-arms before it runs its callback, stream MB's round 11), and each schedule records its own
+  number and its due time, as `ClosableTimer` does, so neither a tick of an earlier schedule nor an early tick can take a
+  newer one. A decision that keeps the step (the same window, or another window at the release, the one step it leaves
+  in place) re-arms that step to run at once when its tick was taken and is still in flight, so a tick that read the
+  foreground before the notice cannot apply what it judged then (round 3, item 2). And while no step is scheduled, the
+  watchdog's recovery poll (`KeyboardHookPrecedence.RecoverIfIdle`, from `MaintainKeyboardHookLocked`) looks at what is
+  in front once a period, so a sequence that ended while a client stayed in front (a step that read the foreground as a
+  window was losing activation, when Windows has none) starts over within 30 s. It publishes no notice: a publication takes
+  the notice's one window slot and advances the revision, which let a late watchdog sample cancel a real notice's sequence
+  or drop a move judged on it (round 4, item 1). It reads the revision, then the window, and starts the sequence only if,
+  under the gate, still no step is scheduled and no notice was published since; it then decides that revision, so a notice
+  published before its look and decided late changes nothing. Each move carries the foreground
+  revision and the window its step judged (`WM_HOTKEY_MOVE_AHEAD`'s wParam and lParam), and the hook thread drops it,
+  right before registering, unless no notice was published since and that window is still in front (one
+  `GetForegroundWindow` through the service's delegate, between messages, which also covers a change whose WinEvent the
+  thread has not been handed yet; no process is looked up there): a move posted, or held back, before the user left for
+  a local app is not made (round 2, item 5). Requests are posted thread messages (`WM_HOTKEY_MOVE_AHEAD`,
+  `WM_HOTKEY_MOVE_RETRY`, `WM_HOTKEY_RELEASE_RETIRED`); nothing waits for the hook thread. No new setting: it is automatic,
+  and `KeyboardHookPrecedenceTests` drives it on a clock the test owns. Each time a sequence starts for a remote client,
+  one Information line records, by its process name, that the client is in front and a move is scheduled (not that one
+  was made), and says so with "no move scheduled" when the recovery poll started it; the watchdog reports a refused move (Warning) and a move that waited or was dropped (Debug) by count.
+- **A move does not strand a keystroke that a hook ahead of Scribe's may have seen begin.** Such a hook may have forwarded
+  the press into a remote session; if Scribe swallowed the rest of that keystroke after moving ahead, the session would
+  keep the key down, and pressing it again would not help, because Scribe swallows that key (for a push-to-talk Right
+  Ctrl: every key typed in the session becomes a Ctrl shortcut, and the wheel zooms). Three rules keep such a keystroke
+  whole. First, `HookInstallation.MoveAhead` waits while the engine holds a key whose press it swallowed
+  (`HotkeyEngine.HoldsSwallowedKey`, from the machines' swallowed sets, keys only: a mouse button's order is the mouse
+  hook's), so a keystroke Scribe swallowed ends through the same hooks it began in; the wait is counted, the move is kept
+  on the hook thread with its revision and window, and the reconcile pass that follows that key's swallowed release asks
+  for it again (`RetryDeferredMoveAhead`), as does the watchdog once a period, and each retry judges it afresh; a later
+  move asked for meanwhile replaces it. Second, each registration has its own delegate
+  (`HookInstallation.KeyboardRegistration`), so the callback knows which one an event came through, and
+  `KeyboardHookFilter.Route` lets a registration the move replaced judge but never swallow an event that reaches only it
+  (`HotkeyEngine.OnKeyEvent(..., mayBeSwallowed: false)`, which also leaves nothing swallowed for the rest of the
+  keystroke): such an event entered the chain before the move and has passed every hook registered between the two.
+  Third (review round 2, item 1), a press the hook ahead kept is one Scribe never saw, so neither the engine nor
+  `GetAsyncKeyState` knows the key is held (a kept low-level event never reaches the asynchronous state), and its next
+  autorepeat reaches Scribe's new registration first. So once the hook becomes the newest registration (a move, or a
+  reinstall's registration; the first install replaces none and opens nothing), for a window a key-down of a key the
+  engine neither holds nor has seen go up since is uncertain (`HotkeyEngine.OnRegisteredAhead`): judged, so a dictation
+  still starts or ends, but never swallowed, and neither is the rest of its keystroke, so the hook that forwarded the
+  press also gets the release. The engine keeps such a keystroke itself until its release (`PassesWholeKeystroke`;
+  review round 3, item 1): a key-down judged uncertain, or one that reached only a replaced registration, marks its key,
+  and every repeat and the release of that keystroke pass whatever clears the machines' view meanwhile (new bindings,
+  capture's start and end, a desktop switch), since the machines alone would take the next repeat for a fresh press and
+  swallow it with its release. The judgement is made on the view the machines then use: `OnKeyEvent` applies the pending
+  commands once, first, then judges, then processes, with no second drain between (the mouse path keeps its order). The
+  cost fails open: a key whose release went unseen (let go on the lock screen) stays marked, so its next press passes
+  once, whole. The window is how long an autorepeat of a key held across the move can take to arrive,
+  from the user's keyboard settings (`KeyRepeatTiming`: SystemParametersInfo's SPI_GETKEYBOARDDELAY, "approximately 250
+  ms" to "approximately 1 second", and SPI_GETKEYBOARDSPEED, "approximately 2.5" to "approximately 30" repetitions per second, "hardware-dependent" and off a
+  linear scale "by as much as 20%"; read off the hook thread and published to the engine): the longer of the delay and
+  the period, a quarter more, plus 250 ms, so 875 ms for Windows' defaults and 1.5 s at most, measured on the events' own
+  time stamps (the tick count, compared signed). What can still reach the session: a press inside a window, of a key
+  Scribe has not seen go up since that move, passes through whole, for as long as it is held (a bound Page Down pages
+  the session and keeps paging while it is held, its repeats passing with it; a bound Right Ctrl is pressed and released
+  there; the dictation still starts and ends); a key held across a move whose repeat comes later than the window allows
+  is judged as a fresh press; an event stamped far in the future (KEYBDINPUT.time is the caller's) closes the window
+  early; a key held at the instant Scribe first installs its hook opens no window. `KeyboardHookMoveSafetyTests`,
+  `KeyboardHookUncertaintyTests`, `KeyboardHookUncertaintyOrderTests` and `KeyboardHookPassingKeystrokeTests` pin the
+  rules in memory; the CI tests
+  `Start_lets_a_key_already_on_its_way_to_a_replaced_registration_through_and_still_judges_it` (a real press held inside
+  a hook ahead of Scribe's while the move lands) and
+  `Start_lets_the_rest_of_a_keystroke_a_hook_ahead_of_it_kept_through_after_a_move` (a hook that forwards and keeps a key
+  held across the move must get its repeats and its release) measure them on real hooks.
+- **A move ahead keeps the engine and judges each key once.** `MoveAhead` runs between messages: it registers afresh
+  (so ahead of every hook registered before, the client's included) and keeps the registration it replaced
+  (`RetiredHookRegistrations`) instead of releasing it, because an event already on its way to the old registration
+  (inside the client's hook when the new one landed) would otherwise reach no registration of Scribe's. No key state,
+  epoch, key view or latch changes. While both are registered, an event the new registration judged and passed on comes
+  back through the old one, nested inside the new one's `CallNextHookEx`: the callback recognizes that echo
+  (`KeyEventPassOn`, which records the vkCode, scanCode, flags and time of every event the thread is passing on right
+  now, all nested passes, because injected input runs the hooks in the injecting thread's context and can hand the thread
+  a different event mid-pass) and passes it untouched. Only a replaced registration is asked: an event entering the
+  current registration is always judged as new, because those four fields do not name one event (KEYBDINPUT.time is the
+  caller's, so a key remapper behind Scribe's hook can synthesize a press and release identical to an event Scribe is
+  still passing on; review round 2, item 2). A replaced registration is released no sooner than 2 s after it was
+  replaced: twice LowLevelHooksTimeout's 1 s maximum, which is each hook's timeout, not the chain's ("If the hook
+  procedure times out, the system passes the message to the next hook", LowLevelKeyboardProc), so the grace covers an
+  event held by up to two slow hooks between the two registrations, not a longer chain. It is released at the next move,
+  at the sequence's release, or at the watchdog's next tick, and never sooner: at most four are kept, and when all four
+  are still inside their grace a move registers nothing and waits, kept like a move a key holds back, until the oldest
+  grace ends, when a thread timer of the hook thread's own (`SetTimer` with no window and no TimerProc, so `WM_TIMER`
+  reaches its loop) retries it; later moves coalesce into it (review round 2, item 3). Five delegate slots are made with
+  the installation (the current registration, four kept, and the new one while fewer than four are kept), and the grace
+  is timed on the service's `TimeProvider`, so the tests drive it. One that is already gone when released means Windows
+  removed it, so for a while no registration may have seen the keys: the watchdog reinstalls with a fresh engine
+  (`MaintainKeyboardHookLocked`), as for a hook that stopped receiving events. A retired engine moves nothing. The CI
+  tests `Start_sees_keys_first_again_once_moved_ahead_of_a_hook_that_keeps_them` and
+  `Start_decides_each_key_once_while_a_replaced_registration_is_kept` measure the chain order and the echo on real hooks.
+- **The watchdog's probe stops at Scribe's hook.** The keyboard callback counts every event, the probe included, and then
+  swallows exactly Scribe's own marker-tagged key-up of `VK_PROBE` (`KeyboardHookFilter.IsProbe`), through whichever
+  registration it reaches first: passed on, a Remote Desktop client behind Scribe's hook would forward a key-up of an
+  unassigned key with scan code 0 into the remote session every watchdog period. Text Scribe types and every other
+  marked event pass as before. Scribe's own keyboard input is its marker whole or exactly its low half
+  (`KeyboardHookFilter.IsScribesOwn`): Windows keeps only the low 32 bits of a mouse event's extra information (above),
+  while for a keyboard event it hands the hook the whole value, measured on both CI runners by
+  `Start_measures_the_marker_windows_hands_a_keyboard_hook_for_scribe_s_own_key` (run 36188289247), so the low half is
+  accepted only in case a later Windows narrows it too. The watchdog's warning no longer asserts a missed deadline: it
+  says the hook stopped receiving events either because Windows removed it or because another program's keyboard hook,
+  such as a Remote Desktop client's, now receives keys first, and names the process in front and whether it is a remote
+  client. `Start_judges_a_key_through_a_replaced_registration_without_swallowing_it` calls each registration's own
+  delegate on a private desktop, so the wiring of the rule above that a replaced registration never swallows is pinned
+  without injected input.
+- **The mouse hook exists only while a binding presses a mouse button.** A middle, Back or Forward
+  button (`MouseButtons`, stored as VK_MBUTTON, VK_XBUTTON1 or VK_XBUTTON2 in the existing binding) is
+  read by a `WH_MOUSE_LL` hook on the same hook thread, feeding the same engine
+  (`HotkeyEngine.OnMouseButtonEvent`), so chords of a key and a button, suppression, pause, capture,
+  the modifier rule, a desktop switch and a reinstall treat a button as one more key. The thread
+  installs it, or removes it, between messages and never inside a callback, whenever it has applied a
+  change (`HookInstallation.SyncMouseHook`, after `HotkeyEngine.UsesMouseButtons`), so nobody who binds
+  keys alone gets a system-wide mouse hook: every pointer move on the desktop waits for this thread
+  while one is installed. The one exception is drain-only: while a swallowed press still owes its
+  release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
+  judge that release and nothing else (no binding can use a button then), and it is removed as soon as
+  the debt is gone: any event that settles it, its release swallowed or let through or a new press
+  that forgives it, asks for that sync at once (`HookDecision.RequestMouseHookSync`, a pass of
+  `HotkeyService.RunReconcilePass` that syncs the mouse hook and repairs no key; review round 8, A9),
+  and a renewal that finds the hook gone, which drops the debt, removes it in that same renewal (Grok's
+  G5, round 7). A debt whose release went up on
+  the lock screen or a secure desktop, where no hook could see it, keeps the drain-only hook until that
+  button is pressed once more. Its callback's first act is the one comparison
+  (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
+  hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
+  `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event
+  carrying a mouse button's code (only injected input can) is not the button. The left and right
+  buttons are never bindable.
+- **The mouse hook is renewed, not probed.** Windows removes a low-level hook that misses the callback
+  deadline, and the mouse hook is the one called for every pointer move, so it needs recovery, but the
+  keyboard probe has no safe mouse counterpart: the only input that clicks nothing is a move, and a
+  move that reaches the desktop brings back a pointer hidden while typing. So every watchdog period
+  (`MaintainMouseHookLocked`) the thread registers the mouse hook afresh, the new registration before
+  the old one is released and both before it takes another message, so the engine keeps its state
+  through the change. That is not a seal: Windows "always installs a hook procedure at the beginning of
+  a hook chain", and each procedure passes an event on to the next one (Hooks Overview), so an event
+  already inside a newer program's hook when the swap happens reaches neither registration; what that
+  can cost an owed release is decided when the release is made (below). A registration Windows removed
+  is normally back within one period, which is registration recovery only (a renewal whose new
+  registration Windows refuses keeps the old one, found gone or not, and tries again next period).
+  **A renewal that finds the old registration already gone is a lost hook, and the engine is told**
+  (`HotkeyEngine.OnMouseHookLost`, on the hook thread between messages, before any button event
+  reaches the new registration): while it was gone no hook saw the mouse, so a held button's release,
+  or a toggle's second click, may be the input nobody saw, and a press may have reached Windows unseen.
+  So every release still owed is dropped, and nothing is read from Windows then; both machines
+  forget their mouse buttons (keys stay: the keyboard hook saw them), a binding that presses one gives
+  up its latch, and if the arbiter's owner is such a binding, the engine advances its activation epoch
+  and then ends that dictation, reported as `HotkeyDeactivation.MouseHookLost`
+  (`DictationStopReason.MouseHookLost` in the log), so its queued Activated can never open the
+  microphone; a keyboard binding's dictation and its queued start are left alone. So recording
+  recovery is best effort and comes at the renewal that finds the loss, normally one watchdog period
+  after it, later if a renewal's registration fails, and until then a press or release no hook saw
+  reaches the app. The loss is logged. Nothing is injected and nothing is added to any event.
+- **An owed release is decided when it is made, on Windows' own view, and a gap lets it through**
+  (review rounds 6 and 7). The engine keeps a release owed to every button press it swallowed; a time
+  no hook saw the mouse (a renewal that finds the hook gone, or a reinstall, whose new engine starts
+  owing nothing) drops those debts. When a release reaches the mouse hook
+  (`HotkeyEngine.OnMouseButtonEvent`), the decision is:
+
+  | The release | What happens |
+  | --- | --- |
+  | Owed, and Windows shows the button down | Let through: a press reached Windows that this hook did not swallow (a second mouse, the secure desktop, an event lost in a renewal's swap), and its release is due |
+  | Owed, and Windows shows it up, or the read failed and returned zero | Swallowed: no time without the hook has passed since its press, so every press since went through this hook |
+  | Its debt dropped by a lost hook or a reinstall | Let through, with no read (fail-open) |
+  | Not owed, and no binding holds the button | Let through, as always |
+
+  The read is `GetAsyncKeyState`'s high bit, through a delegate `HotkeyService.CreateRouter` makes
+  before either hook exists, and the service's constructor prelinks the P/Invoke behind it (the hook
+  threading bullet above; round 7 made a first call for a key nobody presses instead, which round 8
+  replaced with `Marshal.Prelink`). It is the only native call the decision makes; nothing on the
+  mouse callback's path makes a delegate; and no process, window or token is queried inside the
+  hook's deadline (review round 7: opening a process can run drivers' callbacks, which a callback
+  Windows removes on timeout must not wait for). `MouseButtonRound7Tests` pins the three, and
+  `MouseButtonRound8Tests` measures, cold, that the first owed release after production
+  initialization allocates nothing. Why the read is current evidence: the callback runs before
+  Windows applies the event it is called for (the keyboard hook's documentation: "the callback
+  function is called before the asynchronous state of the key is updated"; for the mouse, a press
+  the hook swallows never shows in Windows' view, measured on CI by
+  `HotkeyServiceTests.Start_keeps_a_swallowed_button_press_out_of_windows_own_view`), and Windows takes
+  input from the system message queue "one at a time" (About Messages and Message Queues), so the
+  read shows every earlier press. Why a gap lets the release through: a press may have reached
+  Windows while no hook saw the mouse, including one still inside another program's hook when a
+  registration landed, and the one read the callback can make cannot tell a failed read from an up
+  (UIPI makes it zero while a window of a higher integrity level is in front, and no check around the
+  read can prove it did not fail), so nothing is guessed. Fail-open's cost is stated plainly: after a
+  rare hook loss or reinstall while a bound button is held, its release reaches the app once, which
+  for Back or Forward is one navigation; it never leaves a button down in Windows. What one read
+  cannot tell for a debt no gap has touched: a zero that is a failed read while Windows does hold the
+  button (a press that reached it some other way, with a higher-integrity window in front) swallows
+  that release, and the button stays down in Windows until a later release of it is read as down,
+  which then reaches the app (`A_release_owed_without_a_gap_gets_through_when_windows_holds_the_button`).
+- **A swallowed button press owes its release.** The engine, not the machines whose resets forget,
+  keeps the buttons whose press it swallowed until their release comes, and judges that release when
+  it comes (above), whatever happened in between: every path that clears the machines' state while
+  the hook keeps seeing the mouse (a desktop switch, capture, new bindings, a dictation-only trigger
+  removed), and new bindings with no mouse button at all, which keep the drain-only hook above. A gap
+  in the hook's view (a mouse hook found gone, a reinstall) drops the debts instead (above).
+  DefWindowProc makes a side button's lone release a
+  `WM_APPCOMMAND` (Back or Forward), so passing it on navigated the app under the pointer. A new press
+  of the button retires the debt (buttons never repeat, so its release went up where no hook could
+  see it) and is judged afresh; nothing is ever injected for it. The debts are one word changed by
+  compare-exchange, which the retirement seals: a press is swallowed only once its debt is committed,
+  so a press a reinstall overtakes while its callback is still judging it reaches the app whole, with
+  its release; a debt committed before the seal is not handed on, so that release reaches the app (the
+  reinstall's fail-open cost above). `MouseButtonRecoveryTests`, `MouseButtonRound3Tests` and
+  `MouseButtonRound6Tests` pin each path. Keys keep the reset they had: a key's lone release does nothing
+  documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
+  `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
+  Not covered: a release made while no mouse hook exists (Windows removed it, or a reinstall is between
+  the old thread's exit and the new one's install), which goes to the app, and a release the rule
+  above lets through.
+- **Scribe injects no mouse input, and the leaked-input check covers keys only.** No mouse button is
+  ever a candidate of `SuppressedKeyReconciler`, and no production code builds mouse `INPUT`
+  (`MouseButtonHotkeyTests.No_production_code_injects_mouse_input`): "the engine does not hold it" also
+  means "the engine never saw it go down", as for a button held in another app since before the mouse
+  hook existed, and even a claim made on better evidence was overtaken, in review, by a new press
+  during capture before the injection, which then ended the user's drag. Nothing needs that repair:
+  buttons do not repeat, and on Windows 7 and later a hook that misses its deadline is removed rather
+  than skipped, so a leaked press is one Windows received. Its release reaches the app too, unless the
+  watchdog's renewal registered the hook again before it came; that renewal dropped the debt (above),
+  so the release goes through then as well; the recording that press started ends through the lost-hook
+  recovery, not through an injected release. So
+  no button-up, and no mouse input of any kind, is ever injected by this feature. Keys keep the older
+  rule, which can still misjudge a key held since before a keyboard hook reinstall (a new engine never
+  saw it go down); reinstalls are rare. **Windows hands a low-level mouse hook only
+  the low 32 bits of `MOUSEINPUT.dwExtraInfo`** (measured on both CI runners: a 64-bit value arrived with
+  its high half zeroed), so the mouse hook recognizes Scribe's own input by the low half of
+  `SyntheticInputMarker` (`MouseHookFilter.Marker`); a full-width compare never matches there. Windows
+  also adds a `WM_MOUSEMOVE` of its own, carrying the same extra information, around injected button
+  events now and then, which the injection tests allow for.
+- **A mouse debt never asks for the keyboard's leak repair, and the repair never runs during capture**
+  (review round 8, A9). The repair judges a key leaked when Windows holds it and the engine's view does
+  not, which is evidence only while that view is whole: capture tracks no key, and every state clear
+  (capture's start and end, a desktop switch, new bindings, a reinstall) forgets the keys held across
+  it. Round 7 had every event that settled a mouse debt ask for the repair, to remove a drain-only hook
+  promptly, and Astra's sequence showed the harm: with Left Ctrl and Back bound, the chord pressed and
+  released on the lock screen (the debt stays), then Set chosen and Left Ctrl held with Back pressed to
+  capture a chord, Back's press forgave the debt, the repair found Left Ctrl down in Windows and not in
+  the engine, and sent a Ctrl-up while the user held Ctrl. So the two requests are separate
+  (`HookDecision.RequestReconcile` and `HookDecision.RequestMouseHookSync`, one interlocked word in
+  `HotkeyReconcileSignal` that the pass takes): a key release the bindings swallowed and a dictation's
+  release ask for the repair, exactly as before the mouse feature, and so does a button release the
+  bindings themselves swallowed, their pairing of it with a press they tracked since the last state
+  clear, which keeps their view of the chord's keys whole. Every other event that settles a debt (a
+  release swallowed only for a debt from before a state clear, a release let through, a new press that
+  forgives the debt) asks for the mouse hook's sync alone, and a renewal that finds the hook gone asks
+  for nothing (it removes a drain-only hook itself). Round 6 had a release swallowed only for such a
+  debt ask for the repair as well; that is the same harm (the chord held through a UAC prompt, then
+  Back released while Ctrl is still held), so it asks for the sync alone too. Round 8 added
+  `MouseButtonRound8Tests`, the two `Start_releases_no_key` service tests and
+  `Start_removes_the_drain_only_mouse_hook_without_releasing_a_held_key`.
+- **The key repair is excluded from binding capture, not just checked against it** (review round 9,
+  A11). A check alone could be overtaken: a legitimate repair pass (Left Ctrl and Back bound, Back
+  released while Ctrl is held) read "capture does not own input", then Set was chosen and the engine
+  applied capture, clearing its key view, and the pass went on to find Left Ctrl down in Windows and
+  absent from the engine and sent a Ctrl-up during the capture; and capture's end was published before
+  both machines had applied it. Now capture's start and the repair's key-ups are serialized on one
+  gate that only the requesting threads use (`HotkeyService._repairGate`): the repair
+  (`SuppressedKeyReconciler`) judges and sends one key at a time inside it, and checks inside it,
+  before the key's reads and again after them, before the key-up (`HotkeyService.KeyViewIsWhole`),
+  that no capture start is being admitted, capture does not own input and a hook runs at all.
+  `HotkeyService.AdmitCapture`, on the UI thread, first raises an admission count (which stops the
+  repair at its next check), then takes the gate (which waits for the one key-up that may already be
+  on its way) and publishes and posts the request inside it, so every key-up is sent before capture is
+  requested or not at all, and the engine clears its view only after. Capture owns input from that
+  request until the current engine has applied the latest capture request with both machines
+  (`HotkeyEngine.AppliedCaptureGeneration`, published after the second machine;
+  `HotkeyCommandRouter.CaptureOwnsInput` compares it with the router's latest capture generation, so a
+  request not yet applied, start or end, counts too, and a replacement engine starts with the latest
+  already applied). The wait for the gate is bounded, 250 ms: a key-up lasts as long as the low-level
+  hooks Windows passes it through (for injected input the context "switches back to the process that
+  installed the hook", then "back to the application that generated the event", LowLevelKeyboardProc;
+  Scribe's own keyboard callback passes a marked key-up on at once; each other hook has up to
+  LowLevelHooksTimeout, at most 1 second since Windows 10 1709, and is removed if it takes longer), and
+  the UI thread must not wait on them unboundedly. The bound is the gate's only: the rest of the call
+  (the router's lock, posting the command, the log call for the timeout's warning) is not in it. Past
+  the bound capture starts anyway and logs a warning. No deadlock: the hook thread never takes the gate
+  or any lock (an IL test pins it), so a key-up the gate's holder is sending never waits on a thread
+  that waits for the gate; the UI thread holds the gate only while it publishes and posts the request
+  (the router's lock, held by requesters for in-memory updates only, and PostThreadMessage, which does
+  not wait for the hook thread); the gate is taken before the router's lock and never after it; nothing
+  is logged under it; and the UI thread's wait ends at the bound even if another program's hook were
+  waiting on it.
+- **Every key-up the repair sends is conditional on the key view it judged** (review round 10, A12).
+  The capture checks alone left an ordering: a legitimate pass held up before its reads (or behind an
+  earlier key's slow SendInput, which another program's hook can stretch to its timeout, so the gate
+  can be held past 250 ms), Set timing out and publishing capture, the hook applying it, the user
+  cancelling and the end applied, then the pass finding Left Ctrl down in Windows and absent from the
+  cleared view with no admission pending and the generations equal, and sending a Ctrl-up. So the key
+  view has an epoch (`HotkeyEngine.KeyViewEpoch`): the owner takes a new one, with one interlocked add
+  on a counter shared by every engine and one volatile write, no lock and no allocation, immediately
+  before its machines clear or replace their keys, at every site that does: new bindings
+  (`ApplyBindings`, which clears the standard machine and updates, resets, creates or removes the
+  dictation-only one), capture's start and end (`ApplyCaptureMode`) and a desktop reset
+  (`ApplyDesktopSwitch`); a new engine starts with one of its own (a reinstall), and `EndEngine` leaves
+  no engine at all. A mouse hook found gone (`OnMouseHookLost`) forgets buttons, never keys, which the
+  repair never judges, so it takes none. A repair request carries the epoch its trigger was seen at
+  (the hook callbacks pass their engine's through `HotkeyReconcileSignal.Signal`, and a dictation's
+  release carries it in its `QueuedTransition`). Each hook installation has its own signal (review
+  round 11, A14): the signal's one word keeps the latest request, so a callback of a replaced
+  installation, whose thread can outlive the reinstall's 2 s join, would otherwise replace the
+  replacement's pending request with its own, which the pass then refuses, leaving a real leak for the
+  next trigger. The installation makes its signal and its hook thread disposes it once its hooks are
+  gone. `KeyViewIsWhole` checks, before the key's reads
+  and again immediately before the key-up, together with the capture checks and a fresh read of
+  whether the hook now holds the key, that the current engine's view still has that epoch. Any change
+  stops the rest of the pass, and nothing replays it. That also covers a clear between the trigger and
+  the pass (it waits 25 ms, longer on a busy pool) and closes the desktop reset and the reinstall that
+  were not excluded the way capture is. The engine takes the new epoch before the first key is cleared,
+  so reads that saw a cleared key make the check after them see the new epoch. What no check can
+  close is the time between the last check and the SendInput itself: a key-up already past that check
+  was decided on a view that was whole, and it is still sent if the view is cleared in that time, or if
+  the user presses that very key again in that time. Then it releases a key the user holds, and
+  Windows sees the key down again only when another down event for it reaches Windows: for a
+  modifier such as Ctrl that can mean releasing the key and pressing it again, since a modifier does
+  not dependably autorepeat into a fresh down, and a bound key's repeats stay swallowed
+  (`ChordStateMachine.Process` keeps a swallowed keystroke swallowed through its repeats) (review round
+  11, A15). That is also the one key-up that can arrive after capture's start
+  when capture stops waiting for the gate. **A pass that is stopped is not run again**, at capture's
+  end or after any other clear: the keys held across the clear are missing from the engine's view then,
+  so a replay would send key-ups for keys the user still holds; a real leak is repaired at the next
+  trigger (a key release the bindings swallow, or a dictation's release). A pass that reaches its check
+  after Stop has no engine and releases nothing; a key-up already past its last check when Stop runs
+  is still sent. `MouseButtonRound9Tests` and `MouseButtonRound10Tests` (barriers inside the scripted
+  Windows view, after the reads, and inside the key-up) pin it, and so does
+  `Start_runs_no_repair_again_when_capture_ends`, which counts repair requests where they are made,
+  on the asking thread (the signal counts each it is asked for, the transition queue each Deactivated
+  that will ask the consumer, the service each pass it schedules), and takes the hook thread's renewal as
+  the acknowledgment that capture's end is applied: no sleep, and no drain through the pool, whose
+  registered wait re-arms before its callback runs, so a later pass proves nothing about an earlier
+  callback (review round 11, A13). `Start_serves_the_current_installation_s_repair_whatever_an_obsolete_one_asks_for`
+  pins A14. In memory, `HotkeyEngineHarness` takes the passes its service schedules through the service's internal
+  `scheduleReconcilePass` seam, on the thread that schedules, and a test runs them on its own thread
+  (`RunReconcilePasses`), so no in-memory test waits on the pool (review round 3, item 6: a 10 s wait for the pool's pass
+  failed under load) and no harness pass runs after its test; production keeps `Task.Run` and the 25 ms settle, and the
+  `Start_` tests that wait for it there say whether it was never scheduled or scheduled and never finished. The mouse
+  filter's tests read what it asks for on the asking thread (the signal's `RepairRequests` and `SyncRequestsForTests`, and
+  the word its hold keeps), so only the signal's own tests wait for its pool delivery. Nothing a pass throws leaves the
+  signal's pool callback (`HotkeyReconcileSignal.RunPass`): an exception escaping a pool callback ends the process, which a
+  test's disposed recorder once did to the whole test host.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
   epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
   the lifecycle gate, and the router ignores a request older than the last one applied.
-- **Only a bare Page Up or Page Down lets modified presses through.** For a binding whose only key is
-  Page Up or Page Down, with no modifier (the shipped defaults, or either key bound in Settings),
-  `ChordStateMachine` refuses the press that would complete it while any Ctrl, Alt, Shift or Win key
-  is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that whole
-  keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
-  Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
-  dictation neither ends it nor lets the key through. No binding but a bare Page Up or Page Down
-  changes: every other one (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as
+- **Only a bare Page Up, Page Down or mouse button lets modified presses through.** For a binding whose
+  only input is Page Up, Page Down or a middle, Back or Forward mouse button, with no modifier (the
+  shipped defaults, or any of those bound in Settings), `ChordStateMachine` refuses the press that
+  would complete it while any Ctrl, Alt, Shift or Win key is held, or a Narrator key (Caps Lock,
+  Insert, or NonConvert on a Japanese 106 keyboard): that whole keystroke or click reaches the app and
+  starts nothing, so Ctrl+Page Down still switches tabs, Narrator+Page Down still changes views, and a
+  Ctrl or Shift click of a bound button still means what it means to the app. One rule for both
+  (`IsBarePassThroughBinding`). Only that press is judged, so a modifier pressed during a dictation
+  neither ends it nor lets the input through. No other binding changes: every other one (F9,
+  Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord, a key and a button together) matches exactly as
   before whatever else is held, and widening the rule would change them. An install that had already
   bound Page Up or Page Down on its own gets the pass-through too, because 0.4.3's capture stored that
   key exactly so: after the upgrade its Ctrl, Shift, Alt, Win or Narrator key plus the Page key reaches
@@ -750,10 +1200,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A modifier counts only while Windows agrees it is down.** A hook is called only for input on its
   own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
   prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
-  a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`, the one native
-  query the keyboard callback makes besides `CallNextHookEx`: only on such a press, never on a bare
-  one, and never about the key the callback is for, whose async state Windows updates only after the
-  callback returns.
+  a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`: only on such a
+  press, never on a bare one, and never about the key the callback is for, whose async state Windows
+  updates only after the callback returns. The only other native read the hook callbacks make besides
+  `CallNextHookEx` is for the release of a mouse button whose press was swallowed (the owed-release
+  bullet above): `GetAsyncKeyState` about that very button, where the state before this release is
+  exactly the answer wanted.
 - **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
   out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
   its message loop and calls `HotkeyEngine.OnDesktopSwitchNotice` (which ignores a call from any other
@@ -782,7 +1234,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   before a reinstall, and a shared epoch let that late switch discard the replacement's first genuine
   press. Without all this a key held through Win+L or a UAC prompt
   kept the microphone recording while the PC was locked, and its stale state swallowed the next press
-  as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
+  as an autorepeat. A switch with nothing recording starts and stops nothing. A mouse button whose press
+  was swallowed keeps its release owed through the reset (see above), so a side button held through a
+  UAC prompt and let go afterwards navigates nothing, even with the elevated app in front, unless the
+  mouse hook was also found gone meanwhile (the watchdog keeps renewing it while the prompt is up):
+  that drops the debt, so the release reaches the app and can become `WM_APPCOMMAND` (Grok's G4 in
+  round 5; since round 7 such a release goes through whoever is in front). The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
   Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
@@ -798,10 +1255,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   ends in white space (any `char.IsWhiteSpace`: a space, a tab, a line break, a no-break space and every other Unicode
   space), so a snippet ending in a line break gets nothing. It keeps the text for recovery first, as dictated, then
   checks cancellation, then types. The controller inserts through nothing else: it hands history, the `Dictated` event
-  and the playground's report `DictationInsertionResult.Recorded`, and the spaced text (`DictationInsertionResult.Typed`)
+  and Try dictation's report `DictationInsertionResult.Recorded`, and the spaced text (`DictationInsertionResult.Typed`)
   is internal to Core, so the shell cannot give it to anything that keeps text. History, the tray's recent dictations,
-  the recovery notice's copy, quick add, usage insights and learning from history never see the space; the playground's
-  Text insertion row says when one was typed. `DictationInsertionTests` drives every insertion path (typing, the
+  the recovery notice's copy, quick add, usage insights and learning from history never see the space; Try dictation's
+  typing step says when one was typed (`InjectionMethodLabel.Describe`). `DictationInsertionTests` drives every insertion path (typing, the
   clipboard paste, its typing fallback, a standard edit control) through the real `TextInjector` and pins the controller
   by source.
 - **The space comes after everything else.** AI cleanup and its guards, the dash normalizer, the dictionary and
@@ -834,7 +1291,45 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   degraded mode that trusts sequence numbers alone.
 - The paste log line carries enum names, counts and booleans only: nothing of the clipboard's content,
   length or format names.
+- **A Remote Desktop or virtual machine client never reaches this path**: it is always typed into (see "Typing into a
+  Remote Desktop or virtual machine session" below), because a remote session reads a pasted clipboard only when it
+  pastes, which can be after the restore.
 
+## Typing into a Remote Desktop or virtual machine session (read before touching TextInjector's pace or key events)
+
+- **Which targets are remote clients is a curated list** (`RemoteClientProcesses`, pure, by process name, like
+  `InjectionTextFormatter.IsTerminalProcess`): mstsc, msrdc (the Remote Desktop client for Windows and the Windows App,
+  whose session windows belong to msrdc), RDCMan and vmconnect (both host the Remote Desktop control), vmware, vmplayer,
+  vmware-view and vmware-remotemks, VirtualBoxVM, wfica32 and CDViewer. Add a name only with evidence that its window
+  forwards the local keyboard into another machine; `RemoteClientProcessesTests` holds the expected list by hand.
+- **Every VK-based event Scribe injects carries a real scan code** (`KeyScanCodes`): text insertion's Shift, Return, Ctrl
+  and V (`InjectionKeys`, read once per insertion from the foreground window's layout through
+  `IInjectionPlatform.ScanCodeOf`), and the leaked-key repair's key-ups (`NativeMethods.MarkedKeyEvent`). Remote clients
+  forward keys by scan code ([MS-RDPBCGR]: a keyboard event's keyCode is "the scancode of the key"), so with wScan 0 a
+  remote session received scan code 0 for all of them. The code is `MapVirtualKeyEx` with `MAPVK_VK_TO_VSC_EX`; an 0xE0
+  prefix sets `KEYEVENTF_EXTENDEDKEY`, as does the list of keys the repair always sent extended (the navigation keys share
+  their scan codes with the keypad); an 0xE1 key (Pause) keeps none. `KEYEVENTF_SCANCODE` is never set, so Windows still
+  takes the key from wVk and a local app gets the same keys as before. The watchdog's probe keeps no scan code.
+- **Typing into a remote client is paced for the remote session** (`TypingPace`): at most 16 code units per SendInput
+  call (`TextInjector.RemoteChunkChars`), 20 ms apart (`RemoteSettleMs`), with no word-boundary backoff, against 50 units
+  5 ms apart for every other target, which is unchanged. The user's 0.4.3 log showed 184 characters (368 events) typed
+  into msrdc in 99 ms, in four calls of up to 100 events, and the remote input stack wedged about a second later; nothing
+  documents a rate a remote session can take, so the remote pace stays far below that burst. The extra time is the
+  settles, measured over the same text: 220 ms for 184 characters (15 ms locally) and 940 ms for 766 (75 ms); the events
+  are the same. `ChunkLength` never splits a CRLF pair or, for every target, a surrogate pair: a local batch ends one
+  unit earlier only where a 50-unit cut would have fallen inside a pair, which it used to (`TypingPaceTests`).
+- **The log says what it was, shapes only.** The recording-start line carries `remote=True|False`, and the `text.inject`
+  trace carries `inject.remote`, `inject.paste_bypassed`, `inject.batch_units` and `inject.batches` (typing), and the counts
+  `inject.line_breaks`, `inject.surrogate_pairs` and `inject.control_chars` (`InjectedTextShape`), all allowlisted in
+  `TraceTagPolicy`. Never the text, never a window title.
+- **A remote client is always typed into, never pasted into, whatever the insertion setting** (review round 2, item 6).
+  The Remote Desktop clipboard uses delayed rendering ([MS-RDPECLIP]: "The data associated with the Clipboard Format is
+  sent only if a paste operation is executed"), so the remote app's paste reads the local clipboard over the connection,
+  after its Ctrl+V has crossed it, while Scribe restores the user's clipboard 130 ms after its Ctrl+V
+  (`PasteSettleDelayMs`); with real scan codes the Ctrl+V does reach the session, so it could paste what was put back,
+  possibly something private, instead of the dictation. So `TextInjector` types whenever `TypingPace.For` gives the remote
+  pace, never borrows the clipboard there, and the trace says so (`inject.remote=True`, `inject.paste_bypassed=True`;
+  `RemoteInsertionDiagnosticsTests`, `TypingPaceTests`). Every other target keeps the setting's method exactly.
 ## Storage maintenance (read before touching history or the database)
 
 - **The schema stays at `user_version` 7; never raise it for an additive change** (pattern P-11 in the
@@ -867,6 +1362,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   after real passes. `HistoryRepository.PruneOlderThan` counts no deletion either: production retention
   never calls it (maintenance deletes through `DeleteEntriesOlderThan` and counts that itself), only the
   soak harness does, so nothing PRIVACY.md describes may be routed through it without counting.
+- **Deleted history is announced after the commit, and nothing on the delete path waits for it.**
+  `HistoryRepository`'s `Delete`, `Clear`, `DeleteEntriesOlderThan` and `PruneOlderThan` publish a `HistoryDeletion`
+  through `HistoryDeletionNotifier` right after their SQL commit: a lock-free enqueue, still inside the write scope, so no
+  history write commits in between. The notifier delivers on its own task, in order and outside the write gate, and
+  logs by shape and swallows a subscriber that throws, so a slow or failing subscriber never reaches the delete path or
+  the history writer's thread. Subscribers (the tray's recent dictations, Add to dictionary) only update memory or post
+  to their window's dispatcher; none calls the repository or waits on the UI thread. Publishing is not
+  `StorageMaintenance.NoteDeletion`: the checkpoint accounting above is unchanged, and `PruneOlderThan` still counts no
+  deletion.
 - **The close only tries to empty the WAL.** `ScribeDatabase.Dispose` runs a final `TRUNCATE` checkpoint
   and, once the pool is cleared, logs its result row's shape (the outcome, SQLite's page counts, and
   whether the file outlived the close). It skips the checkpoint when the write gate cannot be had within
@@ -920,6 +1424,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   callers that each loaded the document and then save the whole of it still write last-wins for every
   field, which is why read-modify-write callers go through `Update`, and why the AI switch has its own
   intent ordering below. Settings writes still never take the maintenance write gate.
+- **Library state has its own commit, which never writes the editing document.**
+  `ISettingsRepository.CommitLibraryState` runs whole under the same lock with BEGIN IMMEDIATE and never takes the
+  maintenance write gate. It checks the library generation, writes the library rows and, only when the payload changes
+  the enabled list, patches that one list in the stored document, refusing before it writes anything when that document
+  is missing, lost or unreadable. The library service's adoption and wrappers commit through it, and so do a word pack
+  Save's reference repairs (`WordPackSaveProtocol`), never `SaveBundle(_settings, ...)`: a settlement that runs after a
+  failed Save must never store that Save's unsaved fields.
 - **The AI switch invariant.** The newest intent for the AI cleanup switch wins, ordered by when the
   user made it, from the tray or in the Settings window, and a whole-document save never writes over a
   stored value its window neither showed nor changed. A tray change takes a revision
@@ -936,31 +1447,35 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   all there, a picked AI cleanup provider among them, while dictation keeps running on what is stored. So
   `_applySettings(_settings)` runs in one place, right after `SaveBundle` returns. Anything else in the
   window that needs settings applied goes through `StoredSettingsReapply`, which applies the settings as
-  stored, or, while `LastLoadFailed`, applies none and has the controller reload only the vocabulary
-  (`DictationController.ReloadVocabulary`), on the settings in use, library selection included, because the
-  defaults standing in are no more the user's choice. The Usage page's Add used to apply `_settings` to
-  reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to the
-  provider nobody saved.
+  stored, or, while `LastLoadFailed`, applies none and has the controller rebuild only the vocabulary
+  (`DictationController.ReloadVocabulary`, a new generation from the committed library vocabulary and the stored
+  dictionary), because the defaults standing in are no more the user's choice. The Usage page's Add used to apply
+  `_settings` to reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to
+  the provider nobody saved.
   `StoredSettingsReapplyTests` drives that failed Save and the Add through a real repository and cleanup
   service; `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it` pins the
   window.
-- **The library selection is the one in use.** The post-processor (`ITextPostProcessor.Reload(ids)`), the AI
-  glossary (`DictationController.BuildGlossary`), the usage report and quick add's conflict check each pass the
-  enabled library ids of the settings dictation runs on to `IDictionaryLibraryService.GetEnabledLibraryEntries(ids)`,
-  never a fresh read of the stored document: a document that turns unreadable mid-session reads as the defaults,
-  which switched the user's libraries off and the default AI libraries on and sent their terms to a remote provider.
-  A parameterless `Reload()` (quick add, learning from history) keeps the last selection; the parameterless
-  `GetEnabledLibraryEntries()` returns none while `LastLoadFailed`, and only a post-processor no owner has given a
-  selection falls back to it. `LibrarySelectionInUseTests` pins both consumers through the real library service and
-  post-processor, and the callers by source. This is the seam the dictionary library program replaces with a
-  vocabulary source.
+- **The library vocabulary is the committed one, never the stored document.** Every dictation's vocabulary generation
+  is built from one `ILibraryVocabularySource.Current` snapshot (the library service's committed vocabulary) and one
+  read of the personal dictionary, so no consumer re-reads the stored document per request, and a dictionary-only
+  reload keeps the library vocabulary. Release 0.4.4 passed the ids of the settings in use
+  (`IDictionaryLibraryService.GetEnabledLibraryEntries(ids)`, `ITextPostProcessor.Reload(ids)`) for the same reason:
+  a document that turns unreadable mid-session reads as the defaults, which switched the user's libraries off and
+  the default AI libraries on and sent their terms to a remote provider. That seam now serves only the
+  post-processor's legacy reload and the usage report's path for a library service that is not a vocabulary source;
+  quick add's conflict check reads the committed `Current.Entries`, and the usage report one `Current` snapshot with
+  its scope. A post-processor no owner has given a selection falls back to the parameterless
+  `GetEnabledLibraryEntries()`, which is `Current.Entries`: on defaults, what a surviving state row enables, or
+  nothing. `LibrarySelectionInUseTests` pins both guarantees through the real library service and post-processor,
+  and the callers by source.
 
 ## Dictionary libraries: order and precedence (read before touching library order)
 
-- **What the list shows and what wins are separate.** The Libraries page lists built-in and custom libraries in one
-  A to Z list (`LibraryOrdering`: `CompareInfo` of the current culture with `IgnoreCase | NumericOrdering`, then
-  ordinal name, then ordinal id), with the ordering captured when the page loads, the source ("Built-in" or "Your
-  library") under each name, no sortable column, and no row that moves when its box is ticked. Which library supplies
+- **What the list shows and what wins are separate.** The Word packs tab (the Libraries page until 0.4.4) lists built-in
+  and custom packs in one A to Z list (`LibraryOrdering`: `CompareInfo` of the current culture with
+  `IgnoreCase | NumericOrdering`, then ordinal name, then ordinal id), with the ordering captured when the tab loads, the
+  source ("Built-in" or "Imported", `WordPackUiText.Source`) under each name, no sortable column, and no row that moves
+  when its box is ticked. Which library supplies
   a spoken form is `LibraryPrecedence`: the built-ins in the frozen `BuiltInOrder`, then custom libraries by file
   name. Never derive a winner from the list's order.
 - **The frozen list.** `BuiltInOrder` is the order 0.4.3 composed the built-ins in (category, then name), frozen as
@@ -971,17 +1486,19 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests` fails until every shipped id
   appears exactly once, every other listed id is retired, the catalog follows the order with the retired ids left
   out, and the C# lists agree with the fixture.
-- **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
-  file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
-  comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
+- **Custom libraries compare as file names**, not bare ids: their physical file name (`DictionaryLibrary.FileName`,
+  which is `id + ".csv"` for every custom library except a hand-placed file whose logical id was remapped away from a
+  built-in id, which keeps ranking by its own name). The loader has always read them in file-name order, and '-' sorts
+  before '.', so "team-terms-2.csv", the file a second import of the same library gets, comes before "team-terms.csv";
+  comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
   `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
   prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)
   is the exception by design: it takes entries, not libraries, and a flattened list has no library of origin left to
   order by, so the window hands it `ComposeLibraries` over `LibraryPrecedence.Enabled` and the hint never reorders
-  them. The window also hands the cleanup scan its libraries through `LibraryPrecedence.Enabled`, and saves the
-  enabled ids in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display,
-  reversed and random orders.
+  them. The window saves the enabled ids in precedence order, never in display order (and, while the old window is
+  contained, see Word packs, hands the cleanup scan no library). `LibraryOrderInvariantTests` hands the Core calls
+  display, reversed and random orders.
 - **The cleanup switches a library off only when that cannot change what dictation writes.** `LibrarySwitchOffCopy`
   decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
   first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule
@@ -1017,7 +1534,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   every loaded library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so
   unticking one of the two while the other's row stays ticked switches nothing off, and unticking the last row with
   the id switches both off. The window passes every row and every loaded library, leaves the rows of libraries kept on
-  ticked, and Core decides.
+  ticked, and Core decides. While the old window is contained (see Word packs) its cleanup does not call it, and the rule
+  stands for the Word packs page.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
@@ -1030,6 +1548,109 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `localizedStandardCompare` and the same two tie-breaks; until it lands, the Dictionary Libraries and Dictionary
   cleanup rows of `macos/PORTING-PLAN.md` are stale, and, as the mono-repo note says, nothing keeps the C# and Swift
   orders in step.
+- **One key per library term.** `LibraryTermKey` is 0.4.3's key: a spoken form trimmed (`string.Trim`, the Unicode
+  White_Space set), compared `OrdinalIgnoreCase`, with inner white space kept, so an older file's row with a double space
+  or a tab inside it keeps 0.4.3's matching and de-duplication and never suppresses a row that matches (review finding
+  A10). The editor commits every typed Spoken value in `LibraryTermKey.Normalize`'s form (trimmed, each inner run of white
+  space collapsed to one space), so for everything written from now on the key and a collapsing comparison agree. The
+  key keeps the spelling it was made from and its `ToString()` shows only the length, so a key handed to a log template
+  leaks nothing. The personal dictionary's merge trims and compares case-insensitively too.
+  `tests/fixtures/libraries/term-keys.json` pins the key and the commit form for the macOS port to read in stream M1 (it
+  reads no fixture yet), including the letters where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s,
+  final sigma).
+- **Library metadata stays readable by 0.4.3.** A managed library file stores its name, category and description as raw
+  `# key: value` comment lines, and 0.4.3's CSV reader treats a double quote on them as a quoted field, so an unpaired
+  quote hides every row from it. `LibraryMetadata` holds the rule (refuse a typed double quote; a header 0.4.3 reads back
+  has an even number of them), checked against `Legacy043LibraryCsv`, a verbatim copy of 0.4.3's reader in the tests.
+
+## Word packs: the library model (read before touching library storage, composition or the editor's deciders)
+
+- **The product calls libraries word packs** ("Word packs" as a title, "word pack" in a sentence, the maintainer's
+  decision). Every text the deciders show says so; types, ids, file names, settings keys, log text and the misuse
+  exceptions keep "library", and so do release 0.4.4's `Import` and `Remove` wrappers, which the old window shows beside
+  its own "library" wording until W2 replaces them. An unnamed import is "Imported word pack"
+  (`LibraryNaming.ImportedLibraryBaseName`). Ids follow the unchanged rules and are never derived again: a word pack
+  created or imported on the page takes `custom-<slug>` of the name it is made with (`custom-new-word-pack`), and the
+  `Import` wrapper keeps release 0.4.4's unprefixed slug (`imported-word-pack`).
+- **One service over four pure parts.** `DictionaryLibraryService` is `IDictionaryLibraryService`,
+  `ILibraryCatalogStore` and `ILibraryVocabularySource`, one singleton, built by `LibraryServiceParts.Default` from the
+  library CSV codec (`LibraryCsvCodec`), the built-in overlay (`BuiltInLibraryOverlay`) and composition and policy
+  (`LibraryComposer`), which are singletons in the container too, over `PhysicalLibraryFileSystem`. The editor's deciders
+  (`LibraryWorkspace`, `LibraryEditor`, `LibraryImportPlanner`, `LibraryNaming`, `LibraryLayoutPlanner`,
+  `SettingsCloseGuard`, `LibrarySearch`, `LibraryTermSort`) are pure and are what the Word packs page drives; their public
+  shapes are the Settings redesign's to build on, so a change to one goes through whoever owns that stream. Tests build
+  catalogs, drafts and change sets through `InternalsVisibleTo`; the App cannot.
+- **Tiers and legacy markers (decision 1, behind `LibraryDecisions`).** Authored rows (custom rows, and edited, pinned,
+  added and no-longer-shipped rows of a built-in; an off row supplies no rule) beat shipped rows. A custom row that
+  contradicted a built-in at the upgrade carries a legacy marker and competes after the shipped rows until the user
+  chooses "Use my spelling", so no replacement winner moves on upgrade. The AI glossary can change: authored terms enter
+  the on-device model's 80 slots ahead of shipped ones. `tests/fixtures/libraries/composition-golden.txt` pins both.
+- **Built-in edits documents.** `edits\<id>.json`, version 1, hold the user's intent per row (edited, added, pinned, off),
+  merged field by field with later shipped versions (a question only where both sides changed a field differently); the
+  previous document stays as `<id>.previous.json`. An unreadable or newer document pauses only its built-in, with no rows
+  at all: the service never calls `Apply(shipped, null)` for a document that exists, so a term the user turned off never
+  comes back. A document another app holds open keeps the content last read, or nothing at a fresh start.
+- **A library Save is a journal, and only a whole Settings Save makes one.** `PrepareSave` writes redo images and a
+  manifest `journal\g<G>-<id>.manifest.json`; `SaveBundle` with the payload commits generation G
+  (`libraries.generation`) with the local state (`libraries.state`) and the file ids (`libraries.file_ids`) in the
+  settings transaction; `CompleteSave` installs every file from whatever state it finds, never overwriting what another
+  app wrote (that is kept as a new word pack, off, or set aside), and recovery resumes an interrupted one. The witness
+  `journal\state.witness` is written before the first commit and never deleted. Journal names are parsed whole, never
+  globbed (`LibraryJournalNames`). Only `LibraryJournal` and `LibraryInstaller` touch these files.
+- **The local state is the truth; the document's list is a projection.** Enabled word packs and AI permission live in
+  `libraries.state` by logical id. `EnabledDictionaryLibraryIds` is only the downgrade-safe list older builds read (a
+  library kept from AI cleanup, or a hand-placed twin not both on and permitted, is left out), and once a state row exists
+  only a library Save or an adoption writes it: `Save`, `Update` and a settings-only `SaveBundle` keep it.
+- **The Word packs page stages library state and saves it through the library payload.** Word pack On and AI permission
+  live in the library workspace, not in ad hoc settings rows. A Settings Save captures one `LibraryChangeSet`, prepares
+  the journal, commits its payload through `SaveBundle`, completes the journal, and calls `MarkSaved` only for a Save
+  that stands. A settings-only Save keeps the stored projection unchanged. The overlap review is never part of Save, and
+  dictionary cleanup does not switch word packs off or copy their terms into the dictionary.
+- **AI permission (decision 2) is bound to content.** Built-ins are on; created, imported, restored and discovered word
+  packs off; a duplicate inherits; and custom libraries that existed at the upgrade stay on. A file whose bytes are not
+  the accepted ones (changed outside Scribe) loses its permission and is turned off; Scribe records the hash of everything
+  it writes in the same commit, and drops the hash of an edits document it removes, so its own writes never read as a
+  replacement. A word pack a Save created that another app's file pushed to a new id takes the draft's choices with it at
+  the next adoption in the same process; after a restart before that, it is simply a word pack that is off.
+- **The vocabulary and its admission point.** `ILibraryVocabularySource.Current` is published after every commit, load
+  and recovery that changes it, possibly at the same generation, so a consumer never skips a publication because the
+  generation matches. Once a vocabulary is published, `Current` is a lock-free read; before that, its first read loads
+  the catalog synchronously (file I/O under the library lock), so it is not I/O-free. That first read is W-V's first
+  vocabulary build, on a worker, which the app awaits in `DictationController.PrepareAsync` (at most
+  `VocabularyPublisher.StartupDeadline`, 30 s) before the tray and the hotkey; nothing on the dispatcher reads the
+  source before it. The first load measured about 4.5 ms at 1,549 terms, 21 ms at 10,000 and 187 ms at 100,000, so the
+  deadline needs no change. Dictation takes every library through the publisher (see "Library vocabulary admission"),
+  never through release 0.4.4's seam, and every outbound cleanup request is handed over only through `TryHandOff` with
+  the scope it was admitted under. Committed content that cannot be read right now is held back (no rows, no hash), and
+  dictation runs on the personal dictionary alone until a recovery can read it again: `LibraryRecoveryRetry` asks
+  storage maintenance for a pass right away, then again 30 s later doubling to 5 minutes while the hold-back lasts, and
+  stops when content is back or shutdown begins. A request maintenance cannot take yet stays owed: the app's first
+  publication comes from that first build, before maintenance is resolved and started, so the request is made when
+  maintenance's `Start` runs, and the startup pass comes after the 10 s trigger delay rather than the first pass's 30 s.
+  `LibraryVocabularyRealSourceTests` runs W-V's publisher, dictation pass and admission point over the library service
+  itself: a hold-back and a restoration at the same generation, a dictation that keeps its own generation across a Save,
+  a one-off completion under a narrowed scope or a stale recipient, and store=false on the Responses surface.
+- **Formats.** A managed file this version writes carries `# scribe-format: 2` and 0.4.3's raw metadata lines; one without
+  the marker is read exactly as 0.4.3 read it. An export is UTF-8 with a byte order mark, quoted metadata and the
+  reversible formula guard (`# formula-guard: 1`); an import decodes strictly with an ANSI fallback. Every write is encoded
+  before any destination is opened, so a refusal never truncates a file. The personal dictionary's export keeps its
+  replacing encoder until the editor refuses ill-formed text there too.
+- **Logging.** The library service logs counts, generations, enum names and `FailureShape` text only, never a name, id,
+  term, file name or path; `LogPrivacyGuardTests` scans `Core\Libraries`, `Core\Settings`, `Core\Vocabulary`,
+  `PostProcessing\DictionaryLibrary*.cs` and `PostProcessing\TextPostProcessor.cs`, and `LogCallScanner` holds the one
+  file-failure template.
+- **Release gate: no release contains this library model without W-V's vocabulary publication.** Without W-V,
+  dictation selected word packs through release 0.4.4's seam (`GetEnabledLibraryEntries(ids)` with the document's
+  list, the projection), which left an enabled word pack kept from AI cleanup, or a remapped twin, unapplied on this
+  PC, and filtered by the ids its caller passed rather than by the current AI permission, so a word pack whose
+  permission was withdrawn since could still reach the glossary until the settings were applied again. W-V (approved at
+  a9e0b9e on `win/libraries-wv-r3`) is merged on this line, so dictation follows the committed vocabulary and its
+  permission gate. Before any release from a line carrying the integration, check that a9e0b9e is an ancestor of the
+  release head too. The Store build's journal (the redirected `LocalCache` folder, native and checked replace) is
+  unverified until the desktop gate exercises it.
+- **The macOS port does not mirror this yet.** The `macos/PORTING-PLAN.md` rows for dictionary libraries, library CSV
+  import and export, and the dictionary cleanup are stale until stream M1, which reads the fixtures under
+  `tests/fixtures/libraries/` (`edits/`, `csv/`, `slugs.json`, `term-keys.json`).
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
@@ -1047,7 +1668,7 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   kept as the write-once recovery copy, though: it holds nothing to recover and would shut out the next unreadable
   document that does, so a blank copy also gives way to the first one with content.
   `DefaultHotkeyTests` pins each case.
-- **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
+- **Restore default shortcuts** (Settings, Dictation, Shortcuts) stages `DefaultHotkeyRestore.Restore` like any other edit on the
   page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
   the result at once. Its notice compares the defaults with the page and with the saved settings, so a second press
   or a double click before Save still says Save applies them, and one that only undoes unsaved edits says so.
@@ -1071,6 +1692,51 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys to it, and the hint says so. Letting a
   short tap through would be a change to `ChordStateMachine` with tests of its own, not a tweak, and it waits on the
   maintainer.
+- **Mouse buttons are bound like keys, and captured in Core.** Change (the capture button, Set until 0.4.4) records
+  keys and the middle, Back and Forward buttons by `HotkeyCaptureSession` (Core, tested): up to two inputs in the
+  order they go down, set once all are up,
+  the left and right buttons refused with a reason and left their meaning (the window only shows the reason for a
+  click on the capture box itself), and a chord recorded with a button first warns that the button still reaches the
+  app under the pointer (a chord is swallowed from the input that completes it). Beyond two inputs it records only
+  Ctrl, Alt and Shift keys and at most one other input, and builds that as the one input with modifier flags
+  ("Ctrl+Shift+F13"), matched on either side of each modifier and for the generic codes injected input can carry; one
+  or two inputs stay the exact physical binding every build captured. Only the input that completes a shortcut is
+  kept from Windows and the app: its key when the modifiers go down first, as a mouse's software and a person send
+  one; with the key first (F13, then Shift, then Ctrl) the key reaches the app whole and the last modifier is kept
+  instead, and the capture warns when it records that order. A Windows key is never one of more than two
+  inputs: a Windows key Windows sees pressed and released with nothing
+  between opens Start. For the same reason a shortcut of Shift with Ctrl or Alt warns
+  (`HotkeyCaptureSession.LayoutSwitchWarning`) that its modifiers can still switch the keyboard language or layout;
+  sending a masking key, as AutoHotkey does, would remove that and is not done. The Settings window maps its own
+  Preview mouse events, and the title bar's `WM_NCMBUTTON*` and `WM_NCXBUTTON*` messages, into it, so a button
+  pressed with the pointer anywhere on the window counts, and it marks a recorded button's events handled, so a side
+  button's release never becomes a Back or Forward command there. `KeyNames` names them "Middle mouse button",
+  "Mouse Back (button 4)" and "Mouse Forward (button 5)", and the capture stores that name, which is what 0.4.3 and
+  0.4.2 show for the binding (they show the stored name). Those builds have no mouse hook, so a button binding never
+  fires in them; nothing in them throws on it or rejects it.
+- **Windows delivers five mouse buttons, so every other button binds as the key it sends.** Microsoft says so:
+  "Windows supports mice with up to five buttons" (`WM_XBUTTONDOWN`), the mouse features it supports are "Buttons 1-5"
+  and the wheels (keyboard and mouse HID client drivers), the low-level hook and `RAWMOUSE` carry only those
+  (`ulRawButtons`: "The Win32 subsystem does not use this member"), and "The system opens all keyboard and mouse
+  collections for its exclusive use", so no app reads a mouse's own reports. Raw Input's `RIM_TYPEHID` is for input
+  from "some device that is not a keyboard or a mouse", which for a mouse means a vendor-specific collection only its
+  vendor's software understands. A button past the fifth therefore reaches Scribe as the keyboard input its software
+  or firmware sends: F13 to F24, a media or browser key, or a shortcut with modifiers, each bound, named and swallowed
+  like any key (`MouseButtonHotkeyTests`, `HotkeyCaptureSessionTests` and the CI injection tests pin it). Raw Input
+  was assessed and left out: it cannot suppress input, needs a window, and has nothing generic to read. The Settings
+  hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
+  directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
+  here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
+  modifier. A release owed to a swallowed press stays swallowed through desktop switches, capture and any rebinding (one
+  that leaves no mouse binding keeps the drain-only hook for it), unless Windows shows that button down when it is let
+  go, which means a press reached Windows unseen and its release is due; a press or release made while Windows has
+  removed the mouse hook, before the next successful renewal, can still reach the app, and so does the release of a
+  button held across that time or across a reinstall (the gap dropped its debt: fail-open). The hint's second exception
+  says both in one clause: if Windows briefly stops passing input to Scribe, a click made or held while that lasts gets
+  through (a reinstall follows Windows removing the keyboard hook, so it is such a time too).
+  It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
+  press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
+  so the text promises no more than that. The same holds for a swallowed key.
 
 ## Startup (read before touching OnStartup)
 
@@ -1127,50 +1793,182 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 (`SystemBackdropElement`/`TransparentBackdrop`) and sidesteps the legacy layered path.
 
 - The WPF engine drives the overlay one‑way over a **named pipe** via
-  `src/Scribe.App/Overlay/OverlayProcessClient.cs` (state changes, meter levels, position,
-  hide/exit).
+  `src/Scribe.App/Overlay/OverlayProcessClient.cs` (state changes, outcomes, meter levels, position,
+  hide/exit). **Every line is built by `Scribe.Core.Overlay.OverlayPipeProtocol`**, whose verbs the overlay's
+  `OverlayIpcServer` parses from literals of its own (it has no Scribe.Core reference). `OverlayPipeProtocolTests`
+  holds the overlay's switch to exactly the protocol's verbs, the client to building its lines from the protocol,
+  and each outcome verb to the overlay state of the same name. Add a verb in both, or the overlay logs
+  `unknown command` and ignores it.
 - The pill's screen anchor is set with the `POSITION <name>` pipe command. The wire tokens are the
   value names of **two enums kept in sync by name**: `Scribe.Core.Models.OverlayPosition` (engine)
   and `Scribe.Overlay.OverlayAnchor` (overlay, which deliberately has no Scribe.Core reference).
-  Add/rename values in BOTH or the overlay silently ignores the command. The client replays the
-  applied position right after every pipe (re)connect, so relaunches keep the user's anchor.
+  Add/rename values in BOTH or the overlay silently ignores the command (`OverlayPipeProtocolTests` compares
+  the names). The client replays the applied position right after every pipe (re)connect, so relaunches keep
+  the user's anchor.
 - `Scribe.Overlay.exe` is resolved in this order: `SCRIBE_OVERLAY_EXE` env →
   **installer layout** `AppContext.BaseDirectory\Overlay\Scribe.Overlay.exe` → dev fallback
   walking the repo to `src\Scribe.Overlay\bin\...\Scribe.Overlay.exe`.
 - **Orphan safety:** the overlay is launched into an OS **Job Object** (kill‑on‑close) and
   also runs a parent‑PID watchdog (`--parent`), so the pill can never outlive the engine.
 - **The helper's lifetime is decided in Core, and only there.** `Scribe.Core.Overlay.OverlayHelperLifetime`
-  (built on the internal `OverlayIdleDeadline` and `OverlayLaunchBackoff`) makes every keep, suspend and
-  relaunch decision; `OverlayProcessClient` only carries them out (process start, pipe I/O, kill) and has
+  (built on the internal `OverlayIdleDeadline` and `OverlayLaunchBackoff`) makes every keep, trim, suspend and
+  relaunch decision; `OverlayProcessClient` only carries them out (process start, pipe I/O, trim, kill) and has
   no tests of its own, so a new rule lands in the Core type with a scripted fake-clock test
   (`OverlayHelperLifetimeTests`). The rules:
-    - Every state command resets an idle deadline. After the keep-warm period with nothing on screen the
-      helper is suspended and the next show relaunches it. The app pushes the period with
-      `SetKeepWarm(ReleaseModelsAfterIdleMinutes)` at startup, with every state change and when Settings
-      saves; 0 keeps the helper resident.
-    - Pausing dictation hides the pill, then sends a stamped `ReleaseWhenIdle`, vetoed like the idle
-      suspend.
+    - Every state command resets an idle deadline. When the keep-warm period passes with nothing on screen, a
+      helper kept resident stays: its working set is trimmed (`OverlayDueWork.Trim`,
+      `SetProcessWorkingSetSizeEx(-1, -1)` through the client's own process handle) and it keeps running, pipe and
+      all, so the next pill shows at once. It is kept resident only while the pill is turned on and dictation is not
+      paused (`OverlayWarmup.KeepResident`); otherwise the helper is ended (`OverlayDueWork.Suspend`) and the next
+      show relaunches it. The app pushes the period and the flag together with
+      `SetKeepWarm(ReleaseModelsAfterIdleMinutes, OverlayWarmup.KeepResident(ShowOverlay, paused))` at startup
+      (never paused), with every state change (for the state it renders, so a pause pushes false before its release
+      and the resume pushes true) and when Settings saves (from the state rendered last); 0 never trims or ends it.
+      Never keep it resident while paused (Astra's A5): while paused nothing but the idle deadline ends a helper that
+      came back, and two things bring one back, a setting saved while the pause's outcome shows (its stamped
+      commands veto the waiting release) and a position preview (it launches the helper), so a trim there kept it
+      until the resume. A trim keeps the helper's launch time and cancels nothing, and falls once per idle period.
+      The cost it removes: 84 of 472 dictations in Chris's logs found the suspended helper gone and waited for a
+      launch, 0.5 s on an idle machine and 2 to 11 s under the speech models' reload at the same recording start.
+    - Pausing dictation sends a stamped `ReleaseWhenIdle` right after the shell shows the `Paused` change, vetoed
+      like the idle suspend, and ends the helper whether or not the pill is on. A pause while idle is that change
+      at once, and hides the pill first. A pause that ends a recording, or comes while a dictation is processing,
+      raises no `Paused` change at once: that dictation is processed as usual, and its return to idle is the
+      `Paused` change, which carries and shows its outcome (or hides a quiet discard); the release then waits until
+      the outcome has hidden (below). The resume warms the helper again, and so does applying settings with the pill
+      on and dictation not paused (`OverlayWarmup`), so neither leaves the next dictation to launch it; a warmup on a
+      running helper is only the no-op `WARMUP`.
     - Both are re-checked at the commit point: a command stamped after the deadline was armed, or a
       recording or processing pill that must show, vetoes them. Stamps are taken when a command is
       queued, never in the consumer.
+    - Measured on Chris's PC with the published overlay, from a command's write to
+      `ShowState exit shown=Listening`: a warm helper shows in 6 to 18 ms; a trimmed one, 20 s after the trim, in 8
+      to 11 ms, with about 7,000 soft page faults per show as its working set grows from about 5 MB to about 35 MB;
+      a relaunch (0.4.4's idle suspend) takes 0.5 to 2.2 s, and 3 to 11 s under load. A trial build on a copy of
+      Chris's data, the PC locked, launched the helper once in the whole session (691 ms, at startup), logged
+      `working set trimmed from 129.6 MB to 5.4 MB (ok True)` after 10 idle minutes, and then showed a preview's
+      pill 5 ms after the click reached the app (`ShowState` enter to exit 17 ms), as on a warm helper, its working
+      set back at 49 MB, with no warning or error.
+    - A launch waits up to 30 s for the helper's pipe (`ConnectTimeoutMs`). Under load healthy helpers needed 6 to
+      10 s, and the old 8 s bound killed one 400 ms before its window was built, a 10 s hold with no pill. A helper
+      that dies still ends the wait at once (`ConnectBeforeExit`), and `CloseOverlay` cancels it. ReadyToRun measured
+      no gain for the helper's start (a median 511 against 539 ms, for 43 MiB more payload): don't add it.
     - A failed launch starts a cooldown of 1 s doubling to 60 s. While it runs nothing relaunches the
       helper; if a recording or processing pill must show, one retry at cooldown end replays only the
       latest state and position. A helper lost within 10 s of launching, judged by its process exit
       time, counts as a failed launch; a successful launch resets the backoff.
-- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview and restores the
-  applied position on the first engine command after one.
+    - A dictation's outcome keeps the helper while it is on screen: its command passes how long (the hold plus
+      the fade out, `PillOutcome.OnScreen`), timed from when its write to the helper returns
+      (`OverlayHelperLifetime.OnShown`, after an existing helper's write and a launch's alike): a write can take
+      up to the client's 1.5 s timeout and still succeed, and the overlay starts its own hold only once it has the
+      line. One whose write failed, or that could not be shown, keeps nothing. The idle deadline never falls
+      before it has hidden, and a pause release that nothing vetoes waits for it, is judged again once it has
+      hidden, and gives way to a newer request, a newer command or a recording (`OverlayDueWork.Release`).
+      Without this a pause ended the helper under the "Typed" or "Nothing typed" of the very dictation it
+      stopped.
+    - A lost helper is brought back, by a later command or after a failed write, only while a recording or
+      processing pill must show. An outcome is never replayed, so a relaunch for one would show nothing.
+    - A state command that a newer state replaced is never written. Every request publishes a `DesiredState` of
+      its own, compared by reference, and its command carries it. The client judges the command before the
+      lifetime decides, which takes it as `superseded` so the command never launches the helper on its own
+      account, and again right before the write, after any launch, because a launch replays the latest state
+      first. Without this a helper relaunched for dictation A's outcome replayed dictation B's `RECORDING` and
+      then wrote A's `TYPED` over it. The engine's anchor move writes the applied anchor as it stands when it is
+      written, so it never puts back an older one. A preview's commands carry no state, only their preview's
+      generation, and the preview gate judges them the same two ways: when they are taken, and again right after
+      the launch (`OverlayPreviewGate.ConfirmWrite`), before anything of them is written. Without the second
+      judgement a preview's recording look passed the gate, launched a replacement helper, and was written over the
+      Processing that the launch had replayed for a dictation started meanwhile.
+- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview, both when the consumer takes
+  them and at their write, and restores the applied position on the first engine command after one; an end
+  turned away at its write leaves that restore to the next engine command.
+- **The pill is drawn in Signal On** (the palette decision's section 5, `OverlayWindow.xaml`): an opaque navy
+  gradient face with a sheen over its top 45%, and one edge drawn inside it for the state: 1.5 DIP blue while
+  listening, a 1 DIP neutral hairline while processing and after text was typed, 1 DIP pink when nothing, or not
+  all, was typed. No plate, glow, bloom or red wash, and no record dot. Listening shows five level bars in the
+  icon's proportions (0.26, 0.56, 1, 0.56, 0.26 of 16 DIP over a 4 DIP floor), each laid out 16 DIP tall and scaled
+  by the level with a `ScaleY` render transform, so a level update never runs a layout pass. Processing shows three
+  dots, the same for transcribing and AI cleanup; the words say which. It is the same in both app themes and
+  never follows the Windows accent.
+- **Every colour the pill draws is a `Scribe.Core.Appearance.PillPalette` colour**, and the palette reads every
+  brand value from `ScribeBrand` (decision PD15). The brushes are theme resources in the overlay's `App.xaml`:
+  Default and Light hold the same values, and HighContrast draws system colours only, fully opaque, with a 2 DIP
+  WindowText edge in every state, Highlight for the bars and dots, and WindowText for the icons. WinUI picks that
+  dictionary itself; the window also reads the contrast state in its own process at each show (the state line's
+  `contrast=`). `OverlayPillSourceTests` holds every colour the overlay's XAML writes, read from the parsed
+  document whatever the quotes or syntax (a markup extension's arguments, quoted either way, included), to the
+  palette (Transparent aside) and each brush to its role's colours, the contrast dictionary to system colours,
+  and every theme resource, storyboard target and icon path the window names to one that exists: a missing theme
+  key throws only when the window loads, which no build catches.
+- **Motion follows Windows "Animation effects"**, read with `UISettings.AnimationsEnabled` at each show (the state
+  line's `animations=`): with it on, the pill fades in over 120 ms and out over 150 ms and the processing dots
+  bounce; with it off there are no fades and the dots stand still. The level bars follow the level either way,
+  because that is information. Nothing runs while the pill is hidden: hiding stops the dots and both timers, and a
+  fade out ends in the hide. `ProcessingStoryboard` is the only repeating animation; `PulseStoryboard` is gone.
+- **The whole pill follows Windows text size, as one unit** (WCAG 1.4.4). No TextBlock scales its own text (each
+  sets `IsTextScaleFactorEnabled="False"`); the window is 264 x 110 DIP times
+  `s = clamp(UISettings.TextScaleFactor, 1, 2.25)` (1 when unreadable), and a `Viewbox` draws the content, laid out
+  at exactly 264 x 110, scaled to fill it, so every line keeps its 100% width budget and its text renders at 12 x s.
+  `PillGeometry` (Core) sizes and anchors the window, keeping the 8 DIP margin and clamping it into the work area;
+  `PillTextScale` applies a new s, read at each show and on `TextScaleFactorChanged` (dispatched to the UI thread),
+  at once on screen, after a running fade in, and at the next show when hidden or fading out. The overlay compiles
+  both files through linked `Compile` items, not a reference to Scribe.Core; `OverlayTextScaleSourceTests` pins the
+  rest from source.
+- **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
+  produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and always the one fixed line
+  `PillOutcome.CleanupDidNotRun`, "See Settings, AI cleanup": never the cleanup's reason, which is a sentence the pill
+  cuts off, and never its display detail), or Nothing typed / Not all of it was typed (an error icon and the next
+  step from `DictationProblemText.PillLine`: "Copy it from the tray menu" after an insertion that failed, otherwise the
+  problem's own line, each measured to fit the pill);
+  notices hold 1.3 s. The truth rules: a check only after the whole insertion succeeded, the space after the
+  dictation included; a partial insertion or a dictation left for the recovery copy is the error state; a
+  dictation discarded quietly (the speech detector found no speech in audio that was not digital silence, or
+  nothing was left after the dictionary) shows nothing, while digital silence and a recogniser that returned
+  nothing on real audio are notices ("Nothing typed" and their message). The controller hands the outcome on
+  with the change that ends the dictation, Idle, or Paused when a pause ended it (`DictationStateChange.Outcome`),
+  under that change's revision, so a late outcome never covers a newer recording and nothing waits for it. A new
+  recording or processing state replaces an outcome at once, and a hide during its hold is ignored. The holds and
+  fades live in `PillTiming`; the overlay keeps copies, which `OverlayPillSourceTests` checks. The shell's
+  `RenderDictationState` shows the change's outcome in place of the hide, and nothing else puts a failure on the
+  pill: the old `FAILED` flash, which fired before the text was typed and for errors alike, is gone with
+  `ShowFailed` and the controller's `CleanupFailed`, and the controller's `Error` reaches only the tray
+  (`OverlayPipeProtocolTests` pins the shell).
 - **Never tie the helper to `DictationController.ModelsReleased`.** Releasing the speech models and
   ending the pill are separate decisions; the old wiring could end a newer recording's pill.
+- **The pill never activates itself.** Every show, the first after a launch included, is `AppWindow.Show(activateWindow:
+  false)`. The first show used to call `Window.Activate()`, which "Attempts to activate the application window by
+  bringing it to the foreground and setting the input focus to it" (WinUI's implementation is `ShowWindow(SW_SHOW)` and
+  `SetActiveWindow`), and `WS_EX_NOACTIVATE` does not stop an explicit activation ("To activate the window, use the
+  SetActiveWindow or SetForegroundWindow function"): the log recorded `OverlayWindow.Activated state=CodeActivated`
+  during the first dictation after every launch. Whenever Windows allowed the foreground to move (the cases
+  `SetForegroundWindow` lists), the window being dictated into would lose it mid-recording, and a Remote Desktop client
+  its activation. The user's 0.4.3 log shows the dictated window still in front at each insertion, so that did not
+  happen there. `AppWindow.Show` is a supported way to show a XAML window (microsoft-ui-xaml#10995 shows one that way);
+  since WinUI raises `VisibilityChanged` only on a window's first activation, that line no longer follows a launch, and
+  the first-show line is now `OverlayWindow.EnsureShown first show AppWindow.Show(activate:false)`.
+  `OverlayNeverActivatesTests` pins the overlay's source. Not yet seen on a live desktop: the first pill after a launch.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
   `SystemBackdrop=TransparentBackdrop assigned`, `TransparentBackdrop.OnTargetConnected applied`,
-  `size=462x192`, `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
+  `size=462x192` (at 100% text size and 175% DPI; at other text sizes the size is multiplied by the text scale, which
+  `SizeAndPosition` and the state line log as `textScale=`, and `SizeAndPosition` logs `clamped=True` when it had to
+  move the pill inside the work area; a text size change logs `OverlayWindow.TextScaleChanged textScale=<s>
+  resize=<True|False>`), `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
   stays alive (no teardown) with **zero IOExceptions** after launch (and no `0x80040154` or
-  `0x8007007E`, which point to a missing component). The failure and warning pills log
-  `reasonLength=<n>`, never the reason text. The client's lifetime lines are `Overlay helper suspended
-  after N idle minutes`, `Overlay helper released because dictation was paused`, `Overlay relaunch
-  retry due after a N ms cooldown` and `Overlay command <verb> failed; tearing down for relaunch.`
+  `0x8007007E`, which point to a missing component). The outcome and warning pills log
+  `reasonLength=<n>`, never the reason text (`OverlayWindow.ShowOutcome state=<State> hold=<n>ms reasonLength=<n>`),
+  the controller logs `#<n> finished with outcome <Kind>` (the kind only), and a hold ends in
+  `OverlayWindow.OutcomeTimer.Tick`. With Animation effects on, a show logs `StartStoryboard FadeInStoryboard begun`
+  and a hide ends in `OverlayWindow.FadeOut completed; window hidden`; with them off, neither appears.
+  `PulseStoryboard` never appears. The client's lifetime lines are `Overlay helper suspended after N idle
+  minutes`, `Overlay helper idle for N minutes: working set trimmed from N MB to N MB (ok True); it stays running
+  so the next pill shows at once.`, `Overlay helper released because dictation was paused` (with `, once the
+  outcome on screen had hidden` when it waited, after `Overlay release on pause waits N ms for the outcome on
+  screen to hide.`), `Overlay process launched pid=N pipe=... exe=... after N ms`,
+  `Overlay relaunch retry due after a N ms cooldown`, `Overlay command <verb> failed; tearing down for relaunch.`
+  and, at Debug, `Overlay command <verb> skipped: a newer state replaced it.` and `Overlay command <verb> skipped: a
+  newer request superseded its preview.`
 
 ## Accent contrast (read before touching theme resources or anything drawn on an accent fill)
 
@@ -1181,6 +1979,51 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   fills from the user's accent with fixed HSV steps. With the maintainer's accent #0E0E70 the dark theme drew black on
   #42429B (2.48:1) and #59599B (3.33:1); a light accent such as Gold #FFB900 got white on #E6A700 (2.12:1) in the
   light theme. Windows' own palette does not rescue it: for #0E0E70 it is darker still (`AccentLight2` #14149D).
+- **Scribe blue is the accent for every install.** `AppSettings.AccentSource` is `Scribe` or `Windows`, with the property
+  initializer `Scribe`. It follows the `AddSpaceAfterDictation` pattern, not P-7: a document written before the key
+  existed reads as Scribe. It is a whole-document setting (Save applies it, Cancel discards it), shown on Advanced,
+  Appearance, as "Use my Windows accent color". Its property has its own converter (`AccentSource.cs`), which reads only
+  the exact names, case-insensitively, and reads anything else (a number, "1", "Scribe, Windows", null, an object) as
+  `Scribe`, so a cosmetic value can never make the document unreadable (`LastLoadFailed` stays false). The session
+  banner logs `accent=Scribe|Windows`, never a colour.
+- **One resolver chooses the accent, as the first step of every accent refresh.** `AccentResolver.Decide` gives the
+  four-colour Scribe set for Light and Dark with source Scribe (`ScribeBrand.LightAccent` and `DarkAccent`, applied with
+  WPF-UI's `ApplicationAccentColorManager.Apply(system, primary, secondary, tertiary)`). With source Windows it gives the
+  Windows accent through exactly the call 0.4.4 made, `ApplicationAccentColorManager.Apply(GetColorizationColor(), theme,
+  false)`, never `ApplySystemAccent()`, which reads Windows' own AccentLight and AccentDark palette and would change every
+  Windows-accent user's shades. In a contrast theme it gives that same 0.4.4 call whatever the source: WPF-UI's contrast
+  dictionaries do not define the app-level accent keys (`AccentFillColorDefaultBrush`, `SystemAccentColorPrimary`, the
+  accent text brushes), so applying nothing would strand Scribe blue there. With an unknown theme it gives nothing.
+  `AccentContrastResources.ResolveAccent` runs it before the planner reads any colour.
+- **WPF-UI never updates the accent itself.** Every `SystemThemeWatcher.Watch` passes `updateAccents: false` (Settings,
+  Add to dictionary, Welcome, the cleanup review), and so does `App.xaml.cs`'s theme application: a watched window's flag
+  is fixed when it registers, so a flag that depended on the source would go stale after a Save. `AccentSourceScanTests`
+  enforces this with a whitespace- and comment-blind detector over the whole `src\Scribe.App` tree, including multi-line
+  calls and named arguments. **Changing the source at run time goes through `AccentContrastResources.UseSource`**, which
+  re-resolves and re-plans on the dispatcher, because the four-colour overload raises no `Changed`; the app calls it after
+  the settings load and in `ApplySettings`. `Replanned` fires after every plan, so the tray menu, which holds a copy of the
+  application resources, copies them again (`TrayIconHost`). A refresh requested while one is running (for example by a
+  `Replanned` subscriber) only marks another pass, with at most two extra passes. `WindowsAccent` is a test seam for the
+  Windows accent.
+- **The resolver runs after the theme dictionary swaps**, so a theme dictionary resource that took an accent colour by
+  `StaticResource` would show the previous accent. In WPF-UI 4.3.0 the only one is `BadgeBackground`, and Scribe uses only
+  the Caution and Info badge appearances. A Primary-appearance badge needs a DynamicResource fill of Scribe's own.
+- **Links are the accent text shades.** WPF's `HotTrackColor` and its red hover are retired: the planner's `Hyperlink` and
+  `HyperlinkHover` shades come from `AccentTextPrimary` and `AccentTextSecondary`. In a contrast theme the flag is off and
+  WPF's own link colours draw.
+- **The measured surfaces include the Settings redesign's nested panels**: light `#EAEAEA` and `#E5E5E5`, dark `#383838`
+  and `#404040`, for every accent text, link, switch, check and chart bar; the selection indicator keeps its own set. With
+  Scribe blue the planner leaves every specified colour as drawn except the dark Tertiary accent text (`#72A0FF` is lifted
+  to `#81AAFF` on `#404040`), and the pressed accent button's label stays white in light. Acceptance is worded as "every
+  specified role pair passes and the brand fills draw as specified, with the existing repairs active", never "zero
+  corrections".
+- **Usage chart bars have their own keys**, `ScribeChartBarBrush` and `ScribeChartBarCurrentBrush`. They hold the planned
+  `ChartBar` shade (3:1 on every surface) and `ChartBarCurrent` (stepped in lightness to 1.5:1 against the bar, then held
+  at 3:1), and `SystemColors.HighlightBrush` in a contrast theme. With Scribe blue: `#0C48CF` and `#083391` light,
+  `#88B0FE` and `#C4D8FF` dark. The label, not the colour, says which bar is today.
+- **Scribe's brand brushes** (`ScribePillFaceBrush`, `ScribePillListeningEdgeBrush`, `ScribeLevelTipBrush`,
+  `ScribeSignalBrush`, in App.xaml) are literals checked against `ScribeBrand` by `ScribeBrandTests`. They draw only where
+  the flag is on, or in the brand mark, never in a contrast theme's own colours.
 - **Every pressed `ui:Button` label is `Control.Foreground`'s default, black.** WPF-UI's template sets a pressed
   button's Foreground to `{Binding PressedForeground, RelativeSource={RelativeSource TemplatedParent}}` on the button
   itself; a button in a window or a dialog has no templated parent, so the binding fails (the offscreen harness logs
@@ -1200,8 +2043,8 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   label, what shows today, then what the template means to draw), then black or white; text is held to 4.5:1 and a
   glyph (check, knob) to SC 1.4.11's 3:1. Where the theme's own reads, WPF-UI's brush is left in place.
 - **Colours that are themselves read are corrected in lightness only** (`ContrastShade`): the accent text brushes
-  (headings, the Welcome icons, the Diagnostics best pace), links (WPF-UI has no Hyperlink style, so a link draws in
-  WPF's `HotTrackColor`, 2.93:1 on the dark page whatever the accent, and red when hovered) and the on switch's track.
+  (headings, the Welcome icons, the Diagnostics best pace), links (the accent text shades, above) and the on switch's
+  track.
   A colour that reads on every surface it is drawn on (page, window, card, filled row, the Diagnostics panel) is kept
   exactly; otherwise its HSL lightness moves, hue and saturation kept, to the first shade that reads. WPF-UI's accent
   manager rewrites the accent text brushes in the application dictionary on every theme application, identical or
@@ -1226,6 +2069,58 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   dictionaries and templates, and whether the pressed-label binding is fixed (then `ButtonLabelContrast` can go): the
   adapter logs a warning when a key it overrides is missing from the loaded theme dictionary, because a renamed brush
   quietly brings the old colour back. It logs one line per distinct outcome (counts and ratios only, never a colour).
+
+## Settings window: WPF and WPF-UI gotchas (read before laying out a page)
+
+Each of these compiled warning-clean and showed only at run time or in a render, during the 0.5.0 Settings redesign.
+
+- **A DataGrid inside a vertical ScrollViewer realizes every row.** The ScrollViewer measures its content with unbounded
+  height, so the grid's own virtualization never engages: a 1,200-word pack built all 1,200 rows on the dispatcher (about
+  5 s). The Word packs card scrolls as a whole, so `FitLibraryTermsGridToCard` (`SettingsWindow.WordPacks.cs`) gives the
+  words grid an explicit Height, the viewport less the card's other rows and never below its minimum, recomputed from the
+  card ScrollViewer's `ScrollChanged` (its viewport and extent are stale in `SizeChanged`), with a Height in the XAML
+  bounding the first layout. Any grid or list put in a scrolling container needs the same.
+- **Never set a WPF-UI InfoBar's Visibility locally.** The InfoBar shows and hides itself from `IsOpen` with a template
+  trigger on its own Visibility; a local value overrides that for good and leaves an empty or closed bar on screen. Hide a
+  parent instead (`WordPackNoticeHost`). WPF-UI's close button clears `IsOpen` and raises no event, so anything that
+  belongs to a notice (its action buttons) watches `IsOpen` through a `DependencyPropertyDescriptor`, removed when the
+  window closes.
+- **`{x:Type DataGridColumnHeader}` is the system header style here.** WPF-UI keys its header style
+  `DefaultDataGridColumnHeaderStyle` and applies it through `DataGrid.ColumnHeaderStyle`, so a column `HeaderStyle` based
+  on the type key draws the grey Aero2 header. To add a tooltip, give the column a header element
+  (`<DataGridCheckBoxColumn.Header><TextBlock Text=... ToolTip=.../>`), which inherits the header's font.
+- **WPF-UI's CheckBox is 42 DIP wide with no content** (`CheckBoxPadding` 11,5,11,6 around a 20 DIP box), so a grid column
+  holding one needs 54 DIP with the cell's 6 + 6 padding. The Word packs planner's Use column is 54 for that reason; a
+  narrower column centres the box and clips it to a sliver.
+- **The window's Escape runs first.** `SettingsWindow.OnPreviewKeyDown` handles Escape before any control's own
+  PreviewKeyDown, so a control with its own Escape behaviour is asked from there (Find a setting's
+  `TryConsumeSettingsSearchEscape`: close the list, then clear the text), and that ask returns false while a hotkey capture
+  runs or an IME composes, so the capture is cancelled and the IME keeps its key. Only then do the Escape order and the
+  close guard run. Every keyboard command other than Save goes through `SettingsCloseGuard.CanRunAccelerator` with the page
+  it belongs to (Alt+Left is `BackToWordPacks`), so a Dictionary tab's command never runs while another page shows.
+- **WPF-UI's AutoSuggestBox throws when its template is applied without a window handle,** so an off-screen render of the
+  window has to hide Find a setting's box and render its list separately; and a render that detaches the window's content
+  must give layout code that measures `Content` (the Word packs planner's `WordPackLayoutRoot`) another root.
+- **Every Scribe text size comes from the ScribeFont ramp.** `TextScaleService` writes `ScribeFontCaption`,
+  `ScribeFontBody`, `ScribeFontBodyLarge`, `ScribeFontSubtitle`, `ScribeFontTitle` (and WPF-UI's own font keys) into the
+  application resources from Windows' text size, so a style or element that sets a number stays at 100% while everything
+  around it grows. `XamlFontSizeSourceTests` fails on an inline numeric `FontSize` (except a `ui:SymbolIcon`) and on a
+  style setter with a literal `FontSize` anywhere in `src\Scribe.App`. A merge once put literal sizes back in every
+  Settings text style, and five combo boxes back on fixed widths, without a conflict, and nothing but a 225% render showed
+  it: render at `SCRIBE_TEXT_SCALE_FACTOR=2.25` after any merge that touches SettingsWindow.xaml's styles.
+- **Width versus MinWidth.** A combo or text box with a fixed `Width` clips its text once the text grows; use `MinWidth`
+  (the 100% value) so it grows with the text, and let the row wrap when it no longer fits.
+- **A DataGrid's Auto column grows and never shrinks by itself, and assigning Auto to an Auto column changes nothing.**
+  After a live text size decrease, `ResetAutoColumns` (`SettingsWindow.TextSizeLayout.cs`) sets such a column's width to 0
+  and back to Auto; once the Auto columns have measured, it sets each fixed column's declared width again, or the grid
+  takes width from those too.
+- **A DataGrid takes a star column's MinWidth out of its other columns.** Give the text columns their minimums (Your words
+  keeps 120 DIP times the text scale above 100%) only together with the other columns' natural widths as minimums,
+  measured after a pass with every minimum cleared (an Auto column never shrinks by itself), or the other columns are
+  squeezed to 20 DIP instead of the grid scrolling sideways (`UpdateDictionaryColumnMinimums`).
+- **A profile preset's name is its identity in the menu.** The App profiles menu greys out a preset that is already
+  added by matching profile names (`ProfilePresets.Preset.IsNamed`), so a renamed preset keeps its old name in
+  `FormerNames` ("Terminals and shells" is now "Command windows"), or everyone who added it before is offered it again.
 
 ## Azure authentication (read before touching credentials)
 
@@ -1328,6 +2223,16 @@ packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
+- **The word pack library model ships only with W-V's vocabulary publication.** Before cutting
+  a release, check whether the W1b integration commit ("Integrate the library model's parts", first on
+  `win/libraries-integration`) is an ancestor of the release head (`git merge-base --is-ancestor <integration commit>
+  <release head>`); if it is, W-V's approved head (a9e0b9e, on `win/libraries-wv-r3`) must be an ancestor too, checked
+  the same way, or the release is refused. Until the Store rows of the desktop gate are observed, the release notes say
+  the Store build's library journal is unverified (see Word packs).
+- **The old Libraries page's containment stays gone.** `LegacyLibraryPageContainment` held the 0.4.4 Libraries page's
+  switches read-only until the Word packs page replaced it. It must remain absent from release heads (`git grep
+  LegacyLibraryPageContainment -- src tests` returns no matches), and word pack switches are saved only through the
+  library payload, never by a settings-only write of `EnabledDictionaryLibraryIds`.
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
@@ -1349,7 +2254,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.4.4.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.0.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -1531,11 +2436,33 @@ at that same version will **not** auto-update; they need a manual installer run.
 The tray icon, window icon, installer, and Add/Remove Programs entry all resolve to one brand
 mark. Changing it means changing every one of these together:
 
-- `src/Scribe.App/Assets/scribe.ico` plus the `-recording`, `-processing`, and `-paused` state
-  variants, each carrying 16/24/32/48/64/128/256 px frames.
-- All four are **embedded resources** (`Scribe.App.Assets.*.ico`) loaded by `Tray/TrayIcons.cs`, so
-  an upgrade replaces them atomically with the executable and can never leave stale artwork beside
-  the new binary.
+- **Every brand colour lives in `Scribe.Core.Appearance.ScribeBrand`**: Ink `#07142F`, Paper `#FCFCFC`, Signal
+  `#1C83FE`, Slate `#6B7689`, the processing dots, both accent sets and the pill's colours. The overlay process and the
+  icon files cannot reference Core, so tests compare their literals with it (`ScribeBrandTests`, `TrayIconAssetTests`,
+  and the overlay's colour scan).
+- **Tray states:** idle is the brand icon; recording is the only state that lights the tile (a Signal tile, white
+  capsule, Ink waveform, and at 16 to 24 px a plain capsule); processing is an Ink tile with three large dots and no
+  microphone; paused is a Slate tile with two large Paper pause bars. Each file carries 16, 20, 24, 32, 40, 48, 64, 128
+  and 256 px frames: DIB below 256, PNG at 256, hand-tuned and left-right symmetric at 16 to 40 px.
+  `scripts/New-TrayIcons.ps1` generates them deterministically, so rerun it after changing `ScribeBrand` or the idle
+  icon, and commit its output. `src/Scribe.App/Assets/scribe.ico` keeps every frame it had byte for byte and gains 20 and
+  40 px frames; it is also the executable, installer and shortcut icon.
+- All four icons are **embedded resources** (`Scribe.App.Assets.*.ico`) loaded by `Tray/TrayIcons.cs`, so an upgrade
+  replaces them atomically with the executable and can never leave stale artwork beside the new binary.
+- **`TrayIcons` loads the frame for the notification area's real size**: `GetSystemMetricsForDpi(SM_CXSMICON, dpi)` at
+  the primary monitor's effective DPI, instead of handing the shell the 64 px frame to scale down. `TrayIconHost` sets
+  the icon again when that size changes (`SystemEvents.DisplaySettingsChanged` and `UserPreferenceChanged`). The
+  fresh-icon ownership rule in the class remarks still holds.
+- **The brand mark in windows** is `docs/icon.png`, linked into Scribe.App as the resource `Assets\scribe-mark.png`: the
+  title bars of Settings, Add to dictionary, Welcome and Clean up unused terms, the About header and the Welcome header.
+  On Welcome its five bars rise once over 600 ms when the window loads, only with Windows "Animation effects" on and
+  outside a contrast theme; they finish at once if the window is minimized, hidden or closed, and then the real bitmap
+  shows. `scripts/New-WelcomeMark.ps1` makes `Assets\scribe-mark-nobars.png`, the mark without its bars, for that
+  overlay. The bitmap stays as it is in a contrast theme, as Windows' own app icons do.
+- **The Settings rail's selected icon is drawn filled,** in the planned selection indicator colour while the flag is on.
+  **The recording indicator's position picker** is a miniature ink pill: outlines at rest, and the selected place shows
+  the face, the listening edge and three level bars; in a contrast theme it uses `Highlight`, `HighlightText` and
+  `WindowText`.
 - `<ApplicationIcon>` in `Scribe.App.csproj` sets the executable icon, which is what the uninstall
   entry's `DisplayIcon` and every shortcut resolve to.
 - `docs/icon.png` is the README mark and the source for the generated Store logos.
@@ -1719,6 +2646,53 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
   [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true)). The serving agent is built by the
   initializer and published only after that probe passes; the Chat Completions fallback builds its
   serving agent only once its own probe has passed.
+- **A cleanup reason states the cause, and every surface that shows it adds the consequence.** A reason
+  says what went wrong ("AI cleanup couldn't start.", "Couldn't reach the AI service."), never what Scribe
+  did about it: the AI cleanup status line adds "Until it's ready, Scribe types what it hears", Try
+  dictation and Diagnostics' failures list add that Scribe typed what it heard, and the pill's fixed line
+  and the tray's episode notice never quote the reason. A new surface that shows a reason says the
+  consequence itself.
+
+## Library vocabulary admission (read before touching a cleanup client or the publisher)
+
+- Every dictation takes one `VocabularyGeneration` at admission and uses it for cleanup and the dictionary pass.
+  `VocabularyPublisher` builds generations with one builder, off the dispatcher, the first one included: the app awaits
+  `DictationController.PrepareAsync`, at most `StartupDeadline`, before the tray and the hotkey, so the library source's
+  first read (a cold catalog) never runs on the dispatcher. Nothing waits on a vocabulary task synchronously.
+- A change that stores vocabulary is reported as in effect only after awaiting the `VocabularyRefresh` its application
+  returns (`ApplySettings`, `ReloadVocabulary`, `StoredSettingsReapply`): `Applied` means the next dictation is admitted
+  with a generation built from inputs read after the change; `NotApplied` means saved but dictation keeps its previous
+  vocabulary (`VocabularyNotice`).
+- Every wait for a generation is bounded, on an injected `TimeProvider`: `StartAsync` faults with a `TimeoutException`
+  once `VocabularyPublisher.StartupDeadline` (30 s) passes without the first generation, which ends startup through
+  `AbandonStartup`, and every later request is answered `TimedOut` at `RefreshDeadline` (15 s), which callers report as
+  saved but not in use yet. Nothing waits for a read that does not return: the request is retired, the build is left to
+  finish, and if it returns it publishes in order for later dictations without changing the answer given. The events
+  nobody awaits (`Changed`, `Reloaded`) ask for a build with no deadline. Tests fire deadlines on a manual clock; never
+  add a sleep.
+- A Settings save stays editable while it awaits its generation, so it hands its draft to `StoredChangeAcknowledgement`
+  when the wait starts (no await since it read its controls) and the draft is read again on the dispatcher when the answer
+  is in. `ChangedWhileSaving` shows `VocabularyNotice.SettingsChangedWhileSaving` and keeps the window open with the edit
+  unsaved; `NotInUseYet` shows the saved-but-not-applied notice; only `InEffect` reports "Settings saved." or closes.
+  The draft is what a Save stores, read the way the Save reads it, and a row read that finishes during the wait is no
+  change (`VocabularyApplicationSourceTests` checks the draft against the Save and the pages against the XAML).
+- A build reads the library snapshot, then the dictionary. A commit of both between the reads gives one transient mixed
+  generation; it never persists, because every change of either source asks for a build after it commits, and it stays
+  content-bound, because its glossary and its scope come from the same library snapshot. Do not add a cross-store
+  transaction for it.
+- Every request is handed over only through `ILibraryVocabularySource.TryHandOff` with its admission's scope: HTTP from
+  `VocabularyHandOffHandler` just before the network handler (every OpenAI client is built with `ConfigureClient`; a
+  client that skips it sends vocabulary no admission stands behind), Copilot at `session.create` and at `session.send`. A
+  one-off completion is also bound to its recipient: every attempt goes only while the service still serves it and is
+  ready, checked under `_gate` inside the permission gate in one step with the send. Cleanup options carry no glossary;
+  one given in them is dropped where there is an admission point. A held-back request leaves its segment as dictated with
+  no failure, and its log line is a shape.
+- A vocabulary can be republished at the same library generation (a restoration after a hold-back, a lock clearing after
+  a fresh start, an adoption used in memory): the publisher rebuilds on every `Changed` from a fresh `Current`, and
+  nothing may cache vocabulary, rules, a glossary or an agent by generation. While libraries are held back, dictation runs
+  on the personal dictionary alone. The source is the library service itself (`DictionaryLibraryService`), which
+  `AddScribeCore` registers as the one `ILibraryVocabularySource`; its first read at startup publishes, which asks the
+  publisher for one more build right after the first.
 
 ## Git workflow
 

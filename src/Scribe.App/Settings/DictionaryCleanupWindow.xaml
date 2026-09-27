@@ -1,8 +1,8 @@
-<ui:FluentWindow x:Class="Scribe.App.Settings.DictionaryCleanupWindow"
+﻿<ui:FluentWindow x:Class="Scribe.App.Settings.DictionaryCleanupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
-        Title="Clean up unused terms"
+        Title="Clean up unused words"
         Width="660" Height="680" MinWidth="580" MinHeight="520"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
@@ -10,27 +10,43 @@
         WindowBackdropType="Mica"
         WindowCornerPreference="Round">
     <ui:FluentWindow.Resources>
-        <Style TargetType="TextBlock" x:Key="SectionLabel">
-            <Setter Property="FontSize" Value="11"/>
+        <Style TargetType="TextBlock" x:Key="SectionHeader">
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Margin" Value="1,24,0,8"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="CardTitle">
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontBody}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="CardDescription">
+            <Setter Property="FontSize" Value="{DynamicResource ScribeFontCaption}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
-            <Setter Property="Margin" Value="2,14,0,6"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+        </Style>
+        <Style TargetType="Border" x:Key="SettingsCard">
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Padding" Value="16,12"/>
+            <Setter Property="MinHeight" Value="64"/>
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="4"/>
         </Style>
 
         <!-- A check box whose content is a panel has no name of its own, so it is labelled by the row's title. -->
         <DataTemplate x:Key="CleanupRowTemplate">
-            <Border Margin="0,0,0,4" Padding="10,8" CornerRadius="6"
-                    Background="{DynamicResource ControlFillColorDefaultBrush}"
-                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                    BorderThickness="1">
+            <Border Style="{StaticResource SettingsCard}">
                 <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}"
                           VerticalContentAlignment="Top"
                           AutomationProperties.LabeledBy="{Binding ElementName=RowTitle}">
                     <StackPanel Margin="4,0,0,0">
-                        <TextBlock x:Name="RowTitle" Text="{Binding Title}" TextWrapping="Wrap" FontSize="13"/>
+                        <TextBlock x:Name="RowTitle" Text="{Binding Title}" TextWrapping="Wrap" Style="{StaticResource CardTitle}"/>
                         <TextBlock Text="{Binding Detail}" TextWrapping="Wrap"
-                                   FontSize="11" Margin="0,2,0,0"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                   Style="{StaticResource CardDescription}"/>
                     </StackPanel>
                 </CheckBox>
             </Border>
@@ -45,15 +61,15 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="Clean up unused terms">
+        <ui:TitleBar Grid.Row="0" Title="Clean up unused words">
             <ui:TitleBar.Icon>
-                <ui:SymbolIcon Symbol="Broom24"/>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
         <StackPanel Grid.Row="1" Margin="24,4,24,0">
             <TextBlock x:Name="SummaryText"
-                       FontSize="13"
+                       Style="{StaticResource CardTitle}"
                        TextWrapping="Wrap"
                        Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
             <CheckBox x:Name="SelectAllBox"
@@ -68,20 +84,20 @@
             <StackPanel>
                 <!-- The two lists only hold the check boxes, which are the Tab stops. An ItemsControl is
                      focusable by default, so each list was also an empty stop of its own. -->
-                <TextBlock x:Name="EntriesHeader" Style="{StaticResource SectionLabel}"
-                           Text="YOUR ENTRIES"/>
+                <TextBlock x:Name="EntriesHeader" Style="{StaticResource SectionHeader}"
+                           Text="Your words"/>
                 <ItemsControl x:Name="EntriesList" Focusable="False"
                               AutomationProperties.LabeledBy="{Binding ElementName=EntriesHeader}"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
-                <TextBlock x:Name="LibrariesHeader" Style="{StaticResource SectionLabel}"
-                           Text="LIBRARIES WITH TERMS THAT DID NOT COME UP"/>
+                <TextBlock x:Name="LibrariesHeader" Style="{StaticResource SectionHeader}"
+                           Text="Word packs with words that did not come up"/>
                 <ItemsControl x:Name="LibrariesList" Focusable="False"
                               AutomationProperties.LabeledBy="{Binding ElementName=LibrariesHeader}"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
                 <TextBlock x:Name="FootnoteText"
-                           Margin="2,14,0,10" FontSize="11" TextWrapping="Wrap"
+                           Margin="2,14,0,10" FontSize="{DynamicResource ScribeFontCaption}" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
             </StackPanel>
         </ScrollViewer>
@@ -90,13 +106,13 @@
                     Margin="24,10,24,18">
             <ui:Button Content="Cancel" MinWidth="100" Margin="0,0,8,0" IsCancel="True"
                        Click="CancelButton_Click"/>
-            <ui:Button x:Name="DeleteButton" Content="Delete selected entries" MinWidth="170"
+            <ui:Button x:Name="DeleteButton" Content="Delete selected words" MinWidth="170"
                        Margin="0,0,8,0"
                        Appearance="Danger" Click="DeleteButton_Click"
-                       ToolTip="Remove the ticked entries from your dictionary for good. Libraries are switched off either way; their terms are not yours to delete."/>
+                       ToolTip="Remove the checked words from your dictionary for good. Word packs are turned off either way; their words are not yours to delete."/>
             <ui:Button x:Name="DisableButton" Content="Turn off selected" Appearance="Primary"
                        MinWidth="150" Click="DisableButton_Click"
-                       ToolTip="Keep the ticked entries but stop them applying. You can switch them back on any time."/>
+                       ToolTip="Keep the checked words but stop them applying. You can turn them back on any time."/>
         </StackPanel>
     </Grid>
 </ui:FluentWindow>

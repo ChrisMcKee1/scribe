@@ -256,7 +256,7 @@ public sealed class OverlayIdleDeadlineTests
         deadline.OnCommandProcessed(0, deadline.NoteCommandIssued());      // HIDE for the Paused state
         var release = deadline.NoteCommandIssued();
 
-        Assert.True(deadline.TryCommitRelease(release, OverlayDemand.None));
+        Assert.Equal(OverlayReleaseVerdict.Commit, deadline.TryCommitRelease(release, OverlayDemand.None, 0));
         Assert.Null(deadline.DueAtMs(Idle)); // disarmed until the next command
     }
 
@@ -267,12 +267,51 @@ public sealed class OverlayIdleDeadlineTests
         newer.OnCommandProcessed(0, newer.NoteCommandIssued());
         var release = newer.NoteCommandIssued();
         _ = newer.NoteCommandIssued(); // resumed: a newer command is on its way
-        Assert.False(newer.TryCommitRelease(release, OverlayDemand.None));
+        Assert.Equal(OverlayReleaseVerdict.Veto, newer.TryCommitRelease(release, OverlayDemand.None, 0));
         Assert.Equal(Idle, newer.DueAtMs(Idle)); // the idle deadline is untouched
 
         var sustained = new OverlayIdleDeadline();
         sustained.OnCommandProcessed(0, sustained.NoteCommandIssued());
-        Assert.False(sustained.TryCommitRelease(sustained.NoteCommandIssued(), OverlayDemand.Sustained));
+        Assert.Equal(
+            OverlayReleaseVerdict.Veto,
+            sustained.TryCommitRelease(sustained.NoteCommandIssued(), OverlayDemand.Sustained, 0));
+    }
+
+    [Fact]
+    public void A_release_waits_while_an_outcome_is_on_screen_and_a_veto_still_wins()
+    {
+        var deadline = new OverlayIdleDeadline();
+        deadline.OnCommandProcessed(1_000, deadline.NoteCommandIssued()); // the outcome
+        deadline.NoteShownUntil(1_550);
+        var release = deadline.NoteCommandIssued();
+
+        Assert.Equal(1_550, deadline.ShownUntilMs(1_549));
+        Assert.Equal(OverlayReleaseVerdict.Wait, deadline.TryCommitRelease(release, OverlayDemand.Transient, 1_549));
+        Assert.Equal(1_000 + Idle, deadline.DueAtMs(Idle)); // still armed
+        Assert.Equal(OverlayReleaseVerdict.Veto, deadline.TryCommitRelease(release, OverlayDemand.Sustained, 1_549));
+
+        Assert.Null(deadline.ShownUntilMs(1_550));
+        Assert.Equal(OverlayReleaseVerdict.Commit, deadline.TryCommitRelease(release, OverlayDemand.Transient, 1_550));
+    }
+
+    [Fact]
+    public void The_idle_deadline_never_falls_before_an_outcome_on_screen_has_hidden()
+    {
+        var deadline = new OverlayIdleDeadline();
+        deadline.OnCommandProcessed(0, deadline.NoteCommandIssued());
+        deadline.NoteShownUntil(900);
+        deadline.NoteShownUntil(500); // an earlier end never shortens it
+
+        Assert.Equal(900, deadline.DueAtMs(300));
+        Assert.False(deadline.TryCommitSuspend(899, 300, OverlayDemand.Transient));
+        Assert.True(deadline.TryCommitSuspend(900, 300, OverlayDemand.Transient));
+
+        var cleared = new OverlayIdleDeadline();
+        cleared.OnCommandProcessed(0, cleared.NoteCommandIssued());
+        cleared.NoteShownUntil(900);
+        cleared.ClearShown(); // the helper is gone, so nothing it showed is on screen
+        Assert.Equal(300, cleared.DueAtMs(300));
+        Assert.Null(cleared.ShownUntilMs(0));
     }
 
     [Fact]
