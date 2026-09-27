@@ -128,6 +128,8 @@ public static class SettingsSearchIndex
         Entry("advanced.accent", SettingsPage.Advanced, "AccentSourceCheck", "Use my Windows accent color", ["appearance", "theme", "color", "palette"]),
     ];
 
+    private static readonly SearchEntry[] SearchEntries = BuildSearchEntries();
+
     public static IReadOnlyList<SettingsSearchResult> Search(string? query) => Search(query, MaxResults);
 
     public static IReadOnlyList<SettingsSearchResult> Search(string? query, int maxResults)
@@ -143,15 +145,32 @@ public static class SettingsSearchIndex
             return [];
         }
 
-        return Entries
-            .Select((entry, index) => new { Entry = entry, Index = index, Rank = Rank(entry, terms) })
-            .Where(candidate => candidate.Rank < int.MaxValue)
-            .OrderBy(candidate => candidate.Rank)
-            .ThenBy(candidate => SettingsNavigation.Items.First(item => item.Page == candidate.Entry.Page).Position)
-            .ThenBy(candidate => candidate.Index)
-            .Take(Math.Min(maxResults, MaxResults))
-            .Select(candidate => new SettingsSearchResult(candidate.Entry, $"{candidate.Entry.DisplayLabel} on {candidate.Entry.PageLabel}"))
-            .ToArray();
+        var candidates = new List<SearchCandidate>();
+        foreach (var searchEntry in SearchEntries)
+        {
+            var rank = Rank(searchEntry, terms);
+            if (rank < int.MaxValue)
+            {
+                candidates.Add(new SearchCandidate(searchEntry, rank));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        candidates.Sort(SearchCandidateComparer.Instance);
+
+        var count = Math.Min(Math.Min(maxResults, MaxResults), candidates.Count);
+        var results = new SettingsSearchResult[count];
+        for (var i = 0; i < count; i++)
+        {
+            var entry = candidates[i].Entry.Entry;
+            results[i] = new SettingsSearchResult(entry, $"{entry.DisplayLabel} on {entry.PageLabel}");
+        }
+
+        return results;
     }
 
     private static SettingsSearchEntry Entry(
@@ -164,19 +183,19 @@ public static class SettingsSearchIndex
         IReadOnlyList<SettingsSearchRequirement>? requirements = null) =>
         new(id, page, controlName, label, context, keywords, requirements);
 
-    private static int Rank(SettingsSearchEntry entry, IReadOnlyList<string> terms)
+    private static int Rank(SearchEntry entry, IReadOnlyList<string> terms)
     {
-        if (AllTermsMatch(terms, entry.DisplayLabel))
+        if (AllTermsMatch(terms, entry.LabelWords))
         {
             return 0;
         }
 
-        if (entry.Keywords is { Count: > 0 } keywords && AllTermsMatch(terms, [entry.DisplayLabel, .. keywords]))
+        if (entry.AllWords.Length > entry.LabelWords.Length && AllTermsMatch(terms, entry.AllWords))
         {
             return 2;
         }
 
-        if (AllTermsMatch(terms, entry.PageLabel))
+        if (AllTermsMatch(terms, entry.PageWords))
         {
             return 3;
         }
@@ -184,8 +203,79 @@ public static class SettingsSearchIndex
         return int.MaxValue;
     }
 
-    private static bool AllTermsMatch(IReadOnlyList<string> terms, params string?[] values) =>
-        terms.All(term => values.SelectMany(Words).Any(word => word.StartsWith(term, StringComparison.Ordinal)));
+    private static bool AllTermsMatch(IReadOnlyList<string> terms, string[] words)
+    {
+        foreach (var term in terms)
+        {
+            var matched = false;
+            foreach (var word in words)
+            {
+                if (word.StartsWith(term, StringComparison.Ordinal))
+                {
+                    matched = true;
+                    break;
+                }
+            }
+
+            if (!matched)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static SearchEntry[] BuildSearchEntries()
+    {
+        var pagePositions = SettingsNavigation.Items.ToDictionary(item => item.Page, item => item.Position);
+        var entries = new SearchEntry[Entries.Count];
+        for (var index = 0; index < Entries.Count; index++)
+        {
+            var entry = Entries[index];
+            var labelWords = Words(entry.DisplayLabel).ToArray();
+            var keywordWords = entry.Keywords is { Count: > 0 }
+                ? entry.Keywords.SelectMany(Words).ToArray()
+                : [];
+            var allWords = keywordWords.Length == 0 ? labelWords : [.. labelWords, .. keywordWords];
+            entries[index] = new SearchEntry(
+                entry,
+                index,
+                pagePositions[entry.Page],
+                labelWords,
+                allWords,
+                Words(entry.PageLabel).ToArray());
+        }
+
+        return entries;
+    }
+
+    private sealed record SearchEntry(
+        SettingsSearchEntry Entry,
+        int Index,
+        int PagePosition,
+        string[] LabelWords,
+        string[] AllWords,
+        string[] PageWords);
+
+    private readonly record struct SearchCandidate(SearchEntry Entry, int Rank);
+
+    private sealed class SearchCandidateComparer : IComparer<SearchCandidate>
+    {
+        public static SearchCandidateComparer Instance { get; } = new();
+
+        public int Compare(SearchCandidate x, SearchCandidate y)
+        {
+            var rank = x.Rank.CompareTo(y.Rank);
+            if (rank != 0)
+            {
+                return rank;
+            }
+
+            var page = x.Entry.PagePosition.CompareTo(y.Entry.PagePosition);
+            return page != 0 ? page : x.Entry.Index.CompareTo(y.Entry.Index);
+        }
+    }
 
     private static IEnumerable<string> Words(string? value)
     {

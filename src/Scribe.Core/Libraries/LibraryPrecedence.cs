@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Libraries;
@@ -48,9 +49,9 @@ public static class LibraryPrecedence
     /// </summary>
     public static IReadOnlyList<string> RetiredBuiltInIds { get; } = [];
 
-    private static readonly Dictionary<string, int> BuiltInIndex = BuiltInOrder
+    private static readonly FrozenDictionary<string, int> BuiltInIndex = BuiltInOrder
         .Select((id, index) => (id, index))
-        .ToDictionary(pair => pair.id, pair => pair.index, StringComparer.OrdinalIgnoreCase);
+        .ToFrozenDictionary(pair => pair.id, pair => pair.index, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Compares libraries by precedence; see <see cref="Compare(string, bool, string, string, bool, string)"/>.</summary>
     public static IComparer<DictionaryLibrary> Comparer { get; } =
