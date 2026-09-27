@@ -162,18 +162,20 @@ public class CaptureSignalAnalyzerTests
 
     [Theory]
     [MemberData(nameof(NonFiniteChannelCases))]
-    public void Non_finite_samples_match_the_release_050_analyzer(float left, float right)
+    public void Non_finite_samples_match_the_release_050_analyzer(float left, float right, bool expectedChannelsDiverge)
     {
         var raw = Interleaved(128, frame => frame == 17 ? left : 0.25f, frame => frame == 29 ? right : 0.125f);
 
         var expected = AnalyzeLikeRelease050(MemoryMarshal.Cast<byte, float>(raw), channels: 2, sampleRate: 48_000);
         var actual = CaptureSignalAnalyzer.Analyze(raw, Stereo48Float);
+        var expectedDivergence = ChannelsDivergeLikeRelease050(expected.PerChannel);
 
         AssertSameFloat(expected.Peak, actual.Peak);
         AssertSameFloat(expected.Rms, actual.Rms);
         AssertSameFloat(expected.DcOffset, actual.DcOffset);
         Assert.Equal(expected.HasSilentChannel, actual.HasSilentChannel);
-        Assert.Equal(expected.ChannelsDiverge, actual.ChannelsDiverge);
+        Assert.Equal(expectedChannelsDiverge, expectedDivergence);
+        Assert.Equal(expectedChannelsDiverge, actual.ChannelsDiverge);
         Assert.Equal(expected.PerChannel.Count, actual.PerChannel.Count);
         for (var index = 0; index < expected.PerChannel.Count; index++)
         {
@@ -182,18 +184,28 @@ public class CaptureSignalAnalyzerTests
         }
     }
 
-    public static TheoryData<float, float> NonFiniteChannelCases() => new()
+    public static TheoryData<float, float, bool> NonFiniteChannelCases() => new()
     {
-        { float.NaN, 0.75f },
-        { 0.75f, float.NaN },
-        { float.NaN, float.NaN },
-        { float.PositiveInfinity, 0.75f },
-        { 0.75f, float.PositiveInfinity },
-        { float.PositiveInfinity, float.PositiveInfinity },
-        { float.NegativeInfinity, 0.75f },
-        { 0.75f, float.NegativeInfinity },
-        { float.PositiveInfinity, float.NegativeInfinity },
+        { float.NaN, 0.75f, false },
+        { 0.75f, float.NaN, false },
+        { float.NaN, float.NaN, false },
+        { float.PositiveInfinity, 0.75f, true },
+        { 0.75f, float.PositiveInfinity, true },
+        { float.PositiveInfinity, float.PositiveInfinity, false },
+        { float.NegativeInfinity, 0.75f, true },
+        { 0.75f, float.NegativeInfinity, true },
+        { float.PositiveInfinity, float.NegativeInfinity, false },
+        { float.NaN, float.PositiveInfinity, false },
+        { float.NegativeInfinity, float.NaN, false },
     };
+
+    private static bool ChannelsDivergeLikeRelease050(IReadOnlyList<ChannelLevel> perChannel)
+    {
+        if (perChannel.Count < 2) return false;
+        var loudest = perChannel.Max(c => c.Rms);
+        var quietest = perChannel.Min(c => c.Rms);
+        return loudest > 0 && quietest / loudest < 0.5f;
+    }
 
     private static CaptureSignalReport AnalyzeLikeRelease050(ReadOnlySpan<float> samples, int channels, int sampleRate)
     {
