@@ -19,6 +19,11 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     private CompiledRule[] _rules = [];
     private SnippetRule[] _snippetRules = [];
 
+    // The rules the last Build compiled, by all a CompiledRule reads of its entry. A rule never changes and its Regex is
+    // safe to share, so the next generation takes an unchanged rule from here instead of compiling it again. Keyed by
+    // content, never by generation; each Build replaces it whole, so it holds only the newest rules.
+    private Dictionary<RuleKey, CompiledRule>? _compiled;
+
     // Two flags because a caller that brings its own dictionary rules (a vocabulary generation) needs only the snippets:
     // loading this post-processor's own rules would read the libraries for nothing.
     private bool _rulesLoaded;
@@ -334,23 +339,41 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     private CompiledRule[] Build(IReadOnlyList<DictionaryEntry> entries)
     {
+        var previous = Volatile.Read(ref _compiled);
+        var next = new Dictionary<RuleKey, CompiledRule>(entries.Count);
         var rules = new List<CompiledRule>(entries.Count);
         foreach (var entry in entries)
         {
             if (string.IsNullOrEmpty(entry.Pattern)) continue;
-            try
+            var key = new RuleKey(entry.Pattern, entry.Replacement, entry.WholeWord);
+            if (!next.TryGetValue(key, out var rule))
             {
-                rules.Add(new CompiledRule(entry));
+                if (previous is null || !previous.TryGetValue(key, out rule))
+                {
+                    // Never kept when it fails, so a rejected entry is logged at every build, as before.
+                    try
+                    {
+                        rule = new CompiledRule(entry);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogSkippedEntry(_logger, entry, ex);
+                        continue;
+                    }
+                }
+
+                next[key] = rule;
             }
-            catch (Exception ex)
-            {
-                LogSkippedEntry(_logger, entry, ex);
-            }
+
+            rules.Add(rule);
         }
 
+        Volatile.Write(ref _compiled, next);
         _logger.LogDebug("Post-processor loaded {Count} dictionary rule(s).", rules.Count);
         return rules.ToArray();
     }
+
+    private readonly record struct RuleKey(string Pattern, string Replacement, bool WholeWord);
 
     // A trigger phrase and a dictionary pattern are the user's own words, and a regex error message
     // quotes the pattern it rejected. So the warning carries the id, the length and the exception
