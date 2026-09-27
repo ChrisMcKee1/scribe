@@ -48,9 +48,14 @@ internal static class Program
                 "build and run emulated too, which is not what a native install executes.");
         }
 
+        var useDefaultJob = args.Contains("--scribe-default-job", StringComparer.Ordinal);
+        var benchmarkArgs = args
+            .Where(arg => !string.Equals(arg, "--scribe-default-job", StringComparison.Ordinal))
+            .ToArray();
+
         // DontEnforcePowerPlan: without it BenchmarkDotNet switches the whole machine to High
         // performance for the run, which neither represents a user's PC nor is this tool's to change.
-        var job = Job.Default
+        var job = (useDefaultJob ? Job.Default : Job.ShortRun)
             .WithPlatform(platform)
             .WithMsBuildArguments($"/p:RuntimeIdentifier={runtimeIdentifier}")
             .DontEnforcePowerPlan();
@@ -81,7 +86,7 @@ internal static class Program
         var config = ManualConfig.Create(DefaultConfig.Instance)
             .AddJob(job)
             .AddColumn(new ExecutionEnvironmentColumn());
-        var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, config).ToList();
+        var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(benchmarkArgs, config).ToList();
 
         PrintResultEnvironment(host, summaries);
         return 0;

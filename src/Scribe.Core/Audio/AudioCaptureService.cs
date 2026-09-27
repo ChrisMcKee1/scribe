@@ -708,7 +708,9 @@ public sealed class AudioCaptureService : IAudioCaptureService
             ? mono
             : new WdlResamplingSampleProvider(mono, TargetSampleRate);
 
-        return ReadAll(resampled, EstimateResampledSampleCount(length, format));
+        return ReferenceEquals(resampled, mono)
+            ? ReadAll(resampled, EstimateResampledSampleCount(length, format))
+            : ReadAll(resampled);
     }
 
     internal static float[] ReadAll(ISampleProvider provider) => ReadAll(provider, ArrayPool<float>.Shared);

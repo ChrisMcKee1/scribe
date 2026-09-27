@@ -51,15 +51,8 @@ public sealed record CaptureSignalReport(
         get
         {
             if (PerChannel.Count < 2) return false;
-            var loudest = 0f;
-            var quietest = float.MaxValue;
-            for (var index = 0; index < PerChannel.Count; index++)
-            {
-                var rms = PerChannel[index].Rms;
-                if (rms > loudest) loudest = rms;
-                if (rms < quietest) quietest = rms;
-            }
-
+            var loudest = PerChannel.Max(c => c.Rms);
+            var quietest = PerChannel.Min(c => c.Rms);
             return loudest > 0 && quietest / loudest < 0.5f;
         }
     }
@@ -341,12 +334,27 @@ public static class CaptureSignalAnalyzer
         return new CaptureSignalReport(
             2,
             sampleRate,
-            Math.Max(peak0, peak1),
+            MaxLikeEnumerable(peak0, peak1),
             (float)Math.Sqrt((sumSquares0 + sumSquares1) / sampleCount),
             clipped / (double)sampleCount,
             nearSilent / (double)sampleCount,
             (float)(sum / sampleCount),
             [new ChannelLevel(0, peak0, rms0), new ChannelLevel(1, peak1, rms1)]);
+    }
+
+    private static float MaxLikeEnumerable(float first, float second)
+    {
+        if (float.IsNaN(first))
+        {
+            return second;
+        }
+
+        if (float.IsNaN(second))
+        {
+            return first;
+        }
+
+        return first > second ? first : second;
     }
 
     private static CaptureSignalReport Analyze<T>(
