@@ -50,7 +50,7 @@ internal static class Program
 
         // DontEnforcePowerPlan: without it BenchmarkDotNet switches the whole machine to High
         // performance for the run, which neither represents a user's PC nor is this tool's to change.
-        var job = Job.ShortRun
+        var job = Job.Default
             .WithPlatform(platform)
             .WithMsBuildArguments($"/p:RuntimeIdentifier={runtimeIdentifier}")
             .DontEnforcePowerPlan();

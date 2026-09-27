@@ -14,6 +14,37 @@ public sealed class OverlayLogSourceTests
     }
 
     [Fact]
+    public void Overlay_warning_and_error_lines_are_prompt_writes()
+    {
+        var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
+        var write = MethodBody(source, "public static void Write");
+        var prompt = MethodBody(source, "private static void WritePromptLine");
+        var requires = MethodBody(source, "private static bool RequiresPromptWrite");
+
+        Assert.Contains("RequiresPromptWrite(level)", write, StringComparison.Ordinal);
+        Assert.Contains("level is \"Warning\" or \"Error\" or \"Critical\"", requires, StringComparison.Ordinal);
+        Assert.Contains("Flush(timeout)", prompt, StringComparison.Ordinal);
+        Assert.Contains("AppendWithRetry(Path", prompt, StringComparison.Ordinal);
+        Assert.Contains("lock (WriteGate)", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Overlay_error_keeps_stack_frames_but_not_exception_messages()
+    {
+        var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
+        var error = MethodBody(source, "public static void Error");
+        var format = MethodBody(source, "private static string FormatExceptionShape");
+        var frames = MethodBody(source, "private static void AppendStackFrames");
+
+        Assert.Contains("FormatExceptionShape(ex)", error, StringComparison.Ordinal);
+        Assert.Contains("ex.GetType().Name", format, StringComparison.Ordinal);
+        Assert.Contains("ex.HResult", format, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Message", format, StringComparison.Ordinal);
+        Assert.Contains("StartsWith(\"at \", StringComparison.Ordinal)", frames, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Message", frames, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Overlay_logging_keeps_the_share_retry_append_contract_on_the_writer_thread()
     {
         var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));

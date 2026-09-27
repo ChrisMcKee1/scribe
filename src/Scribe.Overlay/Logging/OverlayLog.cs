@@ -21,10 +21,13 @@ public static class OverlayLog
     private const int MaxQueuedLines = 4096;
     private const int MaxBatchLines = 128;
     private const int WriteAttempts = 12;
+    private const int PromptWriteTimeoutMs = 250;
+    private const int UnhandledFlushTimeoutMs = 1000;
     private const int FlushTimeoutMs = 1000;
 
     private static readonly object StartGate = new();
     private static readonly object PathGate = new();
+    private static readonly object WriteGate = new();
     private static readonly Channel<string> Queue = Channel.CreateBounded<string>(new BoundedChannelOptions(MaxQueuedLines)
     {
         SingleReader = true,
@@ -89,6 +92,15 @@ public static class OverlayLog
         {
             EnsureStarted();
             var line = $"{DateTime.Now:HH:mm:ss.fff} [{level}] Overlay: {message}";
+            if (RequiresPromptWrite(level))
+            {
+                var timeout = level == "Error"
+                    ? TimeSpan.FromMilliseconds(UnhandledFlushTimeoutMs)
+                    : TimeSpan.FromMilliseconds(PromptWriteTimeoutMs);
+                WritePromptLine(line, timeout);
+                return;
+            }
+
             var dropped = Interlocked.Exchange(ref _dropped, 0);
             if (dropped > 0 && !Queue.Writer.TryWrite(DropNotice(dropped)))
             {
@@ -108,10 +120,79 @@ public static class OverlayLog
 
     public static void Warn(string message) => Write(message, "Warning");
 
-    public static void Error(string message, Exception? ex = null) =>
-        Write(ex is null ? message : string.Create(
-            CultureInfo.InvariantCulture,
-            $"{message} ({ex.GetType().Name} 0x{ex.HResult:X8})"), "Error");
+    public static void Error(string message, Exception? ex = null)
+    {
+        Write(ex is null ? message : message + FormatExceptionShape(ex), "Error");
+    }
+
+    private static bool RequiresPromptWrite(string level)
+    {
+        return level is "Warning" or "Error" or "Critical";
+    }
+
+    private static string FormatExceptionShape(Exception ex)
+    {
+        var builder = new StringBuilder()
+            .Append(" (")
+            .Append(ex.GetType().Name)
+            .Append(" 0x")
+            .Append(ex.HResult.ToString("X8", CultureInfo.InvariantCulture))
+            .Append(')');
+        AppendExceptionFrames(builder, ex);
+        return builder.ToString();
+    }
+
+    private static void AppendExceptionFrames(StringBuilder builder, Exception? exception)
+    {
+        if (exception is null)
+        {
+            return;
+        }
+
+        AppendStackFrames(builder, exception.StackTrace);
+        if (exception is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                AppendExceptionFrames(builder, inner);
+            }
+
+            return;
+        }
+
+        AppendExceptionFrames(builder, exception.InnerException);
+    }
+
+    private static void AppendStackFrames(StringBuilder builder, string? stackTrace)
+    {
+        if (string.IsNullOrWhiteSpace(stackTrace))
+        {
+            return;
+        }
+
+        foreach (var line in stackTrace.Split([Environment.NewLine], StringSplitOptions.None))
+        {
+            if (line.AsSpan().TrimStart().StartsWith("at ", StringComparison.Ordinal))
+            {
+                builder.AppendLine().Append(line);
+            }
+        }
+    }
+
+    private static void WritePromptLine(string line, TimeSpan timeout)
+    {
+        var dropped = Interlocked.Exchange(ref _dropped, 0);
+        if (dropped > 0 && !Queue.Writer.TryWrite(DropNotice(dropped)))
+        {
+            Interlocked.Add(ref _dropped, dropped);
+        }
+
+        Flush(timeout);
+        lock (WriteGate)
+        {
+            AppendWithRetry(Path, line + Environment.NewLine);
+        }
+    }
 
     internal static bool Flush(TimeSpan timeout)
     {
@@ -177,15 +258,15 @@ public static class OverlayLog
         {
             while (await Queue.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
-                Batch.Clear();
-                while (Batch.Count < MaxBatchLines && Queue.Reader.TryRead(out var line))
-                {
-                    Batch.Add(line);
-                }
-
                 Volatile.Write(ref _writing, 1);
                 try
                 {
+                    Batch.Clear();
+                    while (Batch.Count < MaxBatchLines && Queue.Reader.TryRead(out var line))
+                    {
+                        Batch.Add(line);
+                    }
+
                     WriteBatch(Batch);
                 }
                 finally
@@ -219,7 +300,10 @@ public static class OverlayLog
                 Pending.AppendLine(line);
             }
 
-            AppendWithRetry(Path, Pending.ToString());
+            lock (WriteGate)
+            {
+                AppendWithRetry(Path, Pending.ToString());
+            }
         }
         catch
         {

@@ -529,6 +529,9 @@ cause of one.**
 - Both processes append to the **same** daily file:
   `%LOCALAPPDATA%\ScribeData\logs\scribe-<yyyyMMdd>.log` (so dictation + overlay events
   interleave on one timeline).
+- Both processes batch writes now. The shared file is a merged append stream, not a total-order event
+  log: lines from the app and overlay can appear out of timestamp order when their batches flush at different times.
+  Readers must sort by the line timestamp when reconstructing an exact cross-process sequence.
 - All log writers open with **`FileShare.ReadWrite` + retry + swallow** and are
   **fully non‑throwing** end to end (`DailyLogFile`, behind `FileLoggerProvider`'s queued writer, on
   the app side; `OverlayLog` on the overlay side). A throwing logger once tore down a healthy overlay
