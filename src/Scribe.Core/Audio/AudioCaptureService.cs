@@ -648,7 +648,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
         (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         || (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample is 16 or 24 or 32);
 
-    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format)
+    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format) =>
+        ReadAll(CreateConversionChain(bytes, length, format), ArrayPool<float>.Shared, RequestLimit(format));
+
+    /// <summary>
+    /// The device-format bytes as 16 kHz mono: NAudio's converter for the sample format, the downmix (which also bounds
+    /// every read of the converter), and the resampler when the device rate is not 16 kHz.
+    /// </summary>
+    internal static ISampleProvider CreateConversionChain(byte[] bytes, int length, WaveFormat format)
     {
         var rawStream = new RawSourceWaveStream(bytes, 0, length, format);
         ISampleProvider source = rawStream.ToSampleProvider();
@@ -656,17 +663,38 @@ public sealed class AudioCaptureService : IAudioCaptureService
         // Mono too: the downmix passes a mono source through unchanged, and it bounds every read of the converter.
         ISampleProvider mono = new MonoDownmixSampleProvider(source);
 
-        ISampleProvider resampled = mono.WaveFormat.SampleRate == TargetSampleRate
+        return mono.WaveFormat.SampleRate == TargetSampleRate
             ? mono
             : new WdlResamplingSampleProvider(mono, TargetSampleRate);
-
-        return ReadAll(resampled);
     }
+
+    /// <summary>Most samples one read of the conversion asks for, where <see cref="RequestLimit"/> bounds it.</summary>
+    internal const int ResampleRequestSamples = 4_096;
+
+    /// <summary>
+    /// How many samples one read of the conversion may ask for. NAudio's WDL resampler resizes its input buffer to each
+    /// request on every call and zero pads twice the shortfall of the last one, so the doubling requests of
+    /// <see cref="ReadAll(ISampleProvider)"/> cost it several large object heap arrays per dictation. The requests are
+    /// bounded only where that cannot change a sample: when the device rate is a multiple of 16 kHz the resampling ratio is
+    /// an integer, every position the resampler computes is exact, and its output does not depend on how it is asked for
+    /// (pinned by <c>AudioCaptureServiceReadRequestTests</c>). At other rates (44.1 kHz and its multiples, 22.05, 8 kHz) the
+    /// resampler rounds its position differently at every call boundary, so the requests stay exactly as they were.
+    /// </summary>
+    internal static int RequestLimit(WaveFormat format) =>
+        format.SampleRate > 0 && format.SampleRate % TargetSampleRate == 0 ? ResampleRequestSamples : int.MaxValue;
 
     internal static float[] ReadAll(ISampleProvider provider) => ReadAll(provider, ArrayPool<float>.Shared);
 
-    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool)
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool) =>
+        ReadAll(provider, pool, int.MaxValue);
+
+    /// <param name="provider">What to read until it returns nothing.</param>
+    /// <param name="pool">Where the scratch comes from.</param>
+    /// <param name="maxRequest">Most samples one read asks for; <see cref="int.MaxValue"/> asks for the rest of the scratch.</param>
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool, int maxRequest)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRequest);
+
         // The shared pool keeps returned arrays for whoever rents next, and Return(clearArray) only
         // clears an array the pool decides to keep, so this dictation's audio is wiped before each
         // array goes back.
@@ -685,7 +713,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     samples = expanded;
                 }
 
-                var read = provider.Read(samples.AsSpan(count));
+                var read = provider.Read(samples.AsSpan(count, Math.Min(maxRequest, samples.Length - count)));
                 if (read <= 0)
                 {
                     return samples.AsSpan(0, count).ToArray();
