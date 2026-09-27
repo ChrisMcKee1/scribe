@@ -253,7 +253,7 @@ internal static class LibraryVocabularyOrigins
 
     public static void Record(LibraryVocabulary vocabulary, LibraryComposition composition)
     {
-        var origins = new Dictionary<DictionaryEntry, string>(ReferenceEqualityComparer.Instance);
+        var origins = new Dictionary<DictionaryEntry, string>(vocabulary.Entries.Count, ReferenceEqualityComparer.Instance);
         foreach (var entry in vocabulary.Entries)
         {
             if (composition.LibraryOf(entry) is { } id)

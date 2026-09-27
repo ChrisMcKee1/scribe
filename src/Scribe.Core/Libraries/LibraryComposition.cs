@@ -69,6 +69,7 @@ public sealed class LibraryComposition
         }
 
         _dictionary = [.. dictionary.Where(entry => entry is { Enabled: true })];
+        _dictionaryByKey.EnsureCapacity(_dictionary.Count);
         foreach (var entry in _dictionary)
         {
             var key = LibraryTermKey.From(entry.Pattern);
@@ -83,7 +84,26 @@ public sealed class LibraryComposition
             MarkActiveLegacyRows();
         }
 
-        var rules = new List<ComposedRule>();
+        var ruleCapacity = 0;
+        foreach (var source in _sources)
+        {
+            if (!source.Participates)
+            {
+                continue;
+            }
+
+            for (var row = 0; row < source.Keys.Length; row++)
+            {
+                if (source.Content.Rows[row].Values.Enabled && !source.Keys[row].IsEmpty)
+                {
+                    ruleCapacity++;
+                }
+            }
+        }
+
+        _ruleByKey.EnsureCapacity(ruleCapacity);
+        _sourceOfRule.EnsureCapacity(ruleCapacity);
+        var rules = new List<ComposedRule>(ruleCapacity);
         for (var tier = 0; tier < 3; tier++)
         {
             foreach (var source in _sources.Where(source => source.Participates))
@@ -396,7 +416,7 @@ public sealed class LibraryComposition
     /// </summary>
     public IReadOnlyDictionary<string, LibraryCoverage> Coverage()
     {
-        var covering = new Dictionary<string, LibraryCoverage>(StringComparer.OrdinalIgnoreCase);
+        var covering = new Dictionary<string, LibraryCoverage>(Rules.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var composed in Rules)
         {
             var source = _sourceOfRule[composed.Entry];
@@ -416,7 +436,7 @@ public sealed class LibraryComposition
     public DictionaryOverlapReport OverlapReport(IReadOnlyList<DictionaryEntry> personal)
     {
         ArgumentNullException.ThrowIfNull(personal);
-        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var names = new Dictionary<string, string>(Rules.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var composed in Rules)
         {
             names.TryAdd(composed.Key.Value, _sourceOfRule[composed.Entry].Content.Name);
