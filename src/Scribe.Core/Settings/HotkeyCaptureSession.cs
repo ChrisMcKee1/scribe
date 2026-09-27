@@ -64,7 +64,7 @@ public readonly record struct HotkeyCaptureStep(
 /// key stay the chord they always were, whose Windows key is kept from Windows from its first press (see
 /// <c>ChordStateMachine</c>). Only the middle, Back and Forward buttons can be recorded
 /// (<see cref="MouseButtons.IsBindable"/>); the left and right buttons are refused and keep their meaning. A release
-/// the capture never saw go down (the key that pressed Set, a button held before it) changes nothing.
+/// the capture never saw go down (the key that pressed Change, a button held before it) changes nothing.
 /// </remarks>
 public sealed class HotkeyCaptureSession
 {
@@ -115,13 +115,14 @@ public sealed class HotkeyCaptureSession
     /// does the release of one held across that time, which the text says in one plain clause.
     /// </summary>
     public const string MouseButtonsHint =
-        "Middle, Back and Forward mouse buttons bind directly: choose Set, then press the button with the pointer on this " +
-        "window, on its own or after a key (for a chord such as Ctrl and Back, press the key first). For other mouse " +
-        "buttons, set the button to a key such as F13 in your mouse's software, then choose Set and press it here. Left " +
-        "and right clicks can't be used. While Scribe runs, a bound button no longer does its usual job in other apps, so " +
-        "Back stops going back in your browser, with two exceptions: a game that reads the mouse directly may still see " +
-        "it, and if Windows briefly stops passing input to Scribe, a click made or held while that lasts gets through. " +
-        "Pressed with Ctrl, Shift, Alt, Win or the Narrator key, a button bound on its own still does its usual job.";
+        "Middle, Back and Forward mouse buttons bind directly: choose Change, then press the button with the pointer " +
+        "on this window, on its own or after a key (for a shortcut such as Ctrl and Back, press the key first). For " +
+        "other mouse buttons, set the button to a key such as F13 in your mouse's software, then choose Change and " +
+        "press it here. Left and right clicks can't be used. While Scribe runs, a bound button no longer does its " +
+        "usual job in other apps, so Back stops going back in your browser, with two exceptions: a game that reads " +
+        "the mouse directly may still see it, and if Windows briefly stops passing input to Scribe, a click made or " +
+        "held while that lasts gets through. Pressed with Ctrl, Shift, Alt, Win or the Narrator key, a button bound " +
+        "on its own still does its usual job.";
 
     /// <summary>The inputs recorded so far, in the order they went down.</summary>
     public IReadOnlyList<uint> Recorded => _recorded;

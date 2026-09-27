@@ -274,7 +274,7 @@ public sealed class DefaultHotkeyTests
         Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
         Assert.Equal(
             "Shortcuts set to the defaults: hold Page Down for dictation with AI cleanup and hold Page Up for dictation " +
-            "only. Choose Save to use them.",
+            "without AI cleanup. Choose Save to use them.",
             restored.Message);
     }
 
@@ -305,7 +305,7 @@ public sealed class DefaultHotkeyTests
         Assert.True(second.SaveNeeded);
         Assert.Equal(
             "The defaults are already shown: hold Page Down for dictation with AI cleanup and hold Page Up for " +
-            "dictation only. Choose Save to use them.",
+            "dictation without AI cleanup. Choose Save to use them.",
             second.Message);
     }
 
@@ -375,7 +375,9 @@ public sealed class DefaultHotkeyTests
         Assert.Equal(
             "Restores hold Page Down for dictation and hold Page Up for the shortcut without AI cleanup.",
             DefaultHotkeyRestore.Caption);
-        Assert.Contains("hold Page Down for dictation with AI cleanup and hold Page Up for dictation only", hint);
+        Assert.Contains(
+            "hold Page Down for dictation with AI cleanup and hold Page Up for dictation without AI cleanup", hint);
+        Assert.DoesNotContain("dictation only", hint);
         Assert.Contains("Page Down and Page Up pressed on their own no longer reach other apps", hint);
         Assert.Contains("a presentation remote stops changing slides", hint);
         Assert.Contains("With Ctrl, Shift, Alt, Win or the Narrator key held they work in other apps as before", hint);

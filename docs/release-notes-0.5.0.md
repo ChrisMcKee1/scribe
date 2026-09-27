@@ -99,21 +99,21 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
 
 ## Mouse buttons
 
-- **Middle, Back and Forward bind directly.** In Settings, Dictation, choose Set and press the button
-  with the pointer on the Settings window: the middle button (on most mice, pressing the wheel), or the
-  Back or Forward side button. Either shortcut can use one, in hold or toggle mode, on its own or after
-  a key, such as Ctrl then Back; for a key and a button together, press the key first. Left and right
-  clicks can't be used.
+- **Middle, Back and Forward bind directly.** In Settings, Dictation, choose Change next to a shortcut
+  and press the button with the pointer on the Settings window: the middle button (on most mice,
+  pressing the wheel), or the Back or Forward side button. Either shortcut can use one, whether you
+  press and hold or press to start and stop, on its own or after a key, such as Ctrl then Back; for a
+  key and a button together, press the key first. Left and right clicks can't be used.
 - **Every other mouse button binds through the key it sends.** Windows passes only five mouse buttons
   to apps: left, right, middle, Back and Forward. For any other button, set it to a key such as F13 in
-  your mouse's software, then choose Set and press the button. F13 to F24, media and browser keys, and
-  shortcuts with Ctrl, Alt or Shift all bind this way, and a button that already sends such a key binds
-  as it is. A key such as F13 on its own works best: with a shortcut, Windows still sees its Ctrl, Alt
-  and Shift keys, and Set warns you when a Ctrl+Shift or Alt+Shift shortcut could switch your keyboard
-  language or layout.
-- **Set records more.** Besides one or two keys, Set now records the middle, Back and Forward mouse
-  buttons, and a key or button held with Ctrl, Alt or Shift, including more than one of them, such as
-  Ctrl+Shift+F13. Before, it stopped at two keys.
+  your mouse's software, then choose Change and press the button. F13 to F24, media and browser keys,
+  and shortcuts with Ctrl, Alt or Shift all bind this way, and a button that already sends such a key
+  binds as it is. A key such as F13 on its own works best: with a shortcut, Windows still sees its Ctrl,
+  Alt and Shift keys, and Settings warns you when a Ctrl+Shift or Alt+Shift shortcut could switch your
+  keyboard language or layout.
+- **A shortcut can hold more.** Besides one or two keys, Change now records the middle, Back and
+  Forward mouse buttons, and a key or button held with Ctrl, Alt or Shift, including more than one of
+  them, such as Ctrl+Shift+F13. Before, it stopped at two keys.
 - **A button bound on its own no longer does its usual job in other apps,** so a bound Back button
   stops going back in your browser while Scribe runs. Pressed with Ctrl, Shift, Alt, Win or the
   Narrator key, it still does its usual job, and so does every button while dictation is paused from
@@ -144,7 +144,7 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
   go where its press went, as long as its next repeat comes within the time the keyboard's repeat
   settings allow (under a second with the Windows defaults); a later repeat, or a keystroke a program
   sends stamped with a time in the future, is taken as a new press.
-- **Text going into those windows is always typed, never pasted,** even with "Paste it in" chosen: a
+- **Text going into those windows is always typed, never pasted,** even with "Paste the text" chosen: a
   remote session reads the clipboard only when it pastes, which can be after Scribe has put back what
   you had copied.
 - **It is typed in small batches with a short pause between them** instead of bursts of up to 100
@@ -197,8 +197,8 @@ Nothing was removed except the Libraries page's tip line.
 
 - No dependency changes: the speech engine, the AI libraries and the Windows App SDK are the same
   builds as in 0.4.4.
-- The shortcut self-healing that releases a key Windows still thinks is held covers keys only. It no
-  longer starts a release once you choose Set, until Set is done, and immediately before each release
+- The shortcut self-healing that releases a key Windows still thinks is held covers keys only. It
+  starts no release while you record a new shortcut with Change, and immediately before each release
   it checks that nothing has reset Scribe's view of your keys since the release was asked for. After
   such a reset it waits for your shortcut's next release instead of guessing.
 - The log says whether each shortcut uses a key, a mouse button or both, and when Scribe's mouse hook
@@ -222,11 +222,11 @@ Nothing was removed except the Libraries page's tip line.
   bind that key.
 - While Scribe watches the mouse, every pointer move passes through Scribe, so a moment when Scribe is
   busy can briefly hold up the pointer.
-- Set records one modifier and a key, such as Ctrl+F13, as those two exact keys, left or right. If a
-  mouse button set to such a pair doesn't respond, set it to a key on its own, such as F13, or add a
-  second modifier.
-- Set ignores a few unassigned or reserved key codes, so a button whose software sends one of those
-  can't be bound. F13 to F24 and the media and browser keys all work.
+- A shortcut of one modifier and a key, such as Ctrl+F13, is recorded as those two exact keys, left
+  or right. If a mouse button set to such a pair doesn't respond, set it to a key on its own, such as
+  F13, or add a second modifier.
+- Recording a shortcut ignores a few unassigned or reserved key codes, so a button whose software
+  sends one of those can't be bound. F13 to F24 and the media and browser keys all work.
 - Very rarely, after a press of a bound button that Scribe could not see (on a Windows security
   prompt, say), letting go of it while a window of an app running as administrator is in front can
   leave Windows thinking the button is still held. The next time you use the button with another
@@ -234,7 +234,7 @@ Nothing was removed except the Libraries page's tip line.
 - A key you press at the very moment the self-healing releases it can be let go in Windows while you
   hold it; let go of the key and press it again. If another program holds up keyboard input for more
   than a quarter of a second, a release the self-healing is already sending can also arrive just after
-  you choose Set.
+  you choose Change.
 - Like other apps that are not running as administrator, Scribe's shortcuts, mouse buttons included,
   may not respond while a window of an app running as administrator is active.
 

@@ -76,10 +76,11 @@ public static class DefaultHotkeyRestore
     public static string Caption =>
         "Restores hold Page Down for dictation and hold Page Up for the shortcut without AI cleanup.";
 
-    // "hold Page Down for dictation with AI cleanup and hold Page Up for dictation only", built from the bindings.
+    // "hold Page Down for dictation with AI cleanup and hold Page Up for dictation without AI cleanup", built from the
+    // bindings. Settings calls the second one the shortcut without AI cleanup, so this never says "dictation only".
     private static string Defaults =>
         $"{Phrase(HotkeyBinding.DefaultDictation)} for dictation with AI cleanup and " +
-        $"{Phrase(HotkeyBinding.DefaultDictationOnly)} for dictation only";
+        $"{Phrase(HotkeyBinding.DefaultDictationOnly)} for dictation without AI cleanup";
 
     private static string Phrase(HotkeyBinding binding) =>
         $"{HotkeyText.Verb(binding.Mode).ToLowerInvariant()} {HotkeyText.Describe(binding)}";

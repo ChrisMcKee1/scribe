@@ -263,8 +263,8 @@ public sealed class HotkeyCaptureSessionTests
 
         Assert.StartsWith("Middle, Back and Forward mouse buttons bind directly", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains(
-            "For other mouse buttons, set the button to a key such as F13 in your mouse's software, then choose Set and " +
-            "press it here.",
+            "For other mouse buttons, set the button to a key such as F13 in your mouse's software, then choose Change " +
+            "and press it here.",
             HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("Left and right clicks can't be used", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("press the key first", HotkeyCaptureSession.MouseButtonsHint);
@@ -546,6 +546,21 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Contains("Press and hold", code);
         Assert.DoesNotContain("two-part chord", xaml);
         Assert.Contains("The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.", code);
+    }
+
+    [Fact]
+    public void The_mouse_buttons_hint_names_the_button_the_page_shows()
+    {
+        // The hint says which button to choose, so it names the capture button by the label on the page. The redesign
+        // renamed Set to Change and the hint kept saying Set, pointing at a button the page no longer had.
+        var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        var button = System.Text.RegularExpressions.Regex.Match(xaml, "x:Name=\"CaptureButton\"\\s+Content=\"(?<label>[^\"]+)\"");
+        Assert.True(button.Success, "SettingsWindow.xaml has no CaptureButton with a Content label.");
+
+        var chosen = System.Text.RegularExpressions.Regex.Matches(HotkeyCaptureSession.MouseButtonsHint, @"\bchoose (?<word>\w+)")
+            .Select(match => match.Groups["word"].Value)
+            .ToList();
+        Assert.Equal([button.Groups["label"].Value, button.Groups["label"].Value], chosen);
     }
 
     private static string RepositoryRoot()

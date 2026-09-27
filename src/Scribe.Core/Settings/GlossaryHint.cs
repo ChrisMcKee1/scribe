@@ -137,8 +137,8 @@ public static class GlossaryHint
         {
             (true, true) => " It is applied on this PC.",
             (true, false) => " All of them are applied on this PC.",
-            (false, true) => " Post-processing is off, so it is not applied on this PC.",
-            (false, false) => " Post-processing is off, so none of them are applied on this PC.",
+            (false, true) => " Your dictionary and snippets are turned off, so it is not applied on this PC.",
+            (false, false) => " Your dictionary and snippets are turned off, so none of them are applied on this PC.",
         });
     }
 

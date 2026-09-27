@@ -265,7 +265,7 @@ keyboard's repeat settings allow (under a second with the Windows defaults, a se
 most). A key whose repeat comes later than that, or a keystroke a program sends stamped with a time
 in the future, is taken as a new press. And if you let go of a key Scribe is letting through where
 Scribe cannot see it, on the lock screen for example, its next press goes through once, whole, too.
-Text is always typed into a remote window, never pasted, even when you chose Paste it in, because a
+Text is always typed into a remote window, never pasted, even when you chose Paste the text, because a
 remote session reads the clipboard only when it pastes, which can be after Scribe has put back what
 you had copied. It is typed in small batches with a short pause between them, never hundreds of
 keystrokes at once, which adds about a quarter of a second to a 180-character dictation and about a
