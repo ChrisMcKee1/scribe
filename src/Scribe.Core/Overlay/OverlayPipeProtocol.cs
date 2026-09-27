@@ -11,6 +11,8 @@ namespace Scribe.Core.Overlay;
 /// </summary>
 public static class OverlayPipeProtocol
 {
+    private static readonly string[] MeterLines = CreateMeterLines();
+
     /// <summary>Launches the helper ahead of the first show; the window is built hidden, so it does nothing else.</summary>
     public const string Warmup = "WARMUP";
 
@@ -78,7 +80,10 @@ public static class OverlayPipeProtocol
     public static string ProcessingLine(bool aiCleanup) => Processing + (aiCleanup ? " 1" : " 0");
 
     /// <summary>The live input level, scaled to 0 to 1000.</summary>
-    public static string MeterLine(int level) => Meter + " " + level.ToString(CultureInfo.InvariantCulture);
+    public static string MeterLine(int level) =>
+        (uint)level < (uint)MeterLines.Length
+            ? MeterLines[level]
+            : Meter + " " + level.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>The anchor.</summary>
     public static string PositionLine(OverlayPosition position) => Position + " " + position;
@@ -88,5 +93,16 @@ public static class OverlayPipeProtocol
     {
         var clean = (argument ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
         return clean.Length == 0 ? verb : verb + " " + clean;
+    }
+
+    private static string[] CreateMeterLines()
+    {
+        var lines = new string[1001];
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lines[i] = Meter + " " + i.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return lines;
     }
 }

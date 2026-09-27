@@ -16,7 +16,9 @@ public sealed class OverlayPipeProtocolTests
     [Fact]
     public void Every_verb_the_app_can_send_is_one_the_overlay_parses_and_no_other()
     {
-        var parsed = Regex.Matches(Dispatch(), "case \"(?<verb>[A-Z]+)\":").Select(m => m.Groups["verb"].Value).ToArray();
+        var parsed = Regex.Matches(Dispatch(), "cmd\\.Equals\\(\"(?<verb>[A-Z]+)\", StringComparison\\.OrdinalIgnoreCase\\)")
+            .Select(m => m.Groups["verb"].Value)
+            .ToArray();
 
         Assert.Equal(parsed.Distinct().Count(), parsed.Length);
         Assert.Equal(OverlayPipeProtocol.Verbs.Order(StringComparer.Ordinal), parsed.Order(StringComparer.Ordinal));
@@ -56,7 +58,7 @@ public sealed class OverlayPipeProtocolTests
         Assert.Contains(verb, OverlayPipeProtocol.Verbs);
 
         Assert.Contains(kind.ToString(), EnumMembers(File.ReadAllText(OverlayFile("OverlayState.cs")), "OverlayState"));
-        Assert.Matches(new Regex($"case \"{verb}\":\\s*_window\\.ShowOutcome\\(OverlayState\\.{kind}\\b"), Dispatch());
+        Assert.Matches(new Regex($@"cmd\.Equals\(""{verb}"", StringComparison\.OrdinalIgnoreCase\)\)\s*\{{\s*_window\.ShowOutcome\(OverlayState\.{kind}\b"), Dispatch());
     }
 
     [Fact]
@@ -90,7 +92,7 @@ public sealed class OverlayPipeProtocolTests
     {
         Assert.Equal("PROCESSING 1", OverlayPipeProtocol.ProcessingLine(aiCleanup: true));
         Assert.Equal("PROCESSING 0", OverlayPipeProtocol.ProcessingLine(aiCleanup: false));
-        Assert.Contains("_window.ShowProcessing(arg.Trim() == \"1\");", Dispatch(), StringComparison.Ordinal);
+        Assert.Contains("_window.ShowProcessing(arg.Trim().Equals(\"1\", StringComparison.Ordinal));", Dispatch(), StringComparison.Ordinal);
 
         Assert.Equal("METER 0", OverlayPipeProtocol.MeterLine(0));
         Assert.Equal("METER 1000", OverlayPipeProtocol.MeterLine(1000));
@@ -98,6 +100,24 @@ public sealed class OverlayPipeProtocolTests
 
         Assert.Equal("POSITION TopCenter", OverlayPipeProtocol.PositionLine(OverlayPosition.TopCenter));
         Assert.Equal("POSITION BottomRight", OverlayPipeProtocol.PositionLine(OverlayPosition.BottomRight));
+    }
+
+    [Fact]
+    public void Meter_lines_in_the_normal_level_range_are_cached()
+    {
+        var line = OverlayPipeProtocol.MeterLine(500);
+        Assert.Same(line, OverlayPipeProtocol.MeterLine(500));
+        Assert.Equal("METER -1", OverlayPipeProtocol.MeterLine(-1));
+        Assert.Equal("METER 1001", OverlayPipeProtocol.MeterLine(1001));
+    }
+
+    [Fact]
+    public void Meter_dispatch_does_not_allocate_a_normalized_command_string()
+    {
+        var dispatch = Dispatch();
+        Assert.DoesNotContain("ToUpperInvariant", dispatch, StringComparison.Ordinal);
+        Assert.Contains("line.AsSpan().Trim()", dispatch, StringComparison.Ordinal);
+        Assert.Contains("int.TryParse(arg.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)", dispatch, StringComparison.Ordinal);
     }
 
     [Fact]
