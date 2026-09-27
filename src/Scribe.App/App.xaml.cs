@@ -22,6 +22,7 @@ using Scribe.Core.Infrastructure;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
+using Scribe.Core.Overlay;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
@@ -63,6 +64,10 @@ public partial class App : Application
     private DictationController? _controller;
     private Scribe.Core.Lifecycle.PresentationRelay<DictationStateChange>? _dictationState;
     private IOverlayController? _overlay;
+
+    // UI thread only: the dictation state rendered last, so a render can tell a resume (Paused, then anything else) and warm
+    // the helper the pause released, and a settings save can tell it is paused.
+    private DictationState _lastRenderedState = DictationState.Idle;
     private SettingsWindow? _settingsWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private QuickAdd.QuickAddWindow? _quickAddWindow;
@@ -495,16 +500,20 @@ public partial class App : Application
         // until Start() loads the persisted settings, so reading it earlier silently ignored the
         // user's saved overlay position, overlay toggle, and AI-cleanup state on every launch.
         // The helper's idle lifetime follows the speech models' keep-warm setting but is decided inside
-        // the client, never on the models' release, which could end a newer recording's pill. It is
-        // pushed here before the warmup can arm it, and again with every state change.
-        _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes);
+        // the client, never on the models' release, which could end a newer recording's pill. The period and
+        // whether the helper is kept resident (the idle deadline then trims it rather than ending it) are pushed
+        // together, here before the warmup can arm the deadline, and again with every state change. Resident means
+        // the pill is on and dictation is not paused (OverlayWarmup decides); dictation always starts unpaused.
+        _overlay.SetKeepWarm(
+            _controller.CurrentSettings.ReleaseModelsAfterIdleMinutes,
+            OverlayWarmup.KeepResident(_controller.CurrentSettings.ShowOverlay, paused: false));
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
         _ = SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
         UpdateTrayShortcut(_controller.CurrentSettings);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
         // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
-        // later, ShowRecording launches it lazily. A warmed helper left unused is suspended after the
-        // keep-warm period like any other, and relaunches on the next show.
+        // later, the settings save warms it. A warmed helper left unused is trimmed after the keep-warm
+        // period and kept running, so the next pill shows at once.
         if (_controller.CurrentSettings.ShowOverlay)
         {
             _overlay.Warmup();
@@ -906,6 +915,8 @@ public partial class App : Application
     private void RenderDictationState(DictationStateChange change)
     {
         var state = change.State;
+        var previous = _lastRenderedState;
+        _lastRenderedState = state;
 
         // The tray and the overlay are independent views of the same state. A failure updating one
         // must never stop the other: when this method threw, the overlay was left showing whatever
@@ -925,9 +936,14 @@ public partial class App : Application
 
         // Pushed with every state change, so a keep-warm saved in Settings reaches the overlay client
         // without its command thread ever reading the controller's settings. Unchanged values cost nothing.
+        // The resident flag is for the state rendered here, so a pause pushes false before its release below (the push is
+        // unstamped and vetoes nothing): while paused the idle deadline ends whatever brought the helper back, a preview or
+        // a release that a stamped command vetoed, instead of trimming it until the resume. The resume pushes true.
         if (settings is not null)
         {
-            _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
+            _overlay?.SetKeepWarm(
+                settings.ReleaseModelsAfterIdleMinutes,
+                OverlayWarmup.KeepResident(settings.ShowOverlay, state == DictationState.Paused));
         }
 
         if (!overlayEnabled)
@@ -962,9 +978,16 @@ public partial class App : Application
             }
         }
 
-        // Pausing is the user standing Scribe down, so the idle helper (~100 MB) is ended now rather
-        // than after the keep-warm period, as pausing already does for the speech models. Only the
-        // newest change gets here, so a pause shown late can never release the helper under a newer
+        // A pause released the helper; the first dictation after the resume would otherwise wait for a launch (0.5 s idle,
+        // 2 to 11 s while the speech models reload), so the resume warms it again (OverlayWarmup decides).
+        if (OverlayWarmup.AfterRender(previous == DictationState.Paused, state == DictationState.Paused, overlayEnabled))
+        {
+            _overlay?.Warmup();
+        }
+
+        // Pausing is the user standing Scribe down, so the helper is ended now, handing back its whole ~100 MB
+        // of private memory (an idle trim only empties its working set), as pausing already does for the speech
+        // models. Only the newest change gets here, so a pause shown late can never release the helper under a newer
         // recording; a newer command or an on-screen state still vetoes it inside the client as well,
         // and an outcome the pause's own dictation just showed holds the release until it has hidden.
         if (state == DictationState.Paused)
@@ -1786,8 +1809,16 @@ public partial class App : Application
                     // application asked for, before it says the change is in effect.
                     _settingsWrites?.NoteExternalApply();
                     var applying = _controller!.ApplySettings(settings);
-                    _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
+                    var paused = _lastRenderedState == DictationState.Paused;
+                    _overlay?.SetKeepWarm(
+                        settings.ReleaseModelsAfterIdleMinutes,
+                        OverlayWarmup.KeepResident(settings.ShowOverlay, paused));
                     _overlay?.SetPosition(settings.OverlayPosition);
+                    if (OverlayWarmup.AfterSettingsApplied(settings.ShowOverlay, paused))
+                    {
+                        _overlay?.Warmup(); // turning the pill on must not leave the next dictation to launch it
+                    }
+
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
                     AccentContrastResources.UseSource(settings.AccentSource);
                     UpdateTrayShortcut(settings);

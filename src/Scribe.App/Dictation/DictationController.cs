@@ -717,7 +717,7 @@ internal sealed class DictationController : IDisposable
             var binding = CaptureTriggerBinding.For(settings, e.Trigger);
             _log.LogInformation(
                 "#{Id} recording started: trigger={Trigger} mode={Mode} key='{Key}' device='{Device}' " +
-                "target={App} remote={Remote} autoStopOnSilence={AutoStop} vad={Vad} cleanup={Cleanup}",
+                "target={App} remote={Remote} autoStopOnSilence={AutoStop} vad={Vad} cleanup={Cleanup} opened in {OpenMs} ms",
                 id,
                 e.Trigger,
                 (object?)binding?.Mode ?? "unknown",
@@ -727,7 +727,8 @@ internal sealed class DictationController : IDisposable
                 RemoteClientProcesses.IsRemoteClient(capture.TargetApp),
                 settings.AutoStopOnSilence,
                 settings.UseVoiceActivityDetection,
-                settings.EnableAiCleanup);
+                settings.EnableAiCleanup,
+                (long)open.OpenDuration.TotalMilliseconds);
 
             Raise(shown);
 
