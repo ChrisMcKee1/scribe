@@ -143,8 +143,9 @@ public static class SettingsSearchIndex
             return [];
         }
 
+        var entryWords = EntryWordsIndex.All;
         return Entries
-            .Select((entry, index) => new { Entry = entry, Index = index, Rank = Rank(entry, terms) })
+            .Select((entry, index) => new { Entry = entry, Index = index, Rank = Rank(entryWords[index], terms) })
             .Where(candidate => candidate.Rank < int.MaxValue)
             .OrderBy(candidate => candidate.Rank)
             .ThenBy(candidate => SettingsNavigation.Items.First(item => item.Page == candidate.Entry.Page).Position)
@@ -164,19 +165,19 @@ public static class SettingsSearchIndex
         IReadOnlyList<SettingsSearchRequirement>? requirements = null) =>
         new(id, page, controlName, label, context, keywords, requirements);
 
-    private static int Rank(SettingsSearchEntry entry, IReadOnlyList<string> terms)
+    private static int Rank(EntryWords words, string[] terms)
     {
-        if (AllTermsMatch(terms, entry.DisplayLabel))
+        if (AllTermsMatch(terms, words.Label))
         {
             return 0;
         }
 
-        if (entry.Keywords is { Count: > 0 } keywords && AllTermsMatch(terms, [entry.DisplayLabel, .. keywords]))
+        if (words.LabelAndKeywords is { } labelAndKeywords && AllTermsMatch(terms, labelAndKeywords))
         {
             return 2;
         }
 
-        if (AllTermsMatch(terms, entry.PageLabel))
+        if (AllTermsMatch(terms, words.Page))
         {
             return 3;
         }
@@ -184,8 +185,31 @@ public static class SettingsSearchIndex
         return int.MaxValue;
     }
 
-    private static bool AllTermsMatch(IReadOnlyList<string> terms, params string?[] values) =>
-        terms.All(term => values.SelectMany(Words).Any(word => word.StartsWith(term, StringComparison.Ordinal)));
+    private static bool AllTermsMatch(string[] terms, string[] words)
+    {
+        foreach (var term in terms)
+        {
+            if (!StartsAWord(term, words))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool StartsAWord(string term, string[] words)
+    {
+        foreach (var word in words)
+        {
+            if (word.StartsWith(term, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static IEnumerable<string> Words(string? value)
     {
@@ -219,6 +243,39 @@ public static class SettingsSearchIndex
         if (builder.Length > 0)
         {
             yield return builder.ToString();
+        }
+    }
+
+    // The words of an entry's label; of its label and then each keyword, when it has keywords; and of its page.
+    private sealed record EntryWords(string[] Label, string[]? LabelAndKeywords, string[] Page);
+
+    // The entries are static and Words depends only on its text (FormD, marks dropped, invariant lower case), so their words
+    // are found once, on the first search, and a keystroke tokenizes only the query. Entries of one page share its words.
+    private static class EntryWordsIndex
+    {
+        public static readonly EntryWords[] All = Build();
+
+        private static EntryWords[] Build()
+        {
+            var pages = new Dictionary<SettingsPage, string[]>();
+            var all = new EntryWords[Entries.Count];
+            for (var i = 0; i < all.Length; i++)
+            {
+                var entry = Entries[i];
+                string[] label = [.. Words(entry.DisplayLabel)];
+                string[]? labelAndKeywords = entry.Keywords is { Count: > 0 } keywords
+                    ? [.. label, .. keywords.SelectMany(Words)]
+                    : null;
+                if (!pages.TryGetValue(entry.Page, out var page))
+                {
+                    page = [.. Words(entry.PageLabel)];
+                    pages.Add(entry.Page, page);
+                }
+
+                all[i] = new EntryWords(label, labelAndKeywords, page);
+            }
+
+            return all;
         }
     }
 }
