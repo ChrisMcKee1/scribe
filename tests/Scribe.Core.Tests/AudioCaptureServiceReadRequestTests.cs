@@ -15,23 +15,45 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class AudioCaptureServiceReadRequestTests
 {
-    public static TheoryData<int, int> IntegerRatioFormats() => new()
+    // Every positive multiple of 16 kHz is limited, so the rule is checked at every ratio a device rate can give it here
+    // (1, 2, 3, 4, 6 and 12), for float and integer PCM and up to 6 channels, all through the production chain.
+    public static TheoryData<string, int, int> IntegerRatioFormats() => new()
     {
-        { 16_000, 1 },
-        { 16_000, 2 },
-        { 32_000, 1 },
-        { 32_000, 2 },
-        { 48_000, 1 },
-        { 48_000, 2 },
-        { 96_000, 1 },
-        { 96_000, 2 },
+        { "float", 16_000, 1 },
+        { "float", 16_000, 2 },
+        { "float", 32_000, 1 },
+        { "float", 32_000, 2 },
+        { "float", 48_000, 1 },
+        { "float", 48_000, 2 },
+        { "float", 48_000, 4 },
+        { "float", 48_000, 6 },
+        { "float", 64_000, 1 },
+        { "float", 96_000, 1 },
+        { "float", 96_000, 2 },
+        { "float", 192_000, 1 },
+        { "float", 192_000, 2 },
+        { "pcm16", 16_000, 1 },
+        { "pcm16", 48_000, 2 },
+        { "pcm16", 192_000, 1 },
+        { "pcm24", 48_000, 2 },
+        { "pcm24", 96_000, 6 },
+    };
+
+    // Past the 21 s the conversion's other identity tests reach, where its unlimited requests grow to hundreds of
+    // thousands of samples and the resampler's position into the millions. Few lengths, so the class stays quick.
+    public static TheoryData<string, int, int, int> LongIntegerRatioCaptures() => new()
+    {
+        { "float", 48_000, 2, 48_000 * 30 },
+        { "float", 192_000, 1, 192_000 * 25 },
+        { "pcm16", 48_000, 6, (48_000 * 22) + 17 },
+        { "pcm24", 96_000, 2, (96_000 * 23) + 5 },
     };
 
     [Theory]
     [MemberData(nameof(IntegerRatioFormats))]
-    public void Bounded_requests_give_the_same_samples_when_the_ratio_is_an_integer(int rate, int channels)
+    public void Bounded_requests_give_the_same_samples_when_the_ratio_is_an_integer(string encoding, int rate, int channels)
     {
-        var format = WaveFormat.CreateIeeeFloatWaveFormat(rate, channels);
+        var format = Format(encoding, rate, channels);
         var ratio = rate / 16_000;
         int[] frameCounts =
         [
@@ -44,25 +66,23 @@ public sealed class AudioCaptureServiceReadRequestTests
 
         foreach (var frames in frameCounts)
         {
-            var raw = Signal(format, frames, seed: frames + rate);
-            var expected = AudioCaptureService.ReadAll(AudioCaptureService.CreateConversionChain(raw, raw.Length, format));
-            foreach (var limit in new[] { 1, 3, 64, AudioCaptureService.ResampleRequestSamples })
-            {
-                var bounded = AudioCaptureService.ReadAll(
-                    AudioCaptureService.CreateConversionChain(raw, raw.Length, format), ArrayPool<float>.Shared, limit);
-
-                Assert.True(
-                    SameBits(expected, bounded),
-                    $"{rate} Hz {channels} ch, {frames} frames, requests of at most {limit}: " +
-                    $"{bounded.Length} samples against {expected.Length}, or different values.");
-            }
+            AssertBoundedRequestsGiveTheSameSamples(format, frames, [1, 3, 64, AudioCaptureService.ResampleRequestSamples]);
         }
+    }
+
+    [Theory]
+    [MemberData(nameof(LongIntegerRatioCaptures))]
+    public void Bounded_requests_give_the_same_samples_for_long_captures(string encoding, int rate, int channels, int frames)
+    {
+        AssertBoundedRequestsGiveTheSameSamples(
+            Format(encoding, rate, channels), frames, [997, AudioCaptureService.ResampleRequestSamples]);
     }
 
     [Theory]
     [InlineData(16_000)]
     [InlineData(32_000)]
     [InlineData(48_000)]
+    [InlineData(64_000)]
     [InlineData(96_000)]
     [InlineData(192_000)]
     public void Reads_are_bounded_at_rates_that_are_a_multiple_of_16_kHz(int rate)
@@ -154,24 +174,67 @@ public sealed class AudioCaptureServiceReadRequestTests
                 AudioCaptureService.CreateConversionChain(raw, raw.Length, format), pool, AudioCaptureService.RequestLimit(format));
     }
 
+    // The unlimited conversion, then the same capture through the same chain with each limit: the samples must be identical.
+    private static void AssertBoundedRequestsGiveTheSameSamples(WaveFormat format, int frames, int[] limits)
+    {
+        var raw = Signal(format, frames, seed: frames + format.SampleRate + format.Channels);
+        var expected = AudioCaptureService.ReadAll(AudioCaptureService.CreateConversionChain(raw, raw.Length, format));
+        foreach (var limit in limits)
+        {
+            var bounded = AudioCaptureService.ReadAll(
+                AudioCaptureService.CreateConversionChain(raw, raw.Length, format), ArrayPool<float>.Shared, limit);
+
+            Assert.True(
+                SameBits(expected, bounded),
+                $"{format}, {frames} frames, requests of at most {limit}: " +
+                $"{bounded.Length} samples against {expected.Length}, or different values.");
+        }
+    }
+
     private static bool SameBits(float[] expected, float[] actual) =>
         expected.Length == actual.Length
         && MemoryMarshal.AsBytes(expected.AsSpan()).SequenceEqual(MemoryMarshal.AsBytes(actual.AsSpan()));
 
-    // A tone with noise and a few samples on both rails, as 32-bit float frames.
+    private static WaveFormat Format(string encoding, int rate, int channels) => encoding switch
+    {
+        "float" => WaveFormat.CreateIeeeFloatWaveFormat(rate, channels),
+        "pcm16" => new WaveFormat(rate, 16, channels),
+        "pcm24" => new WaveFormat(rate, 24, channels),
+        _ => throw new ArgumentOutOfRangeException(nameof(encoding), encoding, "Unknown test encoding."),
+    };
+
+    // A tone with noise and a few samples on both rails, in the device format, frame aligned as WASAPI delivers it.
     private static byte[] Signal(WaveFormat format, int frames, int seed)
     {
         var random = new Random(seed);
-        var samples = new float[frames * format.Channels];
-        for (var i = 0; i < samples.Length; i++)
+        var bytes = new byte[frames * format.BlockAlign];
+        var samples = frames * format.Channels;
+        for (var i = 0; i < samples; i++)
         {
             var t = i / format.Channels / (double)format.SampleRate;
-            samples[i] = i % 1_009 == 0
-                ? (i % 2 == 0 ? 1f : -1f)
-                : (float)((0.3 * Math.Sin(2 * Math.PI * 220 * t)) + (0.2 * (random.NextDouble() - 0.5)));
+            var value = i % 1_009 == 0
+                ? (i % 2 == 0 ? 1.0 : -1.0)
+                : (0.3 * Math.Sin(2 * Math.PI * 220 * t)) + (0.2 * (random.NextDouble() - 0.5));
+            switch (format.BitsPerSample)
+            {
+                case 32 when format.Encoding == WaveFormatEncoding.IeeeFloat:
+                    BitConverter.TryWriteBytes(bytes.AsSpan(i * 4), (float)value);
+                    break;
+                case 16:
+                    BitConverter.TryWriteBytes(bytes.AsSpan(i * 2), (short)(value * short.MaxValue));
+                    break;
+                case 24:
+                    var code = (int)(value * 8_388_607);
+                    bytes[i * 3] = (byte)code;
+                    bytes[(i * 3) + 1] = (byte)(code >> 8);
+                    bytes[(i * 3) + 2] = (byte)(code >> 16);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(format), format.BitsPerSample, "Unexpected test format.");
+            }
         }
 
-        return MemoryMarshal.AsBytes(samples.AsSpan()).ToArray();
+        return bytes;
     }
 
     /// <summary>A 16 kHz mono source of known samples that records how much each read asked for.</summary>

@@ -11,12 +11,37 @@ namespace Scribe.Core.Tests;
 public sealed class CaptureBufferPoolReservationTests
 {
     [Fact]
+    public void A_reservation_holding_audio_when_it_is_outgrown_is_zeroed_before_it_is_kept()
+    {
+        var pool = new CaptureBufferPool();
+        var recording = pool.Rent(1_024);
+        var reservation = recording.Buffer;
+        recording.Write(Filled(900, 0x5A));
+
+        recording.Write(Filled(300, 0x6B));
+
+        // Outgrown with 900 bytes of audio in it: zeroed at once, while the capture goes on in the grown array.
+        Assert.True(recording.Grew);
+        Assert.True(IsAllZero(reservation));
+        Assert.Equal(1_200, recording.Length);
+        Assert.True(recording.Written[..900].IndexOfAnyExcept((byte)0x5A) < 0);
+        Assert.True(recording.Written[900..].IndexOfAnyExcept((byte)0x6B) < 0);
+
+        pool.Return(recording, retain: true);
+
+        var next = pool.Rent(1_024);
+        Assert.Same(reservation, next.Buffer);
+        Assert.True(IsAllZero(next.Buffer));
+    }
+
+    [Fact]
     public void Only_the_first_array_is_kept_when_a_capture_grows_twice()
     {
         var pool = new CaptureBufferPool();
         var recording = pool.Rent(256);
         var reservation = recording.Buffer;
-        recording.Write(Filled(300, 0x11));
+        recording.Write(Filled(200, 0x11));
+        recording.Write(Filled(100, 0x11));
         var firstGrowth = recording.Buffer;
         recording.Write(Filled(300, 0x22));
         var secondGrowth = recording.Buffer;
@@ -41,7 +66,8 @@ public sealed class CaptureBufferPoolReservationTests
         var pool = new CaptureBufferPool();
         var recording = pool.Rent(512);
         var reservation = recording.Buffer;
-        recording.Write(Filled(600, 0x33));
+        recording.Write(Filled(500, 0x33));
+        recording.Write(Filled(100, 0x33));
         var grown = recording.Buffer;
 
         pool.Return(recording, retain: false);
@@ -77,7 +103,8 @@ public sealed class CaptureBufferPoolReservationTests
         var pool = new CaptureBufferPool();
         var recording = pool.Rent(1_024);
         var reservation = recording.Buffer;
-        recording.Write(Filled(2_000, 0x55));
+        recording.Write(Filled(1_000, 0x55));
+        recording.Write(Filled(1_000, 0x55));
         pool.Return(recording, retain: true);
 
         // A capture callback that somehow ran after the join: it grows into a fresh array of its own.
@@ -101,7 +128,8 @@ public sealed class CaptureBufferPoolReservationTests
         var recording = pool.Rent(1_024);
         var kept = recording.Buffer;
         Assert.Equal(4_096, kept.Length);
-        recording.Write(Filled(5_000, 0x66));
+        recording.Write(Filled(4_000, 0x66));
+        recording.Write(Filled(1_000, 0x66));
 
         pool.Return(recording, retain: true);
 
