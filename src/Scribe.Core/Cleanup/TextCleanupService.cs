@@ -4766,7 +4766,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private static int EstimateMaxTokens(string text, CleanupProvider provider)
     {
         // English averages a little over one token per word; cleanup output tracks input length.
-        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+        var words = CountWords(text);
 
         /*
          * Azure cleanup often runs on reasoning models whose hidden thinking counts against this
@@ -4958,8 +4958,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         // (3) Terse reply. A cleaned question ends with "?"; a short, non-question result is a candidate
         // answer that replaced (rather than edited) the input.
-        var candidateWords = WordSet(candidate);
-        if (candidateWords.Count is > 0 and <= 3 && !candidate.TrimEnd().EndsWith('?'))
+        var candidateWords = DistinctWords(candidate, limit: 3);
+        if (candidateWords is { Count: > 0 } && !candidate.TrimEnd().EndsWith('?'))
         {
             // A short, non-question reply to a dictated question is the model answering it.
             if (LooksLikeQuestion(original))
@@ -4969,7 +4969,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             // For a non-question input, only reject when the few output words are absent from a longer
             // utterance (a replacement, not an edit) and the output isn't a numeric reformat.
-            var originalWords = WordSet(original);
+            var originalWords = DistinctWords(original, limit: int.MaxValue)!;
             if (originalWords.Count >= 4 && !candidate.Any(char.IsDigit))
             {
                 var shared = 0;
@@ -4995,16 +4995,43 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal static bool LooksLikeQuestion(string text) =>
         !string.IsNullOrWhiteSpace(text) && (text.TrimEnd().EndsWith('?') || QuestionOpener.IsMatch(text));
 
-    // Distinct lowercased word tokens, used by the terse-answer signal to measure input overlap.
-    private static HashSet<string> WordSet(string text)
+    // Distinct lowercased word tokens, used by the terse-answer signal to measure input overlap, or null once there are
+    // more than limit of them: every cleaned answer reaches the signal, which asks only whether it has at most three.
+    internal static HashSet<string>? DistinctWords(string text, int limit)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in WordToken.Matches(text))
+        foreach (var match in WordToken.EnumerateMatches(text))
         {
-            set.Add(match.Value.ToLowerInvariant());
+            set.Add(text.Substring(match.Index, match.Length).ToLowerInvariant());
+            if (set.Count > limit)
+            {
+                return null;
+            }
         }
 
         return set;
+    }
+
+    // The count text.Split(null, StringSplitOptions.RemoveEmptyEntries) gives, without its strings: the runs of
+    // characters char.IsWhiteSpace does not count as white space.
+    internal static int CountWords(string text)
+    {
+        var words = 0;
+        var inWord = false;
+        foreach (var c in text)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                inWord = false;
+            }
+            else if (!inWord)
+            {
+                inWord = true;
+                words++;
+            }
+        }
+
+        return words;
     }
 
     /*
