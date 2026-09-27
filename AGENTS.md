@@ -1678,8 +1678,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys to it, and the hint says so. Letting a
   short tap through would be a change to `ChordStateMachine` with tests of its own, not a tweak, and it waits on the
   maintainer.
-- **Mouse buttons are bound like keys, and captured in Core.** Set records keys and the middle, Back and Forward
-  buttons by `HotkeyCaptureSession` (Core, tested): up to two inputs in the order they go down, set once all are up,
+- **Mouse buttons are bound like keys, and captured in Core.** Change (the capture button, Set until 0.4.4) records
+  keys and the middle, Back and Forward buttons by `HotkeyCaptureSession` (Core, tested): up to two inputs in the
+  order they go down, set once all are up,
   the left and right buttons refused with a reason and left their meaning (the window only shows the reason for a
   click on the capture box itself), and a chord recorded with a button first warns that the button still reaches the
   app under the pointer (a chord is swallowed from the input that completes it). Beyond two inputs it records only
@@ -1688,7 +1689,7 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   or two inputs stay the exact physical binding every build captured. Only the input that completes a shortcut is
   kept from Windows and the app: its key when the modifiers go down first, as a mouse's software and a person send
   one; with the key first (F13, then Shift, then Ctrl) the key reaches the app whole and the last modifier is kept
-  instead, and Set warns when it records that order. A Windows key is never one of more than two
+  instead, and the capture warns when it records that order. A Windows key is never one of more than two
   inputs: a Windows key Windows sees pressed and released with nothing
   between opens Start. For the same reason a shortcut of Shift with Ctrl or Alt warns
   (`HotkeyCaptureSession.LayoutSwitchWarning`) that its modifiers can still switch the keyboard language or layout;
