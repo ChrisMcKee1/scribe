@@ -78,7 +78,11 @@ public static class OverlayPipeProtocol
     public static string ProcessingLine(bool aiCleanup) => Processing + (aiCleanup ? " 1" : " 0");
 
     /// <summary>The live input level, scaled to 0 to 1000.</summary>
-    public static string MeterLine(int level) => Meter + " " + level.ToString(CultureInfo.InvariantCulture);
+    public static string MeterLine(int level) =>
+        string.Create(CultureInfo.InvariantCulture, stackalloc char[LongestMeterLine], $"{Meter} {level}");
+
+    // "METER -2147483648": every line fits this scratch space, so the returned string is MeterLine's only allocation.
+    private const int LongestMeterLine = 17;
 
     /// <summary>The anchor.</summary>
     public static string PositionLine(OverlayPosition position) => Position + " " + position;
