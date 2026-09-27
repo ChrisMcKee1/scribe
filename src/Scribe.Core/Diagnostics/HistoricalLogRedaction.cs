@@ -323,7 +323,9 @@ public static class HistoricalLogRedaction
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(chunk);
+            // The chunk held raw log bytes, which in files from 0.4.2 and earlier include the text this pass redacts, and the
+            // shared pool hands it to whatever rents that size next.
+            ArrayPool<byte>.Shared.Return(chunk, clearArray: true);
         }
 
         return redactor.Counts;
