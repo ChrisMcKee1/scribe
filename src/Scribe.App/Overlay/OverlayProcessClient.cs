@@ -26,16 +26,20 @@ namespace Scribe.App.Overlay;
 /// is built by <see cref="OverlayPipeProtocol"/>, whose verbs the overlay parses (a test keeps the two equal).
 ///
 /// That consumer also carries out the helper's lifetime, and only carries it out: when to wake, whether
-/// an idle helper is suspended, whether a command launches the helper or waits out a cooldown after
-/// failures, how a lost helper is judged, how long a dictation's outcome keeps it, and what shutdown ends
-/// are all decided by <see cref="OverlayHelperLifetime"/>, and position previews are sequenced by
+/// an idle helper is trimmed and kept (the pill turned on) or ended (the pill off), whether a command launches the
+/// helper or waits out a cooldown after failures, how a lost helper is judged, how long a dictation's outcome keeps it,
+/// and what shutdown ends are all decided by <see cref="OverlayHelperLifetime"/>, and position previews are sequenced by
 /// <see cref="OverlayPreviewGate"/>, both in Scribe.Core where they are tested against a scripted clock.
 /// Due work runs between commands on this same thread and the wait for it is the queue wait itself, so
 /// nothing here sleeps, an EXIT is never held up, and stale commands never pile up behind a wait.
 /// </summary>
 public sealed class OverlayProcessClient : IOverlayController, IDisposable
 {
-    private const int ConnectTimeoutMs = 8000;
+    // How long a launch waits for the helper's pipe. On an idle machine a helper connects in about 0.5 s (median 539 ms
+    // measured), but under load, with the speech models reloading at the same recording start, Chris's logs show healthy
+    // helpers needing 6 to 10 s, and the old 8 s bound killed one 400 ms before its window was built: a 10 s hold that
+    // never showed a pill. A helper that dies still ends the wait at once (ConnectBeforeExit), and CloseOverlay cancels it.
+    private const int ConnectTimeoutMs = 30000;
     private const int WriteTimeoutMs = 1500;
     private const int GracefulExitMs = 1000;
     private const long MeterIntervalMs = 25; // ~40 meter updates/sec is plenty for a VU bar
@@ -68,9 +72,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private bool _loggedMissing;
     private long _launchAttempts; // consumer only, for the log
 
-    // The keep-warm minutes last pushed. The push that comes with every state change queues nothing when
-    // the value is unchanged; the consumer starts at "never suspend" until the first push.
-    private int _keepWarmMinutes = int.MinValue;
+    // The keep-warm period and whether the pill is on, as last pushed: one object, so the consumer always applies the two
+    // together. The push that comes with every state change queues nothing when the pair is unchanged; until the first push
+    // the consumer never trims or ends the helper for being idle.
+    private KeepWarmSetting? _keepWarm;
 
     private bool _subscribed;
     private float _meterLevel;
@@ -165,11 +170,12 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue(desired.ReplayLine, desired, ensureAlive: false);
     }
 
-    public void SetKeepWarm(int minutes)
+    public void SetKeepWarm(int minutes, bool keepResident)
     {
-        // The consumer applies whatever value is latest when it takes the command, so pushes from any
-        // thread, in any order, settle on the last one written here.
-        if (Interlocked.Exchange(ref _keepWarmMinutes, minutes) != minutes)
+        // The consumer applies whichever pair is latest when it takes the command, so pushes from any thread, in any order,
+        // settle on the last one written here.
+        var setting = new KeepWarmSetting(minutes, keepResident);
+        if (Interlocked.Exchange(ref _keepWarm, setting) != setting)
         {
             TryAdd(Command.KeepWarmChanged);
         }
@@ -356,6 +362,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                     _lifetime.IdlePeriodMs / 60_000);
                 break;
 
+            case OverlayDueWork.Trim:
+                TrimHelper();
+                break;
+
             case OverlayDueWork.Release:
                 EndHelper();
                 TryLog(LogLevel.Information, null,
@@ -397,7 +407,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             switch (item.Kind)
             {
                 case CommandKind.KeepWarm:
-                    ApplyKeepWarm(Volatile.Read(ref _keepWarmMinutes));
+                    ApplyKeepWarm(Volatile.Read(ref _keepWarm));
                     break;
                 case CommandKind.Release:
                     HandleRelease(item.Stamp);
@@ -526,17 +536,24 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
     }
 
-    private void ApplyKeepWarm(int minutes)
+    private void ApplyKeepWarm(KeepWarmSetting? setting)
     {
-        var idleMs = minutes > 0 ? minutes * 60_000L : 0;
-        if (idleMs == _lifetime.IdlePeriodMs)
+        if (setting is null)
+        {
+            return;
+        }
+
+        var idleMs = setting.Minutes > 0 ? setting.Minutes * 60_000L : 0;
+        if (idleMs == _lifetime.IdlePeriodMs && setting.KeepResident == _lifetime.KeepResident)
         {
             return;
         }
 
         _lifetime.SetIdlePeriodMs(idleMs);
+        _lifetime.SetKeepResident(setting.KeepResident);
         TryLog(LogLevel.Debug, null,
-            "Overlay keep-warm period set to {Minutes} minutes (0 keeps the helper resident).", idleMs / 60_000);
+            "Overlay keep-warm period set to {Minutes} minutes (0 never trims or ends the helper); keep resident {KeepResident}.",
+            idleMs / 60_000, setting.KeepResident);
     }
 
     /// <summary>
@@ -770,6 +787,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
 
         var pipeName = "Scribe.Overlay." + Guid.NewGuid().ToString("N");
+        var launchStarted = Stopwatch.GetTimestamp();
         try
         {
             var psi = new ProcessStartInfo
@@ -851,8 +869,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         // intermittent "pill disappears" regressions.
         TryLog(
             LogLevel.Information, null,
-            "Overlay process launched pid={Pid} pipe={Pipe} exe={Exe}",
-            _process?.Id, pipeName, _exePath);
+            "Overlay process launched pid={Pid} pipe={Pipe} exe={Exe} after {LaunchMs} ms",
+            _process?.Id, pipeName, _exePath, (long)Stopwatch.GetElapsedTime(launchStarted).TotalMilliseconds);
         return LaunchOutcome.Launched;
     }
 
@@ -919,6 +937,26 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         var sentExit = IsAlive && TryWrite(OverlayPipeProtocol.Exit);
         KillProcess(graceful: sentExit);
     }
+
+    // The pill is on and nothing used the helper for the keep-warm period: its working set goes back to Windows and it keeps
+    // running, pipe and writer included, so the next pill shows at once instead of after a relaunch. A trim that fails
+    // changes nothing else.
+    private void TrimHelper()
+    {
+        var process = _process;
+        if (process is null)
+        {
+            return;
+        }
+
+        var trimmed = HelperWorkingSet.TryTrim(process, _log, out var beforeBytes, out var afterBytes);
+        TryLog(LogLevel.Information, null,
+            "Overlay helper idle for {IdleMinutes} minutes: working set trimmed from {BeforeMb} MB to {AfterMb} MB (ok {Trimmed}); " +
+            "it stays running so the next pill shows at once.",
+            _lifetime.IdlePeriodMs / 60_000, Megabytes(beforeBytes), Megabytes(afterBytes), trimmed);
+    }
+
+    private static double Megabytes(long bytes) => Math.Round(bytes / (1024.0 * 1024.0), 1);
 
     // Non-throwing logging for the overlay-launch path. A diagnostics failure (e.g. a transient
     // shared-log-file lock) must never surface as an exception here, because nearby catch blocks treat
@@ -1235,6 +1273,61 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         /// dictation would flash its "Typed" again.
         /// </summary>
         public string ReplayLine => Demand == OverlayDemand.Transient ? OverlayPipeProtocol.Hide : Line;
+    }
+
+    /// <summary>
+    /// The keep-warm period and whether the pill is turned on, pushed and applied as one value, so the consumer never
+    /// applies one without the other. A record: the push compares a new pair with the last by value.
+    /// </summary>
+    private sealed record KeepWarmSetting(int Minutes, bool KeepResident);
+
+    /// <summary>
+    /// Hands an idle helper's working set back to Windows while it keeps running. Measured on an idle, hidden helper: its
+    /// 131 MB working set goes to about 0.1 MB, its 98 MB of commit stays, and one pipe command brings back about 12 MB.
+    /// </summary>
+    private static class HelperWorkingSet
+    {
+        // -1 for both sizes removes as many pages as possible; the client's own Process handle, from the launch, carries
+        // the PROCESS_SET_QUOTA access it needs. Non-throwing: a trim that fails leaves the helper as it was.
+        public static bool TryTrim(Process process, ILogger? log, out long beforeBytes, out long afterBytes)
+        {
+            beforeBytes = ReadWorkingSet(process);
+            var trimmed = false;
+            try
+            {
+                trimmed = SetProcessWorkingSetSizeEx(process.Handle, new IntPtr(-1), new IntPtr(-1), 0);
+                if (!trimmed)
+                {
+                    TryLogTo(log, LogLevel.Debug, null, "SetProcessWorkingSetSizeEx failed (err={Err}).", Marshal.GetLastWin32Error());
+                }
+            }
+            catch (Exception ex)
+            {
+                TryLogTo(log, LogLevel.Debug, ex, "Trimming the overlay helper's working set failed.");
+            }
+
+            afterBytes = ReadWorkingSet(process);
+            return trimmed;
+        }
+
+        // Read once per idle period, so the refresh costs nothing that matters; zero when the process cannot be read.
+        private static long ReadWorkingSet(Process process)
+        {
+            try
+            {
+                process.Refresh();
+                return process.WorkingSet64;
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetProcessWorkingSetSizeEx(
+            IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize, uint flags);
     }
 
     /// <summary>

@@ -9,14 +9,15 @@ namespace Scribe.App.Overlay;
 /// (<see cref="OverlayProcessClient"/>) is the default: it renders the pill in a separate kept-warm
 /// process via DWM composition, sidestepping the WPF <c>AllowsTransparency</c>/layered-window path
 /// that produced the recurring "black box". The implementation owns the helper's idle lifetime itself,
-/// independently of the speech models: callers push the keep-warm period and may ask for a release on
-/// pause, but never end the helper directly.
+/// independently of the speech models: callers push the keep-warm period and whether the pill is turned on, and may
+/// ask for a release on pause or for a warmup, but never end the helper directly.
 /// </summary>
 public interface IOverlayController
 {
     /// <summary>
     /// Pre-warms the overlay (launches the helper process / presents the surface) before first use. A
-    /// warmed helper that is never shown still follows the idle deadline.
+    /// warmed helper that is never shown follows the idle deadline like any other: trimmed and kept while the pill
+    /// is turned on, ended while it is off. A warmup on a running helper is only a no-op write.
     /// </summary>
     void Warmup();
 
@@ -45,17 +46,20 @@ public interface IOverlayController
     void SetPosition(OverlayPosition position);
 
     /// <summary>
-    /// Sets the keep-warm period: a helper left idle for this many minutes is ended to reclaim its
-    /// memory and relaunches on the next show; zero or less keeps it resident. It mirrors
-    /// <see cref="AppSettings.ReleaseModelsAfterIdleMinutes"/>, the speech models' keep-warm setting, and
-    /// also applies to an idle period already running. Until the first call the helper is never suspended.
+    /// Sets the keep-warm period and what it does, together, so the two are never applied out of step. A helper left
+    /// idle for <paramref name="minutes"/> is trimmed and kept running while <paramref name="keepResident"/> (the pill is
+    /// turned on), so the next pill shows at once; otherwise it is ended to reclaim its memory and relaunches on the next
+    /// show. Zero or less keeps it resident untouched. The period mirrors
+    /// <see cref="AppSettings.ReleaseModelsAfterIdleMinutes"/>, the speech models' keep-warm setting, and also applies to
+    /// an idle period already running. Until the first call the helper is never trimmed or ended for being idle.
     /// </summary>
-    void SetKeepWarm(int minutes);
+    void SetKeepWarm(int minutes, bool keepResident);
 
     /// <summary>
     /// Ends the helper now instead of after the keep-warm period, if nothing needs it (dictation was
-    /// paused). A command sent after this call, or a state that keeps the pill on screen, vetoes it, so it
-    /// can never end the pill of a recording started later; the next show relaunches the helper.
+    /// paused), whether or not the pill is turned on. A command sent after this call, or a state that keeps the pill on
+    /// screen, vetoes it, so it can never end the pill of a recording started later; the next show, or the warmup the
+    /// resume brings, relaunches the helper.
     /// </summary>
     void ReleaseWhenIdle();
 
