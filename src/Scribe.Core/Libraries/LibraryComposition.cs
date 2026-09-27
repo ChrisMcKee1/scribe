@@ -45,8 +45,9 @@ public sealed class LibraryComposition
     private readonly Dictionary<DictionaryEntry, Source> _sourceOfRule = new(ReferenceEqualityComparer.Instance);
     private readonly GlossaryBudget _budget;
     private readonly Lazy<Dictionary<DictionaryEntry, GlossaryInclusion>> _glossary;
-    private readonly Lazy<Dictionary<LibraryTermKey, List<(Source Source, int Row)>>> _rowsByKey;
+    private readonly Lazy<Dictionary<LibraryTermKey, Holders>> _rowsByKey;
     private readonly Lazy<IReadOnlyList<DictionaryLibrary>> _enabledLibraries;
+    private readonly int _candidateRows;
 
     private LibraryComposition(
         bool isPreview,
@@ -103,6 +104,7 @@ public sealed class LibraryComposition
 
         _ruleByKey.EnsureCapacity(ruleCapacity);
         _sourceOfRule.EnsureCapacity(ruleCapacity);
+        _candidateRows = ruleCapacity;
         var rules = new List<ComposedRule>(ruleCapacity);
         for (var tier = 0; tier < 3; tier++)
         {
@@ -379,13 +381,36 @@ public sealed class LibraryComposition
         var different = new List<string>();
         if (!competing.IsEmpty && _rowsByKey.Value.TryGetValue(competing, out var holders))
         {
-            var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { source.Id };
-            foreach (var (other, otherRow) in holders)
+            HashSet<string>? listed = null;
+            Tally(holders.First);
+            if (holders.Rest is { } rest)
             {
-                if (listed.Add(other.Id))
+                foreach (var holder in rest)
                 {
-                    (LibraryTiers.SameResult(other.Content.Rows[otherRow].Values, values) ? same : different).Add(other.Id);
+                    Tally(holder);
                 }
+            }
+
+            // Made only once a second library holds the form, and seeded with this library as it always was, so this
+            // library's own rows stay out of both lists.
+            void Tally((Source Source, int Row) holder)
+            {
+                var other = holder.Source;
+                if (string.Equals(other.Id, source.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (listed is null)
+                {
+                    listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { source.Id, other.Id };
+                }
+                else if (!listed.Add(other.Id))
+                {
+                    return;
+                }
+
+                (LibraryTiers.SameResult(other.Content.Rows[holder.Row].Values, values) ? same : different).Add(other.Id);
             }
         }
 
@@ -551,21 +576,28 @@ public sealed class LibraryComposition
     }
 
     // Enabled rows of the libraries in use by spoken form, in precedence and saved order, for the statuses' comparisons.
-    private Dictionary<LibraryTermKey, List<(Source Source, int Row)>> IndexRowsByKey()
+    private Dictionary<LibraryTermKey, Holders> IndexRowsByKey()
     {
-        var rows = new Dictionary<LibraryTermKey, List<(Source Source, int Row)>>();
+        var rows = new Dictionary<LibraryTermKey, Holders>(_candidateRows);
         foreach (var source in _sources.Where(source => source.Participates))
         {
             for (var row = 0; row < source.Keys.Length; row++)
             {
                 if (source.Content.Rows[row].Values.Enabled && !source.Keys[row].IsEmpty)
                 {
-                    if (!rows.TryGetValue(source.Keys[row], out var list))
+                    var key = source.Keys[row];
+                    if (!rows.TryGetValue(key, out var holders))
                     {
-                        rows[source.Keys[row]] = list = [];
+                        rows.Add(key, new Holders((source, row), null));
                     }
-
-                    list.Add((source, row));
+                    else if (holders.Rest is { } rest)
+                    {
+                        rest.Add((source, row));
+                    }
+                    else
+                    {
+                        rows[key] = holders with { Rest = [(source, row)] };
+                    }
                 }
             }
         }
@@ -688,6 +720,12 @@ public sealed class LibraryComposition
             : body;
     }
 
+    /// <summary>
+    /// The enabled rows of one spoken form, in precedence and saved order: the first inline, since most forms have one row,
+    /// and any others after it.
+    /// </summary>
+    private readonly record struct Holders((Source Source, int Row) First, List<(Source Source, int Row)>? Rest);
+
     /// <summary>One library as the composition sees it.</summary>
     private sealed class Source
     {
@@ -749,7 +787,7 @@ public sealed class LibraryComposition
             var rows = Volatile.Read(ref _rowsByIdentity);
             if (rows is null)
             {
-                rows = [];
+                rows = new Dictionary<LibraryTermKey, int>(Content.Rows.Count);
                 for (var row = 0; row < Content.Rows.Count; row++)
                 {
                     rows.TryAdd(Content.Rows[row].Key, row);
