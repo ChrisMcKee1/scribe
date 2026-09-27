@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Text;
 using System.Threading;
 
 namespace Scribe.Overlay.Logging;
@@ -16,6 +17,14 @@ public static class OverlayLog
     private static readonly object Gate = new();
     private static string? _path;
     private static DateOnly _pathDate;
+
+    // A StreamWriter given only a stream encodes as UTF-8 without a byte order mark and throws on text that is not well
+    // formed; it buffers 1,024 characters and encodes a line that fits them in one piece when it is disposed. Such a line is
+    // written the same way here without the writer's and the stream's buffers; a longer one keeps the writer, which writes
+    // it in pieces.
+    private static readonly UTF8Encoding LineEncoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly byte[] NewLineBytes = LineEncoding.GetBytes(Environment.NewLine);
+    private const int WriterBufferChars = 1024;
 
     private static string Path
     {
@@ -66,10 +75,21 @@ public static class OverlayLog
                 {
                     lock (Gate)
                     {
-                        using var stream = new FileStream(
-                            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                        using var writer = new StreamWriter(stream);
-                        writer.WriteLine(line);
+                        if (line.Length + Environment.NewLine.Length <= WriterBufferChars)
+                        {
+                            using var stream = new FileStream(
+                                path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
+                            var bytes = new byte[LineEncoding.GetByteCount(line) + NewLineBytes.Length];
+                            NewLineBytes.CopyTo(bytes, LineEncoding.GetBytes(line, 0, line.Length, bytes, 0));
+                            stream.Write(bytes, 0, bytes.Length);
+                        }
+                        else
+                        {
+                            using var stream = new FileStream(
+                                path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                            using var writer = new StreamWriter(stream);
+                            writer.WriteLine(line);
+                        }
                     }
 
                     return;
