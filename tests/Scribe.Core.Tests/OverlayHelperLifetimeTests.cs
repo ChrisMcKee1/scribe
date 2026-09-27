@@ -1356,6 +1356,118 @@ public sealed class OverlayHelperLifetimeTests
         Assert.Empty(consumer.At("Trim"));
     }
 
+    // ---- Paused: the helper is kept resident only while the pill is on and dictation is not paused (Astra's A5) ---------
+
+    [Fact]
+    public void A_pause_release_a_settings_save_vetoed_leaves_the_idle_deadline_to_end_the_helper()
+    {
+        // Astra's A5. The pause stops a dictation, whose outcome holds the release; a setting saved meanwhile moves the
+        // anchor, and its two stamped commands veto the release for good. With the helper kept resident while paused, the
+        // next idle deadline only trimmed it, and it stayed until the resume. Paused, it is ended there, as in 0.4.4.
+        var consumer = new Consumer();
+        consumer.PushKeepResident(pillOn: true, paused: false); // at startup
+        consumer.Warmup();
+        consumer.Drain();
+        Assert.True(consumer.Lifetime.KeepResident);
+
+        consumer.AdvanceTo(1_000);
+        consumer.PushKeepResident(pillOn: true, paused: false); // every render pushes; unchanged, so nothing is queued
+        consumer.Show("RECORDING", OverlayDemand.Sustained);
+        consumer.Drain();
+        consumer.AdvanceTo(4_000);
+
+        // The Paused change: its push (unstamped), its outcome, then the release it asks for, which the outcome holds.
+        consumer.PushKeepResident(pillOn: true, paused: true);
+        consumer.Show("TYPED", OverlayDemand.Transient, showsForMs: TypedOnScreen);
+        consumer.RequestRelease();
+        consumer.Drain();
+        Assert.Equal(4_000 + TypedOnScreen, consumer.Lifetime.ReleaseDueAtMs); // the unstamped push vetoed nothing
+
+        // A setting saved while the outcome shows: the push reads the paused state again, then the anchor moves.
+        consumer.AdvanceTo(4_200);
+        consumer.PushKeepResident(pillOn: true, paused: true);
+        consumer.MoveAnchor("TopCenter");
+        consumer.Drain();
+
+        consumer.AdvanceTo(4_000 + TypedOnScreen);
+        Assert.Empty(consumer.At("Release")); // vetoed as before
+        Assert.Null(consumer.Lifetime.ReleaseDueAtMs);
+        Assert.Equal(OverlayHelperStatus.Alive, consumer.HelperStatus);
+
+        consumer.AdvanceTo(4_200 + 3 * Idle);
+        Assert.Equal([4_200 + Idle], consumer.At("Suspend"));
+        Assert.Empty(consumer.At("Trim"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+        Assert.Equal([0L], consumer.At("Launch"));
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+        Assert.False(consumer.Lifetime.KeepResident);
+    }
+
+    [Fact]
+    public void A_helper_a_preview_launched_while_paused_is_ended_at_the_idle_deadline()
+    {
+        // The coordinator's second path to A5: nothing but the idle deadline ends a helper a position preview launched.
+        var consumer = new Consumer();
+        consumer.PushKeepResident(pillOn: true, paused: false);
+        consumer.Warmup();
+        consumer.Drain();
+
+        // Paused while idle: the Paused change pushes, hides the pill and releases the helper at once.
+        consumer.AdvanceTo(1_000);
+        consumer.PushKeepResident(pillOn: true, paused: true);
+        consumer.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        consumer.RequestRelease();
+        consumer.Drain();
+        Assert.Equal([1_000L], consumer.At("Release"));
+
+        // Still paused, a position preview in Settings launches it again, and pushes nothing.
+        consumer.AdvanceTo(60_000);
+        var preview = consumer.Preview("TopLeft");
+        consumer.Drain();
+        consumer.PreviewStep(preview, "METER 500");
+        consumer.PreviewEnd(preview);
+        consumer.Drain();
+        Assert.Equal([0L, 60_000L], consumer.At("Launch"));
+        Assert.Equal("Write preview end POSITION BottomCenter", consumer.WhatSince(60_000)[^1]);
+
+        consumer.AdvanceTo(60_000 + 3 * Idle);
+        Assert.Equal([60_000 + Idle], consumer.At("Suspend"));
+        Assert.Empty(consumer.At("Trim"));
+        Assert.Equal(OverlayHelperStatus.Absent, consumer.HelperStatus);
+        Assert.Null(consumer.Lifetime.NextWakeAtMs());
+    }
+
+    [Fact]
+    public void The_resume_keeps_the_helper_resident_again_and_the_next_idle_deadline_trims_it()
+    {
+        var consumer = new Consumer();
+        consumer.PushKeepResident(pillOn: true, paused: false);
+        consumer.Warmup();
+        consumer.Drain();
+
+        consumer.AdvanceTo(1_000);
+        consumer.PushKeepResident(pillOn: true, paused: true);
+        consumer.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        consumer.RequestRelease();
+        consumer.Drain();
+
+        // The resume renders Idle: its push, its hide, and the warmup OverlayWarmup asks for after a pause.
+        consumer.AdvanceTo(120_000);
+        consumer.PushKeepResident(pillOn: true, paused: false);
+        consumer.Show("HIDE", OverlayDemand.None, ensureAlive: false, cancelsRetry: true);
+        Assert.True(OverlayWarmup.AfterRender(wasPaused: true, isPaused: false, pillOn: true));
+        consumer.Warmup();
+        consumer.Drain();
+        Assert.True(consumer.Lifetime.KeepResident);
+        Assert.Equal([0L, 120_000L], consumer.At("Launch"));
+
+        consumer.AdvanceTo(120_000 + 3 * Idle);
+        Assert.Equal([120_000 + Idle], consumer.At("Trim"));
+        Assert.Empty(consumer.At("Suspend"));
+        Assert.Equal([1_000L], consumer.At("Release"));
+        Assert.Equal(OverlayHelperStatus.Alive, consumer.HelperStatus);
+    }
+
     /// <summary>
     /// Plays the overlay client's consumer and its producers against a scripted clock and a simulated
     /// helper, recording each decision as "<c>What</c> at <c>time</c>".
@@ -1375,6 +1487,9 @@ public sealed class OverlayHelperLifetimeTests
 
         // The applied anchor, as the client's _position: a relaunch replays it, and an anchor move writes it as it stands.
         private string _applied = "BottomCenter";
+
+        // The resident flag pushed last, as the client's _keepWarm: null until the first push.
+        private bool? _keepResidentPushed;
 
         public Consumer(long idleMs = Idle)
         {
@@ -1528,6 +1643,21 @@ public sealed class OverlayHelperLifetimeTests
         public void RequestRelease() =>
             _queue.Enqueue(new Pending(PendingKind.Release, "RELEASE", Lifetime.IssueStamp(), false, false, 0, null));
 
+        /// <summary>
+        /// As the shell's keep-warm push (OverlayProcessClient.SetKeepWarm), with the resident flag
+        /// <see cref="OverlayWarmup.KeepResident"/> decides: unstamped, so it vetoes nothing, queued only when the value
+        /// changed, and applied when the consumer takes it, in queue order, as whichever value was pushed last.
+        /// </summary>
+        public void PushKeepResident(bool pillOn, bool paused)
+        {
+            var keepResident = OverlayWarmup.KeepResident(pillOn, paused);
+            if (_keepResidentPushed != keepResident)
+            {
+                _keepResidentPushed = keepResident;
+                _queue.Enqueue(new Pending(PendingKind.KeepWarm, "KEEPWARM", 0, false, false, 0, null));
+            }
+        }
+
         public void CrashHelperAt(long atMs)
         {
             Assert.Equal(OverlayHelperStatus.Alive, _helper);
@@ -1555,6 +1685,13 @@ public sealed class OverlayHelperLifetimeTests
             if (!_queue.TryDequeue(out var pending))
             {
                 return false;
+            }
+
+            if (pending.Kind == PendingKind.KeepWarm)
+            {
+                // As ApplyKeepWarm: it sets the flag and touches no stamp, so it neither arms the deadline nor vetoes anything.
+                Lifetime.SetKeepResident(_keepResidentPushed ?? false);
+                return true;
             }
 
             if (pending.Kind == PendingKind.Release)
@@ -1824,6 +1961,7 @@ public sealed class OverlayHelperLifetimeTests
         {
             State,
             Release,
+            KeepWarm,
         }
 
         private readonly record struct Pending(

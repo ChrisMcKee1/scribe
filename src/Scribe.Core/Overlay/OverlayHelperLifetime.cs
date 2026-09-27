@@ -79,9 +79,9 @@ public enum OverlayDueWork
     Release,
 
     /// <summary>
-    /// The keep-warm period passed with nothing on screen while the pill is turned on
-    /// (<see cref="OverlayHelperLifetime.SetKeepResident"/>): trim the running helper's working set and keep it running, so
-    /// the next pill shows at once instead of after a relaunch.
+    /// The keep-warm period passed with nothing on screen while the helper is kept resident, the pill turned on and dictation
+    /// not paused (<see cref="OverlayHelperLifetime.SetKeepResident"/>, <see cref="OverlayWarmup.KeepResident"/>): trim the
+    /// running helper's working set and keep it running, so the next pill shows at once instead of after a relaunch.
     /// </summary>
     Trim,
 }
@@ -121,13 +121,15 @@ public readonly record struct OverlayHelperLoss(long? LivedMs, long? CooldownMs)
 /// falls due.
 /// </para>
 /// <para>
-/// What the idle deadline does depends on whether the pill is turned on (<see cref="SetKeepResident"/>). With it on, a
-/// running helper is trimmed and kept (<see cref="OverlayDueWork.Trim"/>): its working set goes back to Windows, and the
-/// next pill shows at once instead of waiting for a relaunch, which Chris's logs show taking 0.5 s on an idle machine and
-/// 2 to 11 s while the speech models reload at the same recording start. A trimmed helper is still the helper that was
-/// launched: it keeps its launch time for the stable window, and nothing pending is cancelled. With the pill off, the
-/// deadline ends the helper (<see cref="OverlayDueWork.Suspend"/>), as it always did. Both commit on the same validation,
-/// once per idle period; a pause release ends the helper either way.
+/// What the idle deadline does depends on whether the helper is kept resident (<see cref="SetKeepResident"/>), which the
+/// shell asks for while the pill is turned on and dictation is not paused (<see cref="OverlayWarmup.KeepResident"/>). Kept
+/// resident, a running helper is trimmed and kept (<see cref="OverlayDueWork.Trim"/>): its working set goes back to Windows,
+/// and the next pill shows at once instead of waiting for a relaunch, which Chris's logs show taking 0.5 s on an idle
+/// machine and 2 to 11 s while the speech models reload at the same recording start. A trimmed helper is still the helper
+/// that was launched: it keeps its launch time for the stable window, and nothing pending is cancelled. Otherwise (the pill
+/// off, or dictation paused) the deadline ends the helper (<see cref="OverlayDueWork.Suspend"/>), as it always did, so a
+/// helper that something brought back while paused (a preview, a release a stamped command vetoed) cannot stay until the
+/// resume. Both commit on the same validation, once per idle period; a pause release ends the helper either way.
 /// </para>
 /// <para>
 /// A lost helper is brought back whenever the latest state keeps the pill on screen (a recording or
@@ -209,17 +211,18 @@ public sealed class OverlayHelperLifetime
     public long IssueStamp() => _idle.NoteCommandIssued();
 
     /// <summary>
-    /// Sets the idle period after which an unused helper is trimmed, while the pill is turned on, or ended, while it is off
-    /// (the keep-warm setting; see <see cref="SetKeepResident"/>). Zero or less never does either. It also applies to a
+    /// Sets the idle period after which an unused helper is trimmed, while it is kept resident, or ended otherwise (the
+    /// keep-warm setting; see <see cref="SetKeepResident"/>). Zero or less never does either. It also applies to a
     /// deadline that is already armed.
     /// </summary>
     public void SetIdlePeriodMs(long idleMs) => _idleMs = Math.Max(0, idleMs);
 
     /// <summary>
-    /// Whether the pill is turned on, so an idle helper is kept running: when the idle period passes with nothing on screen,
-    /// the deadline trims a running helper (<see cref="OverlayDueWork.Trim"/>) instead of ending it
-    /// (<see cref="OverlayDueWork.Suspend"/>). False, as it starts, ends it as before; a pause release ends it either way.
-    /// The next deadline follows the latest value, one already armed included.
+    /// Whether an idle helper is kept running, which the shell asks for while the pill is turned on and dictation is not
+    /// paused (<see cref="OverlayWarmup.KeepResident"/>): when the idle period passes with nothing on screen, the deadline
+    /// trims a running helper (<see cref="OverlayDueWork.Trim"/>) instead of ending it (<see cref="OverlayDueWork.Suspend"/>).
+    /// False, as it starts, ends it as before; a pause release ends it either way. The next deadline follows the latest
+    /// value, one already armed included.
     /// </summary>
     public void SetKeepResident(bool keepResident) => _keepResident = keepResident;
 
@@ -236,8 +239,8 @@ public sealed class OverlayHelperLifetime
     /// is at or before now; it always moves that wake time past now or clears it, so the consumer cannot
     /// spin. A pause release that waited for an outcome to hide is judged again, as when it arrived. The idle
     /// deadline commits only when no command has been stamped since it was armed, the latest state does not keep
-    /// the pill on screen and no outcome is still on screen, and then only once until the next command: with the pill
-    /// turned on it trims a running helper and keeps it, touching nothing else; otherwise it ends the helper and cancels
+    /// the pill on screen and no outcome is still on screen, and then only once until the next command: with the helper
+    /// kept resident it trims a running helper and keeps it, touching nothing else; otherwise it ends the helper and cancels
     /// a pending retry. The retry applies only while the latest state still keeps the pill on screen.
     /// </summary>
     public OverlayDueWork TakeDueWork(long nowMs, OverlayDemand demand, OverlayHelperObservation helper)
