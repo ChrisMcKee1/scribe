@@ -4,9 +4,11 @@ using Scribe.Core.Overlay;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// <see cref="OverlayPipeProtocol.MeterLine"/> formats its line in stack scratch space sized for the longest line an int
-/// makes, so the string it returns is its only allocation. These tests show it writes the text the concatenation wrote,
-/// for every level the app sends and far beyond, at every length up to the longest, whatever the current culture.
+/// <see cref="OverlayPipeProtocol.MeterLine"/> formats its line with int.TryFormat in stack scratch space sized for the
+/// longest line an int makes, so the string it returns is its only allocation, in every tier the JIT moves the code
+/// through. These tests show it writes the text the concatenation wrote, for every level the app sends, far beyond it and
+/// across the whole int range, at every length up to the longest, whatever the current culture; and that after its calls
+/// have had time to move up the JIT's tiers it allocates exactly the strings it returns.
 /// </summary>
 public sealed class OverlayPipeProtocolMeterLineTests
 {
@@ -26,7 +28,9 @@ public sealed class OverlayPipeProtocolMeterLineTests
         CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
         try
         {
-            var mismatches = Enumerable.Range(-2_000, 5_001).Concat(BoundaryLevels)
+            var random = new Random(20260927);
+            var sample = Enumerable.Range(0, 100_000).Select(_ => random.Next(int.MinValue, int.MaxValue));
+            var mismatches = Enumerable.Range(-2_000, 5_001).Concat(BoundaryLevels).Concat(sample)
                 .Where(level => OverlayPipeProtocol.MeterLine(level) != "METER " + level.ToString(CultureInfo.InvariantCulture))
                 .Take(10)
                 .ToList();
@@ -66,6 +70,13 @@ public sealed class OverlayPipeProtocolMeterLineTests
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
     {
+        private const int CallsPerRound = 500;
+
+        // Longer than the runtime's default 100 ms delay before it counts calls for promotion, so the methods MeterLine calls
+        // can move up a tier between rounds. In one of those tiers, the one that profiles the code, the interpolated string
+        // handler MeterLine used before allocated a box for the int on every call.
+        private const int TierUpPauseMs = 150;
+
         [Theory]
         [InlineData(0)]
         [InlineData(299)]
@@ -77,30 +88,50 @@ public sealed class OverlayPipeProtocolMeterLineTests
         [InlineData(int.MaxValue)]
         public void A_meter_line_allocates_only_the_string_it_returns(int level)
         {
-            var length = 0;
-            for (var i = 0; i < 100; i++)
+            var length = OverlayPipeProtocol.MeterLine(level).Length;
+            Assert.Equal(("METER " + level.ToString(CultureInfo.InvariantCulture)).Length, length);
+
+            // Three rounds with a pause between them, and the last is measured: the lines' bytes beyond as many strings of
+            // their length, each counted the same way.
+            for (var round = 1; round < 3; round++)
             {
-                length = OverlayPipeProtocol.MeterLine(level).Length;
-                _ = new string('x', length);
+                Lines(level);
+                Strings(length);
+                Thread.Sleep(TierUpPauseMs);
             }
 
             _ = RuntimeWork.Now().Since(RuntimeWork.Now());
 
             var work = RuntimeWork.Now();
             var before = GC.GetAllocatedBytesForCurrentThread();
-            var line = OverlayPipeProtocol.MeterLine(level);
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Lines(level);
+            var lines = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            Strings(length);
+            var strings = GC.GetAllocatedBytesForCurrentThread() - before;
             var during = RuntimeWork.Now().Since(work);
 
-            before = GC.GetAllocatedBytesForCurrentThread();
-            var same = new string('x', length);
-            var oneString = GC.GetAllocatedBytesForCurrentThread() - before;
+            AllocationMeasurement.AssertZero(
+                lines - strings,
+                during,
+                $"{CallsPerRound} meter lines for level {level}, beyond {CallsPerRound} strings of {length} characters ({strings} bytes)",
+                () => Lines(level));
+        }
 
-            Assert.Equal(length, line.Length);
-            Assert.Equal(length, same.Length);
-            Assert.True(
-                allocated == oneString,
-                $"MeterLine({level}) allocated {allocated} bytes; one string of its length is {oneString}. During it: {during}.");
+        private static void Lines(int level)
+        {
+            for (var i = 0; i < CallsPerRound; i++)
+            {
+                _ = OverlayPipeProtocol.MeterLine(level);
+            }
+        }
+
+        private static void Strings(int length)
+        {
+            for (var i = 0; i < CallsPerRound; i++)
+            {
+                _ = new string('x', length);
+            }
         }
     }
 }

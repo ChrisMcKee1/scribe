@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Scribe.Core.Models;
 
@@ -78,10 +79,22 @@ public static class OverlayPipeProtocol
     public static string ProcessingLine(bool aiCleanup) => Processing + (aiCleanup ? " 1" : " 0");
 
     /// <summary>The live input level, scaled to 0 to 1000.</summary>
-    public static string MeterLine(int level) =>
-        string.Create(CultureInfo.InvariantCulture, stackalloc char[LongestMeterLine], $"{Meter} {level}");
+    public static string MeterLine(int level)
+    {
+        // Formatted on the stack with int.TryFormat and copied once into the returned string, its only allocation in every
+        // JIT tier. An interpolated string handler here allocated a box for the int while the JIT profiled its generic code.
+        Span<char> line = stackalloc char[LongestMeterLine];
+        Meter.CopyTo(line);
+        line[Meter.Length] = ' ';
+        if (!level.TryFormat(line[(Meter.Length + 1)..], out var digits, provider: CultureInfo.InvariantCulture))
+        {
+            throw new UnreachableException("The digits of every int fit the line.");
+        }
 
-    // "METER -2147483648": every line fits this scratch space, so the returned string is MeterLine's only allocation.
+        return new string(line[..(Meter.Length + 1 + digits)]);
+    }
+
+    // "METER -2147483648", the longest line an int makes.
     private const int LongestMeterLine = 17;
 
     /// <summary>The anchor.</summary>
