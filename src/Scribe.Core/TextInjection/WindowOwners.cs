@@ -13,6 +13,9 @@ internal static class WindowOwners
     // and Access Rights), which is all QueryFullProcessImageName needs.
     private const uint ProcessQueryLimitedInformation = 0x1000;
 
+    // The buffer every build has used: an image path that does not fit fails the query and names no process, as before.
+    private const int ImagePathCapacity = 1024;
+
     /// <summary>The window in front now, or zero.</summary>
     public static nint Foreground() => InjectionNativeMethods.GetForegroundWindow();
 
@@ -20,7 +23,7 @@ internal static class WindowOwners
     /// The name of the process that owns <paramref name="window"/>, as <c>Process.ProcessName</c> gives it (no path, no
     /// extension), or null when the window, its process or its image name cannot be had.
     /// </summary>
-    public static string? ProcessNameOf(nint window)
+    public static unsafe string? ProcessNameOf(nint window)
     {
         if (window == 0)
         {
@@ -41,11 +44,17 @@ internal static class WindowOwners
 
         try
         {
-            var path = new char[1024];
+            Span<char> path = stackalloc char[ImagePathCapacity];
             var length = (uint)path.Length;
-            return QueryFullProcessImageName(process, 0, path, ref length)
-                ? Path.GetFileNameWithoutExtension(new string(path, 0, (int)length))
-                : null;
+            fixed (char* buffer = path)
+            {
+                if (!QueryFullProcessImageName(process, 0, buffer, ref length))
+                {
+                    return null;
+                }
+            }
+
+            return Path.GetFileNameWithoutExtension(path[..(int)length]).ToString();
         }
         finally
         {
@@ -58,7 +67,7 @@ internal static class WindowOwners
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "QueryFullProcessImageNameW")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool QueryFullProcessImageName(nint hProcess, uint dwFlags, char[] lpExeName, ref uint lpdwSize);
+    private static extern unsafe bool QueryFullProcessImageName(nint hProcess, uint dwFlags, char* lpExeName, ref uint lpdwSize);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.InteropServices;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
 
 namespace Scribe.Core.TextInjection;
@@ -50,58 +49,15 @@ internal sealed class Win32Clipboard : IClipboardNative
             return false;
         }
 
-        // Bounded by the block size: another application's data is not guaranteed to be terminated.
-        int maxChars = (int)Math.Min((ulong)GlobalSize(handle) / sizeof(char), int.MaxValue);
-        if (maxChars == 0)
-        {
-            return false;
-        }
-
-        nint pointer = GlobalLock(handle);
-        if (pointer == 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            var buffer = new char[maxChars];
-            Marshal.Copy(pointer, buffer, 0, maxChars);
-            int end = Array.IndexOf(buffer, '\0');
-            text = new string(buffer, 0, end < 0 ? maxChars : end);
-            return true;
-        }
-        finally
-        {
-            GlobalUnlock(handle);
-        }
+        return TryReadUnicodeText(handle, out text);
     }
 
     public bool SetText(string text)
     {
-        // Null-terminated UTF-16; GMEM_MOVEABLE memory is required for clipboard handles.
-        nuint bytes = (nuint)((text.Length + 1) * sizeof(char));
-        nint global = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        nint global = AllocUnicodeText(text);
         if (global == 0)
         {
             return false;
-        }
-
-        nint target = GlobalLock(global);
-        if (target == 0)
-        {
-            GlobalFree(global);
-            return false;
-        }
-
-        try
-        {
-            Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
-            Marshal.WriteInt16(target, text.Length * sizeof(char), 0);
-        }
-        finally
-        {
-            GlobalUnlock(global);
         }
 
         if (SetClipboardData(CF_UNICODETEXT, global) == 0)
@@ -116,31 +72,10 @@ internal sealed class Win32Clipboard : IClipboardNative
 
     public bool SetData(uint format, ReadOnlySpan<byte> data)
     {
-        // Always a real allocation, even for an empty payload: SetClipboardData rejects a null handle
-        // for a registered format (a null handle means delayed rendering).
-        nint global = GlobalAlloc(GMEM_MOVEABLE, (nuint)Math.Max(data.Length, 1));
+        nint global = AllocData(data);
         if (global == 0)
         {
             return false;
-        }
-
-        nint target = GlobalLock(global);
-        if (target == 0)
-        {
-            GlobalFree(global);
-            return false;
-        }
-
-        try
-        {
-            if (data.Length > 0)
-            {
-                Marshal.Copy(data.ToArray(), 0, target, data.Length);
-            }
-        }
-        finally
-        {
-            GlobalUnlock(global);
         }
 
         if (SetClipboardData(format, global) == 0)
@@ -155,7 +90,20 @@ internal sealed class Win32Clipboard : IClipboardNative
     public bool TryReadData(uint format, Span<byte> destination)
     {
         nint handle = GetClipboardData(format);
-        if (handle == 0 || GlobalSize(handle) < (nuint)destination.Length)
+        return handle != 0 && TryReadBlock(handle, destination);
+    }
+
+    /// <summary>
+    /// The text of a CF_UNICODETEXT global memory block: up to its first NUL, or all of it when it has none. False when the
+    /// block holds less than one character or cannot be locked.
+    /// </summary>
+    internal static bool TryReadUnicodeText(nint handle, [NotNullWhen(true)] out string? text)
+    {
+        text = null;
+
+        // Bounded by the block size: another application's data is not guaranteed to be terminated.
+        nuint byteLength = GlobalSize(handle);
+        if (byteLength < sizeof(char))
         {
             return false;
         }
@@ -168,9 +116,126 @@ internal sealed class Win32Clipboard : IClipboardNative
 
         try
         {
-            var buffer = new byte[destination.Length];
-            Marshal.Copy(pointer, buffer, 0, buffer.Length);
-            buffer.CopyTo(destination);
+            // Read only while the block is locked.
+            text = ReadUnicodeText(pointer, byteLength);
+            return true;
+        }
+        finally
+        {
+            GlobalUnlock(handle);
+        }
+    }
+
+    /// <summary>
+    /// The UTF-16 text in the <paramref name="byteLength"/> bytes at <paramref name="pointer"/>: up to the first NUL, or all
+    /// of them when there is none, and never a byte past them; an odd last byte belongs to no character. The memory is read
+    /// where it lies, so the text is the one copy made in this process, and whatever follows the terminator is never copied.
+    /// </summary>
+    internal static unsafe string ReadUnicodeText(nint pointer, nuint byteLength)
+    {
+        int maxChars = (int)Math.Min((ulong)byteLength / sizeof(char), int.MaxValue);
+        var block = new ReadOnlySpan<char>((void*)pointer, maxChars);
+        int end = block.IndexOf('\0');
+        return new string(end < 0 ? block : block[..end]);
+    }
+
+    /// <summary>
+    /// A new GMEM_MOVEABLE block holding <paramref name="text"/> as null-terminated UTF-16, unlocked, or 0 when it cannot
+    /// be allocated or locked. The caller owns it until SetClipboardData succeeds.
+    /// </summary>
+    internal static nint AllocUnicodeText(string text)
+    {
+        // Null-terminated UTF-16; GMEM_MOVEABLE memory is required for clipboard handles.
+        nuint bytes = (nuint)((text.Length + 1) * sizeof(char));
+        nint global = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (global == 0)
+        {
+            return 0;
+        }
+
+        nint target = GlobalLock(global);
+        if (target == 0)
+        {
+            GlobalFree(global);
+            return 0;
+        }
+
+        try
+        {
+            WriteUnicodeText(target, text);
+        }
+        finally
+        {
+            GlobalUnlock(global);
+        }
+
+        return global;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="text"/> and one NUL, as UTF-16, at <paramref name="target"/>, which has room for
+    /// text.Length + 1 characters. Nothing after them is touched.
+    /// </summary>
+    internal static unsafe void WriteUnicodeText(nint target, string text)
+    {
+        var destination = new Span<char>((void*)target, text.Length + 1);
+        text.AsSpan().CopyTo(destination);
+        destination[text.Length] = '\0';
+    }
+
+    /// <summary>
+    /// A new GMEM_MOVEABLE block holding <paramref name="data"/>, unlocked, or 0 when it cannot be allocated or locked. The
+    /// caller owns it until SetClipboardData succeeds.
+    /// </summary>
+    internal static unsafe nint AllocData(ReadOnlySpan<byte> data)
+    {
+        // Always a real allocation, even for an empty payload: SetClipboardData rejects a null handle
+        // for a registered format (a null handle means delayed rendering).
+        nint global = GlobalAlloc(GMEM_MOVEABLE, (nuint)Math.Max(data.Length, 1));
+        if (global == 0)
+        {
+            return 0;
+        }
+
+        nint target = GlobalLock(global);
+        if (target == 0)
+        {
+            GlobalFree(global);
+            return 0;
+        }
+
+        try
+        {
+            data.CopyTo(new Span<byte>((void*)target, data.Length));
+        }
+        finally
+        {
+            GlobalUnlock(global);
+        }
+
+        return global;
+    }
+
+    /// <summary>
+    /// Fills <paramref name="destination"/> from the start of a global memory block; false when the block is smaller than
+    /// <paramref name="destination"/> or cannot be locked.
+    /// </summary>
+    internal static unsafe bool TryReadBlock(nint handle, Span<byte> destination)
+    {
+        if (GlobalSize(handle) < (nuint)destination.Length)
+        {
+            return false;
+        }
+
+        nint pointer = GlobalLock(handle);
+        if (pointer == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            new ReadOnlySpan<byte>((void*)pointer, destination.Length).CopyTo(destination);
             return true;
         }
         finally
