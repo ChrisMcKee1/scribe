@@ -84,11 +84,11 @@ public interface IAudioCaptureService : IDisposable
     CapturedAudio Stop(long owner = 0);
 
     /// <summary>
-    /// Drops any capture working buffer kept between captures so an idle-time release can hand the
-    /// memory back to the garbage collector, and returns the bytes released. A retained buffer is
-    /// always zeroed; the next capture simply reserves a fresh one. Safe to call from any thread at
-    /// any time, including while a capture is starting, recording or being converted: a buffer a
-    /// capture is using is never retained, so it is never released or cleared by this call.
+    /// Drops any capture working buffer and conversion scratch kept between captures so an idle-time
+    /// release can hand the memory back to the garbage collector, and returns the bytes released. What
+    /// is retained is always zeroed; the next capture simply reserves afresh. Safe to call from any
+    /// thread at any time, including while a capture is starting, recording or being converted: a
+    /// buffer a capture is using is never retained, so it is never released or cleared by this call.
     /// Implementations that retain nothing return 0.
     /// </summary>
     long ReleaseRetainedBuffers() => 0;

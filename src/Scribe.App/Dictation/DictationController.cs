@@ -267,18 +267,18 @@ internal sealed class DictationController : IDisposable
 
     /// <summary>
     /// Unloads the recognizer and VAD if the controller is genuinely idle, drops the capture service's
-    /// retained working buffer, then compacts the LOH with the one blocking gen-2 collection that
-    /// actually returns large buffers to the OS (a background gen-2 never honors CompactOnce). Skips
-    /// silently when a dictation is recording or still processing; the timer re-arms when that work
-    /// returns to idle.
+    /// retained working buffer and conversion scratch, then compacts the LOH with the one blocking gen-2
+    /// collection that actually returns large buffers to the OS (a background gen-2 never honors
+    /// CompactOnce). Skips silently when a dictation is recording or still processing; the timer re-arms
+    /// when that work returns to idle.
     /// </summary>
     /// <remarks>
     /// The release is claimed by the lifecycle and every step runs outside its gate (see
     /// <see cref="IdleModelRelease"/>). Unloading stays safe if a dictation starts meanwhile, because the
     /// speech services load and use their models under their own gates, and so does dropping the capture
-    /// buffer, because the capture service never retains a buffer a capture is using. The buffer goes on
+    /// buffers, because the capture service never retains a buffer a capture is using. The buffers go on
     /// every claimed release, with or without resident models, and before the compaction so that collection
-    /// returns it too. The compaction and the announcement are skipped when a recording began after the
+    /// returns them too. The compaction and the announcement are skipped when a recording began after the
     /// claim; what remains is activity that begins while the collection itself is running, which that
     /// collection briefly pauses like every other managed thread.
     /// </remarks>
@@ -314,7 +314,7 @@ internal sealed class DictationController : IDisposable
                     var bytes = _audio.ReleaseRetainedBuffers();
                     if (bytes > 0)
                     {
-                        TryLog(log => log.LogDebug("Released a {Bytes}-byte idle capture buffer.", bytes));
+                        TryLog(log => log.LogDebug("Released {Bytes} bytes of idle capture buffers.", bytes));
                     }
                 });
 

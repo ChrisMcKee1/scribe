@@ -34,6 +34,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private readonly InputDeviceWatcher? _watcher;
     private readonly TimeSpan _disposeOpenWait;
     private readonly CaptureBufferPool _buffers = new();
+    private readonly CaptureScratchPool _scratch = new();
     private readonly object _sync = new();
 
     // The listeners for InputDevicesChanged, kept here so the watcher knows whether anything is listening.
@@ -322,7 +323,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 return CapturedAudio.Empty;
             }
 
-            var captured = ConvertCapture(raw, format, report => LastSignalReport = report, _logger);
+            var captured = ConvertCapture(raw, format, report => LastSignalReport = report, _logger, _scratch);
             var signal = LastSignalReport!;
 
             // The signal shape is on this line deliberately. It separates failure modes that produce
@@ -346,14 +347,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
     }
 
     /// <summary>
-    /// Drops the capture working buffer kept between captures, returning the bytes released. The
-    /// buffer is already zeroed; releasing it only lets the garbage collector reclaim the memory,
-    /// and the next capture reserves a fresh one. Takes only the pool's gate, never
-    /// <c>_sync</c>, and never touches the buffer of a capture that is starting, recording or
-    /// converting (see <see cref="CaptureBufferPool"/>), so the idle release may call it from any
-    /// thread at any time.
+    /// Drops the capture working buffer kept between captures and the conversion's scratch arrays,
+    /// returning the bytes released. Both are already zeroed; releasing them only lets the garbage
+    /// collector reclaim the memory, and the next capture reserves afresh. Takes only the pools'
+    /// gates, never <c>_sync</c>, and never touches the buffer or scratch of a capture that is
+    /// starting, recording or converting (see <see cref="CaptureBufferPool"/> and
+    /// <see cref="CaptureScratchPool"/>), so the idle release may call it from any thread at any time.
     /// </summary>
-    public long ReleaseRetainedBuffers() => _buffers.ReleaseRetained();
+    public long ReleaseRetainedBuffers() => _buffers.ReleaseRetained() + _scratch.ReleaseRetained();
 
     /// <summary>
     /// About 30 s of the device's native format (11,520,000 bytes at 48 kHz stereo float), clamped
@@ -380,12 +381,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
     /// <paramref name="onSignal"/> before anything else can fail, then downmixes and resamples to the
     /// 16 kHz mono the VAD and recognizer consume. The samples are a new array that never aliases
     /// the recording, whose buffer the next capture reuses while history may still hold this one.
+    /// The conversion's scratch comes from <paramref name="scratch"/>, the shared pool when null.
     /// </summary>
     internal static CapturedAudio ConvertCapture(
         CaptureRecording recording,
         WaveFormat format,
         Action<CaptureSignalReport> onSignal,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ArrayPool<float>? scratch = null)
     {
         // Measured on the RAW buffer, before the downmix, so per-channel levels are still
         // visible. Once channels are averaged the evidence is gone, and "what was on the other
@@ -396,7 +399,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
             return CapturedAudio.Empty;
         }
 
-        var samples = ResampleToTarget(recording.Buffer, recording.Length, format);
+        var samples = ResampleToTarget(recording.Buffer, recording.Length, format, scratch ?? ArrayPool<float>.Shared);
         return new CapturedAudio(samples, TargetSampleRate);
     }
 
@@ -649,7 +652,10 @@ public sealed class AudioCaptureService : IAudioCaptureService
         || (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample is 16 or 24 or 32);
 
     internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format) =>
-        ReadAll(CreateConversionChain(bytes, length, format), ArrayPool<float>.Shared, RequestLimit(format));
+        ResampleToTarget(bytes, length, format, ArrayPool<float>.Shared);
+
+    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format, ArrayPool<float> scratch) =>
+        ReadAll(CreateConversionChain(bytes, length, format), scratch, RequestLimit(format));
 
     /// <summary>
     /// The device-format bytes as 16 kHz mono: NAudio's converter for the sample format, the downmix (which also bounds
@@ -896,9 +902,9 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
         if (!Monitor.TryEnter(_sync, _disposeOpenWait))
         {
-            // The retained buffer is safe to drop while an open runs (the pool never hands out a buffer in use); the
+            // The retained buffers are safe to drop while an open runs (the pools never hand out a buffer in use); the
             // endpoints are not.
-            _buffers.ReleaseRetained();
+            ReleaseRetainedBuffers();
             TryLog(log => log.LogWarning(
                 "A microphone was still opening {Seconds:F0} s into shutdown; the audio devices were left for the " +
                 "process to release at exit instead of being released while in use.",
@@ -930,7 +936,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
             }
         }
 
-        _buffers.ReleaseRetained();
+        ReleaseRetainedBuffers();
         try
         {
             _devices.Dispose();
