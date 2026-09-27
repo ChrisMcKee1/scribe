@@ -1,9 +1,10 @@
 # Scribe 0.5.0
 
 Scribe 0.5.0 rebuilds Settings from the ground up, turns libraries into word packs you can edit, and
-gives Scribe a new look of its own. It also lets a spare mouse button be your push-to-talk key, makes
+gives Scribe a new look of its own. It also lets a spare mouse button be your dictation shortcut, makes
 dictating into Remote Desktop and virtual machines safer, and gives the recording indicator a new look
-that tells you what each dictation did. Everything you set up in 0.4.4 carries over.
+that tells you what each dictation did and appears the moment you press your shortcut. Everything you
+set up in 0.4.4 carries over.
 
 ## What changes when you update
 
@@ -17,9 +18,9 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
   Contrast themes are unchanged.
 - **Your shortcuts stay as they are.** Nothing about the mouse changes until you bind a mouse button:
   with keys only, Scribe doesn't watch the mouse.
-- **The recording indicator looks different, and tells you how each dictation went.** It's a solid
-  dark pill now, with five level bars while you speak, and when a dictation ends it briefly says
-  "Typed" or tells you why not.
+- **The recording indicator looks different, and tells you how each dictation went.** It's solid and
+  dark now, with five level bars while you speak, and when a dictation ends it briefly says "Typed" or
+  tells you why not.
 - **Closing Settings with unsaved changes asks first,** and so do quitting Scribe and restarting to
   update.
 - **Text going into a Remote Desktop or virtual machine window is typed in small batches,** never
@@ -68,6 +69,8 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
   the recording indicator while it's on screen, otherwise as a notice. A dictation that couldn't be
   typed always gets a notice with a way to copy it.
 - **The recording indicator says how each dictation went,** then fades away:
+  - "Recognizing speech…", or "Running AI cleanup…" when AI cleanup is on, while Scribe works. 0.4.4
+    said "Transcribing…" and "AI polishing…".
   - "Typed", with a check, for a moment, when all of your text went in.
   - "Typed without AI cleanup" when AI cleanup was on but failed or wasn't ready. Your text went in as
     it was recognized, and Settings, AI cleanup says why.
@@ -76,6 +79,13 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
   - If Scribe heard no speech, the indicator just goes away.
 - **A new dictation always wins.** Press your shortcut again and the indicator starts listening at
   once; a late word about the previous dictation never covers a new recording.
+- **It appears as soon as you start dictating.** In 0.4.4, Scribe closed the indicator's helper after a
+  while without a dictation (the wait set in Free memory when Scribe isn't used, 10 minutes unless you
+  changed it) and started it again on your next dictation. So the indicator could appear a second or
+  two late, several seconds late on a busy PC, and rarely not at all. Now the helper stays ready while
+  the recording indicator is on, and after that wait it gives most of its memory back to Windows
+  instead of closing. With the indicator off it closes as before. Pausing dictation still closes it,
+  and resuming starts it again.
 - **It follows Windows.** In a contrast theme it uses your theme's colors. With animation effects off,
   its dots stand still and it appears and goes without fading, and with a larger Windows text size it
   grows to match, so its words still fit.
@@ -117,8 +127,8 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
 - **A button bound on its own no longer does its usual job in other apps,** so a bound Back button
   stops going back in your browser while Scribe runs. Pressed with Ctrl, Shift, Alt, Win or the
   Narrator key, it still does its usual job, and so does every button while dictation is paused from
-  the tray. In a chord such as Ctrl then Back, only the chord is Scribe's: Back on its own still goes
-  back.
+  the tray. In a shortcut such as Ctrl then Back, only that shortcut is Scribe's: Back on its own
+  still goes back.
 - **If Windows briefly stops passing input to Scribe** (it does this to any app that answers too
   slowly), a click made or held while that lasts reaches the app under the pointer. Scribe reconnects,
   normally within 30 seconds, and ends a dictation a mouse button shortcut started. If you were holding
@@ -136,10 +146,10 @@ that tells you what each dictation did. Everything you set up in 0.4.4 carries o
 
 - **Dictating into a Remote Desktop, Azure Virtual Desktop, Windows 365, Hyper-V, VMware, VirtualBox
   or Citrix window is safer.** A remote client can install a keyboard hook of its own that sees your
-  push-to-talk key before Scribe does. After such a window comes to the front, Scribe now moves its
+  shortcut before Scribe does. After such a window comes to the front, Scribe now moves its
   own hook ahead of the client's, and again while the window stays in front. A press in the moment
   before a move, or right after one, can still reach the remote session, and it goes there whole, its
-  repeats and its release included: a push-to-talk Page Down pages the session for as long as it is
+  repeats and its release included: a Page Down shortcut pages the session for as long as it is
   held. A key you are already holding when Scribe moves is left alone, so its repeats and its release
   go where its press went, as long as its next repeat comes within the time the keyboard's repeat
   settings allow (under a second with the Windows defaults); a later repeat, or a keystroke a program
@@ -192,6 +202,12 @@ Nothing was removed except the Libraries page's tip line.
 - Pressing Enter in a Settings field no longer saves the whole window: in 0.4.4 Save was the window's
   default button.
 - The Diagnostics page scrolls with the mouse wheel over its list of AI cleanup failures.
+- The recording indicator no longer stays away when its helper is slow to start on a busy PC. 0.4.4
+  gave up after 8 seconds, sometimes just as the helper was about to show; Scribe now waits up to 30
+  seconds.
+- Every message now uses the names the Settings pages use, in the tray, the notices, the AI cleanup
+  status and the recording indicator: a shortcut, not a hotkey or chord; word packs, not libraries;
+  another AI service, not an OpenAI-compatible endpoint.
 
 ## Under the hood
 
@@ -206,6 +222,9 @@ Nothing was removed except the Libraries page's tip line.
   whether a dictation went into a remote client, how its typing was paced, whether a paste was typed
   instead, and how many line breaks and special characters it held (never the text), and which
   outcome the recording indicator showed.
+- The log also records how long the microphone took to start for each dictation, how long the
+  recording indicator's helper took to start, and when its memory was given back to Windows. Numbers
+  only.
 
 ## Known limitations
 

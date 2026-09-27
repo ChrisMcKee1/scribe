@@ -491,6 +491,15 @@ back into the code-behind; that is a recurring smell.
   before moving, damaging, copying or deleting it, call `DatabasePools.Release(new AppPaths(root))` (or
   `TempDatabaseFolder.ReleasePooledConnections()`) from `StorageTestSupport`, which clears only the pool
   keyed by `ScribeDatabase.BuildFileConnectionString` for that file.
+- **Every string a person reads uses the Settings glossary's words.** `GlossarySourceTests` reads every
+  C# string literal in `src` (regular, verbatim, interpolated and raw, with interpolation holes dropped as
+  code) and every XAML text attribute and element text. It fails on a word the glossary retires: hotkey
+  or chord for a shortcut, pill or overlay for the recording indicator, library for a word pack,
+  provider for where AI cleanup runs, post-processing, transcribing, polish, endpoint URL, on-device, and
+  the rest of the "Don't say" column. Log calls and logging helpers, exceptions, regexes, `nameof`,
+  telemetry tags, test-seam step names, SQL and single-token keys are exempt, and so are product names
+  (Azure CLI, MIT License). Reword a new string, or add it to the allowlist with its reason; a stale
+  allowlist entry fails the test too. Code, logs and wire tokens keep their internal names.
 - Example of the expected style (descriptive names, real error handling, `why` comment):
 
 ```csharp
@@ -2109,6 +2118,9 @@ Each of these compiled warning-clean and showed only at run time or in a render,
   keeps 120 DIP times the text scale above 100%) only together with the other columns' natural widths as minimums,
   measured after a pass with every minimum cleared (an Auto column never shrinks by itself), or the other columns are
   squeezed to 20 DIP instead of the grid scrolling sideways (`UpdateDictionaryColumnMinimums`).
+- **A profile preset's name is its identity in the menu.** The App profiles menu greys out a preset that is already
+  added by matching profile names (`ProfilePresets.Preset.IsNamed`), so a renamed preset keeps its old name in
+  `FormerNames` ("Terminals and shells" is now "Command windows"), or everyone who added it before is offered it again.
 
 ## Azure authentication (read before touching credentials)
 
@@ -2634,6 +2646,12 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
   [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true)). The serving agent is built by the
   initializer and published only after that probe passes; the Chat Completions fallback builds its
   serving agent only once its own probe has passed.
+- **A cleanup reason states the cause, and every surface that shows it adds the consequence.** A reason
+  says what went wrong ("AI cleanup couldn't start.", "Couldn't reach the AI service."), never what Scribe
+  did about it: the AI cleanup status line adds "Until it's ready, Scribe types what it hears", Try
+  dictation and Diagnostics' failures list add that Scribe typed what it heard, and the pill's fixed line
+  and the tray's episode notice never quote the reason. A new surface that shows a reason says the
+  consequence itself.
 
 ## Library vocabulary admission (read before touching a cleanup client or the publisher)
 

@@ -379,7 +379,7 @@ invented path used only to show the format. Never cite either as an existing exe
 
 🟡 **The new clipboard handoff path skips `MarkPrivate`, so the published policy is now false** `[needs-signoff]` (`src/Scribe.Core/TextInjection/ClipboardHandoff.cs:88`)
 
-`PRIVACY.md` tells users, under "Clipboard and keyboard access", that "Clipboard writes that Scribe
+`PRIVACY.md` tells users, under "Clipboard, keyboard and mouse access", that "Clipboard writes that Scribe
 performs itself are marked so Windows excludes them from clipboard history (Win+V) and from
 cross-device cloud clipboard sync." The new handoff writes `CF_UNICODETEXT` directly and never calls
 `Win32Clipboard.MarkPrivate`, so a dictation inserted through this path lands in Win+V history and

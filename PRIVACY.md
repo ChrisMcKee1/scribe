@@ -87,11 +87,21 @@ improve the local cleanup configuration. These samples are stored locally and
 are deleted automatically after seven days, whether or not later cleanups
 succeed. You can also clear them from the application.
 
-### Clipboard and keyboard access
+### Clipboard, keyboard and mouse access
 
 Scribe listens for the dictation shortcut or key combination you configure. It uses
 those key events only to start and stop dictation and does not record the text
 you type.
+
+If one of your shortcuts uses a mouse button (the middle, Back or Forward button),
+Scribe also watches the mouse through a Windows mouse hook, while such a shortcut
+is set and, after you remove one, until it sees a button you were holding let go.
+With keys only, Scribe does not watch the mouse. While it does, Windows passes
+every mouse event through Scribe, pointer movement included. Scribe acts on the
+middle, Back and Forward buttons alone, passes everything else on at once without
+reading it, and records no pointer movement and no other clicks. Its logs say
+whether each shortcut uses a key or a mouse button, and when the mouse hook is
+added, removed or found gone.
 
 If clipboard-paste injection is selected or used as a fallback, Scribe may
 temporarily read the existing text clipboard so it can restore that content
@@ -331,6 +341,9 @@ You can:
 - Turn off dictionary entries or word packs you do not want sent to a remote AI
   provider as vocabulary (anything you turn off is also no longer applied on this
   PC)
+- Keep a word pack out of AI cleanup's vocabulary while still using it on this PC,
+  with that word pack's Use in AI cleanup setting (word packs you create or import
+  start with it off, and the built-in ones with it on)
 - Avoid invoking AI dictionary suggestions and AI usage insights
 - Disable audio history
 - Review and delete individual history entries
