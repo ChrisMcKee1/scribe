@@ -278,13 +278,17 @@ public static class HistoricalLogRedaction
     /// recognized formats line by line. Every other byte is copied unchanged, line endings included, and a
     /// final line with no terminator (a file being appended to) is still examined.
     /// </summary>
-    public static LogRedactionCounts CopyRedacted(Stream source, Stream destination)
+    public static LogRedactionCounts CopyRedacted(Stream source, Stream destination) =>
+        CopyRedacted(source, destination, ArrayPool<byte>.Shared);
+
+    // The pool is a parameter only so tests can watch what comes back to it; production always passes the shared pool.
+    internal static LogRedactionCounts CopyRedacted(Stream source, Stream destination, ArrayPool<byte> pool)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(destination);
 
         var redactor = new LogLineRedactor();
-        var chunk = ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        var chunk = pool.Rent(ChunkBytes);
         var carry = new ArrayBufferWriter<byte>(256);
         try
         {
@@ -323,7 +327,9 @@ public static class HistoricalLogRedaction
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(chunk);
+            // The chunk held raw log bytes, which in files from 0.4.2 and earlier include the text this pass redacts, and the
+            // pool hands it to whatever rents that size next.
+            pool.Return(chunk, clearArray: true);
         }
 
         return redactor.Counts;
