@@ -589,6 +589,7 @@ public partial class SettingsWindow
         }
 
         _dictionarySuggestionRunning = true;
+        var toolTip = DictionarySuggestButton.ToolTip;
         DictionarySuggestButton.ToolTip = null;
         DictionarySuggestButton.IsEnabled = false;
         DictionaryEmptyLearnButton.IsEnabled = false;
@@ -605,9 +606,7 @@ public partial class SettingsWindow
                 DictionarySuggestBusy.Visibility = Visibility.Collapsed;
                 DictionarySuggestButton.IsEnabled = true;
                 DictionaryEmptyLearnButton.IsEnabled = true;
-                DictionarySuggestButton.ToolTip =
-                    "Learn vocabulary from recent dictations. A configured remote AI provider receives " +
-                    "a bounded text sample only after you confirm; otherwise Scribe scans locally.";
+                DictionarySuggestButton.ToolTip = toolTip;
             }
         }
     }

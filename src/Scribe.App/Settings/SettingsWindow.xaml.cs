@@ -4376,9 +4376,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         try
         {
-            if (await ConfirmAsync("Restore frontier prompt",
-                    "Replace the frontier prompt with Scribe's built-in default? Your local prompt is not affected.",
-                    "Restore frontier prompt"))
+            if (await ConfirmAsync("Restore Scribe's detailed instructions?",
+                    "This replaces what's in the Detailed instructions box. Your short instructions stay as they are. " +
+                    "Nothing changes until you save.",
+                    "Restore"))
             {
                 AiFrontierPromptBox.Text = CleanupPrompt.DefaultFrontierPrompt;
             }
@@ -4386,7 +4387,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             _log.LogWarning("Could not restore the frontier prompt ({Failure}).", FailureShape.Describe(ex));
-            ShowThemedMessage("Couldn't restore the frontier prompt", "Couldn't restore the frontier prompt. Try again.");
+            ShowThemedMessage("Couldn't restore the instructions", "Scribe couldn't restore its detailed instructions. Try again.");
         }
     }
 
@@ -4394,9 +4395,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         try
         {
-            if (await ConfirmAsync("Restore local prompt",
-                    "Replace the local prompt with Scribe's built-in default? Your frontier prompt is not affected.",
-                    "Restore local prompt"))
+            if (await ConfirmAsync("Restore Scribe's short instructions?",
+                    "This replaces what's in the Short instructions box. Your detailed instructions stay as they are. " +
+                    "Nothing changes until you save.",
+                    "Restore"))
             {
                 AiLocalPromptBox.Text = CleanupPrompt.DefaultLocalPrompt;
             }
@@ -4404,7 +4406,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             _log.LogWarning("Could not restore the local prompt ({Failure}).", FailureShape.Describe(ex));
-            ShowThemedMessage("Couldn't restore the local prompt", "Couldn't restore the local prompt. Try again.");
+            ShowThemedMessage("Couldn't restore the instructions", "Scribe couldn't restore its short instructions. Try again.");
         }
     }
 

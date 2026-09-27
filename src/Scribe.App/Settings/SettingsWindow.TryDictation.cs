@@ -40,7 +40,7 @@ public partial class SettingsWindow
         {
             if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
-                ShowInfo("Settings saved.");
+                ShowInfo("Changes saved.");
             }
         }
         finally

@@ -57,8 +57,8 @@ public partial class DictionaryCleanupWindow : FluentWindow
         FootnoteText.Text = hasLibraries
             ? "Turning a word off is reversible: it stays in your dictionary with its check cleared and "
                 + "stops being applied. Turning a word pack off keeps the words you still use working, "
-                + "copying them into your own dictionary where needed. A library whose terms overlap other "
-                + "terms dictation applies stays on, because switching it off could change what dictation "
+                + "copying them into your own dictionary where needed. A word pack whose words overlap other "
+                + "words dictation applies stays on, because turning it off could change what dictation "
                 + "writes. Nothing is written until you save the settings window."
             : "Turning a word off is reversible: it stays in your dictionary with its check cleared and "
                 + "stops being applied. Deleting removes it for good. Either way, nothing is written "
