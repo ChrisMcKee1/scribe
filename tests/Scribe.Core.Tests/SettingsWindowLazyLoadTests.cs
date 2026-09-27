@@ -29,6 +29,34 @@ public sealed class SettingsWindowLazyLoadTests
         Assert.Contains("LoadPerformanceStats();", showPage, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Committed_settings_change_refreshes_diagnostics_only_when_visible()
+    {
+        var source = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.History.cs"));
+        var handler = Slice(source, "private void OnCommittedSettingsChanged()", "private void RefreshHistoryEmptyTextFromCommitted()");
+
+        Assert.Contains("RefreshHistoryEmptyTextFromCommitted();", handler, StringComparison.Ordinal);
+        Assert.Contains("RefreshUsageInsightAvailability();", handler, StringComparison.Ordinal);
+        Assert.Contains("if (SectionDiagnostics.Visibility == Visibility.Visible)", handler, StringComparison.Ordinal);
+        Assert.Contains("LoadPerformanceStats();", handler, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void App_shell_probe_uses_owned_child_root_and_refuses_real_data_roots()
+    {
+        var source = File.ReadAllText(FindRepoFile("tools", "Scribe.Benchmarks", "AppShellProbe.cs"));
+
+        Assert.Contains("CreateOwnedDataRoot(dataRootBase)", source, StringComparison.Ordinal);
+        Assert.Contains("private static string CreateOwnedDataRoot", source, StringComparison.Ordinal);
+        Assert.Contains("OwnershipMarker", source, StringComparison.Ordinal);
+        Assert.Contains("RefuseSensitiveDataRoot(rootBase);", source, StringComparison.Ordinal);
+        Assert.Contains("Path.Combine(localAppData, \"ScribeData\")", source, StringComparison.Ordinal);
+        Assert.Contains("Path.Combine(userProfile, \".Scribe\")", source, StringComparison.Ordinal);
+        Assert.Contains("IsPackageLocalCache(root, localAppData)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory.Delete(dataRoot", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Directory.Delete(rootBase", source, StringComparison.Ordinal);
+    }
+
     private static string Slice(string source, string start, string end)
     {
         var startIndex = source.IndexOf(start, StringComparison.Ordinal);

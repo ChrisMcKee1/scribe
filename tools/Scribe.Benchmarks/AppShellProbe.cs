@@ -26,6 +26,7 @@ internal static class AppShellProbe
 {
     private const string Switch = "--app-shell";
     private const string DefaultRoot = "C:\\Users\\chrismckee\\sw\\perf\\scratch\\pa10\\app-shell-probe";
+    private const string OwnershipMarker = ".scribe-app-shell-probe";
 
     public static bool IsRequested(string[] args) => args.Contains(Switch, StringComparer.OrdinalIgnoreCase);
 
@@ -34,12 +35,14 @@ internal static class AppShellProbe
         var requestedIterations = ReadInt(args, "--iterations", 1);
         var iterations = Math.Min(requestedIterations, 1);
         var pumpMilliseconds = ReadInt(args, "--pump-ms", 2000);
-        var dataRoot = ReadValue(args, "--data-root") ?? DefaultRoot;
+        var dataRootBase = ReadValue(args, "--data-root") ?? DefaultRoot;
         var seedRows = ReadInt(args, "--seed-history", 1000);
         var seedFailures = ReadInt(args, "--seed-failures", 10000);
         var loadSpeechModel = args.Contains("--load-speech-model", StringComparer.OrdinalIgnoreCase);
+        var dataRoot = CreateOwnedDataRoot(dataRootBase);
 
         Console.WriteLine($"App shell probe host: {environment.Describe()}");
+        Console.WriteLine($"dataRootBase={dataRootBase}");
         Console.WriteLine($"dataRoot={dataRoot}");
         Console.WriteLine($"iterations={iterations} pumpMs={pumpMilliseconds} seedHistory={seedRows} seedFailures={seedFailures} loadSpeechModel={loadSpeechModel}");
         if (requestedIterations > iterations)
@@ -47,12 +50,6 @@ internal static class AppShellProbe
             Console.WriteLine("The Settings window probe runs one window per process because WPF-UI theme dictionaries are process-global.");
         }
 
-        if (Directory.Exists(dataRoot))
-        {
-            Directory.Delete(dataRoot, recursive: true);
-        }
-
-        Directory.CreateDirectory(dataRoot);
         Environment.SetEnvironmentVariable(AppPaths.DataDirVariable, dataRoot);
         EnsureApplication();
 
@@ -120,6 +117,68 @@ internal static class AppShellProbe
 
         return 0;
     }
+
+    private static string CreateOwnedDataRoot(string requestedBase)
+    {
+        var rootBase = Path.GetFullPath(requestedBase);
+        RefuseSensitiveDataRoot(rootBase);
+        Directory.CreateDirectory(rootBase);
+
+        var root = Path.Combine(
+            rootBase,
+            "run-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N"));
+        if (Directory.Exists(root))
+        {
+            var marker = Path.Combine(root, OwnershipMarker);
+            if (!File.Exists(marker))
+            {
+                throw new InvalidOperationException("Refusing to reuse an app shell probe data folder without the probe ownership marker.");
+            }
+
+            Directory.Delete(root, recursive: true);
+        }
+
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, OwnershipMarker), "Scribe app shell probe owns this directory.");
+        return root;
+    }
+
+    private static void RefuseSensitiveDataRoot(string root)
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (IsSameOrUnder(root, Path.Combine(localAppData, "ScribeData")) ||
+            IsSameOrUnder(root, Path.Combine(userProfile, ".Scribe")) ||
+            IsPackageLocalCache(root, localAppData))
+        {
+            throw new InvalidOperationException("Refusing to run the app shell probe in a Scribe user data folder.");
+        }
+    }
+
+    private static bool IsPackageLocalCache(string root, string localAppData)
+    {
+        var packages = Path.Combine(localAppData, "Packages");
+        if (!IsSameOrUnder(root, packages))
+        {
+            return false;
+        }
+
+        var localCache = Path.DirectorySeparatorChar + "LocalCache";
+        var normalized = NormalizeForComparison(root);
+        return normalized.EndsWith(localCache, StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains(localCache + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSameOrUnder(string candidate, string parent)
+    {
+        var normalizedCandidate = NormalizeForComparison(candidate);
+        var normalizedParent = NormalizeForComparison(parent);
+        return string.Equals(normalizedCandidate, normalizedParent, StringComparison.OrdinalIgnoreCase) ||
+            normalizedCandidate.StartsWith(normalizedParent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeForComparison(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static IHost CreateHost(string dataRoot, out AppPaths paths)
     {
