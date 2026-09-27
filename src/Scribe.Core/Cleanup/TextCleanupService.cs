@@ -283,6 +283,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private const int MaxAdmittedAgents = 8;
     private readonly Dictionary<string, AIAgent> _admittedAgents = new(StringComparer.Ordinal);
 
+    // The last admitted system prompt and the parts it was built from, so the dictations that share a glossary and a
+    // writing style share one prompt instead of each building a copy of the whole glossary to look its agent up by.
+    // Guarded by _gate. It holds strings only, never CleanupOptions, so no key or secret outlives a Configure.
+    private PromptParts _admittedPromptParts;
+    private string? _admittedPrompt;
+
     // The hand-off transport over InnerHttpHandlerForTesting, built once. Guarded by _gate.
     private HttpClientPipelineTransport? _testTransport;
 
@@ -500,6 +506,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal object? ServingAgentForTesting
     {
         get { lock (_gate) { return _agent; } }
+    }
+
+    internal string? AdmittedPromptForTesting
+    {
+        get { lock (_gate) { return _admittedPrompt; } }
     }
 
     public TextCleanupService(
@@ -1257,7 +1268,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary)
     {
         var glossary = vocabulary.GlossaryFor(CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider));
-        var prompt = BuildSystemPrompt(options with { WritingStyle = style ?? options.WritingStyle, Glossary = glossary });
+        var parts = PromptParts.Of(options, style ?? options.WritingStyle, glossary);
+        if (_admittedPrompt is null || parts != _admittedPromptParts)
+        {
+            _admittedPrompt = parts.Build();
+            _admittedPromptParts = parts;
+        }
+
+        var prompt = _admittedPrompt;
         if (_admittedAgents.TryGetValue(prompt, out var cached))
         {
             return cached;
@@ -4629,36 +4647,37 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         SetInitStatus(CleanupStatus.Downloading, $"Downloading {alias}… {Math.Clamp(pct, 0, 100)}%");
     }
 
-    internal static string BuildSystemPrompt(CleanupOptions options)
-    {
-        var style = CleanupPrompt.ResolveWritingStyle(options.WritingStyle);
+    internal static string BuildSystemPrompt(CleanupOptions options) =>
+        PromptParts.Of(options, options.WritingStyle, options.Glossary).Build();
 
-        // The guardrail preamble is the fixed part of the prompt; it varies by prompt style (frontier
-        // vs local) and can be overridden per style by the user (with a restore-to-default in settings).
-        var isLocalPrompt = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) == CleanupPromptStyle.Local;
-        var guardrail = isLocalPrompt
-            ? CleanupPrompt.ResolveLocalPrompt(options.LocalPrompt)
-            : CleanupPrompt.ResolveFrontierPrompt(options.FrontierPrompt);
-        var prompt = guardrail + "\n\nWriting style:\n" + style;
+    // What a system prompt is made of. The prompt is a function of these parts alone, so equal parts make an equal prompt.
+    private readonly record struct PromptParts(string Guardrail, string WritingStyle, string? Glossary, bool NoThink)
+    {
+        public static PromptParts Of(CleanupOptions options, string? writingStyle, string? glossary) => new(
+            // The guardrail preamble is the fixed part of the prompt; it varies by prompt style (frontier
+            // vs local) and can be overridden per style by the user (with a restore-to-default in settings).
+            CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) == CleanupPromptStyle.Local
+                ? CleanupPrompt.ResolveLocalPrompt(options.LocalPrompt)
+                : CleanupPrompt.ResolveFrontierPrompt(options.FrontierPrompt),
+            CleanupPrompt.ResolveWritingStyle(writingStyle),
+            string.IsNullOrWhiteSpace(glossary) ? null : glossary.Trim(),
+            IsQwen3Family(options));
 
         // The user dictionary is folded in as its own block after the writing style, so the vocabulary
         // feature is preserved independently of whatever tone the user asked for.
-        if (!string.IsNullOrWhiteSpace(options.Glossary))
-        {
-            prompt += "\n\n" + options.Glossary.Trim();
-        }
-
+        //
         // Qwen3-family models support a "/no_think" directive that suppresses chain-of-thought, so
         // they return the corrected text directly with no reasoning preamble. Applies to Foundry
         // Local aliases and to BYO endpoints (Ollama etc.) serving a qwen3 model. (Measured: on the
         // small default qwen3-1.7b, letting it reason did not improve cleanup quality, so we keep the
         // directive on both prompt paths for the lower, more predictable dictation latency.)
-        if (IsQwen3Family(options))
-        {
-            prompt += " /no_think";
-        }
-
-        return prompt;
+        public string Build() => string.Concat(
+            Guardrail,
+            "\n\nWriting style:\n",
+            WritingStyle,
+            Glossary is null ? null : "\n\n",
+            Glossary,
+            NoThink ? " /no_think" : null);
     }
 
     /// <summary>
