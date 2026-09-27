@@ -20,9 +20,10 @@ namespace Scribe.Core.Tests;
 /// <para>
 /// What it does not read, so a pass says nothing about it: the docs (README, PRIVACY.md with its defined terms, AGENTS.md,
 /// the release notes); the built-in word packs' CSV files, whose text is data; text Scribe builds at run time from data or
-/// settings; an exception's message, which the logging rules keep out of the log and the UI never shows; a literal split so
-/// a retired word spans two pieces; text a markup extension other than a binding's format and fallbacks produces; and a
-/// XAML attribute whose name does not end in a text property's name.
+/// settings; an exception's message, which the logging rules keep out of the log and the UI never shows; a message put
+/// together from pieces other than literals joined with + (a variable, a method call or string.Format in between); text a
+/// markup extension other than a binding's format and fallbacks produces; and a XAML attribute whose name does not end in a
+/// text property's name.
 /// </para>
 /// </remarks>
 public sealed partial class GlossarySourceTests
@@ -256,6 +257,9 @@ public sealed partial class GlossarySourceTests
                 string F => $$"""{{hotkeyHole}} and {literal braces}""";
                 string G => "hotkeys";
                 string I => $"Status: {(ready ? "Your hotkey is ready" : "Not ready")}";
+                string L => "Change your hot" +
+                    "key, it's split";
+                string M => $"Press {key} as your shortcut. " + "hotkeys like it " + key + " stay apart";
                 string J => $$"""Name: {{$"{hotkeyName}"}} and {{Describe(hotkey)}}""";
                 void K(ILogger log) => log.LogWarning($"Held {(held ? "Your hotkey in a log call's hole" : "no")}");
                 string H => "SELECT hotkey FROM settings";
@@ -269,7 +273,7 @@ public sealed partial class GlossarySourceTests
             .Select(literal => literal.Text)
             .ToList();
 
-        Assert.Equal(5, found.Count);
+        Assert.Equal(7, found.Count);
         Assert.Contains(found, text => text.StartsWith("Change your hotkey ", StringComparison.Ordinal) && text.EndsWith(" times", StringComparison.Ordinal));
         Assert.Contains("Your \"hotkey\" in a verbatim string", found);
         Assert.Contains("Your hotkey after a quote character", found);
@@ -277,6 +281,10 @@ public sealed partial class GlossarySourceTests
 
         // A literal inside a hole is shown when the hole renders it; code inside a raw string's hole is not text.
         Assert.Contains("Your hotkey is ready", found);
+
+        // Literals joined with + are one text; a variable between them ends it.
+        Assert.Contains("Change your hotkey, it's split", found);
+        Assert.Contains(found, text => text.StartsWith("Press ", StringComparison.Ordinal) && text.EndsWith("hotkeys like it ", StringComparison.Ordinal));
         Assert.DoesNotContain(found, text => text.StartsWith("Name:", StringComparison.Ordinal));
     }
 
@@ -495,7 +503,7 @@ public sealed partial class GlossarySourceTests
             Char,
         }
 
-        private readonly record struct Token(Kind Kind, int Start, int End, string Text);
+        private readonly record struct Token(Kind Kind, int Start, int End, string Text, bool Nested = false);
 
         /// <summary>
         /// The literals outside comments, outside the calls whose text never reaches a person, and outside
@@ -511,16 +519,35 @@ public sealed partial class GlossarySourceTests
                 hidden.Add((call.Index, MatchingClose(masked, call.Index + call.Length - 1)));
             }
 
-            foreach (var token in tokens)
+            bool Hidden(Token token) => hidden.Any(span => token.Start >= span.Start && token.Start < span.End);
+
+            // Pieces joined with + are one text, so a word split across them ("Your local " + "prompt") is still read.
+            var pieces = tokens.Where(token => token.Kind == Kind.Literal && !token.Nested).OrderBy(token => token.Start).ToList();
+            for (var n = 0; n < pieces.Count; n++)
             {
-                if (token.Kind != Kind.Literal || hidden.Any(span => token.Start >= span.Start && token.Start < span.End))
+                var first = pieces[n];
+                var text = new StringBuilder(first.Text);
+                while (n + 1 < pieces.Count && IsConcatenation(source, pieces[n].End, pieces[n + 1].Start))
                 {
-                    continue;
+                    n++;
+                    text.Append(pieces[n].Text);
                 }
 
+                if (!Hidden(first))
+                {
+                    yield return new Literal(first.Start, LineOf(source, first.Start), text.ToString());
+                }
+            }
+
+            foreach (var token in tokens.Where(token => token.Kind == Kind.Literal && token.Nested && !Hidden(token)))
+            {
                 yield return new Literal(token.Start, LineOf(source, token.Start), token.Text);
             }
         }
+
+        // Only whitespace and one plus sign between two literals: the second continues the first.
+        private static bool IsConcatenation(string source, int end, int start) =>
+            start >= end && Regex.IsMatch(source.AsSpan(end, start - end).ToString(), @"^\s*\+\s*$");
 
         /// <summary>The spans of <paramref name="member"/>'s initializers: from the name to the end of its statement.</summary>
         public static IReadOnlyList<(int Start, int End)> MemberInitializers(string source, string member)
@@ -554,7 +581,7 @@ public sealed partial class GlossarySourceTests
                 {
                     // A literal inside an interpolation hole is text too, when the hole renders it.
                     tokens.Add(token);
-                    tokens.AddRange(nested);
+                    tokens.AddRange(nested.Select(inner => inner with { Nested = true }));
                     i = Math.Max(token.End, i + 1);
                 }
                 else
