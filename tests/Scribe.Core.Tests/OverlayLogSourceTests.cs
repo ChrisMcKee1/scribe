@@ -25,7 +25,8 @@ public sealed class OverlayLogSourceTests
         Assert.Contains("level is \"Warning\" or \"Error\" or \"Critical\"", requires, StringComparison.Ordinal);
         Assert.Contains("Flush(timeout)", prompt, StringComparison.Ordinal);
         Assert.Contains("AppendWithRetry(Path", prompt, StringComparison.Ordinal);
-        Assert.Contains("lock (WriteGate)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Monitor.TryEnter(WriteGate, remaining)", prompt, StringComparison.Ordinal);
+        Assert.Contains("Interlocked.Increment(ref _dropped)", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -34,21 +35,56 @@ public sealed class OverlayLogSourceTests
         var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
         var error = MethodBody(source, "public static void Error");
         var format = MethodBody(source, "private static string FormatExceptionShape");
-        var frames = MethodBody(source, "private static void AppendStackFrames");
+        var frames = MethodBody(source, "private static int AppendStackFrames");
 
         Assert.Contains("FormatExceptionShape(ex)", error, StringComparison.Ordinal);
-        Assert.Contains("ex.GetType().Name", format, StringComparison.Ordinal);
+        Assert.Contains("try", error, StringComparison.Ordinal);
+        Assert.Contains("SafeExceptionType(ex)", format, StringComparison.Ordinal);
         Assert.Contains("ex.HResult", format, StringComparison.Ordinal);
         Assert.DoesNotContain(".Message", format, StringComparison.Ordinal);
         Assert.Contains("StartsWith(\"at \", StringComparison.Ordinal)", frames, StringComparison.Ordinal);
+        Assert.Contains("stackTrace.Split('\\n')", frames, StringComparison.Ordinal);
+        Assert.Contains("TrimEnd('\\r')", frames, StringComparison.Ordinal);
+        Assert.Contains("MaxExceptionFrames", format + frames, StringComparison.Ordinal);
+        Assert.Contains("MaxExceptionFrameChars", frames, StringComparison.Ordinal);
         Assert.DoesNotContain(".Message", frames, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Overlay_flush_and_writer_emit_pending_drop_notices()
+    {
+        var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
+        var flush = MethodBody(source, "internal static bool Flush");
+        var writer = MethodBody(source, "private static async Task RunWriter");
+        var notice = MethodBody(source, "private static void WritePendingDropNotice");
+
+        Assert.Contains("WritePendingDropNotice(deadline)", flush, StringComparison.Ordinal);
+        Assert.Contains("WritePendingDropNotice(Environment.TickCount64 + FlushTimeoutMs)", writer, StringComparison.Ordinal);
+        Assert.Contains("Interlocked.Exchange(ref _dropped, 0)", notice, StringComparison.Ordinal);
+        Assert.Contains("DropNotice(dropped)", notice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Overlay_log_calls_never_pass_exception_messages()
+    {
+        foreach (var file in Directory.EnumerateFiles(RepoFile("src", "Scribe.Overlay"), "*.cs", SearchOption.AllDirectories))
+        {
+            var source = File.ReadAllText(file);
+            foreach (var line in source.Split('\n'))
+            {
+                if (line.Contains("OverlayLog.", StringComparison.Ordinal))
+                {
+                    Assert.DoesNotContain(".Message", line, StringComparison.Ordinal);
+                }
+            }
+        }
     }
 
     [Fact]
     public void Overlay_logging_keeps_the_share_retry_append_contract_on_the_writer_thread()
     {
         var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
-        var append = MethodBody(source, "private static void AppendWithRetry");
+        var append = MethodBody(source, "private static bool AppendWithRetry");
 
         Assert.Contains("FileShare.ReadWrite", append, StringComparison.Ordinal);
         Assert.Contains("catch (IOException)", append, StringComparison.Ordinal);

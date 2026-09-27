@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Scribe.Overlay.Ipc;
@@ -27,7 +27,7 @@ public partial class App : Application
         // a silent exit is exactly how the old overlay hid its failures.
         UnhandledException += (_, e) =>
         {
-            OverlayLog.Error($"App.UnhandledException handled={e.Handled} msg={e.Message}", e.Exception);
+            OverlayLog.Error($"App.UnhandledException handled={e.Handled}", e.Exception);
         };
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
@@ -166,7 +166,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            OverlayLog.Warn($"Parent watchdog setup failed for pid={parentPid}: {ex.Message}");
+            OverlayLog.Warn($"Parent watchdog setup failed for pid={parentPid} ({ex.GetType().Name} 0x{ex.HResult:X8})");
             return;
         }
 
@@ -179,7 +179,7 @@ public partial class App : Application
             catch (Exception ex)
             {
                 // Could not synchronize on the parent; the job object + pipe EOF remain as guards.
-                OverlayLog.Warn($"Parent watchdog wait failed for pid={parentPid}: {ex.Message}");
+                OverlayLog.Warn($"Parent watchdog wait failed for pid={parentPid} ({ex.GetType().Name} 0x{ex.HResult:X8})");
                 return;
             }
 

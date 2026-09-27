@@ -24,6 +24,8 @@ public static class OverlayLog
     private const int PromptWriteTimeoutMs = 250;
     private const int UnhandledFlushTimeoutMs = 1000;
     private const int FlushTimeoutMs = 1000;
+    private const int MaxExceptionFrames = 32;
+    private const int MaxExceptionFrameChars = 512;
 
     private static readonly object StartGate = new();
     private static readonly object PathGate = new();
@@ -122,7 +124,21 @@ public static class OverlayLog
 
     public static void Error(string message, Exception? ex = null)
     {
-        Write(ex is null ? message : message + FormatExceptionShape(ex), "Error");
+        try
+        {
+            Write(ex is null ? message : message + FormatExceptionShape(ex), "Error");
+        }
+        catch
+        {
+            try
+            {
+                Write(message + " (" + SafeExceptionType(ex) + ")", "Error");
+            }
+            catch
+            {
+                // Never let diagnostics replace the original failure.
+            }
+        }
     }
 
     private static bool RequiresPromptWrite(string level)
@@ -132,65 +148,124 @@ public static class OverlayLog
 
     private static string FormatExceptionShape(Exception ex)
     {
-        var builder = new StringBuilder()
-            .Append(" (")
-            .Append(ex.GetType().Name)
-            .Append(" 0x")
-            .Append(ex.HResult.ToString("X8", CultureInfo.InvariantCulture))
-            .Append(')');
-        AppendExceptionFrames(builder, ex);
-        return builder.ToString();
+        try
+        {
+            var builder = new StringBuilder()
+                .Append(" (")
+                .Append(SafeExceptionType(ex))
+                .Append(" 0x")
+                .Append(ex.HResult.ToString("X8", CultureInfo.InvariantCulture))
+                .Append(')');
+            AppendExceptionFrames(builder, ex, MaxExceptionFrames);
+            return builder.ToString();
+        }
+        catch
+        {
+            return " (" + SafeExceptionType(ex) + ")";
+        }
     }
 
-    private static void AppendExceptionFrames(StringBuilder builder, Exception? exception)
+    private static string SafeExceptionType(Exception? ex)
     {
-        if (exception is null)
+        try
         {
-            return;
+            return ex?.GetType().Name ?? "Exception";
         }
-
-        AppendStackFrames(builder, exception.StackTrace);
-        if (exception is AggregateException aggregate)
+        catch
         {
-            foreach (var inner in aggregate.InnerExceptions)
-            {
-                AppendExceptionFrames(builder, inner);
-            }
-
-            return;
+            return "Exception";
         }
-
-        AppendExceptionFrames(builder, exception.InnerException);
     }
 
-    private static void AppendStackFrames(StringBuilder builder, string? stackTrace)
+    private static int AppendExceptionFrames(StringBuilder builder, Exception? exception, int remaining)
     {
-        if (string.IsNullOrWhiteSpace(stackTrace))
+        if (exception is null || remaining <= 0)
         {
-            return;
+            return remaining;
         }
 
-        foreach (var line in stackTrace.Split([Environment.NewLine], StringSplitOptions.None))
+        try
         {
-            if (line.AsSpan().TrimStart().StartsWith("at ", StringComparison.Ordinal))
+            remaining = AppendStackFrames(builder, exception.StackTrace, remaining);
+            if (remaining <= 0)
             {
-                builder.AppendLine().Append(line);
+                return 0;
             }
+
+            if (exception is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    remaining = AppendExceptionFrames(builder, inner, remaining);
+                    if (remaining <= 0)
+                    {
+                        return 0;
+                    }
+                }
+
+                return remaining;
+            }
+
+            return AppendExceptionFrames(builder, exception.InnerException, remaining);
         }
+        catch
+        {
+            return remaining;
+        }
+    }
+
+    private static int AppendStackFrames(StringBuilder builder, string? stackTrace, int remaining)
+    {
+        if (string.IsNullOrWhiteSpace(stackTrace) || remaining <= 0)
+        {
+            return remaining;
+        }
+
+        foreach (var rawLine in stackTrace.Split('\n'))
+        {
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+
+            var line = rawLine.TrimEnd('\r');
+            var trimmed = line.AsSpan().TrimStart();
+            if (!trimmed.StartsWith("at ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var frame = trimmed.Length > MaxExceptionFrameChars
+                ? trimmed[..MaxExceptionFrameChars]
+                : trimmed;
+            builder.AppendLine().Append(frame);
+            remaining--;
+        }
+
+        return remaining;
     }
 
     private static void WritePromptLine(string line, TimeSpan timeout)
     {
-        var dropped = Interlocked.Exchange(ref _dropped, 0);
-        if (dropped > 0 && !Queue.Writer.TryWrite(DropNotice(dropped)))
+        var deadline = Environment.TickCount64 + ToWaitMilliseconds(timeout);
+        Flush(timeout);
+        var remaining = RemainingMilliseconds(deadline);
+        if (remaining <= 0 || !Monitor.TryEnter(WriteGate, remaining))
         {
-            Interlocked.Add(ref _dropped, dropped);
+            Interlocked.Increment(ref _dropped);
+            return;
         }
 
-        Flush(timeout);
-        lock (WriteGate)
+        try
         {
-            AppendWithRetry(Path, line + Environment.NewLine);
+            if (!AppendWithRetry(Path, line + Environment.NewLine, deadline))
+            {
+                Interlocked.Increment(ref _dropped);
+            }
+        }
+        finally
+        {
+            Monitor.Exit(WriteGate);
         }
     }
 
@@ -199,18 +274,19 @@ public static class OverlayLog
         try
         {
             EnsureStarted();
-            var deadline = Environment.TickCount64 + Math.Clamp((long)timeout.TotalMilliseconds, 0, int.MaxValue);
+            var deadline = Environment.TickCount64 + ToWaitMilliseconds(timeout);
             while (Queue.Reader.Count > 0 || Volatile.Read(ref _writing) != 0)
             {
-                var remaining = deadline - Environment.TickCount64;
+                var remaining = RemainingMilliseconds(deadline);
                 if (remaining <= 0)
                 {
                     return false;
                 }
 
-                Thread.Sleep((int)Math.Min(10, remaining));
+                Thread.Sleep(Math.Min(10, remaining));
             }
 
+            WritePendingDropNotice(deadline);
             return true;
         }
         catch
@@ -268,6 +344,10 @@ public static class OverlayLog
                     }
 
                     WriteBatch(Batch);
+                    if (Queue.Reader.Count == 0)
+                    {
+                        WritePendingDropNotice(Environment.TickCount64 + FlushTimeoutMs);
+                    }
                 }
                 finally
                 {
@@ -302,7 +382,7 @@ public static class OverlayLog
 
             lock (WriteGate)
             {
-                AppendWithRetry(Path, Pending.ToString());
+                AppendWithRetry(Path, Pending.ToString(), Environment.TickCount64 + FlushTimeoutMs);
             }
         }
         catch
@@ -311,25 +391,77 @@ public static class OverlayLog
         }
     }
 
-    private static void AppendWithRetry(string path, string text)
+    private static void WritePendingDropNotice(long deadline)
+    {
+        var dropped = Interlocked.Exchange(ref _dropped, 0);
+        if (dropped <= 0)
+        {
+            return;
+        }
+
+        var notice = DropNotice(dropped) + Environment.NewLine;
+        var remaining = RemainingMilliseconds(deadline);
+        if (remaining <= 0 || !Monitor.TryEnter(WriteGate, remaining))
+        {
+            Interlocked.Add(ref _dropped, dropped);
+            return;
+        }
+
+        try
+        {
+            if (!AppendWithRetry(Path, notice, deadline))
+            {
+                Interlocked.Add(ref _dropped, dropped);
+            }
+        }
+        finally
+        {
+            Monitor.Exit(WriteGate);
+        }
+    }
+
+    private static bool AppendWithRetry(string path, string text, long deadline)
     {
         for (var attempt = 0; attempt < WriteAttempts; attempt++)
         {
+            if (RemainingMilliseconds(deadline) <= 0)
+            {
+                return false;
+            }
+
             try
             {
                 using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
                 using var writer = new StreamWriter(stream, Utf8NoBom);
                 writer.Write(text);
-                return;
+                return true;
             }
             catch (IOException)
             {
-                Thread.Sleep(15);
+                SleepWithin(deadline);
             }
             catch (UnauthorizedAccessException)
             {
-                Thread.Sleep(15);
+                SleepWithin(deadline);
             }
         }
+
+        return false;
     }
+
+    private static int ToWaitMilliseconds(TimeSpan timeout) =>
+        (int)Math.Clamp(timeout.TotalMilliseconds, 0, int.MaxValue);
+
+    private static int RemainingMilliseconds(long deadline) =>
+        (int)Math.Min(Math.Max(deadline - Environment.TickCount64, 0), int.MaxValue);
+
+    private static void SleepWithin(long deadline)
+    {
+        var remaining = RemainingMilliseconds(deadline);
+        if (remaining > 0)
+        {
+            Thread.Sleep(Math.Min(15, remaining));
+        }
+    }
+
 }
