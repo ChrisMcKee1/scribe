@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using NAudio.Wave;
 
 namespace Scribe.Core.Audio;
@@ -39,7 +40,7 @@ public sealed record CaptureSignalReport(
     /// this halves the speech before it reaches the recognizer.
     /// </summary>
     public bool HasSilentChannel =>
-        PerChannel.Count > 1 && PerChannel.Any(c => c.Peak < CaptureSignalAnalyzer.SilentChannelPeak);
+        PerChannel.Count > 1 && HasChannelBelow(CaptureSignalAnalyzer.SilentChannelPeak);
 
     /// <summary>
     /// True when the channels differ enough that they are not the same microphone: a headset
@@ -50,8 +51,15 @@ public sealed record CaptureSignalReport(
         get
         {
             if (PerChannel.Count < 2) return false;
-            var loudest = PerChannel.Max(c => c.Rms);
-            var quietest = PerChannel.Min(c => c.Rms);
+            var loudest = 0f;
+            var quietest = float.MaxValue;
+            for (var index = 0; index < PerChannel.Count; index++)
+            {
+                var rms = PerChannel[index].Rms;
+                if (rms > loudest) loudest = rms;
+                if (rms < quietest) quietest = rms;
+            }
+
             return loudest > 0 && quietest / loudest < 0.5f;
         }
     }
@@ -59,13 +67,37 @@ public sealed record CaptureSignalReport(
     /// <summary>One line for the log. No content, only shape.</summary>
     public string Describe()
     {
-        var channels = string.Join(" ", PerChannel.Select(c => string.Create(
-            CultureInfo.InvariantCulture, $"ch{c.Channel}(peak {c.PeakDbfs:F1} rms {c.RmsDbfs:F1})")));
+        var builder = new StringBuilder(PerChannel.Count * 32);
+        for (var index = 0; index < PerChannel.Count; index++)
+        {
+            if (index > 0)
+            {
+                builder.Append(' ');
+            }
+
+            var channel = PerChannel[index];
+            builder.Append(string.Create(
+                CultureInfo.InvariantCulture,
+                $"ch{channel.Channel}(peak {channel.PeakDbfs:F1} rms {channel.RmsDbfs:F1})"));
+        }
 
         return string.Create(CultureInfo.InvariantCulture,
             $"{SampleRate}Hz {Channels}ch peak {PeakDbfs:F1}dBFS rms {RmsDbfs:F1}dBFS " +
             $"clipped {ClippedFraction:P2} nearSilent {NearSilentFraction:P0} dc {DcOffset:F4} " +
-            $"[{channels}]");
+            $"[{builder}]");
+    }
+
+    private bool HasChannelBelow(float threshold)
+    {
+        for (var index = 0; index < PerChannel.Count; index++)
+        {
+            if (PerChannel[index].Peak < threshold)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
@@ -117,15 +149,204 @@ public static class CaptureSignalAnalyzer
         var channels = Math.Max(1, format.Channels);
         if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         {
-            return Analyze(MemoryMarshal.Cast<byte, float>(raw), channels, format.SampleRate, static f => f);
+            return AnalyzeFloat(MemoryMarshal.Cast<byte, float>(raw), channels, format.SampleRate);
         }
 
         if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 16)
         {
-            return Analyze(MemoryMarshal.Cast<byte, short>(raw), channels, format.SampleRate, static s => s / 32768f);
+            return AnalyzePcm16(MemoryMarshal.Cast<byte, short>(raw), channels, format.SampleRate);
         }
 
         return Empty(channels, format.SampleRate);
+    }
+
+    private static CaptureSignalReport AnalyzeFloat(ReadOnlySpan<float> samples, int channels, int sampleRate)
+    {
+        if (samples.Length < channels)
+        {
+            return Empty(channels, sampleRate);
+        }
+
+        return channels switch
+        {
+            1 => AnalyzeMono(samples, channels, sampleRate),
+            2 => AnalyzeStereo(samples, sampleRate),
+            _ => Analyze(samples, channels, sampleRate, static f => f),
+        };
+    }
+
+    private static CaptureSignalReport AnalyzePcm16(ReadOnlySpan<short> samples, int channels, int sampleRate)
+    {
+        if (samples.Length < channels)
+        {
+            return Empty(channels, sampleRate);
+        }
+
+        return channels switch
+        {
+            1 => AnalyzeMono(samples, channels, sampleRate),
+            2 => AnalyzeStereo(samples, sampleRate),
+            _ => Analyze(samples, channels, sampleRate, static s => s / 32768f),
+        };
+    }
+
+    private static CaptureSignalReport AnalyzeMono(ReadOnlySpan<float> samples, int channels, int sampleRate)
+    {
+        float peak = 0;
+        double sumSquares = 0;
+        double sum = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        foreach (var value in samples)
+        {
+            var magnitude = Math.Abs(value);
+            if (magnitude > peak) peak = magnitude;
+            sumSquares += value * (double)value;
+            sum += value;
+            if (magnitude >= ClipThreshold) clipped++;
+            if (magnitude < NearSilenceThreshold) nearSilent++;
+        }
+
+        var rms = (float)Math.Sqrt(sumSquares / samples.Length);
+        return new CaptureSignalReport(
+            channels,
+            sampleRate,
+            peak,
+            rms,
+            clipped / (double)samples.Length,
+            nearSilent / (double)samples.Length,
+            (float)(sum / samples.Length),
+            [new ChannelLevel(0, peak, rms)]);
+    }
+
+    private static CaptureSignalReport AnalyzeMono(ReadOnlySpan<short> samples, int channels, int sampleRate)
+    {
+        float peak = 0;
+        double sumSquares = 0;
+        double sum = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        foreach (var sample in samples)
+        {
+            var value = sample / 32768f;
+            var magnitude = Math.Abs(value);
+            if (magnitude > peak) peak = magnitude;
+            sumSquares += value * (double)value;
+            sum += value;
+            if (magnitude >= ClipThreshold) clipped++;
+            if (magnitude < NearSilenceThreshold) nearSilent++;
+        }
+
+        var rms = (float)Math.Sqrt(sumSquares / samples.Length);
+        return new CaptureSignalReport(
+            channels,
+            sampleRate,
+            peak,
+            rms,
+            clipped / (double)samples.Length,
+            nearSilent / (double)samples.Length,
+            (float)(sum / samples.Length),
+            [new ChannelLevel(0, peak, rms)]);
+    }
+
+    private static CaptureSignalReport AnalyzeStereo(ReadOnlySpan<float> samples, int sampleRate)
+    {
+        float peak0 = 0;
+        float peak1 = 0;
+        double sumSquares0 = 0;
+        double sumSquares1 = 0;
+        double sum = 0;
+        long count0 = 0;
+        long count1 = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        var pairs = samples.Length - (samples.Length % 2);
+        for (var i = 0; i < pairs; i += 2)
+        {
+            Accumulate(samples[i], ref peak0, ref sumSquares0, ref sum, ref count0, ref clipped, ref nearSilent);
+            Accumulate(samples[i + 1], ref peak1, ref sumSquares1, ref sum, ref count1, ref clipped, ref nearSilent);
+        }
+
+        if (pairs < samples.Length)
+        {
+            Accumulate(samples[pairs], ref peak0, ref sumSquares0, ref sum, ref count0, ref clipped, ref nearSilent);
+        }
+
+        return BuildStereoReport(sampleRate, samples.Length, peak0, peak1, sumSquares0, sumSquares1, sum, count0, count1, clipped, nearSilent);
+    }
+
+    private static CaptureSignalReport AnalyzeStereo(ReadOnlySpan<short> samples, int sampleRate)
+    {
+        float peak0 = 0;
+        float peak1 = 0;
+        double sumSquares0 = 0;
+        double sumSquares1 = 0;
+        double sum = 0;
+        long count0 = 0;
+        long count1 = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        var pairs = samples.Length - (samples.Length % 2);
+        for (var i = 0; i < pairs; i += 2)
+        {
+            Accumulate(samples[i] / 32768f, ref peak0, ref sumSquares0, ref sum, ref count0, ref clipped, ref nearSilent);
+            Accumulate(samples[i + 1] / 32768f, ref peak1, ref sumSquares1, ref sum, ref count1, ref clipped, ref nearSilent);
+        }
+
+        if (pairs < samples.Length)
+        {
+            Accumulate(samples[pairs] / 32768f, ref peak0, ref sumSquares0, ref sum, ref count0, ref clipped, ref nearSilent);
+        }
+
+        return BuildStereoReport(sampleRate, samples.Length, peak0, peak1, sumSquares0, sumSquares1, sum, count0, count1, clipped, nearSilent);
+    }
+
+    private static void Accumulate(
+        float value,
+        ref float peak,
+        ref double sumSquares,
+        ref double sum,
+        ref long count,
+        ref long clipped,
+        ref long nearSilent)
+    {
+        var magnitude = Math.Abs(value);
+        if (magnitude > peak) peak = magnitude;
+        sumSquares += value * (double)value;
+        sum += value;
+        count++;
+        if (magnitude >= ClipThreshold) clipped++;
+        if (magnitude < NearSilenceThreshold) nearSilent++;
+    }
+
+    private static CaptureSignalReport BuildStereoReport(
+        int sampleRate,
+        int sampleCount,
+        float peak0,
+        float peak1,
+        double sumSquares0,
+        double sumSquares1,
+        double sum,
+        long count0,
+        long count1,
+        long clipped,
+        long nearSilent)
+    {
+        var rms0 = count0 == 0 ? 0f : (float)Math.Sqrt(sumSquares0 / count0);
+        var rms1 = count1 == 0 ? 0f : (float)Math.Sqrt(sumSquares1 / count1);
+        return new CaptureSignalReport(
+            2,
+            sampleRate,
+            Math.Max(peak0, peak1),
+            (float)Math.Sqrt((sumSquares0 + sumSquares1) / sampleCount),
+            clipped / (double)sampleCount,
+            nearSilent / (double)sampleCount,
+            (float)(sum / sampleCount),
+            [new ChannelLevel(0, peak0, rms0), new ChannelLevel(1, peak1, rms1)]);
     }
 
     private static CaptureSignalReport Analyze<T>(

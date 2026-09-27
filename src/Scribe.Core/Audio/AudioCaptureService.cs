@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
@@ -591,14 +592,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         {
             ReadOnlySpan<float> samples = MemoryMarshal.Cast<byte, float>(buffer);
-            foreach (float sample in samples)
-            {
-                float abs = Math.Abs(sample);
-                if (abs > peak)
-                {
-                    peak = abs;
-                }
-            }
+            peak = ComputeFloatPeak(samples);
         }
         else if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 16)
         {
@@ -642,6 +636,59 @@ public sealed class AudioCaptureService : IAudioCaptureService
         return Math.Clamp(peak, 0f, 1f);
     }
 
+    private static float ComputeFloatPeak(ReadOnlySpan<float> samples)
+    {
+        if (!Vector.IsHardwareAccelerated || samples.Length < Vector<float>.Count)
+        {
+            return ComputeFloatPeakScalar(samples);
+        }
+
+        var peakVector = Vector<float>.Zero;
+        var index = 0;
+        var lastVectorStart = samples.Length - Vector<float>.Count;
+        for (; index <= lastVectorStart; index += Vector<float>.Count)
+        {
+            var magnitudes = Vector.Abs(new Vector<float>(samples.Slice(index, Vector<float>.Count)));
+            var larger = Vector.GreaterThan(magnitudes, peakVector);
+            peakVector = Vector.ConditionalSelect(larger, magnitudes, peakVector);
+        }
+
+        var peak = 0f;
+        for (var lane = 0; lane < Vector<float>.Count; lane++)
+        {
+            if (peakVector[lane] > peak)
+            {
+                peak = peakVector[lane];
+            }
+        }
+
+        for (; index < samples.Length; index++)
+        {
+            var abs = Math.Abs(samples[index]);
+            if (abs > peak)
+            {
+                peak = abs;
+            }
+        }
+
+        return peak;
+    }
+
+    private static float ComputeFloatPeakScalar(ReadOnlySpan<float> samples)
+    {
+        var peak = 0f;
+        foreach (float sample in samples)
+        {
+            var abs = Math.Abs(sample);
+            if (abs > peak)
+            {
+                peak = abs;
+            }
+        }
+
+        return peak;
+    }
+
     // Formats the peak meter can measure. Anything else leaves the level (and therefore the
     // silent-capture heuristic) blind, so callers must not report "muted" for those captures.
     internal static bool IsMeterableFormat(WaveFormat format) =>
@@ -661,17 +708,23 @@ public sealed class AudioCaptureService : IAudioCaptureService
             ? mono
             : new WdlResamplingSampleProvider(mono, TargetSampleRate);
 
-        return ReadAll(resampled);
+        return ReadAll(resampled, EstimateResampledSampleCount(length, format));
     }
 
     internal static float[] ReadAll(ISampleProvider provider) => ReadAll(provider, ArrayPool<float>.Shared);
 
-    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool)
+    internal static float[] ReadAll(ISampleProvider provider, int initialCapacity) =>
+        ReadAll(provider, ArrayPool<float>.Shared, initialCapacity);
+
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool) =>
+        ReadAll(provider, pool, provider.WaveFormat.SampleRate);
+
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool, int initialCapacity)
     {
         // The shared pool keeps returned arrays for whoever rents next, and Return(clearArray) only
         // clears an array the pool decides to keep, so this dictation's audio is wiped before each
         // array goes back.
-        var samples = pool.Rent(provider.WaveFormat.SampleRate);
+        var samples = pool.Rent(RentCapacity(initialCapacity));
         var count = 0;
         try
         {
@@ -703,6 +756,20 @@ public sealed class AudioCaptureService : IAudioCaptureService
             pool.Return(samples);
         }
     }
+
+    private static int EstimateResampledSampleCount(int length, WaveFormat format)
+    {
+        if (format.AverageBytesPerSecond <= 0)
+        {
+            return TargetSampleRate;
+        }
+
+        var estimate = (long)Math.Ceiling(length * (double)TargetSampleRate / format.AverageBytesPerSecond);
+        return (int)Math.Clamp(estimate + TargetSampleRate / 10, 1, Array.MaxLength);
+    }
+
+    private static int RentCapacity(int initialCapacity) =>
+        initialCapacity >= Array.MaxLength ? Array.MaxLength : Math.Max(1, initialCapacity + 1);
 
     /// <summary>Where a capture's device came from, for the log and for telling the user once.</summary>
     private enum CaptureSource

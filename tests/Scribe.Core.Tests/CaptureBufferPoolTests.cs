@@ -294,6 +294,21 @@ public sealed class CaptureBufferPoolTests
     }
 
     [Fact]
+    public void ReadAll_uses_the_known_capture_length_as_its_first_scratch_rent()
+    {
+        var input = Enumerable.Repeat(0.25f, 880_000).ToArray();
+        var pool = new RecordingPool();
+
+        var output = AudioCaptureService.ReadAll(new ArraySource(input), pool, input.Length);
+
+        Assert.Equal(input.Length, output.Length);
+        Assert.Equal(input, output);
+        Assert.Single(pool.Rented);
+        Assert.Single(pool.Returned);
+        Assert.True(pool.Rented[0].Length >= input.Length);
+    }
+
+    [Fact]
     public void A_later_capture_into_the_reused_working_buffer_never_changes_audio_already_handed_out()
     {
         // 16 kHz mono float is the passthrough path: no downmix and no resampler, so ReadAll reads
