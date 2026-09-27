@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
@@ -151,7 +152,103 @@ public partial class UsageAnalyzerMemoryTests
                 allocated * 5 < oracleBytes,
                 $"{allocated} bytes against the previous implementation's {oracleBytes} for 600 dictations. During it: {during}.");
         }
+
+        [Fact]
+        public void A_recurring_term_costs_nothing_per_occurrence()
+        {
+            // The same dictations, their vocabulary repeated 6 and 24 times: the distinct terms stay the same while their
+            // occurrences grow, so what the report builds once, per term or per dictation cancels out of the difference and
+            // only what an occurrence costs is left. A string for each occurrence of a term already stored, or a copy of each
+            // token before it is judged, would add at least 32 bytes for each of the 18 extra repetitions in every dictation
+            // (each repetition holds at least one novel term); the bound allows 16 bytes per dictation.
+            var few = RecurringCorpus(repetitions: 6);
+            var many = RecurringCorpus(repetitions: 24);
+            var since = Now.AddDays(-89);
+            for (var round = 0; round < 3; round++)
+            {
+                _ = UsageAnalyzer.Compute(few, RecurringKnownTerms, since, Now, null, TimeZoneInfo.Utc);
+                _ = UsageAnalyzer.Compute(many, RecurringKnownTerms, since, Now, null, TimeZoneInfo.Utc);
+            }
+
+            var work = RuntimeWork.Now();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var fewSnapshot = UsageAnalyzer.Compute(few, RecurringKnownTerms, since, Now, null, TimeZoneInfo.Utc);
+            var fewBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var manySnapshot = UsageAnalyzer.Compute(many, RecurringKnownTerms, since, Now, null, TimeZoneInfo.Utc);
+            var manyBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            var during = RuntimeWork.Now().Since(work);
+
+            Assert.Equal(RecurringTerms(6), Described(fewSnapshot.Terms));
+            Assert.Equal(RecurringTerms(24), Described(manySnapshot.Terms));
+            AssertSame(Oracle.Compute(few, RecurringKnownTerms, since, Now, null, TimeZoneInfo.Utc), fewSnapshot);
+            AssertSame(Oracle.Compute(many, RecurringKnownTerms, since, Now, null, TimeZoneInfo.Utc), manySnapshot);
+            Assert.True(
+                manyBytes - fewBytes <= RecurringDictations * 16,
+                $"{manyBytes} bytes with each term 24 times per dictation against {fewBytes} with 6, for {RecurringDictations} " +
+                $"dictations. During it: {during}.");
+        }
     }
+
+    // Dictations repeating one small vocabulary, so they hold the same distinct terms however often it repeats. Every token
+    // is decided before the letter-digit pattern, whose unoptimized code allocates on each call (see
+    // DictionarySuggestionMinerSpanTests): novel terms are camel humps and acronyms, some spelled differently in later
+    // occurrences, and the rest are one covered term, two stoplist words and a single letter.
+    private const int RecurringDictations = 24;
+
+    private static readonly DictionaryEntry[] RecurringKnownTerms = [new(1, "kubectl", "KubeCtl")];
+
+    private static List<HistoryEntry> RecurringCorpus(int repetitions)
+    {
+        var entries = new List<HistoryEntry>(RecurringDictations);
+        for (var i = 0; i < RecurringDictations; i++)
+        {
+            var text = new StringBuilder();
+            for (var r = 0; r < repetitions; r++)
+            {
+                text.Append(((i + r) % 3) switch { 0 => "ZorbLax ", 1 => "ZORBLAX ", _ => "zorbLax " });
+                if (i % 2 == 0)
+                {
+                    text.Append(r % 2 == 0 ? "QuuxFlip. " : "QUUXFLIP ");
+                }
+
+                if (i % 3 == 0)
+                {
+                    text.Append(r % 2 == 0 ? "BLORTZ, " : "BlortZ ");
+                }
+
+                if (i % 4 == 1)
+                {
+                    text.Append(".GLIM ");
+                }
+
+                text.Append(r % 2 == 0 ? "kubectl" : "KubeCtl").Append(" OK a TODO! ");
+            }
+
+            entries.Add(new HistoryEntry(
+                i + 1,
+                Now.AddHours(-1 - (5 * i)),
+                text.ToString().TrimEnd(),
+                1_000 + (100 * i),
+                100,
+                TargetApp: i % 2 == 0 ? "WINWORD" : "ms-teams"));
+        }
+
+        return entries;
+    }
+
+    // Each term under the spelling it was first seen with, with its dictations and occurrences, in the report's order.
+    private static (string Text, int Dictations, int Occurrences, bool Covered)[] RecurringTerms(int repetitions) =>
+    [
+        ("KubeCtl", 24, 24 * repetitions, true),
+        ("ZorbLax", 24, 24 * repetitions, false),
+        ("QuuxFlip", 12, 12 * repetitions, false),
+        ("BLORTZ", 8, 8 * repetitions, false),
+        (".GLIM", 6, 6 * repetitions, false),
+    ];
+
+    private static (string Text, int Dictations, int Occurrences, bool Covered)[] Described(IReadOnlyList<TermUsage> terms) =>
+        terms.Select(term => (term.Text, term.Dictations, term.Occurrences, term.Covered)).ToArray();
 
     private static IReadOnlyList<DictionaryEntry> Terms(string set) => set switch
     {
