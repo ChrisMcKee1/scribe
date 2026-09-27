@@ -228,6 +228,7 @@ public static partial class UsageAnalyzer
         var termOccurrences = new int[known.Count];
         var novelForms = new Dictionary<string, (string Surface, int Dictations, int Occurrences)>(
             StringComparer.OrdinalIgnoreCase);
+        var novelLookup = novelForms.GetAlternateLookup<ReadOnlySpan<char>>();
         var formCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var lastTokenMatchEnds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var seenNovelForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -246,17 +247,15 @@ public static partial class UsageAnalyzer
                 CountSingleTokenForms(tokenText, match.Index, singleTokenLookup, formCounts, lastTokenMatchEnds);
 
                 var trimmed = tokenText.TrimEnd(TrailingPunctuation);
-                if (trimmed.Length < 2 || coveredLookup.Contains(trimmed))
+                if (trimmed.Length < 2 ||
+                    coveredLookup.Contains(trimmed) ||
+                    !DictionarySuggestionMiner.IsCandidate(trimmed))
                 {
                     continue;
                 }
 
-                var token = trimmed.ToString();
-                if (!DictionarySuggestionMiner.IsCandidate(token))
-                {
-                    continue;
-                }
-
+                // A form seen before is counted under the spelling it was first stored with, as the indexer below keeps it.
+                var token = novelLookup.TryGetValue(trimmed, out var stored, out _) ? stored : trimmed.ToString();
                 var current = novelForms.GetValueOrDefault(token);
                 novelForms[token] = (
                     string.IsNullOrEmpty(current.Surface) ? token : current.Surface,
