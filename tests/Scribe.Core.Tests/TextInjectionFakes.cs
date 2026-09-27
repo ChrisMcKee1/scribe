@@ -367,10 +367,12 @@ internal static class TextInjectionFakes
 
         public nint GetForegroundWindow() => Foreground;
 
-        public uint SendInput(INPUT[] inputs)
+        public uint SendInput(ReadOnlySpan<INPUT> inputs)
         {
-            Batches.Add([.. inputs]);
-            return Deliver?.Invoke(Batches.Count - 1, inputs) ?? (uint)inputs.Length;
+            // Borrowed: the injector writes its next batch into the same buffer, so the record is a copy.
+            INPUT[] batch = inputs.ToArray();
+            Batches.Add(batch);
+            return Deliver?.Invoke(Batches.Count - 1, batch) ?? (uint)batch.Length;
         }
 
         public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)

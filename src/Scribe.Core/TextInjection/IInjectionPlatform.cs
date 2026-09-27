@@ -11,8 +11,12 @@ internal interface IInjectionPlatform
 {
     nint GetForegroundWindow();
 
-    /// <summary>SendInput; returns how many events were inserted into the input stream.</summary>
-    uint SendInput(INPUT[] inputs);
+    /// <summary>
+    /// SendInput; returns how many events were inserted into the input stream. The events are borrowed:
+    /// <see cref="TextInjector"/> writes every batch of an insertion into the same buffer, so an implementation that
+    /// keeps them past the call must copy them.
+    /// </summary>
+    uint SendInput(ReadOnlySpan<INPUT> inputs);
 
     /// <summary>
     /// Inserts <paramref name="text"/> directly when the focused control is a classic Edit or RichEdit,

@@ -13,8 +13,13 @@ internal sealed class Win32InjectionPlatform : IInjectionPlatform
 
     public nint GetForegroundWindow() => InjectionNativeMethods.GetForegroundWindow();
 
-    public uint SendInput(InjectionNativeMethods.INPUT[] inputs) =>
-        InjectionNativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<InjectionNativeMethods.INPUT>());
+    public unsafe uint SendInput(ReadOnlySpan<InjectionNativeMethods.INPUT> inputs)
+    {
+        fixed (InjectionNativeMethods.INPUT* first = inputs)
+        {
+            return InjectionNativeMethods.SendInput((uint)inputs.Length, first, Marshal.SizeOf<InjectionNativeMethods.INPUT>());
+        }
+    }
 
     public void Sleep(int milliseconds) => Thread.Sleep(milliseconds);
 
