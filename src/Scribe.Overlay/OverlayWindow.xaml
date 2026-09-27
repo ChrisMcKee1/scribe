@@ -95,7 +95,7 @@
                                    IsTextScaleFactorEnabled="False"/>
                     </Grid>
 
-                    <!-- Processing: three dots, the same for transcribing and for AI cleanup; the words say which. -->
+                    <!-- Processing: three dots, the same for speech recognition and for AI cleanup; the words say which. -->
                     <Grid x:Name="ProcessingContent" Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -115,7 +115,7 @@
                         </StackPanel>
 
                         <TextBlock x:Name="ProcessingText" Grid.Column="1" Margin="13,0,0,0" VerticalAlignment="Center"
-                                   Text="Transcribing…" Foreground="{ThemeResource PillTextBrush}"
+                                   Text="Recognizing speech…" Foreground="{ThemeResource PillTextBrush}"
                                    FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                    IsTextScaleFactorEnabled="False"/>
                     </Grid>

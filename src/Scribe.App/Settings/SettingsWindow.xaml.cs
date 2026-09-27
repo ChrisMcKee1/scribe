@@ -2170,12 +2170,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var risk = HotkeyCapture.AccessibilityRisk(binding);
         if (risk is not null)
         {
-            ShowInfo(risk + " Consider a two-key chord instead.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            ShowInfo(risk + " Try a shortcut of two keys instead.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
         }
         else if (HotkeyCapture.IsReservedWindowsChord(binding))
         {
             ShowInfo(
-                "This chord overrides a Windows shortcut while Scribe is running.",
+                "This shortcut takes the place of a Windows shortcut while Scribe is running.",
                 Wpf.Ui.Controls.InfoBarSeverity.Warning);
         }
         else if (chordWarning is not null)
@@ -3934,7 +3934,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void AzureCliButton_Click(object sender, RoutedEventArgs e)
     {
-        ShowInfo("Installing or updating the Azure CLI. Finish in the terminal, then choose Check sign-in.");
+        ShowInfo("Installing or updating the Azure CLI. Finish in the command window, then choose Check sign-in.");
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));

@@ -82,7 +82,7 @@ public static class WordPackNotices
                 FromStaleOrSuperseded(),
             LibrarySaveStatus.NotCommitted =>
                 Error("Couldn't save your changes. Your edits are still here.", WordPackNoticeAction.Retry, WordPackNoticeAction.SaveCopy),
-            _ => Info("Settings saved."),
+            _ => Info("Changes saved."),
         };
 
     public static WordPackNotice FromSettlement(WordPackSettlement settlement) =>

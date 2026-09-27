@@ -658,8 +658,8 @@ public partial class SettingsWindow
             {
                 ShowThemedMessage(
                     "Nothing was sent",
-                    "Your AI cleanup provider changed after you agreed to send your dictations, so Scribe sent " +
-                    "nothing. Press the button again to decide about the provider now in use.");
+                    "Where AI cleanup runs changed after you agreed to send your dictations, so Scribe sent " +
+                    "nothing. Choose Learn from history again to decide for the AI service in use now.");
                 return;
             }
 

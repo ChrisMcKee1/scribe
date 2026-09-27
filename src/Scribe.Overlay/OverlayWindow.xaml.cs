@@ -121,7 +121,7 @@ public sealed partial class OverlayWindow : Window
     private void ConfigurePresenter()
     {
         _appWindow.IsShownInSwitchers = false; // hidden from Alt-Tab / task switcher
-        _appWindow.Title = "Scribe Overlay";
+        _appWindow.Title = "Scribe recording indicator";
 
         if (_appWindow.Presenter is OverlappedPresenter presenter)
         {
@@ -324,11 +324,11 @@ public sealed partial class OverlayWindow : Window
         OverlayLog.Write($"OverlayWindow.ShowRecordingWarning hold={RecordingWarningHold.TotalMilliseconds:0}ms reasonLength={ReasonLength(reason)}");
     });
 
-    /// <summary>Processing: three dots, and the words say whether it is transcribing or AI cleanup.</summary>
+    /// <summary>Processing: three dots, and the words say whether it is recognizing speech or running AI cleanup.</summary>
     public void ShowProcessing(bool aiPolishing) => RunOnUi(() =>
     {
         ClearOutcomeHold();
-        ProcessingText.Text = aiPolishing ? "AI polishing…" : "Transcribing…";
+        ProcessingText.Text = aiPolishing ? "Running AI cleanup…" : "Recognizing speech…";
         ShowState(OverlayState.Processing);
     });
 

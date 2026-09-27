@@ -1278,7 +1278,7 @@ internal sealed class DictationController : IDisposable
                     // timeout there must never sit in front of injecting the raw text. The pill says so once the
                     // text is in ("Typed without AI cleanup" and the reason; PillOutcome.Of). Cleanup stays enabled;
                     // runtime failures can retry on the next dictation.
-                    var reason = cleanup.FailureReason ?? "Intelligence failed.";
+                    var reason = cleanup.FailureReason ?? "AI cleanup didn't finish.";
 
                     // The reason is diagnostics-safe and is what the pill shows. The display detail, which can name
                     // the endpoint's host or quote its own error, goes only to the Settings failure log in the local

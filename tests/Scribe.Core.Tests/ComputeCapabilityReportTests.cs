@@ -76,7 +76,7 @@ public class ComputeCapabilityReportTests
             Architecture.Arm64,
             [new NeuralAccelerator("Qualcomm(R) Hexagon(TM) NPU", AcceleratorVendor.Qualcomm)]);
 
-        Assert.StartsWith("CPU decode", withNpu.Describe());
+        Assert.StartsWith("Speech recognition on the CPU", withNpu.Describe());
     }
 
     [Fact]

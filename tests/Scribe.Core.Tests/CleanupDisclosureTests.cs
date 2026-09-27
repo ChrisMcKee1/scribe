@@ -23,7 +23,7 @@ public sealed class CleanupDisclosureTests
         var text = CleanupDisclosure.WhatCleanupSends;
 
         Assert.Contains("Foundry Local runs cleanup on this PC", text, StringComparison.Ordinal);
-        foreach (var provider in new[] { "Microsoft Foundry", "OpenAI-compatible endpoint", "GitHub Copilot" })
+        foreach (var provider in new[] { "Microsoft Foundry", "GitHub Copilot", "any other AI service you set up" })
         {
             Assert.Contains(provider, text, StringComparison.Ordinal);
         }
@@ -33,15 +33,16 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("writing style", text, StringComparison.Ordinal);
         Assert.Contains("your dictionary plus the word packs you let AI cleanup use", text, StringComparison.Ordinal);
         Assert.Contains(
-            $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {N(CleanupPrompt.MaxGlossaryChars)} characters",
+            $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} words and {N(CleanupPrompt.MaxGlossaryChars)} characters",
             text, StringComparison.Ordinal);
-        Assert.Contains($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} terms with the Local prompt style", text, StringComparison.Ordinal);
+        Assert.Contains($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} words with the short instructions", text, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions them", text, StringComparison.Ordinal);
         Assert.Contains(
-            $"An entry whose written form spans more than one line or runs past {N(CleanupPrompt.MaxGlossaryTermChars)} " +
+            $"Anything Scribe writes on more than one line or in more than {N(CleanupPrompt.MaxGlossaryTermChars)} " +
             "characters, such as a signature, is not vocabulary and is not sent.",
             text, StringComparison.Ordinal);
         Assert.DoesNotContain("relevant", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("only", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -67,7 +68,7 @@ public sealed class CleanupDisclosureTests
 
     [Theory]
     [InlineData(CleanupProvider.AzureFoundry, "to your Microsoft Foundry deployment.")]
-    [InlineData(CleanupProvider.OpenAiCompatible, "to the OpenAI-compatible endpoint you set up.")]
+    [InlineData(CleanupProvider.OpenAiCompatible, "to the AI service you set up.")]
     [InlineData(CleanupProvider.GitHubCopilot, "to GitHub, through your Copilot sign-in.")]
     [InlineData(CleanupProvider.FoundryLocal, "to Foundry Local, which runs on this PC.")]
     public void The_dictionary_suggestion_consent_names_the_recipient_and_the_sample_limit(
@@ -79,7 +80,7 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("most recent dictations, as they were inserted, " + destination, text, StringComparison.Ordinal);
         Assert.Contains("your dictionary and snippets added", text, StringComparison.Ordinal);
         Assert.Contains("audio are not sent", text, StringComparison.Ordinal);
-        Assert.Contains("If your AI cleanup provider changes before the request goes out, nothing is sent.", text, StringComparison.Ordinal);
+        Assert.Contains("If where AI cleanup runs changes before the request goes out, nothing is sent.", text, StringComparison.Ordinal);
         Assert.EndsWith("?", CleanupDisclosure.SuggestionConsentTitle, StringComparison.Ordinal);
     }
 
@@ -189,10 +190,10 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("every cleanup request sends that provider", policy, StringComparison.Ordinal);
         Assert.Contains("the word packs you let AI cleanup use", policy, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions any of it", policy, StringComparison.Ordinal);
-        Assert.Contains("whether or not post-processing is switched on", policy, StringComparison.Ordinal);
+        Assert.Contains("whether or not \"Apply your dictionary and snippets\" is turned on", policy, StringComparison.Ordinal);
         Assert.Contains(
             $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {N(CleanupPrompt.MaxGlossaryChars)} characters " +
-            $"({N(CleanupPrompt.MaxGlossaryTermsLocal)} terms when the Local prompt style is in use)",
+            $"({N(CleanupPrompt.MaxGlossaryTermsLocal)} terms when AI cleanup uses the short instructions)",
             policy, StringComparison.Ordinal);
         Assert.Contains(
             $"each spoken form put on one line and shortened to {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
@@ -208,7 +209,7 @@ public sealed class CleanupDisclosureTests
             $"up to {N(AiDictionarySuggester.DefaultMaxSampleChars)} characters of your most recent dictations",
             policy, StringComparison.Ordinal);
         Assert.Contains(
-            "if your AI cleanup provider changes before the request goes out, nothing is sent", policy, StringComparison.Ordinal);
+            "if where AI cleanup runs changes before the request goes out, nothing is sent", policy, StringComparison.Ordinal);
         Assert.Contains(
             $"spans more than one line or is longer than {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
             policy, StringComparison.Ordinal);

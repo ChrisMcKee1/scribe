@@ -43,6 +43,17 @@ public sealed class SettingsCopySourceTests
         Assert.DoesNotContain(literals, text => Regex.IsMatch(text, @"\b(frontier|local) prompt\b", RegexOptions.IgnoreCase));
     }
 
+    [Fact]
+    public void The_preset_menu_asks_the_preset_whether_a_profile_is_it()
+    {
+        // A preset renamed in 0.5.0 keeps matching the profiles added under its former name (ProfilePresetsTests), but
+        // only if the menu asks the preset rather than comparing names itself.
+        var code = Read("SettingsWindow.Profiles.cs");
+
+        Assert.Contains("_profileRows.FirstOrDefault(r => preset.IsNamed(r.Name))", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("FindProfileRow(preset.Profile.Name)", code, StringComparison.Ordinal);
+    }
+
     private static string Read(string file) =>
         File.ReadAllText(Path.Combine(Root, "src", "Scribe.App", "Settings", file));
 

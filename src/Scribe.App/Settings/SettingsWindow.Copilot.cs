@@ -114,7 +114,7 @@ public partial class SettingsWindow
             ? "winget upgrade --id GitHub.Copilot --accept-source-agreements"
             : "winget install --id GitHub.Copilot --accept-source-agreements --accept-package-agreements";
 
-        if (!TryRunInTerminal(command, "Could not start the installer."))
+        if (!TryRunInTerminal(command, "Couldn't start the installer."))
         {
             return;
         }
@@ -139,7 +139,7 @@ public partial class SettingsWindow
             return;
         }
 
-        if (TryRunInTerminal($"\"{_copilotCli.Path}\"", "Could not start the Copilot CLI."))
+        if (TryRunInTerminal($"\"{_copilotCli.Path}\"", "Couldn't start GitHub Copilot."))
         {
             ShowInfo("Sign in there if prompted, then close it and choose Get models.");
             _copilotChecked = true;
@@ -244,7 +244,7 @@ public partial class SettingsWindow
         catch (Exception ex)
         {
             _log.LogWarning("Could not launch a terminal for the Copilot CLI ({Failure}).", FailureShape.Describe(ex));
-            ShowInfo(failureTitle + " Run it yourself in a terminal.", InfoBarSeverity.Error);
+            ShowInfo(failureTitle + " Run it yourself in a command window.", InfoBarSeverity.Error);
             return false;
         }
     }

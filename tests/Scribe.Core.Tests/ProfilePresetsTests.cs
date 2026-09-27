@@ -25,6 +25,41 @@ public sealed class ProfilePresetsTests
     }
 
     [Fact]
+    public void A_preset_renamed_in_0_5_0_still_counts_as_added_under_its_former_name()
+    {
+        // The menu greys out a preset that is already a profile by matching the profile's name. 0.5.0 renamed the two
+        // terminal presets to the words Settings uses, so a profile added under a former name must still match, or the
+        // menu would offer the same preset, with the same apps, a second time.
+        Assert.Equal("Command windows", ProfilePresets.Instantiate(ProfilePresets.TerminalsAndShells).Name);
+        Assert.Equal("Command windows in code editors", ProfilePresets.Instantiate(ProfilePresets.IdeIntegratedTerminals).Name);
+
+        Assert.True(ProfilePresets.TerminalsAndShells.IsNamed("Terminals and shells"));
+        Assert.True(ProfilePresets.TerminalsAndShells.IsNamed("terminals and shells"));
+        Assert.True(ProfilePresets.TerminalsAndShells.IsNamed("COMMAND WINDOWS"));
+        Assert.True(ProfilePresets.IdeIntegratedTerminals.IsNamed("IDE integrated terminals"));
+        Assert.True(ProfilePresets.Teams.IsNamed("microsoft teams"));
+
+        Assert.False(ProfilePresets.TerminalsAndShells.IsNamed("IDE integrated terminals"));
+        Assert.False(ProfilePresets.IdeIntegratedTerminals.IsNamed("Terminals and shells"));
+        Assert.False(ProfilePresets.Documents.IsNamed("Command windows"));
+        Assert.False(ProfilePresets.Teams.IsNamed(null));
+        Assert.False(ProfilePresets.Teams.IsNamed(string.Empty));
+    }
+
+    [Fact]
+    public void No_name_or_former_name_matches_two_presets()
+    {
+        var names = ProfilePresets.All
+            .SelectMany(p => new[] { p.Profile.Name }.Concat(p.FormerNames ?? []))
+            .ToList();
+
+        foreach (var name in names)
+        {
+            Assert.Single(ProfilePresets.All, preset => preset.IsNamed(name));
+        }
+    }
+
+    [Fact]
     public void Preset_names_are_unique()
     {
         var names = ProfilePresets.All.Select(p => p.Profile.Name).ToList();

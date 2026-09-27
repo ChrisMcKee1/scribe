@@ -116,6 +116,36 @@ public sealed class DictationProblemTextTests
     }
 
     [Fact]
+    public void The_processing_words_fit_beside_the_dots()
+    {
+        // The processing line sits beside three 7 DIP dots with 4 DIP gaps (29 DIP) and a 13 DIP margin, in the pill's
+        // 178 DIP inner width: 136 DIP at 12 SemiBold, less the 6 DIP kept for Segoe UI Variable. The overlay has no Core
+        // reference, so the words are read from its source: the XAML default and both words the window chooses.
+        var root = RepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "src", "Scribe.Overlay", "OverlayWindow.xaml"));
+        var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.Overlay", "OverlayWindow.xaml.cs"));
+
+        var element = System.Text.RegularExpressions.Regex.Match(xaml, "<TextBlock x:Name=\"ProcessingText\"[^>]*>");
+        Assert.True(element.Success, "OverlayWindow.xaml has no ProcessingText.");
+        Assert.Contains("Margin=\"13,0,0,0\"", element.Value, StringComparison.Ordinal);
+        Assert.Contains("FontSize=\"12\" FontWeight=\"SemiBold\"", element.Value, StringComparison.Ordinal);
+        var fallback = System.Text.RegularExpressions.Regex.Match(element.Value, "Text=\"(?<text>[^\"]+)\"").Groups["text"].Value;
+
+        var chosen = System.Text.RegularExpressions.Regex.Match(
+            code, "ProcessingText\\.Text = aiPolishing \\? \"(?<ai>[^\"]+)\" : \"(?<plain>[^\"]+)\";");
+        Assert.True(chosen.Success, "OverlayWindow.ShowProcessing no longer chooses its words the way this test reads them.");
+        Assert.Equal("Recognizing speech\u2026", chosen.Groups["plain"].Value);
+        Assert.Equal("Running AI cleanup\u2026", chosen.Groups["ai"].Value);
+        Assert.Equal(chosen.Groups["plain"].Value, fallback);
+
+        foreach (var words in new[] { chosen.Groups["plain"].Value, chosen.Groups["ai"].Value })
+        {
+            var width = Measure(words, FontWeights.SemiBold);
+            Assert.True(width <= 130, $"{width:F1} DIP > 130 DIP: {words}");
+        }
+    }
+
+    [Fact]
     public void Too_quick_follows_hold_press_and_mouse_button_shortcut_modes()
     {
         Assert.Equal("That was too quick. Hold Page Down while you speak, then let go.", DictationProblemText.Describe(DictationProblem.TooQuick, HotkeyMode.Hold, "Page Down").Body);

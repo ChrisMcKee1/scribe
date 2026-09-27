@@ -102,7 +102,7 @@ public partial class SettingsWindow
 
         foreach (var preset in ProfilePresets.All)
         {
-            var existing = FindProfileRow(preset.Profile.Name);
+            var existing = _profileRows.FirstOrDefault(r => preset.IsNamed(r.Name));
             var item = new MenuItem
             {
                 Header = ProfilePresetHeader(preset.Profile.Name, preset.Description),
@@ -169,9 +169,6 @@ public partial class SettingsWindow
         RefreshProfileEmptyState();
         RefreshProfileRules();
     }
-
-    private ProfileRow? FindProfileRow(string name) =>
-        _profileRows.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
 
     private async void ProfileDeleteButton_Click(object sender, RoutedEventArgs e)
     {

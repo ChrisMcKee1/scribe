@@ -86,7 +86,7 @@ public sealed class HotkeyCaptureSessionTests
 
         Assert.Equal(HotkeyCaptureOutcome.Completed, done.Outcome);
         Assert.Equal(
-            "Press Left Ctrl before Middle mouse button when you use this chord: a mouse button pressed first still " +
+            "Press Left Ctrl before Middle mouse button when you use this shortcut: a mouse button pressed first still " +
             "reaches the app under the pointer.",
             done.Message);
         Assert.Equal(Middle, done.Binding!.VirtualKey);
@@ -103,7 +103,7 @@ public sealed class HotkeyCaptureSessionTests
         var done = capture.Release(Back, HotkeyMode.Hold);
 
         Assert.Equal("Mouse Back (button 4)+Mouse Forward (button 5)", done.Binding!.DisplayName);
-        Assert.StartsWith("Whichever mouse button of this chord you press first still reaches the app", done.Message);
+        Assert.StartsWith("Whichever mouse button of this shortcut you press first still reaches the app", done.Message);
     }
 
     [Theory]
