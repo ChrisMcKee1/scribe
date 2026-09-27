@@ -279,13 +279,15 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // The agents built for an admitted vocabulary's glossary (AdmittedCleanup), by the system prompt they carry, so every
     // dictation of one generation shares one. Bounded, because each new generation brings a new glossary. Guarded by
-    // _gate and dropped with the other agents whenever the factory changes.
+    // _gate and dropped with the other agents whenever the factory changes, always through ClearAdmittedAgentsLocked.
     private const int MaxAdmittedAgents = 8;
     private readonly Dictionary<string, AIAgent> _admittedAgents = new(StringComparer.Ordinal);
 
     // The last admitted system prompt and the parts it was built from, so the dictations that share a glossary and a
     // writing style share one prompt instead of each building a copy of the whole glossary to look its agent up by.
-    // Guarded by _gate. It holds strings only, never CleanupOptions, so no key or secret outlives a Configure.
+    // Guarded by _gate. It holds strings only, never CleanupOptions, so no key or secret outlives a Configure. It names
+    // only a prompt whose agent is cached, and ClearAdmittedAgentsLocked empties it with those agents, so no glossary
+    // or writing style outlives the agents that were built for it.
     private PromptParts _admittedPromptParts;
     private string? _admittedPrompt;
 
@@ -511,6 +513,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal string? AdmittedPromptForTesting
     {
         get { lock (_gate) { return _admittedPrompt; } }
+    }
+
+    // The remembered prompt, the parts it was built from and the admitted agents it names, read together.
+    internal (string? Prompt, string? Guardrail, string? WritingStyle, string? Glossary, int CachedAgents, bool PromptIsCached)
+        AdmittedPromptMemoForTesting
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return (
+                    _admittedPrompt,
+                    _admittedPromptParts.Guardrail,
+                    _admittedPromptParts.WritingStyle,
+                    _admittedPromptParts.Glossary,
+                    _admittedAgents.Count,
+                    _admittedPrompt is not null && _admittedAgents.ContainsKey(_admittedPrompt));
+            }
+        }
     }
 
     public TextCleanupService(
@@ -889,7 +910,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         _styleAgents.Clear();
-        _admittedAgents.Clear();
+        ClearAdmittedAgentsLocked();
         return true;
     }
 
@@ -1013,7 +1034,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         _agent = null;
         _agentFactory = null;
         _styleAgents.Clear();
+        ClearAdmittedAgentsLocked();
+    }
+
+    // Must be called under _gate. The only clear of the admitted agents: the remembered prompt and the parts it was
+    // built from go with them, so whatever drops those agents (turning cleanup off, a configuration it cannot start, a
+    // new provider or model, a prompt rebuild, a new initialization, disposal or the cache's own bound) leaves no copy
+    // of a glossary or a writing style behind in the memo.
+    private void ClearAdmittedAgentsLocked()
+    {
         _admittedAgents.Clear();
+        _admittedPrompt = null;
+        _admittedPromptParts = default;
     }
 
     public Task<CleanupResult> CleanAsync(
@@ -1269,27 +1301,24 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         var glossary = vocabulary.GlossaryFor(CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider));
         var parts = PromptParts.Of(options, style ?? options.WritingStyle, glossary);
-        if (_admittedPrompt is null || parts != _admittedPromptParts)
+        var prompt = _admittedPrompt is { } remembered && parts == _admittedPromptParts ? remembered : parts.Build();
+        if (!_admittedAgents.TryGetValue(prompt, out var agent))
         {
-            _admittedPrompt = parts.Build();
-            _admittedPromptParts = parts;
+            // Dropped, not disposed, as a rebuild drops the style agents: they share the client, and a dictation still
+            // holding one finishes on it.
+            if (_admittedAgents.Count >= MaxAdmittedAgents)
+            {
+                ClearAdmittedAgentsLocked();
+            }
+
+            agent = factory(prompt);
+            _admittedAgents[prompt] = agent;
         }
 
-        var prompt = _admittedPrompt;
-        if (_admittedAgents.TryGetValue(prompt, out var cached))
-        {
-            return cached;
-        }
-
-        // Dropped, not disposed, as a rebuild drops the style agents: they share the client, and a dictation still
-        // holding one finishes on it.
-        if (_admittedAgents.Count >= MaxAdmittedAgents)
-        {
-            _admittedAgents.Clear();
-        }
-
-        var agent = factory(prompt);
-        _admittedAgents[prompt] = agent;
+        // Remembered only once its agent is cached, so a factory that throws leaves no prompt in the memo that no agent is
+        // cached for.
+        _admittedPrompt = prompt;
+        _admittedPromptParts = parts;
         return agent;
     }
 
@@ -3049,7 +3078,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _agent = agent;
                 _agentFactory = _pendingFactory;
                 _styleAgents.Clear();
-                _admittedAgents.Clear();
+                ClearAdmittedAgentsLocked();
                 _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
                 inUse = _foundryInUse;
             }
