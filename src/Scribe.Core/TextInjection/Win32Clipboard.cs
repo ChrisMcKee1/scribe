@@ -97,13 +97,13 @@ internal sealed class Win32Clipboard : IClipboardNative
     /// The text of a CF_UNICODETEXT global memory block: up to its first NUL, or all of it when it has none. False when the
     /// block holds less than one character or cannot be locked.
     /// </summary>
-    internal static unsafe bool TryReadUnicodeText(nint handle, [NotNullWhen(true)] out string? text)
+    internal static bool TryReadUnicodeText(nint handle, [NotNullWhen(true)] out string? text)
     {
         text = null;
 
         // Bounded by the block size: another application's data is not guaranteed to be terminated.
-        int maxChars = (int)Math.Min((ulong)GlobalSize(handle) / sizeof(char), int.MaxValue);
-        if (maxChars == 0)
+        nuint byteLength = GlobalSize(handle);
+        if (byteLength < sizeof(char))
         {
             return false;
         }
@@ -116,11 +116,8 @@ internal sealed class Win32Clipboard : IClipboardNative
 
         try
         {
-            // Read where it lies, only while it is locked, and only as far as the terminator: the text is the one copy made
-            // in this process, and whatever the block holds after it is never copied at all.
-            var block = new ReadOnlySpan<char>((void*)pointer, maxChars);
-            int end = block.IndexOf('\0');
-            text = new string(end < 0 ? block : block[..end]);
+            // Read only while the block is locked.
+            text = ReadUnicodeText(pointer, byteLength);
             return true;
         }
         finally
@@ -130,10 +127,23 @@ internal sealed class Win32Clipboard : IClipboardNative
     }
 
     /// <summary>
+    /// The UTF-16 text in the <paramref name="byteLength"/> bytes at <paramref name="pointer"/>: up to the first NUL, or all
+    /// of them when there is none, and never a byte past them; an odd last byte belongs to no character. The memory is read
+    /// where it lies, so the text is the one copy made in this process, and whatever follows the terminator is never copied.
+    /// </summary>
+    internal static unsafe string ReadUnicodeText(nint pointer, nuint byteLength)
+    {
+        int maxChars = (int)Math.Min((ulong)byteLength / sizeof(char), int.MaxValue);
+        var block = new ReadOnlySpan<char>((void*)pointer, maxChars);
+        int end = block.IndexOf('\0');
+        return new string(end < 0 ? block : block[..end]);
+    }
+
+    /// <summary>
     /// A new GMEM_MOVEABLE block holding <paramref name="text"/> as null-terminated UTF-16, unlocked, or 0 when it cannot
     /// be allocated or locked. The caller owns it until SetClipboardData succeeds.
     /// </summary>
-    internal static unsafe nint AllocUnicodeText(string text)
+    internal static nint AllocUnicodeText(string text)
     {
         // Null-terminated UTF-16; GMEM_MOVEABLE memory is required for clipboard handles.
         nuint bytes = (nuint)((text.Length + 1) * sizeof(char));
@@ -152,9 +162,7 @@ internal sealed class Win32Clipboard : IClipboardNative
 
         try
         {
-            var destination = new Span<char>((void*)target, text.Length + 1);
-            text.AsSpan().CopyTo(destination);
-            destination[text.Length] = '\0';
+            WriteUnicodeText(target, text);
         }
         finally
         {
@@ -162,6 +170,17 @@ internal sealed class Win32Clipboard : IClipboardNative
         }
 
         return global;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="text"/> and one NUL, as UTF-16, at <paramref name="target"/>, which has room for
+    /// text.Length + 1 characters. Nothing after them is touched.
+    /// </summary>
+    internal static unsafe void WriteUnicodeText(nint target, string text)
+    {
+        var destination = new Span<char>((void*)target, text.Length + 1);
+        text.AsSpan().CopyTo(destination);
+        destination[text.Length] = '\0';
     }
 
     /// <summary>
