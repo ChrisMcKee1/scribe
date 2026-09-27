@@ -42,6 +42,30 @@ public partial class AppDisplayNameMemoryTests
         }
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("OUTLOOK")]
+    [InlineData(" olk .exe ")]
+    public void A_group_without_a_program_list_fails_as_it_did(string? processName)
+    {
+        // Programs is non-nullable, but a record can still be built, or copied, with null.
+        var expected = Assert.Throws<ArgumentNullException>(() => new Oracle.Group("k", "Name", null!).Contains(processName));
+        var expectedCopy = Assert.Throws<ArgumentNullException>(
+            () => (Oracle.AllGroups[0] with { Programs = null! }).Contains(processName));
+        var constructed = Assert.Throws<ArgumentNullException>(
+            () => new AppProgramGroup("k", "Name", null!).Contains(processName));
+        var copied = Assert.Throws<ArgumentNullException>(
+            () => (Groups[0].Current with { Programs = null! }).Contains(processName));
+
+        Assert.Equal("source", expected.ParamName);
+        foreach (var actual in new[] { expectedCopy, constructed, copied })
+        {
+            Assert.Equal(expected.ParamName, actual.ParamName);
+            Assert.Equal(expected.Message, actual.Message);
+        }
+    }
+
     private static void AssertSameAsOracle(string? processName)
     {
         Assert.Equal(Oracle.NormalizeProcessName(processName), AppDisplayName.NormalizeProcessName(processName));

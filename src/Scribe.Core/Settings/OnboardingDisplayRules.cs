@@ -34,6 +34,8 @@ public sealed record AppProgramGroup(string Key, string DisplayName, IReadOnlyLi
 
     internal bool ContainsNormalized(string normalized)
     {
+        // What Programs.Any threw for a group without a program list, parameter name and message included.
+        ArgumentNullException.ThrowIfNull(Programs, "source");
         for (var i = 0; i < Programs.Count; i++)
         {
             if (string.Equals(Programs[i], normalized, StringComparison.OrdinalIgnoreCase))
