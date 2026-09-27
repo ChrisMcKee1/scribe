@@ -108,8 +108,8 @@ public static class GlossaryHint
                     "words come first.");
                 text.Append(local
                     ? $" With the short instructions, the list stops at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} " +
-                      "words so a small model can take it in."
-                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or " +
+                      "words or phrases so a small model can take it in."
+                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at " +
                       $"{Count(CleanupPrompt.MaxGlossaryChars)} characters.");
             }
         }

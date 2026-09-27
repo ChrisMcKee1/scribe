@@ -33,9 +33,13 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("writing style", text, StringComparison.Ordinal);
         Assert.Contains("your dictionary plus the word packs you let AI cleanup use", text, StringComparison.Ordinal);
         Assert.Contains(
-            $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} words and {N(CleanupPrompt.MaxGlossaryChars)} characters",
+            $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases and {N(CleanupPrompt.MaxGlossaryChars)} characters",
             text, StringComparison.Ordinal);
-        Assert.Contains($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} words with the short instructions", text, StringComparison.Ordinal);
+        Assert.Contains($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} words or phrases with the short instructions", text, StringComparison.Ordinal);
+
+        // The limits count entries, and an entry can be a phrase: a limit given in bare words would understate what goes.
+        Assert.DoesNotContain($"{N(CleanupPrompt.MaxGlossaryTermsCloud)} words and", text, StringComparison.Ordinal);
+        Assert.DoesNotContain($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} words with", text, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions them", text, StringComparison.Ordinal);
         // About dictionary and word pack words, never the dictation: a dictation that spans lines is sent.
         Assert.Contains(

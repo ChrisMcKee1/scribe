@@ -127,7 +127,7 @@ public sealed class GlossaryHintTests
             text, StringComparison.Ordinal);
         Assert.Contains("Your own words come first.", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"With the short instructions, the list stops at {CleanupPrompt.MaxGlossaryTermsLocal} words so a small model can take it in.",
+            $"With the short instructions, the list stops at {CleanupPrompt.MaxGlossaryTermsLocal} words or phrases so a small model can take it in.",
             text, StringComparison.Ordinal);
     }
 
@@ -147,7 +147,7 @@ public sealed class GlossaryHintTests
         Assert.True(sent > gridOrder * 2, $"The fixture must separate the orders ({sent} against {gridOrder}), or it proves nothing.");
         Assert.Contains($"Your AI service receives the first {N(sent)} of 3,100 words", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"The list stops at {N(CleanupPrompt.MaxGlossaryTermsCloud)} words or {N(CleanupPrompt.MaxGlossaryChars)} characters.",
+            $"The list stops at {N(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at {N(CleanupPrompt.MaxGlossaryChars)} characters.",
             text, StringComparison.Ordinal);
     }
 
