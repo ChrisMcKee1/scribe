@@ -89,8 +89,8 @@ public sealed class CleanupModelCatalogTests
     }
 
     [Theory]
-    [InlineData("mistral-nemo-12b-instruct", "Best on-device balance")]
-    [InlineData("phi-4", "Best on-device quality")]
+    [InlineData("mistral-nemo-12b-instruct", "Best balance on this PC")]
+    [InlineData("phi-4", "Best quality on this PC")]
     public void Winners_carry_the_expected_recommendation_text(string alias, string recommendation)
     {
         var model = CleanupModelCatalog.Curated.Single(m => m.Alias == alias);
@@ -117,7 +117,7 @@ public sealed class CleanupModelCatalogTests
         var model = CleanupModelCatalog.Resolve("phi-4");
 
         Assert.Equal("phi-4", model.Alias);
-        Assert.Equal("Best on-device quality", model.Recommendation);
+        Assert.Equal("Best quality on this PC", model.Recommendation);
     }
 
     [Fact]

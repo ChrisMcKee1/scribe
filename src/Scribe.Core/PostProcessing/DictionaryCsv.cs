@@ -28,15 +28,16 @@ public static class DictionaryCsv
         """
         # Scribe dictionary template
         #
-        # One row per substitution: what the transcriber usually hears, and what you
-        # want written instead. Fill it in, then use Import in Scribe's Dictionary
-        # settings. Lines starting with # are ignored.
+        # One row per word: what Scribe hears, and what you want it to write instead.
+        # Fill it in, then choose Import from a CSV file in Settings, Dictionary,
+        # Your words, More. Lines starting with # are ignored.
         #
-        # pattern     - the spoken word or phrase as it gets transcribed (required)
-        # replacement - what to write instead (required)
-        # whole_word  - true to match on word boundaries only, false for phrase
-        #               replacement anywhere (optional, default true)
-        # enabled     - false to keep the row but switch it off (optional, default true)
+        # pattern     - what Scribe hears: the word or phrase as speech recognition
+        #               writes it (required)
+        # replacement - what Scribe writes instead (required)
+        # whole_word  - true to replace whole words only, never parts of longer
+        #               words; false to replace it anywhere (optional, default true)
+        # enabled     - false to keep the row but turn it off (optional, default true)
         #
         pattern,replacement,whole_word,enabled
         azure,Azure,true,true

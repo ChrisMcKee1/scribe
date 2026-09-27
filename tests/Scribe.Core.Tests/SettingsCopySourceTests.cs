@@ -43,15 +43,32 @@ public sealed class SettingsCopySourceTests
         Assert.DoesNotContain(literals, text => Regex.IsMatch(text, @"\b(frontier|local) prompt\b", RegexOptions.IgnoreCase));
     }
 
+    [Fact]
+    public void The_preset_menu_asks_the_preset_whether_a_profile_is_it()
+    {
+        // A preset renamed in 0.5.0 keeps matching the profiles added under its former name (ProfilePresetsTests), but
+        // only if the menu asks the preset rather than comparing names itself.
+        var code = Read("SettingsWindow.Profiles.cs");
+
+        Assert.Contains("_profileRows.FirstOrDefault(r => preset.IsNamed(r.Name))", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("FindProfileRow(preset.Profile.Name)", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_message_split_across_literals_is_read_whole()
+    {
+        var literals = UserFacingLiterals("var text = \"Your local \" +\n    \"prompt is not affected.\";\n_log.LogWarning(\"Your local prompt\");");
+
+        Assert.Equal(["Your local prompt is not affected."], literals);
+    }
+
     private static string Read(string file) =>
         File.ReadAllText(Path.Combine(Root, "src", "Scribe.App", "Settings", file));
 
-    // String literals outside comments and log calls, which keep their internal names.
+    // The text a person can read, with the glossary guard's reader: literals outside comments, log calls and exceptions,
+    // and pieces joined with + read as one text, so a message split across lines is judged whole.
     private static List<string> UserFacingLiterals(string code) =>
-        code.Split('\n')
-            .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal) && !line.Contains("_log.Log", StringComparison.Ordinal))
-            .SelectMany(line => Regex.Matches(line, @"""((?:[^""\\]|\\.)*)""").Select(match => match.Groups[1].Value))
-            .ToList();
+        GlossarySourceTests.SourceLiterals.Read(code, []).Select(literal => literal.Text).ToList();
 
     private static string FindRoot()
     {

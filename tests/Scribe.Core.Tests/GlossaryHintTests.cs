@@ -44,24 +44,24 @@ public sealed class GlossaryHintTests
         // A rule that deletes its phrase is as enabled as one that replaces it, and a blank row is no entry.
         var text = Describe([Row("azure", "Azure"), Row("um", string.Empty), Row(" ", string.Empty)], [], aiCleanupOn: false);
 
-        Assert.Equal("2 of 2 entries enabled.", text);
+        Assert.Equal("2 of 2 words are on.", text);
     }
 
     [Fact]
     public void With_post_processing_off_it_says_the_dictionary_is_not_applied_here()
     {
         Assert.Equal(
-            "1 of 1 entries enabled. Your dictionary and snippets are turned off, so it is not applied on this PC.",
+            "1 of 1 words are on. Your dictionary and snippets are turned off, so it is not applied on this PC.",
             Describe([Row("azure", "Azure")], [], aiCleanupOn: false, postProcessingOn: false));
         Assert.Equal(
-            "2 of 2 entries enabled. Your dictionary and snippets are turned off, so none of them are applied on this " +
+            "2 of 2 words are on. Your dictionary and snippets are turned off, so none of them are applied on this " +
             "PC.",
             Describe([Row("azure", "Azure"), Row("um", string.Empty)], [], aiCleanupOn: false, postProcessingOn: false));
 
         // And AI cleanup still receives the vocabulary, as the post-processing switch itself says.
         Assert.Equal(
-            "1 of 1 entries enabled. Your dictionary and snippets are turned off, so it is not applied on this PC. " +
-            "Your AI provider receives that term as vocabulary with every cleanup request, whether or not the " +
+            "1 of 1 words are on. Your dictionary and snippets are turned off, so it is not applied on this PC. " +
+            "Your AI service receives that word as vocabulary with every cleanup request, whether or not the " +
             "dictation mentions it.",
             Describe([Row("azure", "Azure")], [], postProcessingOn: false));
     }
@@ -74,8 +74,8 @@ public sealed class GlossaryHintTests
             [Library("team", DictionaryEntry.New("azure", "AZURE-from-library"), DictionaryEntry.New("cosmos db", "Cosmos DB"), DictionaryEntry.New("k eight s", "K8s"))]);
 
         Assert.Equal(
-            "2 of 2 entries enabled plus 2 from enabled word packs. All of them are applied on this PC. Your AI " +
-            "provider receives all 4 terms as vocabulary with every cleanup request, whether or not the dictation " +
+            "2 of 2 words are on, plus 2 from word packs that are on. All of them are applied on this PC. Your AI " +
+            "service receives all 4 words as vocabulary with every cleanup request, whether or not the dictation " +
             "mentions them.",
             text);
     }
@@ -95,8 +95,8 @@ public sealed class GlossaryHintTests
             AiLibraryEntries: []));
 
         Assert.Equal(
-            "1 of 1 entries enabled plus 1 from enabled word packs. All of them are applied on this PC. " +
-            "Your AI provider receives that term as vocabulary with every cleanup request, whether or not the dictation mentions it.",
+            "1 of 1 words are on, plus 1 from word packs that are on. All of them are applied on this PC. " +
+            "Your AI service receives that word as vocabulary with every cleanup request, whether or not the dictation mentions it.",
             text);
     }
 
@@ -111,7 +111,7 @@ public sealed class GlossaryHintTests
             [Row("azure", "Azure")], local, true, true, CleanupProvider.AzureFoundry, CleanupPromptStyle.Auto, local));
 
         Assert.Equal(oldText, newText);
-        Assert.Contains("receives all 2 terms", newText, StringComparison.Ordinal);
+        Assert.Contains("receives all 2 words", newText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -123,11 +123,11 @@ public sealed class GlossaryHintTests
         var text = Describe(rows, [library], CleanupProvider.FoundryLocal);
 
         Assert.Contains(
-            $"The on-device model receives the first {CleanupPrompt.MaxGlossaryTermsLocal} of 550 terms as vocabulary",
+            $"The AI model on this PC receives the first {CleanupPrompt.MaxGlossaryTermsLocal} of 550 words as vocabulary",
             text, StringComparison.Ordinal);
-        Assert.Contains("Your own entries come first.", text, StringComparison.Ordinal);
+        Assert.Contains("Your own words come first.", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"The Local prompt style stops the list at {CleanupPrompt.MaxGlossaryTermsLocal} terms so it fits a small model's context.",
+            $"With the short instructions, the list stops at {CleanupPrompt.MaxGlossaryTermsLocal} words or phrases so a small model can take it in.",
             text, StringComparison.Ordinal);
     }
 
@@ -145,9 +145,9 @@ public sealed class GlossaryHintTests
         var sent = SentByDictation(rows, []);
         var gridOrder = CleanupPrompt.CountGlossary(DictionaryEntryBuilder.Build(rows).Entries).Included;
         Assert.True(sent > gridOrder * 2, $"The fixture must separate the orders ({sent} against {gridOrder}), or it proves nothing.");
-        Assert.Contains($"Your AI provider receives the first {N(sent)} of 3,100 terms", text, StringComparison.Ordinal);
+        Assert.Contains($"Your AI service receives the first {N(sent)} of 3,100 words", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"The list stops at {N(CleanupPrompt.MaxGlossaryTermsCloud)} terms or {N(CleanupPrompt.MaxGlossaryChars)} characters.",
+            $"The list stops at {N(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at {N(CleanupPrompt.MaxGlossaryChars)} characters.",
             text, StringComparison.Ordinal);
     }
 
@@ -178,7 +178,7 @@ public sealed class GlossaryHintTests
         var inPageOrderAsGiven = DictionaryLibraryComposer.Merge(inPageOrder.SelectMany(l => l.EnabledEntries), []);
         Assert.NotEqual(sent, CleanupPrompt.CountGlossary(inPageOrderAsGiven).Included);
         Assert.Equal(DictionaryLibraryComposer.ComposeLibraries(loaded), DictionaryLibraryComposer.ComposeLibraries(inPageOrder));
-        Assert.Contains($"receives the first {N(sent)} of 1,200 terms", text, StringComparison.Ordinal);
+        Assert.Contains($"receives the first {N(sent)} of 1,200 words", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public sealed class GlossaryHintTests
         var asGiven = CleanupPrompt.CountGlossary(entries, budget).Included;
         var sorted = CleanupPrompt.CountGlossary([.. entries.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance)], budget).Included;
         Assert.True(sorted > asGiven * 2, $"The fixture must separate the orders ({sorted} against {asGiven}), or it proves nothing.");
-        Assert.Contains($"receives the first {N(asGiven)} of 3,100 terms", text, StringComparison.Ordinal);
+        Assert.Contains($"receives the first {N(asGiven)} of 3,100 words", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -218,16 +218,16 @@ public sealed class GlossaryHintTests
         // library term with the same spoken form.
         var text = Describe([Row("azure", "AZURE-mine", enabled: false)], [Library("team", DictionaryEntry.New("azure", "Azure"))]);
 
-        Assert.StartsWith("0 of 1 entries enabled plus 1 from enabled word packs.", text, StringComparison.Ordinal);
-        Assert.Contains("Your AI provider receives that term as vocabulary", text, StringComparison.Ordinal);
+        Assert.StartsWith("0 of 1 words are on, plus 1 from word packs that are on.", text, StringComparison.Ordinal);
+        Assert.Contains("Your AI service receives that word as vocabulary", text, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Nothing_to_send_is_said_plainly()
     {
-        Assert.Equal("0 of 0 entries enabled. AI cleanup receives no vocabulary.", Describe([], []));
+        Assert.Equal("0 of 0 words are on. AI cleanup receives no vocabulary.", Describe([], []));
         Assert.Equal(
-            "1 of 1 entries enabled. It is applied on this PC. AI cleanup receives no vocabulary.",
+            "1 of 1 words are on. It is applied on this PC. AI cleanup receives no vocabulary.",
             Describe([Row("um", string.Empty)], []));
     }
 
@@ -236,9 +236,9 @@ public sealed class GlossaryHintTests
     {
         var text = Describe([Row("azure", "Azure"), Row("sign off", "Best regards,\nChris"), Row("footer", new string('f', 150))], []);
 
-        Assert.Contains("Your AI provider receives that term as vocabulary", text, StringComparison.Ordinal);
+        Assert.Contains("Your AI service receives that word as vocabulary", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"2 entries are left out because the written form spans more than one line or runs past {CleanupPrompt.MaxGlossaryTermChars} characters.",
+            $"2 words are left out because what Scribe writes for them spans more than one line or runs past {CleanupPrompt.MaxGlossaryTermChars} characters.",
             text, StringComparison.Ordinal);
     }
 

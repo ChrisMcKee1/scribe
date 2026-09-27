@@ -1283,6 +1283,11 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Initializing, null, "On. Getting ready..." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Connection refused", "On, but not ready: Connection refused. Until it's ready, Scribe types what it hears." },
+
+        // The service's reasons end their own sentences, and the line must not add a second period after one.
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Couldn't reach the AI service. Check your network and the service's address.", "On, but not ready: Couldn't reach the AI service. Check your network and the service's address. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "AI cleanup couldn't start. ", "On, but not ready: AI cleanup couldn't start. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "Is the deployment name right?", "On, but not ready: Is the deployment name right? Until it's ready, Scribe types what it hears." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
     };
 

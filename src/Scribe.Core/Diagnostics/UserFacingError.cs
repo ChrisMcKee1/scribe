@@ -123,7 +123,7 @@ public static class TryDictationSummary
         "Scribe couldn't record from your microphone. Check your microphone on the Dictation page, then try again.";
 
     public const string CleanupNotReadyFallback = "Open AI cleanup to check it.";
-    public const string EmptyTextReason = "Post-processing produced empty text.";
+    public const string EmptyTextReason = "Your dictionary or snippets removed all of the text.";
 
     public static string Describe(TryDictationSummaryInput input)
     {

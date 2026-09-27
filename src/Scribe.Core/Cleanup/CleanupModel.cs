@@ -34,8 +34,8 @@ public static class CleanupModelCatalog
         // Golden-suite winners (docs/model-leaderboard.md). Larger downloads than the lightweight
         // defaults, but they top the on-device board: mistral-nemo-12b at ~1.0 s median is the
         // fastest usable local model, and phi-4 earns the best offline quality grade.
-        new CleanupModel("mistral-nemo-12b-instruct", "Mistral NeMo 12B", "About 7 GB, large download. Fastest usable on-device model. Real-time feel with solid quality.", "Best on-device balance"),
-        new CleanupModel("phi-4", "Phi-4", "About 9 GB, large download. Best offline quality. Slower and a larger download.", "Best on-device quality"),
+        new CleanupModel("mistral-nemo-12b-instruct", "Mistral NeMo 12B", "About 7 GB, large download. The fastest usable model that runs on this PC. Real-time feel with solid quality.", "Best balance on this PC"),
+        new CleanupModel("phi-4", "Phi-4", "About 9 GB, large download. Best offline quality. Slower and a larger download.", "Best quality on this PC"),
     };
 
     /// <summary>Resolves an alias to its descriptor, falling back to the default when unknown.</summary>

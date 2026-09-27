@@ -52,7 +52,7 @@ public static class GlossaryHint
         // enabled as one that replaces it.
         var entries = DictionaryEntryBuilder.Build(input.Rows).Entries;
         var enabled = entries.Where(e => e.Enabled).ToList();
-        var text = new StringBuilder($"{Count(enabled.Count)} of {Count(entries.Count)} entries enabled");
+        var text = new StringBuilder($"{Count(enabled.Count)} of {Count(entries.Count)} words are on");
 
         // Dictation reads only enabled entries, so a disabled row never keeps a library term with the same
         // spoken form out of the vocabulary. The page's own rows are put in the order the repository reads the
@@ -72,7 +72,7 @@ public static class GlossaryHint
 
         if (localLibraries.Count > 0 && localVocabulary.Count > personalTerms)
         {
-            text.Append($" plus {Count(localVocabulary.Count - personalTerms)} from enabled word packs");
+            text.Append($", plus {Count(localVocabulary.Count - personalTerms)} from word packs that are on");
         }
 
         text.Append('.');
@@ -90,12 +90,12 @@ public static class GlossaryHint
         }
         else
         {
-            var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The on-device model" : "Your AI provider";
+            var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The AI model on this PC" : "Your AI service";
             if (glossary.Included == glossary.Eligible)
             {
                 var (terms, them) = glossary.Eligible == 1
-                    ? ("that term", "it")
-                    : ($"all {Count(glossary.Eligible)} terms", "them");
+                    ? ("that word", "it")
+                    : ($"all {Count(glossary.Eligible)} words", "them");
                 text.Append(
                     $" {receiver} receives {terms} as vocabulary with every cleanup request, whether or not the " +
                     $"dictation mentions {them}.");
@@ -103,13 +103,13 @@ public static class GlossaryHint
             else
             {
                 text.Append(
-                    $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} terms " +
+                    $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} words " +
                     "as vocabulary with every cleanup request, whether or not the dictation mentions them. Your own " +
-                    "entries come first.");
+                    "words come first.");
                 text.Append(local
-                    ? $" The Local prompt style stops the list at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms so " +
-                      "it fits a small model's context."
-                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms or " +
+                    ? $" With the short instructions, the list stops at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} " +
+                      "words or phrases so a small model can take it in."
+                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at " +
                       $"{Count(CleanupPrompt.MaxGlossaryChars)} characters.");
             }
         }
@@ -117,8 +117,9 @@ public static class GlossaryHint
         if (templates > 0)
         {
             text.Append(
-                $" {Count(templates)} {(templates == 1 ? "entry is" : "entries are")} left out because the written " +
-                $"form spans more than one line or runs past {Count(CleanupPrompt.MaxGlossaryTermChars)} characters.");
+                $" {Count(templates)} {(templates == 1 ? "word is" : "words are")} left out because what Scribe writes " +
+                $"for {(templates == 1 ? "it" : "them")} spans more than one line or runs past " +
+                $"{Count(CleanupPrompt.MaxGlossaryTermChars)} characters.");
         }
 
         return text.ToString();

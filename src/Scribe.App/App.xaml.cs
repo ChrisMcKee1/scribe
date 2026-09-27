@@ -1122,8 +1122,9 @@ public partial class App : Application
 
         _settingsWindow?.AdoptStoredSettings(stored);
         _tray?.SetAiCleanupChecked(stored.EnableAiCleanup);
-        ShowTrayNotice(TrayNotices.AiCleanupActivation(
-            stored.EnableAiCleanup ? "AI cleanup is on. Scribe uses the configured AI cleanup provider." : "AI cleanup is off. Scribe types what it hears, with your dictionary and snippets."));
+        ShowTrayNotice(TrayNotices.AiCleanupActivation(stored.EnableAiCleanup
+            ? "AI cleanup is on. Scribe fixes punctuation and grammar before it types. If AI cleanup isn't ready, Scribe types what it hears."
+            : "AI cleanup is off. Scribe types what it hears, with your dictionary and snippets."));
     }
 
     private void OnAiCleanupToggleFailed(Exception ex, long revision)

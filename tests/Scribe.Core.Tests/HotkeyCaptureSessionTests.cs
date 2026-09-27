@@ -86,7 +86,7 @@ public sealed class HotkeyCaptureSessionTests
 
         Assert.Equal(HotkeyCaptureOutcome.Completed, done.Outcome);
         Assert.Equal(
-            "Press Left Ctrl before Middle mouse button when you use this chord: a mouse button pressed first still " +
+            "Press Left Ctrl before Middle mouse button when you use this shortcut: a mouse button pressed first still " +
             "reaches the app under the pointer.",
             done.Message);
         Assert.Equal(Middle, done.Binding!.VirtualKey);
@@ -103,7 +103,7 @@ public sealed class HotkeyCaptureSessionTests
         var done = capture.Release(Back, HotkeyMode.Hold);
 
         Assert.Equal("Mouse Back (button 4)+Mouse Forward (button 5)", done.Binding!.DisplayName);
-        Assert.StartsWith("Whichever mouse button of this chord you press first still reaches the app", done.Message);
+        Assert.StartsWith("Whichever mouse button of this shortcut you press first still reaches the app", done.Message);
     }
 
     [Theory]
@@ -553,14 +553,21 @@ public sealed class HotkeyCaptureSessionTests
     {
         // The hint says which button to choose, so it names the capture button by the label on the page. The redesign
         // renamed Set to Change and the hint kept saying Set, pointing at a button the page no longer had.
+        // Every capture button counts: the dictation shortcut's and the one for the shortcut without AI cleanup.
         var xaml = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
-        var button = System.Text.RegularExpressions.Regex.Match(xaml, "x:Name=\"CaptureButton\"\\s+Content=\"(?<label>[^\"]+)\"");
-        Assert.True(button.Success, "SettingsWindow.xaml has no CaptureButton with a Content label.");
+        var labels = System.Text.RegularExpressions.Regex.Matches(xaml, "<ui:Button\\b[^>]*\\bClick=\"(?<handler>\\w*CaptureButton_Click)\"[^>]*>")
+            .Select(element => (
+                Handler: element.Groups["handler"].Value,
+                Label: System.Text.RegularExpressions.Regex.Match(element.Value, "\\bContent=\"(?<label>[^\"]+)\"").Groups["label"].Value))
+            .ToList();
+        Assert.Equal(["CaptureButton_Click", "DictationOnlyCaptureButton_Click"], labels.Select(button => button.Handler).Order(StringComparer.Ordinal));
+        var label = Assert.Single(labels.Select(button => button.Label).Distinct());
+        Assert.False(string.IsNullOrWhiteSpace(label), "A capture button has no Content label.");
 
         var chosen = System.Text.RegularExpressions.Regex.Matches(HotkeyCaptureSession.MouseButtonsHint, @"\bchoose (?<word>\w+)")
             .Select(match => match.Groups["word"].Value)
             .ToList();
-        Assert.Equal([button.Groups["label"].Value, button.Groups["label"].Value], chosen);
+        Assert.Equal([label, label], chosen);
     }
 
     private static string RepositoryRoot()

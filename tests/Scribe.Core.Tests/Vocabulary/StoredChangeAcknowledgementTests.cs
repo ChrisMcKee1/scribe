@@ -191,7 +191,7 @@ public sealed class StoredChangeAcknowledgementTests
     public void The_changed_while_saving_notice_says_the_settings_were_saved_and_what_to_do_about_the_change()
     {
         Assert.Equal(
-            "Settings saved, but something in this window changed while saving. Save again to keep that change.",
+            "Changes saved, but something in this window changed while saving. Save again to keep that change.",
             VocabularyNotice.SettingsChangedWhileSaving);
         Assert.DoesNotContain('\u2014', VocabularyNotice.SettingsChangedWhileSaving);
         Assert.DoesNotContain('\u2013', VocabularyNotice.SettingsChangedWhileSaving);

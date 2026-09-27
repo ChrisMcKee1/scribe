@@ -58,10 +58,10 @@ public static class VocabularyNotice
     /// open with it rather than close over it, and the next save stores it.
     /// </summary>
     public const string SettingsChangedWhileSaving =
-        "Settings saved, but something in this window changed while saving. Save again to keep that change.";
+        "Changes saved, but something in this window changed while saving. Save again to keep that change.";
 
     /// <summary>
-    /// <paramref name="saved"/>, what was stored as a clause without a closing stop (such as "Settings saved"), then that
+    /// <paramref name="saved"/>, what was stored as a clause without a closing stop (such as "Changes saved"), then that
     /// dictation is not using the change yet and keeps its previous vocabulary. True whichever way the build fell short: it
     /// could not read the dictionary (a later build, which the next change or a restart asks for, loads it), or it had not
     /// returned by its deadline (it loads the change if it returns).

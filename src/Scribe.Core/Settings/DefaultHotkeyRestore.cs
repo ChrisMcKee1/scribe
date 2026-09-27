@@ -65,11 +65,12 @@ public static class DefaultHotkeyRestore
             var dictation = HotkeyText.Describe(HotkeyBinding.DefaultDictation);
             var dictationOnly = HotkeyText.Describe(HotkeyBinding.DefaultDictationOnly);
             return $"Restores the defaults: {Defaults}. While Scribe runs, {dictation} and {dictationOnly} pressed on " +
-                "their own no longer reach other apps: they stop paging through documents, web pages and terminals, and " +
-                "a presentation remote stops changing slides. With Ctrl, Shift, Alt, Win or the Narrator key held they " +
-                "work in other apps as before. Pause dictation from the tray icon to use them for a while, or choose " +
-                $"other keys here if you present. Most laptops without {dictation} and {dictationOnly} have them on Fn " +
-                $"with the Down and Up arrows, and the keypad's {dictation} and {dictationOnly} with Num Lock off also work.";
+                "their own no longer reach other apps: they stop paging through documents, web pages and command " +
+                "windows, and a presentation remote stops changing slides. With Ctrl, Shift, Alt, Win or the Narrator " +
+                "key held they work in other apps as before. Pause dictation from the tray icon to use them for a " +
+                $"while, or choose other keys here if you present. Most laptops without {dictation} and {dictationOnly} " +
+                $"have them on Fn with the Down and Up arrows, and the keypad's {dictation} and {dictationOnly} with Num " +
+                "Lock off also work.";
         }
     }
 

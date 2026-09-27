@@ -323,9 +323,9 @@ public sealed class HotkeyCaptureSession
         }
 
         return MouseButtons.IsBindable(inputs[1])
-            ? $"Whichever mouse button of this chord you press first still reaches the app under the pointer, so " +
+            ? $"Whichever mouse button of this shortcut you press first still reaches the app under the pointer, so " +
               $"{Name(inputs[0])} pressed first still does its usual job there."
-            : $"Press {Name(inputs[1])} before {Name(inputs[0])} when you use this chord: a mouse button pressed " +
+            : $"Press {Name(inputs[1])} before {Name(inputs[0])} when you use this shortcut: a mouse button pressed " +
               "first still reaches the app under the pointer.";
     }
 

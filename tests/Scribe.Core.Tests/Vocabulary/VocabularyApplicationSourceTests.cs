@@ -47,7 +47,7 @@ public sealed class VocabularyApplicationSourceTests
         Assert.True(
             apply > 0 && apply < awaited && awaited < notApplied && succeeded > 0,
             "A Save is reported before dictation can use what it stored.");
-        Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Settings saved\")", protocol[notApplied..], StringComparison.Ordinal);
+        Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Changes saved\")", protocol[notApplied..], StringComparison.Ordinal);
         Assert.Contains("if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())", Body(window, "private async void SaveButton_Click("), StringComparison.Ordinal);
 
         // The Usage page's Add says the term was added only once the stored settings' generation is published.

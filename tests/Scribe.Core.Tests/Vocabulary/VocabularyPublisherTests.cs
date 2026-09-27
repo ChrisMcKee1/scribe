@@ -525,11 +525,11 @@ public sealed class VocabularyPublisherTests
             var hint = GlossaryHint.Describe(new GlossaryHint.Input(rows, generation.Libraries.AiEntries, true, true, provider, style));
 
             Assert.Equal(["- KESTREL (transcribed as \"kes trel\")", "- Lantern", "- Harbour (transcribed as \"har bour\")"], sent);
-            Assert.Contains($"receives all {sent.Count} terms as vocabulary", hint, StringComparison.Ordinal);
+            Assert.Contains($"receives all {sent.Count} words as vocabulary", hint, StringComparison.Ordinal);
 
             // The control: the hint handed every enabled library's entries would count the excluded library too.
             var wrong = GlossaryHint.Describe(new GlossaryHint.Input(rows, generation.Libraries.Entries, true, true, provider, style));
-            Assert.Contains($"receives all {sent.Count + 1} terms as vocabulary", wrong, StringComparison.Ordinal);
+            Assert.Contains($"receives all {sent.Count + 1} words as vocabulary", wrong, StringComparison.Ordinal);
         }
     }
 
@@ -592,12 +592,12 @@ public sealed class VocabularyPublisherTests
     [Fact]
     public void The_not_applied_notice_says_what_was_saved_and_that_dictation_keeps_its_previous_vocabulary()
     {
-        var notice = VocabularyNotice.SavedButNotApplied("Settings saved");
+        var notice = VocabularyNotice.SavedButNotApplied("Changes saved");
 
         // True whichever way the build fell short: it could not read the dictionary, or it had not returned by its
         // deadline, when it may still load the change (round 3, A5), so it names no event the change waits for.
         Assert.Equal(
-            "Settings saved, but dictation isn't using the change yet and keeps its previous vocabulary until it can load it.",
+            "Changes saved, but dictation isn't using the change yet and keeps its previous vocabulary until it can load it.",
             notice);
         Assert.StartsWith("Added \"Quillmoor\" to your dictionary, but", VocabularyNotice.SavedButNotApplied("Added \"Quillmoor\" to your dictionary"), StringComparison.Ordinal);
         Assert.DoesNotContain("will now", notice, StringComparison.OrdinalIgnoreCase);

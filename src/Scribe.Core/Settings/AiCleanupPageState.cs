@@ -302,7 +302,7 @@ public static class AiCleanupPageState
                 true,
                 "On, but not ready. Until it's ready, Scribe types what it hears.",
                 null,
-                new(AiCleanupStatusKind.Error, "Couldn't start the on-device AI runtime. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again"))),
+                new(AiCleanupStatusKind.Error, "Couldn't start the AI runtime for this PC. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again"))),
             _ => new(true, "On. Getting ready...", null, null),
         };
     }
@@ -329,6 +329,19 @@ public static class AiCleanupPageState
 
     private const string NotReadyLine = "On, but not ready. Until it's ready, Scribe types what it hears.";
 
+    // The service's reasons are sentences ("Couldn't reach the AI service. Check your network..."), so the line ends the
+    // reason's sentence once instead of adding a second period after it.
+    private static string NotReadyBecause(string reason)
+    {
+        var sentence = reason.Trim();
+        if (!sentence.EndsWith('.') && !sentence.EndsWith('!') && !sentence.EndsWith('?') && !sentence.EndsWith('\u2026'))
+        {
+            sentence += ".";
+        }
+
+        return $"On, but not ready: {sentence} Until it's ready, Scribe types what it hears.";
+    }
+
     // The saved, active remote provider's top card reports the running service (plan 6.2.1 "after Save: live status").
     // A discovery or verification outcome belongs to the setup row: a failed model list does not stop a running
     // deployment. A known setup problem only explains why the service is unavailable.
@@ -337,8 +350,7 @@ public static class AiCleanupPageState
         CleanupStatus.Ready => "On. AI cleanup is ready.",
         CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
         CleanupStatus.Unavailable when knownCause is not null => knownCause,
-        CleanupStatus.Unavailable when !string.IsNullOrWhiteSpace(safeReason) =>
-            $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
+        CleanupStatus.Unavailable when !string.IsNullOrWhiteSpace(safeReason) => NotReadyBecause(safeReason),
         CleanupStatus.Unavailable => NotReadyLine,
         _ => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
     };
@@ -355,9 +367,7 @@ public static class AiCleanupPageState
             CleanupStatus.Initializing or CleanupStatus.Downloading => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, "Checking...")),
             CleanupStatus.Unavailable => new(
                 true,
-                string.IsNullOrWhiteSpace(safeReason)
-                    ? "On, but not ready. Until it's ready, Scribe types what it hears."
-                    : $"On, but not ready: {safeReason}. Until it's ready, Scribe types what it hears.",
+                string.IsNullOrWhiteSpace(safeReason) ? NotReadyLine : NotReadyBecause(safeReason),
                 null,
                 new(AiCleanupStatusKind.Error, safeReason ?? "AI cleanup isn't ready yet.", action is null ? null : ActionFor(action))),
             _ => new(true, notCheckedStatus, null, new(AiCleanupStatusKind.Info, "Not checked yet.", action is null ? null : ActionFor(action))),

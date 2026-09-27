@@ -343,7 +343,7 @@ public sealed class WordPackSaveProtocol
         {
             StoredChangeOutcome.InEffect => WordPackSaveProtocolResult.SuccessResult(),
             StoredChangeOutcome.NotInUseYet => WordPackSaveProtocolResult.Warning(
-                VocabularyNotice.SavedButNotApplied("Settings saved")),
+                VocabularyNotice.SavedButNotApplied("Changes saved")),
             _ => WordPackSaveProtocolResult.Warning(VocabularyNotice.SettingsChangedWhileSaving),
         };
     }

@@ -588,7 +588,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return CleanupTestResult.Failed(recipient, CleanupReason.Same(options.Provider switch
                 {
                     CleanupProvider.AzureFoundry => "Choose an Azure deployment to test cleanup.",
-                    CleanupProvider.OpenAiCompatible => "Enter the endpoint URL and model name to test cleanup.",
+                    CleanupProvider.OpenAiCompatible => "Enter the server address and model name to test cleanup.",
                     _ => "Select a model to test cleanup.",
                 }));
             }
@@ -708,9 +708,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 DropAgents();
                 statusChanged = WriteStatusLocked(owner, CleanupStatus.Unavailable, CleanupReason.Same(effective.Provider switch
                 {
-                    CleanupProvider.AzureFoundry => "Choose an Azure deployment to enable cleanup.",
-                    CleanupProvider.OpenAiCompatible => "Enter the endpoint URL and model name to enable cleanup.",
-                    _ => "Select a model to enable cleanup.",
+                    CleanupProvider.AzureFoundry => "Choose an Azure deployment to start AI cleanup.",
+                    CleanupProvider.OpenAiCompatible => "Enter the server address and model name to start AI cleanup.",
+                    _ => "Choose a model to start AI cleanup.",
                 }));
                 notActionable = true;
             }
@@ -1643,8 +1643,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     attempt = attempt with
                     {
                         Error = CleanupReason.Same(
-                            "The on-device cleanup model had been unloaded and is loading again. " +
-                            "This dictation used raw text; give it a moment and try again."),
+                            "The AI model on this PC had been unloaded and is loading again. " +
+                            "Give it a moment and try again."),
                     };
                     break;
 
@@ -1652,7 +1652,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     attempt = attempt with
                     {
                         Error = CleanupReason.Same(
-                            "AI cleanup settings changed during this dictation, so it used raw text."),
+                            "AI cleanup settings changed during this dictation."),
                     };
                     break;
             }
@@ -1739,7 +1739,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         PublishStatus(
             observed,
             CleanupStatus.Unavailable,
-            CleanupReason.Same($"The on-device model '{options.FoundryModelAlias}' was unloaded and could not be reloaded."));
+            CleanupReason.Same($"The AI model '{options.FoundryModelAlias}' on this PC was unloaded and couldn't be loaded again."));
         return ReloadOutcome.Failed;
     }
 
@@ -1795,7 +1795,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (!TrySanitize(result.Text, chunk, out var cleaned))
             {
                 var reason = LooksLikeRefusal(result.Text)
-                    ? "AI cleanup was declined by the model; used raw text."
+                    ? "The AI model declined to clean up this dictation."
                     : "AI cleanup returned unusable output.";
                 return new ChunkAttempt(chunk, CleanupReason.Same(reason), false, false);
             }
@@ -1939,10 +1939,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         {
             return provider == CleanupProvider.FoundryLocal
                 ? CleanupReason.Same(
-                    "The on-device cleanup model is no longer loaded in Foundry Local, and reloading it " +
-                    "failed. Something else likely evicted it (another app, or a model loaded from the " +
-                    "foundry CLI). Reopen Settings and load the model again.")
-                : WithDetail($"The endpoint reports that model is not loaded ({status}).");
+                    "The AI model is no longer loaded in Foundry Local, and loading it again failed. Something " +
+                    "else probably replaced it: another app, or a model loaded with the Foundry Local " +
+                    "command-line tool. Reopen Settings and load the model again.")
+                : WithDetail($"The AI service reports that the model isn't loaded ({status}).");
         }
 
         if (IsGpuShaderIncompatibility(ex))
@@ -1950,48 +1950,48 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return provider == CleanupProvider.FoundryLocal
                 ? WithDetail("This model variant cannot run on this GPU. In Foundry Local, pick a CPU variant " +
                              "of the model and try again.")
-                : WithDetail("This model variant cannot run on the endpoint GPU. Pick a CPU variant or use " +
+                : WithDetail("This model variant cannot run on the AI service's GPU. Pick a CPU variant or use " +
                              "a different model variant.");
         }
 
         if (IsExecutionProviderUnavailable(ex))
         {
             return provider == CleanupProvider.FoundryLocal
-                ? WithDetail("This model variant requires an execution provider that is not available on this PC. " +
+                ? WithDetail("This model variant needs an AI runtime this PC doesn't have. " +
                              "Pick a different model in Settings.")
-                : WithDetail("This model variant requires an execution provider that is not available on the endpoint. " +
+                : WithDetail("This model variant needs an AI runtime the AI service doesn't have. " +
                              "Pick a different model variant.");
         }
 
         return status switch
         {
-            400 => WithDetail("The AI endpoint rejected the request (400)."),
+            400 => WithDetail("The AI service rejected the request (400)."),
 
             401 or 403 => provider switch
             {
                 CleanupProvider.FoundryLocal => WithDetail($"Foundry Local refused the request ({status})."),
                 CleanupProvider.AzureFoundry => WithDetail(
-                    $"The AI endpoint rejected the Azure access ({status}). Check the sign-in and role " +
+                    $"Microsoft Foundry rejected the Azure access ({status}). Check the sign-in and role " +
                     "assignment, then try again."),
                 _ => CleanupReason.Same(
-                    $"The AI endpoint rejected the credentials ({status}). Check the API key, then try again."),
+                    $"The AI service rejected the credentials ({status}). Check the API key, then try again."),
             },
 
             404 => provider == CleanupProvider.FoundryLocal
                 ? CleanupReason.Same(
-                    "Foundry Local no longer recognises the cleanup model (404). Reopen Settings and " +
+                    "Foundry Local no longer recognizes the AI model (404). Reopen Settings and " +
                     "pick the model again.")
-                : WithDetail("The AI endpoint could not find that model (404). Check the model name."),
+                : WithDetail("The AI service could not find that model (404). Check the model name."),
 
-            429 => CleanupReason.Same("The AI endpoint is throttling requests (429). Wait a moment and try again."),
+            429 => CleanupReason.Same("The AI service is throttling requests (429). Wait a moment and try again."),
 
-            >= 500 => WithDetail($"The AI endpoint returned a server error ({status}). This is usually transient."),
+            >= 500 => WithDetail($"The AI service returned a server error ({status}). This is usually transient."),
 
             _ when IsConnectivityFailure(ex) => provider == CleanupProvider.FoundryLocal
                 ? CleanupReason.Same("Couldn't reach Foundry Local. Make sure it is installed and running.")
-                : CleanupReason.Same("Couldn't reach the AI endpoint. Check the endpoint URL and your network."),
+                : CleanupReason.Same("Couldn't reach the AI service. Check your network and the service's address."),
 
-            _ when status > 0 => WithDetail($"The AI endpoint returned {status}."),
+            _ when status > 0 => WithDetail($"The AI service returned {status}."),
 
             // Last resort. Still better than the bare type name: the message usually names the fault.
             // The type name alone is what the diagnostic form keeps; the message may embed a host.
@@ -2852,7 +2852,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return new ResidentChange(
                     ResidentChangeKind.Invalidate,
                     WriteStatusLocked(owner, CleanupStatus.Unavailable, CleanupReason.Same(
-                        "The on-device cleanup model was unloaded. Reload it to turn cleanup back on.")));
+                        "The AI model on this PC was unloaded. Load it again to turn AI cleanup back on.")));
             }
 
             if (nowResident && _agent is null && _initPhase != InitPhase.Live &&
@@ -3072,7 +3072,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             PublishStatus(
                 generation,
                 CleanupStatus.Unavailable,
-                CleanupReason.Same("AI cleanup could not start. Dictation continues with raw text."));
+                CleanupReason.Same("AI cleanup couldn't start."));
         }
         finally
         {
@@ -3834,13 +3834,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         var failure = await GetFoundryExecutionProviderFailureAsync(alias, ex, ct).ConfigureAwait(false);
         var required = string.IsNullOrWhiteSpace(failure.RequiredProvider)
-            ? "an execution provider that is not available"
+            ? "an AI runtime this PC doesn't have"
             : failure.RequiredProvider;
         var available = failure.AvailableProviders.Count == 0
             ? "none reported"
             : string.Join(", ", failure.AvailableProviders);
 
-        return $"Model '{alias}' requires {required}, but this PC has {available}. Pick a different model in Settings.";
+        return $"Model '{alias}' needs {required}. Available on this PC: {available}. Pick a different model in Settings.";
     }
 
     private async Task<FoundryExecutionProviderFailure> GetFoundryExecutionProviderFailureAsync(
@@ -4093,7 +4093,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 SetInitStatus(
                     CleanupStatus.Unavailable,
-                    "The GitHub Copilot CLI is not installed. Install it from Settings, then turn AI cleanup back on.");
+                    "GitHub Copilot isn't installed. Install it from Settings, then turn AI cleanup back on.");
                 return null;
             }
 
@@ -4111,7 +4111,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
          * Copilot session…)" on any dictation taken during startup, which is both wrong and alarming.
          * The startup is around 20 seconds, so the window this is visible in is not small.
          */
-        SetInitStatus(CleanupStatus.Initializing, "Connecting to the GitHub Copilot CLI…");
+        SetInitStatus(CleanupStatus.Initializing, "Connecting to GitHub Copilot…");
 
         /*
          * Point the SDK at the CLI we found, rather than the one it expects to have bundled.
@@ -4151,7 +4151,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             SetInitStatus(
                 CleanupStatus.Unavailable,
-                "Could not start GitHub Copilot. Check that you are signed in: run `copilot` once in a terminal.");
+                "Couldn't start GitHub Copilot. Check that you're signed in to GitHub Copilot, then try again.");
             LogProviderFailure(LogLevel.Warning, CleanupProvider.GitHubCopilot, ex, "GitHub Copilot session could not be started.");
             return null;
         }
@@ -4198,7 +4198,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         if (string.IsNullOrWhiteSpace(options.CustomEndpoint) || string.IsNullOrWhiteSpace(options.CustomModel))
         {
-            SetInitStatus(CleanupStatus.Unavailable, "Enter the endpoint URL and model name to enable cleanup.");
+            SetInitStatus(CleanupStatus.Unavailable, "Enter the server address and model name to start AI cleanup.");
             return Task.FromResult<AIAgent?>(null);
         }
 
@@ -4211,7 +4211,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         // The host is what makes this line useful in Settings, and it is exactly what must not reach
         // the log: a dictation skipped while connecting reports this status as its skip reason.
         SetInitStatus(CleanupStatus.Initializing, new CleanupReason(
-            "Connecting to the custom endpoint…", $"Connecting to {endpointUri.Host}…"));
+            "Connecting to your AI service…", $"Connecting to {endpointUri.Host}…"));
 
         var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
         var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
@@ -4325,8 +4325,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 "Couldn't reach the Azure deployment. Check the endpoint, deployment name, tenant, client ID, " +
                 "and client secret.",
 
-            _ => "Couldn't reach the Azure deployment. Check that you're signed in (az login), the tenant is " +
-                 "correct, and you have access.",
+            _ => "Couldn't reach the Azure deployment. Check that you're signed in with the Azure CLI, the " +
+                 "tenant is correct, and you have access.",
         };
     }
 
@@ -4710,8 +4710,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             "Azure deployment ready.",
             $"Azure deployment '{options.AzureDeployment}' ready."),
         CleanupProvider.OpenAiCompatible => new CleanupReason(
-            $"'{options.CustomModel}' at the custom endpoint ready.",
-            $"'{options.CustomModel}' at {(Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var u) ? u.Host : "custom endpoint")} ready."),
+            $"'{options.CustomModel}' at your AI service ready.",
+            $"'{options.CustomModel}' at {(Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var u) ? u.Host : "your AI service")} ready."),
         _ => CleanupReason.Same($"{CleanupModelCatalog.Resolve(options.FoundryModelAlias).DisplayName} ready."),
     };
 
@@ -4877,13 +4877,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         if (!Uri.TryCreate(value, UriKind.Absolute, out endpoint!) ||
             (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
         {
-            error = "The endpoint is not a valid http(s) URL.";
+            error = "The server address isn't valid. It has to start with http:// or https://.";
             return false;
         }
 
         if (endpoint.Scheme == Uri.UriSchemeHttp && !endpoint.IsLoopback)
         {
-            error = "Remote custom endpoints must use HTTPS. HTTP is allowed only for this PC.";
+            error = "A server on another computer needs an address that starts with https://. An http:// address works for this PC.";
             return false;
         }
 

@@ -47,7 +47,7 @@ public static class FoundryLocalSetup
             FoundryLocalSetupStage.Loaded => new(AiCleanupStatusKind.Success, $"{modelName} is ready.", "Unload", true),
             FoundryLocalSetupStage.Failed => new(
                 AiCleanupStatusKind.Error,
-                "Couldn't start the on-device AI runtime. Try again, or choose another AI service.",
+                "Couldn't start the AI runtime for this PC. Try again, or choose another AI service.",
                 "Try again",
                 false),
             FoundryLocalSetupStage.ModelFailed => new(

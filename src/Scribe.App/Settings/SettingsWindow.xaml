@@ -266,10 +266,10 @@
             <Setter Property="Focusable" Value="False"/>
         </Style>
         <Style x:Key="WholeWordCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
-            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Whole word for {0}'}"/>
+            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Whole words only for {0}'}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding Pattern}" Value="">
-                    <Setter Property="AutomationProperties.Name" Value="Whole word for the new entry"/>
+                    <Setter Property="AutomationProperties.Name" Value="Whole words only for the new word"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -278,10 +278,10 @@
             <Setter Property="Focusable" Value="False"/>
         </Style>
         <Style x:Key="EntryEnabledCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
-            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Enabled for {0}'}"/>
+            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Use {0}'}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding Pattern}" Value="">
-                    <Setter Property="AutomationProperties.Name" Value="Enabled for the new entry"/>
+                    <Setter Property="AutomationProperties.Name" Value="Use the new word"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -538,7 +538,7 @@
             <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Remove {0}'}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding Pattern}" Value="">
-                    <Setter Property="AutomationProperties.Name" Value="Remove the new entry"/>
+                    <Setter Property="AutomationProperties.Name" Value="Remove the new word"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
