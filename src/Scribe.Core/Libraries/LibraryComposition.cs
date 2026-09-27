@@ -118,7 +118,7 @@ public sealed class LibraryComposition
                     }
 
                     var composed = new ComposedRule(
-                        source.Entries[row],
+                        source.Entries![row],
                         source.Id,
                         key,
                         LibraryTiers.IsAuthored(source.Content.Rows[row]) ? RuleTier.Authored : RuleTier.Shipped,
@@ -149,7 +149,7 @@ public sealed class LibraryComposition
             .Where(source => source.Participates)
             .Select(source => new DictionaryLibrary(
                 source.Id, source.Content.Name, source.Content.Category, source.Content.Description, source.BuiltIn,
-                Array.AsReadOnly(source.Entries))
+                Array.AsReadOnly(source.Entries!))
             { FileName = source.BuiltIn ? null : source.FileName })
             .ToList()
             .AsReadOnly());
@@ -358,7 +358,7 @@ public sealed class LibraryComposition
             _ruleByKey.TryGetValue(competing, out rule);
         }
 
-        var thisRow = rule is not null && ReferenceEquals(rule.Entry, source.Entries[row]);
+        var thisRow = rule is not null && source.Entries is { } entries && ReferenceEquals(rule.Entry, entries[row]);
         TermWinner winner;
         string? winningId = null;
         DictionaryEntry? winning = null;
@@ -701,12 +701,16 @@ public sealed class LibraryComposition
             Participates = participates;
             AiPermitted = aiPermitted;
             MarkedKeys = markedKeys;
-            Entries = new DictionaryEntry[content.Rows.Count];
+            Entries = participates ? new DictionaryEntry[content.Rows.Count] : null;
             Keys = new LibraryTermKey[content.Rows.Count];
             MarkerActive = new bool[content.Rows.Count];
             for (var row = 0; row < content.Rows.Count; row++)
             {
-                Entries[row] = content.Rows[row].Values.ToEntry();
+                if (Entries is not null)
+                {
+                    Entries[row] = content.Rows[row].Values.ToEntry();
+                }
+
                 Keys[row] = LibraryTiers.CompetingKey(content.Rows[row]);
             }
         }
@@ -727,8 +731,11 @@ public sealed class LibraryComposition
 
         public IReadOnlySet<LibraryTermKey> MarkedKeys { get; }
 
-        /// <summary>Each row's values as an entry, one object per row, which the rules hold by reference.</summary>
-        public DictionaryEntry[] Entries { get; }
+        /// <summary>
+        /// Each row's values as an entry, one object per row, which the rules hold by reference; null for a library that does
+        /// not take part, since rules come only from libraries that do.
+        /// </summary>
+        public DictionaryEntry[]? Entries { get; }
 
         /// <summary>Each row's competing spoken form.</summary>
         public LibraryTermKey[] Keys { get; }
