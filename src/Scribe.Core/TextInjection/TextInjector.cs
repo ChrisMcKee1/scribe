@@ -481,12 +481,9 @@ public sealed class TextInjector : ITextInjector
         // (TypingPace), for the remote session's input stack.
         int sent = 0;
         int batches = 0;
+        INPUT[]? buffer = null;
         try
         {
-            // One buffer for every batch of this insertion, each written over the last: SendInput has copied a batch
-            // into the input stream by the time it returns, and a batch is at most BatchUnits code units (ChunkLength),
-            // so it never needs more than MaxEventsPerBatch events.
-            var buffer = new INPUT[Math.Min(total, MaxEventsPerBatch(pace.BatchUnits, shiftEnter))];
             for (int start = 0; start < text.Length;)
             {
                 if (!IsExpectedForeground(expectedForegroundWindow))
@@ -495,6 +492,12 @@ public sealed class TextInjector : ITextInjector
                 }
 
                 int count = ChunkLength(text, start, pace.BatchUnits, pace.PreferWordBoundary);
+
+                // One buffer for every batch of this insertion, each written over the last: SendInput has copied a batch
+                // into the input stream by the time it returns, and a batch is at most BatchUnits code units (ChunkLength),
+                // so it never needs more than MaxEventsPerBatch events. It is made where the first batch was always built,
+                // after that batch's focus check, so a focus that moved before any text was typed never makes one.
+                buffer ??= new INPUT[Math.Min(total, MaxEventsPerBatch(pace.BatchUnits, shiftEnter))];
                 int events = WriteUnicodeChunk(buffer, text, start, count, shiftEnter, keys);
 
                 int delivered = SendWithRetry(buffer.AsSpan(0, events));

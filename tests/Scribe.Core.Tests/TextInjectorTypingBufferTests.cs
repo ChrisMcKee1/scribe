@@ -147,6 +147,43 @@ public class TextInjectorTypingBufferTests
             Assert.True(batches > 1, "The text must take more than one batch, or nothing is reused.");
         }
 
+        [Fact]
+        public void A_focus_that_moved_before_the_first_batch_allocates_no_buffer()
+        {
+            // The buffer is made after the first batch's focus check, where 0.5.0 built that batch, so a dictation whose
+            // target lost the focus before any text was typed returns as a failed insertion without allocating it: exactly
+            // the old path, whatever memory is left.
+            var platform = new QuietPlatform { Foreground = Target + 1 };
+            var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard());
+            var pace = TypingPace.Local;
+            var text = FourParagraphs();
+            var total = TextInjector.CountKeyEvents(text, 0, text.Length, shiftEnter: true);
+
+            // Warm the JIT for every call measured below, and the readings around the window.
+            for (var warm = 0; warm < 3; warm++)
+            {
+                _ = injector.TypeUnicode(text, Target, shiftEnter: true, UsKeys, pace);
+            }
+
+            _ = RuntimeWork.Now().Since(RuntimeWork.Now());
+            _ = BytesOfOneBuffer(1);
+            var bufferBytes = BytesOfOneBuffer(Math.Min(total, TextInjector.MaxEventsPerBatch(pace.BatchUnits, shiftEnter: true)));
+
+            var work = RuntimeWork.Now();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var typed = injector.TypeUnicode(text, Target, shiftEnter: true, UsKeys, pace);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            var during = RuntimeWork.Now().Since(work);
+
+            // A bound, not zero: the truncation warning's arguments (a params array and two boxed counts) are allocated on
+            // this path, as they were in 0.5.0. The buffer, which a batch built before the focus check would add, is not.
+            Assert.True(
+                allocated < bufferBytes,
+                $"{allocated} bytes allocated with the focus gone, at least the {bufferBytes}-byte buffer. During it: {during}.");
+            Assert.Equal((0, total, 0), typed);
+            Assert.Equal(0, platform.Sends);
+        }
+
         private static long BytesOfOneBuffer(int length)
         {
             var before = GC.GetAllocatedBytesForCurrentThread();
@@ -159,9 +196,17 @@ public class TextInjectorTypingBufferTests
         // Answers every call without allocating, so the measurement sees only the injector.
         private sealed class QuietPlatform : IInjectionPlatform
         {
-            public nint GetForegroundWindow() => Target;
+            public nint Foreground { get; init; } = Target;
 
-            public uint SendInput(ReadOnlySpan<INPUT> inputs) => (uint)inputs.Length;
+            public int Sends { get; private set; }
+
+            public nint GetForegroundWindow() => Foreground;
+
+            public uint SendInput(ReadOnlySpan<INPUT> inputs)
+            {
+                Sends++;
+                return (uint)inputs.Length;
+            }
 
             public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow) => false;
 
