@@ -124,7 +124,7 @@ public static partial class UsageAnalyzer
 
     /// <summary>Counts Unicode letter/number words without assuming a particular language.</summary>
     public static int CountWords(string? text) =>
-        string.IsNullOrWhiteSpace(text) ? 0 : Word().Matches(text).Count;
+        string.IsNullOrWhiteSpace(text) ? 0 : Word().Count(text);
 
     private static (IReadOnlyList<TrendPoint> Points, TrendGranularity Granularity) BuildTrend(
         IReadOnlyList<HistoryEntry> entries,
@@ -170,6 +170,8 @@ public static partial class UsageAnalyzer
 
         return (points, granularity);
     }
+
+    private const string TrailingPunctuation = ".,:;!?";
 
     private static IReadOnlyList<TermUsage> ExtractTerms(
         IReadOnlyList<HistoryEntry> entries,
@@ -220,23 +222,37 @@ public static partial class UsageAnalyzer
         var coveredForms = new HashSet<string>(
             known.SelectMany(term => term.Forms),
             StringComparer.OrdinalIgnoreCase);
+        var singleTokenLookup = singleTokenForms.GetAlternateLookup<ReadOnlySpan<char>>();
+        var coveredLookup = coveredForms.GetAlternateLookup<ReadOnlySpan<char>>();
         var termDictations = new int[known.Count];
         var termOccurrences = new int[known.Count];
         var novelForms = new Dictionary<string, (string Surface, int Dictations, int Occurrences)>(
             StringComparer.OrdinalIgnoreCase);
+        var formCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var lastTokenMatchEnds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var seenNovelForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
         {
-            var formCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var lastTokenMatchEnds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var seenNovelForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match match in Token().Matches(entry.Text))
-            {
-                CountSingleTokenForms(match, singleTokenForms, formCounts, lastTokenMatchEnds);
+            formCounts.Clear();
+            lastTokenMatchEnds.Clear();
+            seenNovelForms.Clear();
+            var text = entry.Text;
 
-                var token = match.Value.TrimEnd('.', ',', ':', ';', '!', '?');
-                if (token.Length < 2 ||
-                    coveredForms.Contains(token) ||
-                    !DictionarySuggestionMiner.IsCandidate(token))
+            // Token().Matches(text) threw for a null transcript, naming its parameter; EnumerateMatches takes a span and would not.
+            ArgumentNullException.ThrowIfNull(text, "input");
+            foreach (var match in Token().EnumerateMatches(text))
+            {
+                var tokenText = text.AsSpan(match.Index, match.Length);
+                CountSingleTokenForms(tokenText, match.Index, singleTokenLookup, formCounts, lastTokenMatchEnds);
+
+                var trimmed = tokenText.TrimEnd(TrailingPunctuation);
+                if (trimmed.Length < 2 || coveredLookup.Contains(trimmed))
+                {
+                    continue;
+                }
+
+                var token = trimmed.ToString();
+                if (!DictionarySuggestionMiner.IsCandidate(token))
                 {
                     continue;
                 }
@@ -250,7 +266,7 @@ public static partial class UsageAnalyzer
 
             foreach (var matcher in phraseMatchers)
             {
-                var count = matcher.Pattern.Matches(entry.Text).Count;
+                var count = matcher.Pattern.Count(text);
                 if (count > 0)
                 {
                     formCounts[matcher.Text] = count;
@@ -301,17 +317,17 @@ public static partial class UsageAnalyzer
 
     private static bool IsSingleTokenForm(string form)
     {
-        var match = Token().Match(form);
-        return match.Success && match.Index == 0 && match.Length == form.Length;
+        var matches = Token().EnumerateMatches(form);
+        return matches.MoveNext() && matches.Current.Index == 0 && matches.Current.Length == form.Length;
     }
 
     private static void CountSingleTokenForms(
-        Match tokenMatch,
-        HashSet<string> singleTokenForms,
+        ReadOnlySpan<char> token,
+        int tokenIndex,
+        HashSet<string>.AlternateLookup<ReadOnlySpan<char>> singleTokenForms,
         Dictionary<string, int> formCounts,
         Dictionary<string, int> lastMatchEnds)
     {
-        var token = tokenMatch.Value;
         for (var start = 0; start < token.Length; start++)
         {
             if (start > 0 && char.IsLetterOrDigit(token[start - 1]))
@@ -326,20 +342,19 @@ public static partial class UsageAnalyzer
                     continue;
                 }
 
-                var candidate = token[start..end];
-                if (!singleTokenForms.TryGetValue(candidate, out var form))
+                if (!singleTokenForms.TryGetValue(token[start..end], out var form))
                 {
                     continue;
                 }
 
-                var absoluteStart = tokenMatch.Index + start;
+                var absoluteStart = tokenIndex + start;
                 if (lastMatchEnds.TryGetValue(form, out var lastEnd) && absoluteStart < lastEnd)
                 {
                     continue;
                 }
 
                 formCounts[form] = formCounts.GetValueOrDefault(form) + 1;
-                lastMatchEnds[form] = tokenMatch.Index + end;
+                lastMatchEnds[form] = tokenIndex + end;
             }
         }
     }
