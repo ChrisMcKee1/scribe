@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
@@ -36,6 +37,9 @@ public sealed class LibraryComposition
 {
     private static readonly TermStatus UnknownRow = new(
         TermMarker.None, TermWinner.None, null, null, [], [], null, false, GlossaryInclusion.NotApplied);
+
+    // The previews kept for each draft (see Preview), released with the draft.
+    private static readonly ConditionalWeakTable<LibraryDraft, PreviewMemo> PreviewMemos = new();
 
     private readonly Source[] _sources;
     private readonly Dictionary<string, Source> _byId = new(StringComparer.OrdinalIgnoreCase);
@@ -214,6 +218,7 @@ public sealed class LibraryComposition
     /// <param name="dictionary">The personal dictionary in the order dictation reads it; only enabled entries count.</param>
     /// <param name="budget">The glossary budget dictation uses.</param>
     /// <remarks>
+    /// <para>
     /// AI permission is what the Save would commit. A library whose <see cref="DraftLibrary.WritesContent"/> the workspace
     /// set, because its Save writes that library's content (a file, an edits document written or removed, a library brought
     /// in), is composed from the draft and judged by the draft's choices alone, since that Save records the hash of every
@@ -224,11 +229,24 @@ public sealed class LibraryComposition
     /// the file's rows (review finding A4); one the committed catalog does not hold supplies nothing. The preview never
     /// infers a write from the rows: a write no row shows (a reset of intents for terms no longer shipped) is the
     /// workspace's to report (round 3, review finding A6), and rows the Save does not write never reach it (round 4).
+    /// </para>
+    /// <para>
+    /// The two most recent previews of each draft are kept with it and released with it (the workspace hands out a new
+    /// draft at every revision). A call with the same committed catalog object, the same budget and the same enabled
+    /// dictionary entries (equal values, in the same order) as one of them returns that preview itself, statuses already
+    /// computed included, so a dictionary winner's <see cref="TermStatus.WinningEntry"/> is then the equal entry the first
+    /// call passed. Both a draft and a catalog are immutable, and a composition is safe to share.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="committed"/> is not the catalog the draft was built from.</exception>
     public static LibraryComposition Preview(
-        LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget) =>
-        Preview(draft, committed, dictionary, budget, LibraryDecisions.Precedence);
+        LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+    {
+        ValidatePreview(draft, committed, dictionary);
+        var memo = PreviewMemos.GetValue(draft, static _ => new PreviewMemo());
+        return memo.Find(committed, dictionary, budget)
+            ?? memo.Keep(committed, Preview(draft, committed, dictionary, budget, LibraryDecisions.Precedence));
+    }
 
     // Each decision-1 alternative behind the one policy point, so a veto is a change to LibraryDecisions alone.
     internal static LibraryComposition Committed(
@@ -265,6 +283,7 @@ public sealed class LibraryComposition
         return new LibraryComposition(isPreview: false, catalog.Generation, sources, dictionary, budget, rule);
     }
 
+    // Composes every time: only the public overload keeps previews, for the one rule dictation uses.
     internal static LibraryComposition Preview(
         LibraryDraft draft,
         LibraryCatalog committed,
@@ -272,16 +291,7 @@ public sealed class LibraryComposition
         GlossaryBudget budget,
         LibraryPrecedenceRule rule)
     {
-        ArgumentNullException.ThrowIfNull(draft);
-        ArgumentNullException.ThrowIfNull(committed);
-        ArgumentNullException.ThrowIfNull(dictionary);
-        if (committed.Generation != draft.BaseGeneration)
-        {
-            throw new ArgumentException(
-                "The committed catalog must be the one the draft was built from, the generation the draft names as its base.",
-                nameof(committed));
-        }
-
+        ValidatePreview(draft, committed, dictionary);
         var state = draft.LocalState;
         var markers = MarkersByLibrary(state);
         Dictionary<string, List<TermValues>>? shipped = null;
@@ -327,6 +337,48 @@ public sealed class LibraryComposition
         }
 
         return new LibraryComposition(isPreview: true, draft.Revision, sources, dictionary, budget, rule);
+    }
+
+    // Both overloads throw these, in this order, before anything is composed or kept.
+    private static void ValidatePreview(LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(committed);
+        ArgumentNullException.ThrowIfNull(dictionary);
+        if (committed.Generation != draft.BaseGeneration)
+        {
+            throw new ArgumentException(
+                "The committed catalog must be the one the draft was built from, the generation the draft names as its base.",
+                nameof(committed));
+        }
+    }
+
+    // Whether the constructor would build this composition's personal part from these entries and this budget: the same
+    // budget, and the enabled entries it kept, equal and in the same order, enumerated as the constructor enumerates them.
+    private bool Composes(IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+    {
+        if (_budget != budget)
+        {
+            return false;
+        }
+
+        var kept = 0;
+        foreach (var entry in dictionary)
+        {
+            if (entry is not { Enabled: true })
+            {
+                continue;
+            }
+
+            if (kept == _dictionary.Count || !entry.Equals(_dictionary[kept]))
+            {
+                return false;
+            }
+
+            kept++;
+        }
+
+        return kept == _dictionary.Count;
     }
 
     // The built-ins as the Save leaves them: the draft's content where it writes it, the committed content otherwise.
@@ -750,6 +802,61 @@ public sealed class LibraryComposition
     /// and any others after it.
     /// </summary>
     private readonly record struct Holders((Source Source, int Row) First, List<(Source Source, int Row)>? Rest);
+
+    /// <summary>
+    /// The two most recent previews of one draft, the most recent first, each with the committed catalog it was composed
+    /// against. The Settings window composes one at every Word packs refresh (the grid's dictionary order, the saved budget)
+    /// and one at every Your words refresh (the dictionary sorted, the budget on screen), both against the draft of the
+    /// current revision, so two slots serve both pages.
+    /// </summary>
+    private sealed class PreviewMemo
+    {
+        private readonly Lock _gate = new();
+        private (LibraryCatalog Committed, LibraryComposition Composition)? _recent;
+        private (LibraryCatalog Committed, LibraryComposition Composition)? _older;
+
+        public LibraryComposition? Find(LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+        {
+            lock (_gate)
+            {
+                return FindLocked(committed, dictionary, budget);
+            }
+        }
+
+        // The caller composes outside the lock; if another thread kept a preview of the same inputs meanwhile, that one is
+        // returned instead, so equal inputs always get one preview.
+        public LibraryComposition Keep(LibraryCatalog committed, LibraryComposition composed)
+        {
+            lock (_gate)
+            {
+                if (FindLocked(committed, composed._dictionary, composed._budget) is { } kept)
+                {
+                    return kept;
+                }
+
+                _older = _recent;
+                _recent = (committed, composed);
+                return composed;
+            }
+        }
+
+        private LibraryComposition? FindLocked(
+            LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+        {
+            if (_recent is { } recent && ReferenceEquals(recent.Committed, committed) && recent.Composition.Composes(dictionary, budget))
+            {
+                return recent.Composition;
+            }
+
+            if (_older is { } older && ReferenceEquals(older.Committed, committed) && older.Composition.Composes(dictionary, budget))
+            {
+                (_recent, _older) = (older, _recent);
+                return older.Composition;
+            }
+
+            return null;
+        }
+    }
 
     /// <summary>One library as the composition sees it.</summary>
     private sealed class Source
