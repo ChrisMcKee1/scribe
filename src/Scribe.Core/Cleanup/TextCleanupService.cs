@@ -281,7 +281,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // dictation of one generation shares one. Bounded, because each new generation brings a new glossary. Guarded by
     // _gate and dropped with the other agents whenever the factory changes.
     private const int MaxAdmittedAgents = 8;
-    private readonly Dictionary<string, AIAgent> _admittedAgents = new(StringComparer.Ordinal);
+    private readonly Dictionary<AdmittedAgentKey, AIAgent> _admittedAgents = new();
 
     // The hand-off transport over InnerHttpHandlerForTesting, built once. Guarded by _gate.
     private HttpClientPipelineTransport? _testTransport;
@@ -1256,9 +1256,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private AIAgent AdmittedAgentLocked(
         Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary)
     {
-        var glossary = vocabulary.GlossaryFor(CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider));
-        var prompt = BuildSystemPrompt(options with { WritingStyle = style ?? options.WritingStyle, Glossary = glossary });
-        if (_admittedAgents.TryGetValue(prompt, out var cached))
+        var maxTerms = CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider);
+        var key = new AdmittedAgentKey(vocabulary, style, maxTerms);
+        if (_admittedAgents.TryGetValue(key, out var cached))
         {
             return cached;
         }
@@ -1270,10 +1270,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             _admittedAgents.Clear();
         }
 
+        var glossary = vocabulary.GlossaryFor(maxTerms);
+        var prompt = BuildSystemPrompt(options with { WritingStyle = style ?? options.WritingStyle, Glossary = glossary });
         var agent = factory(prompt);
-        _admittedAgents[prompt] = agent;
+        _admittedAgents[key] = agent;
         return agent;
     }
+
+    private readonly record struct AdmittedAgentKey(CleanupVocabulary Vocabulary, string? WritingStyle, int MaxTerms);
 
     // Counts and a generation only: never which libraries, and never a term.
     private void LogHeldBack(CleanupAdmission admission, int heldBack, int segments, CleanupProvider provider)

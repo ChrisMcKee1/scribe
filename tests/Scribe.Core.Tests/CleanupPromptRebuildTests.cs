@@ -3,6 +3,8 @@ using System.Reflection;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Libraries;
+using Scribe.Core.Models;
 using Scribe.Core.Settings;
 using Scribe.Core.Tests.Concurrency;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -194,6 +196,34 @@ public sealed class CleanupPromptRebuildTests
         Assert.Contains(fake.Built, built => built.Contains("Fabrikam", StringComparison.Ordinal));
         Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
         Assert.Contains("Fabrikam", fake.Client.Instructions[^1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Admitted_cleanup_reuses_the_agent_for_the_same_vocabulary_without_rebuilding_the_prompt()
+    {
+        await using var harness = new CleanupHarness();
+        var fake = new FakeProvider();
+        var svc = harness.Service;
+        svc.ProviderFactoryForTesting = fake.Connect;
+        svc.Configure(Remote(CleanupProvider.AzureFoundry));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        var buildsBeforeDictation = fake.Agents.Count;
+        var vocabulary = new CleanupVocabulary(
+            [DictionaryEntry.New("contoso", "Contoso")],
+            AiVocabularyScope.None);
+        var admitted = svc.Admit(vocabulary);
+
+        Assert.Equal(CleanupOutcome.Cleaned, (await admitted.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
+        Assert.Equal(CleanupOutcome.Cleaned, (await admitted.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
+
+        Assert.Equal(buildsBeforeDictation + 1, fake.Agents.Count);
+
+        var sameTextNewAdmission = svc.Admit(new CleanupVocabulary(
+            [DictionaryEntry.New("contoso", "Contoso")],
+            AiVocabularyScope.None));
+        Assert.Equal(CleanupOutcome.Cleaned, (await sameTextNewAdmission.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
+        Assert.Equal(buildsBeforeDictation + 2, fake.Agents.Count);
     }
 
     /// <summary>How far the initialization a prompt change supersedes gets before it stops.</summary>
