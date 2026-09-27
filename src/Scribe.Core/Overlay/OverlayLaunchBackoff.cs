@@ -36,12 +36,12 @@ internal enum OverlayLaunchDecision
 /// second is short enough that a transient failure (an antivirus scan of a freshly updated binary, a
 /// development rebuild racing the launch) costs a recording in progress about a second of missing pill,
 /// and long enough that the next state command of the same dictation cannot immediately repeat a
-/// failure that may have just blocked for the whole connect timeout. The 60 s cap holds a persistently
-/// broken helper to about one attempt a minute while something is on screen, so attempts that block for
-/// the client's connect timeout (8 s today) occupy the consumer roughly an eighth of the time at worst,
-/// while a helper that recovers during a long recording is back within a minute. There is no jitter:
-/// jitter spreads many clients retrying against one shared service, and here one client drives one local
-/// helper.
+/// failure that may have just blocked for the whole connect timeout. The 60 s cap bounds how often a persistently broken
+/// helper is tried while something is on screen. The client's connect timeout is 30 s, and a cooldown runs from the end of
+/// the attempt, so a helper that stays up and never opens its pipe blocks the consumer for 30 s and then waits out up to
+/// 60 s of cooldown: one attempt every minute and a half, which holds the consumer about a third of the time at worst,
+/// while a helper that recovers during a long recording is back within a minute and a half. There is no jitter: jitter
+/// spreads many clients retrying against one shared service, and here one client drives one local helper.
 /// </para>
 /// <para>
 /// A successful launch resets the backoff. A helper that is lost within <see cref="DefaultStableAfter"/>
