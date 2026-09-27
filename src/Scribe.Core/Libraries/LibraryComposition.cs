@@ -611,10 +611,10 @@ public sealed class LibraryComposition
     // term budget, and a stop before the first line that would pass the character budget.
     private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary()
     {
-        var inclusion = new Dictionary<DictionaryEntry, GlossaryInclusion>(ReferenceEqualityComparer.Instance);
+        var inclusion = new Dictionary<DictionaryEntry, GlossaryInclusion>(AiLibraryEntries.Count, ReferenceEqualityComparer.Instance);
         var vocabulary = CleanupPrompt.ComposeVocabulary(_dictionary, AiLibraryEntries);
         var lines = GlossaryLines(vocabulary);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(vocabulary.Count, StringComparer.OrdinalIgnoreCase);
         long chars = 0;
         var count = 0;
         var stopped = _budget.MaxTerms <= 0;
@@ -680,7 +680,13 @@ public sealed class LibraryComposition
                 continue;
             }
 
-            var rendered = RenderedLines(CleanupPrompt.BuildGlossary([.. chunk.Select(index => entries[index])], chunk.Count));
+            var batch = new DictionaryEntry[chunk.Count];
+            for (var k = 0; k < batch.Length; k++)
+            {
+                batch[k] = entries[chunk[k]];
+            }
+
+            var rendered = RenderedLines(CleanupPrompt.BuildGlossary(batch, chunk.Count));
             for (var k = 0; k < chunk.Count; k++)
             {
                 lines[chunk[k]] = rendered.Length == chunk.Count ? rendered[k] : GlossaryLine(entries[chunk[k]]);
@@ -704,20 +710,39 @@ public sealed class LibraryComposition
         return rendered.Length == 0 ? null : rendered[0];
     }
 
-    // A rendered glossary is one header line and then one line per term.
-    private static string[] RenderedLines(string glossary) =>
-        glossary.Length == 0 ? [] : glossary[(glossary.IndexOf('\n') + 1)..].Split('\n');
+    // A rendered glossary is one header line and then one line per term. Split on '\n' alone, empty lines included, as
+    // string.Split('\n') split it (not EnumerateLines, which also breaks at '\r' and the other line separators).
+    internal static string[] RenderedLines(string glossary)
+    {
+        if (glossary.Length == 0)
+        {
+            return [];
+        }
+
+        var body = glossary.AsSpan(glossary.IndexOf('\n') + 1);
+        var lines = new string[body.Count('\n') + 1];
+        var index = 0;
+        foreach (var range in body.Split('\n'))
+        {
+            lines[index++] = body[range].ToString();
+        }
+
+        return lines;
+    }
 
     // The key the glossary de-duplicates lines by: the written form, and the spoken form when the line shows one. The
     // renderer drops double quotes from both, so the first " (transcribed as " always separates them.
     internal static string GlossaryKey(string line)
     {
         const string separator = " (transcribed as \"";
-        var body = line.StartsWith("- ", StringComparison.Ordinal) ? line[2..] : line;
+        var body = line.StartsWith("- ", StringComparison.Ordinal) ? line.AsSpan(2) : line.AsSpan();
         var at = body.IndexOf(separator, StringComparison.Ordinal);
-        return at >= 0 && body.EndsWith("\")", StringComparison.Ordinal)
-            ? body[..at] + "|" + body[(at + separator.Length)..^2]
-            : body;
+        if (at >= 0 && body.EndsWith("\")", StringComparison.Ordinal))
+        {
+            return string.Concat(body[..at], "|", body[(at + separator.Length)..^2]);
+        }
+
+        return body.Length == line.Length ? line : body.ToString();
     }
 
     /// <summary>
