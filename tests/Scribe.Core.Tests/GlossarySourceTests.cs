@@ -162,7 +162,7 @@ public sealed partial class GlossarySourceTests
         "Text|Content|Title|Message|ToolTip|Header|Description|Label|Subtitle|Caption|StringFormat|TargetNullValue|FallbackValue";
 
     // The texts a binding shows: its format and its fallbacks, quoted or not.
-    [GeneratedRegex(@"\b(?:StringFormat|TargetNullValue|FallbackValue)\s*=\s*(?:'(?<text>[^']*)'|(?<text>\{\}.*?)(?=,\s*\w+\s*=|\}\s*$)|(?<text>[^,{}]*))", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(?:StringFormat|TargetNullValue|FallbackValue)\s*=\s*(?:'(?<text>[^']*)'|""(?<text>[^""]*)""|(?<text>\{\}.*?)(?=,\s*\w+\s*=|\}\s*$)|(?<text>[^,{}""']*))", RegexOptions.CultureInvariant)]
     private static partial Regex XamlBindingText();
 
     [GeneratedRegex(@"<Setter\b(?<attrs>[^>]*)>", RegexOptions.CultureInvariant)]
@@ -260,6 +260,8 @@ public sealed partial class GlossarySourceTests
                 string L => "Change your hot" +
                     "key, it's split";
                 string M => $"Press {key} as your shortcut. " + "hotkeys like it " + key + " stay apart";
+                string N => $"Use {"your hot" + "key here"}.";
+                string O => $"Error: {Describe(new InvalidOperationException("Your hotkey in an exception in a hole"))}";
                 string J => $$"""Name: {{$"{hotkeyName}"}} and {{Describe(hotkey)}}""";
                 void K(ILogger log) => log.LogWarning($"Held {(held ? "Your hotkey in a log call's hole" : "no")}");
                 string H => "SELECT hotkey FROM settings";
@@ -273,7 +275,7 @@ public sealed partial class GlossarySourceTests
             .Select(literal => literal.Text)
             .ToList();
 
-        Assert.Equal(7, found.Count);
+        Assert.Equal(8, found.Count);
         Assert.Contains(found, text => text.StartsWith("Change your hotkey ", StringComparison.Ordinal) && text.EndsWith(" times", StringComparison.Ordinal));
         Assert.Contains("Your \"hotkey\" in a verbatim string", found);
         Assert.Contains("Your hotkey after a quote character", found);
@@ -284,6 +286,8 @@ public sealed partial class GlossarySourceTests
 
         // Literals joined with + are one text; a variable between them ends it.
         Assert.Contains("Change your hotkey, it's split", found);
+        Assert.Contains("your hotkey here", found);
+        Assert.DoesNotContain(found, text => text.Contains("in an exception in a hole", StringComparison.Ordinal));
         Assert.Contains(found, text => text.StartsWith("Press ", StringComparison.Ordinal) && text.EndsWith("hotkeys like it ", StringComparison.Ordinal));
         Assert.DoesNotContain(found, text => text.StartsWith("Name:", StringComparison.Ordinal));
     }
@@ -304,6 +308,8 @@ public sealed partial class GlossarySourceTests
                 <TextBlock Text="{Binding Count, StringFormat='{}{0} hotkey presses'}"/>
                 <settings:StatusRow PrimaryActionText="Your hotkey action" Tag="{Binding Hotkey}"/>
                 <TextBlock>Press <Run Text="{Binding Key}"/> to change your hotkey</TextBlock>
+                <TextBlock Text="{Binding Count, StringFormat=&quot;{}{0} hotkey taps&quot;}"/>
+                <TextBlock Text='{Binding Count, StringFormat="{}{0} hotkey holds"}'/>
             </StackPanel>
             """;
 
@@ -313,7 +319,7 @@ public sealed partial class GlossarySourceTests
             [
                 "Your hotkey in text", "Your hotkey in a tooltip", "Your hotkey as content", "Your hotkey & more",
                 "Your hotkey in single quotes", "Your hotkey in a setter", "hotkey presses", "Your hotkey action",
-                "Press", "to change your hotkey",
+                "Press", "to change your hotkey", "hotkey taps", "hotkey holds",
             ],
             found);
     }
@@ -448,11 +454,13 @@ public sealed partial class GlossarySourceTests
     // fallback texts. Format placeholders ({0}, {0:N0}) and the {} escape are not text.
     private static IEnumerable<string> XamlValueTexts(string value)
     {
-        var shown = value.StartsWith('{') && !value.StartsWith("{}", StringComparison.Ordinal)
-            ? XamlBindingText().Matches(value).Select(part => part.Groups["text"].Value)
-            : [value];
+        // Entities first: a format written as StringFormat=&quot;{}{0} words&quot; is a quoted format once decoded.
+        var decoded = WebUtility.HtmlDecode(value);
+        var shown = decoded.StartsWith('{') && !decoded.StartsWith("{}", StringComparison.Ordinal)
+            ? XamlBindingText().Matches(decoded).Select(part => part.Groups["text"].Value)
+            : [decoded];
         return shown
-            .Select(text => Regex.Replace(WebUtility.HtmlDecode(text), @"^\{\}|\{\d+(?:[,:][^}]*)?\}", " "))
+            .Select(text => Regex.Replace(text, @"^\{\}|\{\d+(?:[,:][^}]*)?\}", " "))
             .Where(text => !string.IsNullOrWhiteSpace(text));
     }
 
@@ -503,7 +511,8 @@ public sealed partial class GlossarySourceTests
             Char,
         }
 
-        private readonly record struct Token(Kind Kind, int Start, int End, string Text, bool Nested = false);
+        private readonly record struct Token(
+            Kind Kind, int Start, int End, string Text, bool Nested = false, IReadOnlyList<(int Start, int End)>? Holes = null);
 
         /// <summary>
         /// The literals outside comments, outside the calls whose text never reaches a person, and outside
@@ -521,27 +530,26 @@ public sealed partial class GlossarySourceTests
 
             bool Hidden(Token token) => hidden.Any(span => token.Start >= span.Start && token.Start < span.End);
 
-            // Pieces joined with + are one text, so a word split across them ("Your local " + "prompt") is still read.
-            var pieces = tokens.Where(token => token.Kind == Kind.Literal && !token.Nested).OrderBy(token => token.Start).ToList();
-            for (var n = 0; n < pieces.Count; n++)
+            // Pieces joined with + are one text, so a word split across them ("Your local " + "prompt") is still read. Literals
+            // inside holes are joined among themselves: an outer literal and one in its hole never touch.
+            foreach (var nestedPieces in new[] { false, true })
             {
-                var first = pieces[n];
-                var text = new StringBuilder(first.Text);
-                while (n + 1 < pieces.Count && IsConcatenation(source, pieces[n].End, pieces[n + 1].Start))
+                var pieces = tokens.Where(token => token.Kind == Kind.Literal && token.Nested == nestedPieces).OrderBy(token => token.Start).ToList();
+                for (var n = 0; n < pieces.Count; n++)
                 {
-                    n++;
-                    text.Append(pieces[n].Text);
-                }
+                    var first = pieces[n];
+                    var text = new StringBuilder(first.Text);
+                    while (n + 1 < pieces.Count && IsConcatenation(source, pieces[n].End, pieces[n + 1].Start))
+                    {
+                        n++;
+                        text.Append(pieces[n].Text);
+                    }
 
-                if (!Hidden(first))
-                {
-                    yield return new Literal(first.Start, LineOf(source, first.Start), text.ToString());
+                    if (!Hidden(first))
+                    {
+                        yield return new Literal(first.Start, LineOf(source, first.Start), text.ToString());
+                    }
                 }
-            }
-
-            foreach (var token in tokens.Where(token => token.Kind == Kind.Literal && token.Nested && !Hidden(token)))
-            {
-                yield return new Literal(token.Start, LineOf(source, token.Start), token.Text);
             }
         }
 
@@ -593,7 +601,9 @@ public sealed partial class GlossarySourceTests
             return tokens;
         }
 
-        // Literal and comment text blanked out, line breaks kept, so a call's parentheses can be matched on code alone.
+        // Literal and comment text blanked out, line breaks kept, so a call's parentheses can be matched on code alone. An
+        // interpolation hole is code, so it stays: a call inside one (an exception built in a hole) is found like any other,
+        // and the literals inside it are blanked as tokens of their own.
         private static string Mask(string source, List<Token> tokens)
         {
             var chars = source.ToCharArray();
@@ -601,7 +611,7 @@ public sealed partial class GlossarySourceTests
             {
                 for (var k = token.Start; k < token.End && k < chars.Length; k++)
                 {
-                    if (chars[k] != '\n')
+                    if (chars[k] != '\n' && !(token.Holes?.Any(hole => k >= hole.Start && k < hole.End) ?? false))
                     {
                         chars[k] = ' ';
                     }
@@ -690,6 +700,7 @@ public sealed partial class GlossarySourceTests
             {
                 var close = new string('"', quotes);
                 var raw = new StringBuilder();
+                var rawHoles = new List<(int Start, int End)>();
                 var r = i + quotes;
                 while (r < s.Length && string.CompareOrdinal(s, r, close, 0, quotes) != 0)
                 {
@@ -703,7 +714,9 @@ public sealed partial class GlossarySourceTests
                     if (dollars > 0 && run >= dollars)
                     {
                         raw.Append(s, r, run - dollars);
-                        r = SkipHole(s, r + run, nested);
+                        var holeStart = r + run;
+                        r = SkipHole(s, holeStart, nested);
+                        rawHoles.Add((holeStart, Math.Max(holeStart, r - 1)));
                         for (var extra = 1; extra < dollars && r < s.Length && s[r] == '}'; extra++)
                         {
                             r++;
@@ -717,11 +730,12 @@ public sealed partial class GlossarySourceTests
                     r++;
                 }
 
-                token = new Token(Kind.Literal, start, Math.Min(r + quotes, s.Length), raw.ToString());
+                token = new Token(Kind.Literal, start, Math.Min(r + quotes, s.Length), raw.ToString(), Holes: rawHoles);
                 return true;
             }
 
             var text = new StringBuilder();
+            var holes = new List<(int Start, int End)>();
             var k = i + 1;
             while (k < s.Length)
             {
@@ -735,7 +749,9 @@ public sealed partial class GlossarySourceTests
                         continue;
                     }
 
-                    k = SkipHole(s, k + 1, nested);
+                    var holeStart = k + 1;
+                    k = SkipHole(s, holeStart, nested);
+                    holes.Add((holeStart, Math.Max(holeStart, k - 1)));
                     text.Append(' ');
                     continue;
                 }
@@ -777,7 +793,7 @@ public sealed partial class GlossarySourceTests
                 k++;
             }
 
-            token = new Token(Kind.Literal, start, k, text.ToString());
+            token = new Token(Kind.Literal, start, k, text.ToString(), Holes: holes);
             return true;
         }
 
