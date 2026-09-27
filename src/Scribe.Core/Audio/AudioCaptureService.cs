@@ -34,6 +34,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private readonly InputDeviceWatcher? _watcher;
     private readonly TimeSpan _disposeOpenWait;
     private readonly CaptureBufferPool _buffers = new();
+    private readonly CaptureScratchPool _scratch = new();
     private readonly object _sync = new();
 
     // The listeners for InputDevicesChanged, kept here so the watcher knows whether anything is listening.
@@ -322,7 +323,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 return CapturedAudio.Empty;
             }
 
-            var captured = ConvertCapture(raw, format, report => LastSignalReport = report, _logger);
+            var captured = ConvertCapture(raw, format, report => LastSignalReport = report, _logger, _scratch);
             var signal = LastSignalReport!;
 
             // The signal shape is on this line deliberately. It separates failure modes that produce
@@ -346,14 +347,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
     }
 
     /// <summary>
-    /// Drops the capture working buffer kept between captures, returning the bytes released. The
-    /// buffer is already zeroed; releasing it only lets the garbage collector reclaim the memory,
-    /// and the next capture reserves a fresh one. Takes only the pool's gate, never
-    /// <c>_sync</c>, and never touches the buffer of a capture that is starting, recording or
-    /// converting (see <see cref="CaptureBufferPool"/>), so the idle release may call it from any
-    /// thread at any time.
+    /// Drops the capture working buffer kept between captures and the conversion's scratch arrays,
+    /// returning the bytes released. Both are already zeroed; releasing them only lets the garbage
+    /// collector reclaim the memory, and the next capture reserves afresh. Takes only the pools'
+    /// gates, never <c>_sync</c>, and never touches the buffer or scratch of a capture that is
+    /// starting, recording or converting (see <see cref="CaptureBufferPool"/> and
+    /// <see cref="CaptureScratchPool"/>), so the idle release may call it from any thread at any time.
     /// </summary>
-    public long ReleaseRetainedBuffers() => _buffers.ReleaseRetained();
+    public long ReleaseRetainedBuffers() => _buffers.ReleaseRetained() + _scratch.ReleaseRetained();
 
     /// <summary>
     /// About 30 s of the device's native format (11,520,000 bytes at 48 kHz stereo float), clamped
@@ -380,12 +381,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
     /// <paramref name="onSignal"/> before anything else can fail, then downmixes and resamples to the
     /// 16 kHz mono the VAD and recognizer consume. The samples are a new array that never aliases
     /// the recording, whose buffer the next capture reuses while history may still hold this one.
+    /// The conversion's scratch comes from <paramref name="scratch"/>, the shared pool when null.
     /// </summary>
     internal static CapturedAudio ConvertCapture(
         CaptureRecording recording,
         WaveFormat format,
         Action<CaptureSignalReport> onSignal,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ArrayPool<float>? scratch = null)
     {
         // Measured on the RAW buffer, before the downmix, so per-channel levels are still
         // visible. Once channels are averaged the evidence is gone, and "what was on the other
@@ -396,7 +399,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
             return CapturedAudio.Empty;
         }
 
-        var samples = ResampleToTarget(recording.Buffer, recording.Length, format);
+        var samples = ResampleToTarget(recording.Buffer, recording.Length, format, scratch ?? ArrayPool<float>.Shared);
         return new CapturedAudio(samples, TargetSampleRate);
     }
 
@@ -648,26 +651,56 @@ public sealed class AudioCaptureService : IAudioCaptureService
         (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         || (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample is 16 or 24 or 32);
 
-    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format)
+    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format) =>
+        ResampleToTarget(bytes, length, format, ArrayPool<float>.Shared);
+
+    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format, ArrayPool<float> scratch) =>
+        ReadAll(CreateConversionChain(bytes, length, format), scratch, RequestLimit(format));
+
+    /// <summary>
+    /// The device-format bytes as 16 kHz mono: NAudio's converter for the sample format, the downmix (which also bounds
+    /// every read of the converter), and the resampler when the device rate is not 16 kHz.
+    /// </summary>
+    internal static ISampleProvider CreateConversionChain(byte[] bytes, int length, WaveFormat format)
     {
         var rawStream = new RawSourceWaveStream(bytes, 0, length, format);
         ISampleProvider source = rawStream.ToSampleProvider();
 
-        ISampleProvider mono = format.Channels == 1
-            ? source
-            : new MonoDownmixSampleProvider(source);
+        // Mono too: the downmix passes a mono source through unchanged, and it bounds every read of the converter.
+        ISampleProvider mono = new MonoDownmixSampleProvider(source);
 
-        ISampleProvider resampled = mono.WaveFormat.SampleRate == TargetSampleRate
+        return mono.WaveFormat.SampleRate == TargetSampleRate
             ? mono
             : new WdlResamplingSampleProvider(mono, TargetSampleRate);
-
-        return ReadAll(resampled);
     }
+
+    /// <summary>Most samples one read of the conversion asks for, where <see cref="RequestLimit"/> bounds it.</summary>
+    internal const int ResampleRequestSamples = 4_096;
+
+    /// <summary>
+    /// How many samples one read of the conversion may ask for. NAudio's WDL resampler resizes its input buffer to each
+    /// request on every call and zero pads twice the shortfall of the last one, so the doubling requests of
+    /// <see cref="ReadAll(ISampleProvider)"/> cost it several large object heap arrays per dictation. The requests are
+    /// bounded only where that cannot change a sample: when the device rate is a multiple of 16 kHz the resampling ratio is
+    /// an integer, every position the resampler computes is exact, and its output does not depend on how it is asked for
+    /// (pinned by <c>AudioCaptureServiceReadRequestTests</c>). At other rates (44.1 kHz and its multiples, 22.05, 8 kHz) the
+    /// resampler rounds its position differently at every call boundary, so the requests stay exactly as they were.
+    /// </summary>
+    internal static int RequestLimit(WaveFormat format) =>
+        format.SampleRate > 0 && format.SampleRate % TargetSampleRate == 0 ? ResampleRequestSamples : int.MaxValue;
 
     internal static float[] ReadAll(ISampleProvider provider) => ReadAll(provider, ArrayPool<float>.Shared);
 
-    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool)
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool) =>
+        ReadAll(provider, pool, int.MaxValue);
+
+    /// <param name="provider">What to read until it returns nothing.</param>
+    /// <param name="pool">Where the scratch comes from.</param>
+    /// <param name="maxRequest">Most samples one read asks for; <see cref="int.MaxValue"/> asks for the rest of the scratch.</param>
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool, int maxRequest)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRequest);
+
         // The shared pool keeps returned arrays for whoever rents next, and Return(clearArray) only
         // clears an array the pool decides to keep, so this dictation's audio is wiped before each
         // array goes back.
@@ -686,7 +719,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     samples = expanded;
                 }
 
-                var read = provider.Read(samples.AsSpan(count));
+                var read = provider.Read(samples.AsSpan(count, Math.Min(maxRequest, samples.Length - count)));
                 if (read <= 0)
                 {
                     return samples.AsSpan(0, count).ToArray();
@@ -869,9 +902,9 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
         if (!Monitor.TryEnter(_sync, _disposeOpenWait))
         {
-            // The retained buffer is safe to drop while an open runs (the pool never hands out a buffer in use); the
+            // The retained buffers are safe to drop while an open runs (the pools never hand out a buffer in use); the
             // endpoints are not.
-            _buffers.ReleaseRetained();
+            ReleaseRetainedBuffers();
             TryLog(log => log.LogWarning(
                 "A microphone was still opening {Seconds:F0} s into shutdown; the audio devices were left for the " +
                 "process to release at exit instead of being released while in use.",
@@ -903,7 +936,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
             }
         }
 
-        _buffers.ReleaseRetained();
+        ReleaseRetainedBuffers();
         try
         {
             _devices.Dispose();

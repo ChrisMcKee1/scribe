@@ -23,8 +23,9 @@ repeatable improvements; movement in the two unchanged controls is ordinary run-
 
 `AudioCaptureService.ReadAll` previously appended each provider read to a dynamically growing
 `List<float>` and then copied the list into the returned array. A 160,000-sample capture allocated
-about four times the 625 KB result payload. It now grows temporary storage through
-`ArrayPool<float>.Shared` and materializes only the exact returned array. A unit test forces growth
+about four times the 625 KB result payload. It now grows temporary storage through pooled arrays
+(`ArrayPool<float>.Shared`, or for the capture service's own conversions a `CaptureScratchPool` that the idle release
+empties) and materializes only the exact returned array. A unit test forces growth
 past the initial one-second buffer and verifies every sample survives unchanged.
 
 `TextCleanupService.ChunkForCleanup` previously allocated a target-sized window string for each
