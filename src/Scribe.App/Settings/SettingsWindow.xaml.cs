@@ -365,9 +365,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LoadDictionaryAsync();
         LoadLibrariesAsync();
         LoadSnippetsAsync();
-        LoadHistory();
-        LoadFailures();
-        LoadPerformanceStats();
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
@@ -1005,6 +1002,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         else if (page == SettingsPage.Usage)
         {
             LoadUsage();
+        }
+        else if (page == SettingsPage.Diagnostics)
+        {
+            LoadFailures();
+            LoadPerformanceStats();
         }
         else if (page == SettingsPage.TryDictation)
         {

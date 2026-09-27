@@ -18,6 +18,7 @@ internal static class Program
         "(PowerManagementApplier); this job opts out with DontEnforcePowerPlan, so it measures under the plan " +
         "shown as power= above and leaves that machine-wide setting alone.";
 
+    [STAThread]
     private static int Main(string[] args)
     {
         var host = ExecutionEnvironment.Capture();
@@ -26,6 +27,11 @@ internal static class Program
         if (SoakHarness.IsRequested(args))
         {
             return SoakHarness.Run(args, host);
+        }
+
+        if (AppShellProbe.IsRequested(args))
+        {
+            return AppShellProbe.Run(args, host);
         }
 
         if (!BenchmarkTarget.TryResolve(host.ProcessArchitecture, out var runtimeIdentifier, out var platform))
