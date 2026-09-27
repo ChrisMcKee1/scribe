@@ -1,11 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
-using System.Threading.Channels;
-using System.Threading.Tasks;
 
 namespace Scribe.Overlay.Logging;
 
@@ -30,23 +29,22 @@ public static class OverlayLog
     private static readonly object StartGate = new();
     private static readonly object PathGate = new();
     private static readonly object WriteGate = new();
-    private static readonly Channel<string> Queue = Channel.CreateBounded<string>(new BoundedChannelOptions(MaxQueuedLines)
-    {
-        SingleReader = true,
-        SingleWriter = false,
-        FullMode = BoundedChannelFullMode.Wait,
-        AllowSynchronousContinuations = false,
-    });
+    private static readonly SemaphoreSlim Signal = new(0);
+    private static readonly ConcurrentQueue<PromptLine> PriorityQueue = new();
+    private static readonly ConcurrentQueue<string> Queue = new();
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly List<string> Batch = new(MaxBatchLines);
     private static readonly StringBuilder Pending = new(4096);
 
     private static string? _path;
     private static DateOnly _pathDate;
-    private static Task? _writer;
+    private static Thread? _writerThread;
     private static int _started;
     private static int _dropped;
+    private static int _ordinaryQueued;
     private static int _writing;
+    private static int _helperRunning;
+    private static long _lastDrainTick = Environment.TickCount64;
 
     static OverlayLog()
     {
@@ -103,16 +101,15 @@ public static class OverlayLog
                 return;
             }
 
-            var dropped = Interlocked.Exchange(ref _dropped, 0);
-            if (dropped > 0 && !Queue.Writer.TryWrite(DropNotice(dropped)))
+            if (Interlocked.Increment(ref _ordinaryQueued) <= MaxQueuedLines)
             {
-                Interlocked.Add(ref _dropped, dropped);
+                Queue.Enqueue(line);
+                Signal.Release();
+                return;
             }
 
-            if (!Queue.Writer.TryWrite(line))
-            {
-                Interlocked.Increment(ref _dropped);
-            }
+            Interlocked.Decrement(ref _ordinaryQueued);
+            Interlocked.Increment(ref _dropped);
         }
         catch
         {
@@ -247,25 +244,19 @@ public static class OverlayLog
 
     private static void WritePromptLine(string line, TimeSpan timeout)
     {
-        var deadline = Environment.TickCount64 + ToWaitMilliseconds(timeout);
-        Flush(timeout);
-        var remaining = RemainingMilliseconds(deadline);
-        if (remaining <= 0 || !Monitor.TryEnter(WriteGate, remaining))
+        var entry = new PromptLine(line);
+        PriorityQueue.Enqueue(entry);
+        Signal.Release();
+
+        var timeoutMs = ToWaitMilliseconds(timeout);
+        if (WriterHasStalled(timeoutMs))
         {
-            Interlocked.Increment(ref _dropped);
-            return;
+            StartPromptHelper(entry);
         }
 
-        try
+        if (!entry.Completed.Wait(timeoutMs))
         {
-            if (!AppendWithRetry(Path, line + Environment.NewLine, deadline))
-            {
-                Interlocked.Increment(ref _dropped);
-            }
-        }
-        finally
-        {
-            Monitor.Exit(WriteGate);
+            StartPromptHelper(entry);
         }
     }
 
@@ -275,7 +266,7 @@ public static class OverlayLog
         {
             EnsureStarted();
             var deadline = Environment.TickCount64 + ToWaitMilliseconds(timeout);
-            while (Queue.Reader.Count > 0 || Volatile.Read(ref _writing) != 0)
+            while (!PriorityQueue.IsEmpty || Volatile.Read(ref _ordinaryQueued) > 0 || Volatile.Read(ref _writing) != 0)
             {
                 var remaining = RemainingMilliseconds(deadline);
                 if (remaining <= 0)
@@ -283,6 +274,7 @@ public static class OverlayLog
                     return false;
                 }
 
+                Signal.Release();
                 Thread.Sleep(Math.Min(10, remaining));
             }
 
@@ -311,15 +303,17 @@ public static class OverlayLog
 
             try
             {
-                _writer = Task.Factory.StartNew(
-                    RunWriter,
-                    CancellationToken.None,
-                    TaskCreationOptions.LongRunning,
-                    TaskScheduler.Default).Unwrap();
+                var thread = new Thread(RunWriter)
+                {
+                    IsBackground = true,
+                    Name = "Scribe overlay log writer",
+                };
+                thread.Start();
+                _writerThread = thread;
             }
             catch
             {
-                // Leave _started set so logging calls do not repeatedly pay for failed task creation.
+                // Prompt writes can still use the one-at-a-time helper. Ordinary lines may be dropped when full.
             }
             finally
             {
@@ -328,23 +322,23 @@ public static class OverlayLog
         }
     }
 
-    private static async Task RunWriter()
+    private static void RunWriter()
     {
         try
         {
-            while (await Queue.Reader.WaitToReadAsync().ConfigureAwait(false))
+            while (true)
             {
+                Signal.Wait();
                 Volatile.Write(ref _writing, 1);
                 try
                 {
-                    Batch.Clear();
-                    while (Batch.Count < MaxBatchLines && Queue.Reader.TryRead(out var line))
+                    DrainPriority();
+                    if (PriorityQueue.IsEmpty)
                     {
-                        Batch.Add(line);
+                        DrainOrdinaryBatch();
                     }
 
-                    WriteBatch(Batch);
-                    if (Queue.Reader.Count == 0)
+                    if (PriorityQueue.IsEmpty && Volatile.Read(ref _ordinaryQueued) == 0)
                     {
                         WritePendingDropNotice(Environment.TickCount64 + FlushTimeoutMs);
                     }
@@ -353,12 +347,52 @@ public static class OverlayLog
                 {
                     Volatile.Write(ref _writing, 0);
                 }
+
+                if (!PriorityQueue.IsEmpty || Volatile.Read(ref _ordinaryQueued) > 0)
+                {
+                    Signal.Release();
+                }
             }
         }
         catch
         {
-            // A dead writer must never take the overlay down. Later lines may be dropped by the full queue.
+            // A dead writer must never take the overlay down. Prompt calls can still use the helper.
         }
+    }
+
+    private static void DrainPriority()
+    {
+        while (PriorityQueue.TryDequeue(out var entry))
+        {
+            if (entry.Completed.IsSet)
+            {
+                continue;
+            }
+
+            if (WriteSingleLine(entry.Line, Environment.TickCount64 + FlushTimeoutMs))
+            {
+                entry.Completed.Set();
+                Volatile.Write(ref _lastDrainTick, Environment.TickCount64);
+            }
+        }
+    }
+
+    private static void DrainOrdinaryBatch()
+    {
+        Batch.Clear();
+        while (Batch.Count < MaxBatchLines && Queue.TryDequeue(out var line))
+        {
+            Batch.Add(line);
+            Interlocked.Decrement(ref _ordinaryQueued);
+        }
+
+        if (Batch.Count == 0)
+        {
+            return;
+        }
+
+        WriteBatch(Batch);
+        Volatile.Write(ref _lastDrainTick, Environment.TickCount64);
     }
 
     private static string DropNotice(int dropped) => string.Create(
@@ -380,14 +414,32 @@ public static class OverlayLog
                 Pending.AppendLine(line);
             }
 
-            lock (WriteGate)
-            {
-                AppendWithRetry(Path, Pending.ToString(), Environment.TickCount64 + FlushTimeoutMs);
-            }
+            WriteText(Pending.ToString(), Environment.TickCount64 + FlushTimeoutMs);
         }
         catch
         {
             // Logging remains best-effort.
+        }
+    }
+
+    private static bool WriteSingleLine(string line, long deadline) =>
+        WriteText(line + Environment.NewLine, deadline);
+
+    private static bool WriteText(string text, long deadline)
+    {
+        var remaining = RemainingMilliseconds(deadline);
+        if (remaining <= 0 || !Monitor.TryEnter(WriteGate, remaining))
+        {
+            return false;
+        }
+
+        try
+        {
+            return AppendWithRetry(Path, text, deadline);
+        }
+        finally
+        {
+            Monitor.Exit(WriteGate);
         }
     }
 
@@ -399,24 +451,9 @@ public static class OverlayLog
             return;
         }
 
-        var notice = DropNotice(dropped) + Environment.NewLine;
-        var remaining = RemainingMilliseconds(deadline);
-        if (remaining <= 0 || !Monitor.TryEnter(WriteGate, remaining))
+        if (!WriteSingleLine(DropNotice(dropped), deadline))
         {
             Interlocked.Add(ref _dropped, dropped);
-            return;
-        }
-
-        try
-        {
-            if (!AppendWithRetry(Path, notice, deadline))
-            {
-                Interlocked.Add(ref _dropped, dropped);
-            }
-        }
-        finally
-        {
-            Monitor.Exit(WriteGate);
         }
     }
 
@@ -449,6 +486,51 @@ public static class OverlayLog
         return false;
     }
 
+    private static bool WriterHasStalled(int timeoutMs) =>
+        Environment.TickCount64 - Volatile.Read(ref _lastDrainTick) > timeoutMs;
+
+    private static void StartPromptHelper(PromptLine entry)
+    {
+        if (entry.Completed.IsSet || Interlocked.CompareExchange(ref _helperRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var thread = new Thread(() => RunPromptHelper(entry))
+            {
+                IsBackground = true,
+                Name = "Scribe overlay log prompt helper",
+            };
+            thread.Start();
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _helperRunning, 0);
+        }
+    }
+
+    private static void RunPromptHelper(PromptLine entry)
+    {
+        try
+        {
+            if (!entry.Completed.IsSet && WriteSingleLine(entry.Line, Environment.TickCount64 + UnhandledFlushTimeoutMs))
+            {
+                entry.Completed.Set();
+                Volatile.Write(ref _lastDrainTick, Environment.TickCount64);
+            }
+        }
+        catch
+        {
+            // Prompt fallback is best-effort.
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _helperRunning, 0);
+        }
+    }
+
     private static int ToWaitMilliseconds(TimeSpan timeout) =>
         (int)Math.Clamp(timeout.TotalMilliseconds, 0, int.MaxValue);
 
@@ -464,4 +546,10 @@ public static class OverlayLog
         }
     }
 
+    private sealed class PromptLine(string line)
+    {
+        public string Line { get; } = line;
+
+        public ManualResetEventSlim Completed { get; } = new(false);
+    }
 }

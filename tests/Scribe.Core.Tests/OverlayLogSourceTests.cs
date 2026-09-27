@@ -8,7 +8,8 @@ public sealed class OverlayLogSourceTests
         var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
         var write = MethodBody(source, "public static void Write");
 
-        Assert.Contains("Queue.Writer.TryWrite", write, StringComparison.Ordinal);
+        Assert.Contains("Queue.Enqueue(line)", write, StringComparison.Ordinal);
+        Assert.Contains("Signal.Release()", write, StringComparison.Ordinal);
         Assert.DoesNotContain("new FileStream", write, StringComparison.Ordinal);
         Assert.DoesNotContain("Thread.Sleep", write, StringComparison.Ordinal);
     }
@@ -23,10 +24,11 @@ public sealed class OverlayLogSourceTests
 
         Assert.Contains("RequiresPromptWrite(level)", write, StringComparison.Ordinal);
         Assert.Contains("level is \"Warning\" or \"Error\" or \"Critical\"", requires, StringComparison.Ordinal);
-        Assert.Contains("Flush(timeout)", prompt, StringComparison.Ordinal);
-        Assert.Contains("AppendWithRetry(Path", prompt, StringComparison.Ordinal);
-        Assert.Contains("Monitor.TryEnter(WriteGate, remaining)", prompt, StringComparison.Ordinal);
-        Assert.Contains("Interlocked.Increment(ref _dropped)", prompt, StringComparison.Ordinal);
+        Assert.Contains("PriorityQueue.Enqueue(entry)", prompt, StringComparison.Ordinal);
+        Assert.Contains("entry.Completed.Wait(timeoutMs)", prompt, StringComparison.Ordinal);
+        Assert.Contains("StartPromptHelper(entry)", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppendWithRetry", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Monitor.TryEnter", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -55,13 +57,39 @@ public sealed class OverlayLogSourceTests
     {
         var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
         var flush = MethodBody(source, "internal static bool Flush");
-        var writer = MethodBody(source, "private static async Task RunWriter");
+        var writer = MethodBody(source, "private static void RunWriter");
         var notice = MethodBody(source, "private static void WritePendingDropNotice");
 
         Assert.Contains("WritePendingDropNotice(deadline)", flush, StringComparison.Ordinal);
         Assert.Contains("WritePendingDropNotice(Environment.TickCount64 + FlushTimeoutMs)", writer, StringComparison.Ordinal);
         Assert.Contains("Interlocked.Exchange(ref _dropped, 0)", notice, StringComparison.Ordinal);
         Assert.Contains("DropNotice(dropped)", notice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Overlay_writer_drains_priority_before_ordinary_lines()
+    {
+        var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
+        var writer = MethodBody(source, "private static void RunWriter");
+
+        var priority = writer.IndexOf("DrainPriority();", StringComparison.Ordinal);
+        var ordinary = writer.IndexOf("DrainOrdinaryBatch();", StringComparison.Ordinal);
+        Assert.True(priority >= 0, "priority drain was not found");
+        Assert.True(ordinary >= 0, "ordinary drain was not found");
+        Assert.True(priority < ordinary, "priority lines must be drained before ordinary lines");
+    }
+
+    [Fact]
+    public void Overlay_prompt_fallback_uses_one_helper_thread_and_not_the_caller()
+    {
+        var source = File.ReadAllText(RepoFile("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"));
+        var start = MethodBody(source, "private static void StartPromptHelper");
+        var run = MethodBody(source, "private static void RunPromptHelper");
+
+        Assert.Contains("Interlocked.CompareExchange(ref _helperRunning, 1, 0)", start, StringComparison.Ordinal);
+        Assert.Contains("new Thread(() => RunPromptHelper(entry))", start, StringComparison.Ordinal);
+        Assert.Contains("WriteSingleLine(entry.Line", run, StringComparison.Ordinal);
+        Assert.Contains("Interlocked.Exchange(ref _helperRunning, 0)", run, StringComparison.Ordinal);
     }
 
     [Fact]
