@@ -29,9 +29,9 @@ public static class CleanupDisclosure
         "and your dictionary plus the word packs you let AI cleanup use as vocabulary: up to " +
         $"{Count(CleanupPrompt.MaxGlossaryTermsCloud)} words and {Count(CleanupPrompt.MaxGlossaryChars)} " +
         $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} words with the short instructions, " +
-        "whether or not the dictation mentions them. Anything Scribe writes on more than one line or in more " +
-        $"than {Count(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature, is not " +
-        "vocabulary and is not sent.";
+        "whether or not the dictation mentions them. A word from your dictionary or a word pack is not " +
+        "vocabulary, and is not sent, when what Scribe writes for it spans more than one line or runs past " +
+        $"{Count(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature.";
 
     /// <summary>The same card's second paragraph: the connection check, and what is never sent.</summary>
     public static string WhatCleanupNeverSends { get; } =

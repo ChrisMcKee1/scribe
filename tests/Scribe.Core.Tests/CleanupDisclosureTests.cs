@@ -37,10 +37,12 @@ public sealed class CleanupDisclosureTests
             text, StringComparison.Ordinal);
         Assert.Contains($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} words with the short instructions", text, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions them", text, StringComparison.Ordinal);
+        // About dictionary and word pack words, never the dictation: a dictation that spans lines is sent.
         Assert.Contains(
-            $"Anything Scribe writes on more than one line or in more than {N(CleanupPrompt.MaxGlossaryTermChars)} " +
-            "characters, such as a signature, is not vocabulary and is not sent.",
+            "A word from your dictionary or a word pack is not vocabulary, and is not sent, when what Scribe writes " +
+            $"for it spans more than one line or runs past {N(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature.",
             text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Anything Scribe writes", text, StringComparison.Ordinal);
         Assert.DoesNotContain("relevant", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("only", text, StringComparison.OrdinalIgnoreCase);
     }
