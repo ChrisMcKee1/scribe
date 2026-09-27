@@ -178,6 +178,30 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     [Fact]
 
+    public void Search_matches_unknown_app_names_but_not_known_process_names()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        var unknown = repository.Add(Entry("plain text", targetApp: "customwriter.exe"));
+
+        repository.Add(Entry("plain text", targetApp: "WINWORD.EXE"));
+
+
+
+        Assert.Equal([unknown.Id], repository.Search("writer", 10).Select(entry => entry.Id));
+
+        Assert.Empty(repository.Search("winword", 10));
+
+    }
+
+
+
+    [Fact]
+
     public void Ordered_search_waits_for_accepted_history_writes()
 
     {
@@ -259,4 +283,3 @@ public sealed class HistoryRepositoryReadTests : IDisposable
         new(0, timestampUtc, text, AudioMilliseconds: 1000, DecodeMilliseconds: 100, TargetApp: targetApp);
 
 }
-

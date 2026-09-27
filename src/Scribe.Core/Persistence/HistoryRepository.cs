@@ -19,6 +19,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     private readonly ScribeDatabase _database;
     private readonly HistoryDeletionNotifier _deletions;
+    private bool _audioEncodingColumnAvailable;
+    private bool _historyCleanupColumnAvailable;
+    private bool _historyModelColumnAvailable;
+    private bool _historyRatingColumnAvailable;
 
     public HistoryRepository(ScribeDatabase database, HistoryDeletionNotifier? deletions = null)
     {
@@ -64,8 +68,8 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
                 storedAudio = true;
             }
 
-            var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
-            var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
+            var hasCleanupColumn = EnsureHistoryColumnAvailable(connection, "cleanup_ms", "INTEGER NULL", ref _historyCleanupColumnAvailable);
+            var hasModelColumn = EnsureHistoryColumnAvailable(connection, "transcription_model_id", "TEXT NULL", ref _historyModelColumnAvailable);
             var optionalColumns =
                 (hasCleanupColumn ? ", cleanup_ms" : string.Empty) +
                 (hasModelColumn ? ", transcription_model_id" : string.Empty);
@@ -142,7 +146,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             return null;
         }
 
-        var hasEncoding = EnsureColumn(connection, "audio_blobs", "encoding", "INTEGER NOT NULL DEFAULT 0");
+        var hasEncoding = EnsureColumnAvailable(connection, "audio_blobs", "encoding", "INTEGER NOT NULL DEFAULT 0", ref _audioEncodingColumnAvailable);
         using var command = connection.CreateCommand();
         command.CommandText = hasEncoding
             ? """
@@ -205,36 +209,50 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             return [];
         }
 
-        using var connection = _database.Open();
-        using var command = CreateHistoryReadCommand(connection, ", text LIKE $query ESCAPE '\\' AS text_match");
-        command.CommandText +=
-            """
-             FROM history
-            WHERE text LIKE $query ESCAPE '\'
-                OR target_app IS NOT NULL
-            ORDER BY timestamp_utc DESC, id DESC;
-            """;
-        command.Parameters.AddWithValue("$query", $"%{EscapeLike(query.Trim())}%");
+        var trimmed = query.Trim();
+        var displayProcessNames = AppDisplayName.ProcessNamesWhoseDisplayMatches(trimmed);
+        var knownProcessNames = AppDisplayName.KnownProcessNames();
+        const string appExpression =
+            "lower(CASE WHEN target_app IS NULL THEN '' WHEN lower(substr(target_app, -4)) = '.exe' THEN substr(target_app, 1, length(target_app) - 4) ELSE target_app END)";
 
-        var results = new List<HistoryEntry>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read() && results.Count < limit)
+        using var connection = _database.Open();
+        using var command = CreateHistoryReadCommand(connection);
+        var appClauses = new List<string>();
+        if (displayProcessNames.Count > 0)
         {
-            var entry = ReadHistoryEntry(reader);
-            if (reader.GetInt64(10) != 0 || FriendlyAppMatches(entry, query))
-            {
-                results.Add(entry);
-            }
+            appClauses.Add($"{appExpression} IN ({AddStringParameters(command, "$app", displayProcessNames)})");
         }
 
-        return results;
+        if (knownProcessNames.Count > 0)
+        {
+            appClauses.Add(
+                $"({appExpression} LIKE $query_lower ESCAPE '\\' AND {appExpression} NOT IN ({AddStringParameters(command, "$known", knownProcessNames)}))");
+        }
+        else
+        {
+            appClauses.Add($"{appExpression} LIKE $query_lower ESCAPE '\\'");
+        }
+
+        command.CommandText +=
+            $"""
+             FROM history
+            WHERE text LIKE $query ESCAPE '\'
+                OR (target_app IS NOT NULL AND ({string.Join(" OR ", appClauses)}))
+            ORDER BY timestamp_utc DESC, id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$query", $"%{EscapeLike(trimmed)}%");
+        command.Parameters.AddWithValue("$query_lower", $"%{EscapeLike(trimmed.ToLowerInvariant())}%");
+        command.Parameters.AddWithValue("$limit", limit);
+
+        return ReadHistoryEntries(command);
     }
 
     private SqliteCommand CreateHistoryReadCommand(SqliteConnection connection, string extraSelect = "")
     {
-        var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
-        var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
-        var hasRatingColumn = EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL");
+        var hasCleanupColumn = EnsureHistoryColumnAvailable(connection, "cleanup_ms", "INTEGER NULL", ref _historyCleanupColumnAvailable);
+        var hasModelColumn = EnsureHistoryColumnAvailable(connection, "transcription_model_id", "TEXT NULL", ref _historyModelColumnAvailable);
+        var hasRatingColumn = EnsureHistoryColumnAvailable(connection, "ai_rating", "INTEGER NULL", ref _historyRatingColumnAvailable);
         var cleanupExpression = hasCleanupColumn ? "cleanup_ms" : "NULL";
         var modelExpression = hasModelColumn ? "transcription_model_id" : "NULL";
         var ratingExpression = hasRatingColumn ? "ai_rating" : "NULL";
@@ -272,14 +290,23 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9));
 
-    private static bool FriendlyAppMatches(HistoryEntry entry, string query) =>
-        !string.IsNullOrWhiteSpace(entry.TargetApp) &&
-        AppDisplayName.For(entry.TargetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
-
     private static string EscapeLike(string query) =>
         query.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal);
+
+    private static string AddStringParameters(SqliteCommand command, string prefix, IReadOnlyList<string> values)
+    {
+        var names = new string[values.Count];
+        for (var index = 0; index < values.Count; index++)
+        {
+            var name = prefix + index.ToString(CultureInfo.InvariantCulture);
+            names[index] = name;
+            command.Parameters.AddWithValue(name, values[index].ToLowerInvariant());
+        }
+
+        return string.Join(", ", names);
+    }
 
     private static HistoryEntry? GetById(SqliteConnection connection, SqliteTransaction transaction, long id)
     {
@@ -308,7 +335,8 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     public CapturedAudio? GetAudio(long blobId)
     {
         using var connection = _database.Open();
-        var hasEncoding = HasColumn(connection, "audio_blobs", "encoding");
+        var hasEncoding = _audioEncodingColumnAvailable || HasColumn(connection, "audio_blobs", "encoding");
+        _audioEncodingColumnAvailable |= hasEncoding;
         using var command = connection.CreateCommand();
         command.CommandText = hasEncoding
             ? "SELECT sample_rate, samples, encoding FROM audio_blobs WHERE id = $id;"
@@ -342,7 +370,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     {
         using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
-        if (!EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL"))
+        if (!EnsureHistoryColumnAvailable(connection, "ai_rating", "INTEGER NULL", ref _historyRatingColumnAvailable))
         {
             return;
         }
@@ -699,6 +727,34 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         string columnName,
         string declaration) =>
         EnsureColumn(connection, "history", columnName, declaration);
+
+    private static bool EnsureHistoryColumnAvailable(
+        SqliteConnection connection,
+        string columnName,
+        string declaration,
+        ref bool available) =>
+        EnsureColumnAvailable(connection, "history", columnName, declaration, ref available);
+
+    private static bool EnsureColumnAvailable(
+        SqliteConnection connection,
+        string table,
+        string columnName,
+        string declaration,
+        ref bool available)
+    {
+        if (available)
+        {
+            return true;
+        }
+
+        var exists = EnsureColumn(connection, table, columnName, declaration);
+        if (exists)
+        {
+            available = true;
+        }
+
+        return exists;
+    }
 
     private static bool EnsureColumn(
         SqliteConnection connection,
