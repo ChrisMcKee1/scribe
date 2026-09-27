@@ -99,14 +99,14 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         var snippetApplications = new List<TextReplacement>();
         var dictionaryInput = ApplySinglePass(
             normalized,
-            snippetRules.SelectMany((rule, order) => rule.Find(normalized, order)),
+            Candidates(snippetRules, normalized),
             snippetApplications,
             TextReplacementKind.Snippet);
 
         var replacements = new List<TextReplacement>();
         var output = ApplySinglePass(
             dictionaryInput,
-            rules.SelectMany((rule, order) => rule.Find(dictionaryInput, order)),
+            Candidates(rules, dictionaryInput),
             replacements);
 
         // The source pass below scans with this same rule snapshot. Matching is a pure function of
@@ -123,7 +123,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             var canonical = ApplySinglePass(
                 application.Replacement,
-                rules.SelectMany((rule, order) => rule.Find(application.Replacement, order)));
+                Candidates(rules, application.Replacement));
             return application with { Length = canonical.Length, Replacement = canonical };
         });
         AddLocatedReplacements(output, canonicalSnippets, replacements, replaceOverlaps: true);
@@ -147,9 +147,32 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         var glossaryApplications = new List<TextReplacement>();
         _ = ApplySinglePass(
             source,
-            rules.SelectMany((rule, order) => rule.Find(source, order)),
+            Candidates(rules, source),
             glossaryApplications);
         return glossaryApplications;
+    }
+
+    // Null when nothing matched, so a pass over rules that do not match allocates nothing.
+    internal static List<ReplacementCandidate>? Candidates(CompiledRule[] rules, string text)
+    {
+        List<ReplacementCandidate>? candidates = null;
+        for (var order = 0; order < rules.Length; order++)
+        {
+            rules[order].AddCandidates(text, order, ref candidates);
+        }
+
+        return candidates;
+    }
+
+    private static List<ReplacementCandidate>? Candidates(SnippetRule[] rules, string text)
+    {
+        List<ReplacementCandidate>? candidates = null;
+        for (var order = 0; order < rules.Length; order++)
+        {
+            rules[order].AddCandidates(text, order, ref candidates);
+        }
+
+        return candidates;
     }
 
     public void Reload()
@@ -379,7 +402,9 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         }
 
         var normalized = NormalizeWhitespace(text);
-        return ApplySinglePass(normalized, rule.Find(normalized, 0));
+        List<ReplacementCandidate>? candidates = null;
+        rule.AddCandidates(normalized, 0, ref candidates);
+        return ApplySinglePass(normalized, candidates);
     }
 
     [GeneratedRegex(@"[ \t\f\v]+")]
@@ -393,19 +418,20 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     private static string ApplySinglePass(
         string text,
-        IEnumerable<ReplacementCandidate> candidates,
+        List<ReplacementCandidate>? candidates,
         List<TextReplacement>? replacements = null,
         TextReplacementKind kind = TextReplacementKind.Dictionary)
     {
+        if (candidates is not { Count: > 0 })
+        {
+            return text;
+        }
+
         var selected = candidates
             .OrderBy(candidate => candidate.Index)
             .ThenByDescending(candidate => candidate.Length)
             .ThenBy(candidate => candidate.RuleOrder)
             .ToList();
-        if (selected.Count == 0)
-        {
-            return text;
-        }
 
         var builder = new System.Text.StringBuilder(text.Length);
         var position = 0;
@@ -518,9 +544,19 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
-        public IEnumerable<ReplacementCandidate> Find(string text, int order) =>
-            _regex.Matches(text).Select(match =>
-                new ReplacementCandidate(match.Index, match.Length, _template, order, _phrase, match.Value));
+        public void AddCandidates(string text, int order, ref List<ReplacementCandidate>? candidates)
+        {
+            foreach (var match in _regex.EnumerateMatches(text))
+            {
+                (candidates ??= []).Add(new ReplacementCandidate(
+                    match.Index,
+                    match.Length,
+                    _template,
+                    order,
+                    _phrase,
+                    text.Substring(match.Index, match.Length)));
+            }
+        }
     }
 
     /// <summary>
@@ -558,23 +594,30 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                 _replacement.Contains(entry.Pattern, StringComparison.OrdinalIgnoreCase);
         }
 
-        // MatchEvaluator avoids $-substitution surprises in user-supplied replacement text.
-        public IEnumerable<ReplacementCandidate> Find(string text, int order)
+        // The replacement is inserted as given, so user text can never trigger $-substitution.
+        public void AddCandidates(string text, int order, ref List<ReplacementCandidate>? candidates)
         {
-            var canonicalStarts = _replacementContainsPattern ? CollectReplacementStarts(text) : [];
-            foreach (Match match in _regex.Matches(text))
+            List<int>? canonicalStarts = null;
+            foreach (var match in _regex.EnumerateMatches(text))
             {
-                var replacement = canonicalStarts.Count > 0 &&
+                // The starts depend on the text alone, so they are found at this rule's first match, not for every rule.
+                if (_replacementContainsPattern)
+                {
+                    canonicalStarts ??= CollectReplacementStarts(text);
+                }
+
+                var original = text.Substring(match.Index, match.Length);
+                var replacement = canonicalStarts is { Count: > 0 } &&
                     IsInsideAnyReplacement(canonicalStarts, match.Index, match.Length)
-                    ? match.Value
+                    ? original
                     : _replacement;
-                yield return new ReplacementCandidate(
+                (candidates ??= []).Add(new ReplacementCandidate(
                     match.Index,
                     match.Length,
                     replacement,
                     order,
                     _pattern,
-                    match.Value);
+                    original));
             }
         }
 
