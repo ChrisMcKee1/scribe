@@ -13,9 +13,17 @@ namespace Scribe.Core.Tests;
 /// names each internal use with its reason, so a new one is a deliberate entry rather than a gap.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The list holds the retired words a reader can check mechanically. Words with an ordinary use as well as a retired one
-/// (entry, term, enabled, replacement, pattern, template, active, binding, Set, Hold, Toggle) are left to review, and so
-/// are the policy's own defined terms in PRIVACY.md, which this test does not read.
+/// (entry, term, enabled, replacement, pattern, template, active, binding, Set, Hold, Toggle) are left to review.
+/// </para>
+/// <para>
+/// What it does not read, so a pass says nothing about it: the docs (README, PRIVACY.md with its defined terms, AGENTS.md,
+/// the release notes); the built-in word packs' CSV files, whose text is data; text Scribe builds at run time from data or
+/// settings; an exception's message, which the logging rules keep out of the log and the UI never shows; a literal split so
+/// a retired word spans two pieces; text a markup extension other than a binding's format and fallbacks produces; and a
+/// XAML attribute whose name does not end in a text property's name.
+/// </para>
 /// </remarks>
 public sealed partial class GlossarySourceTests
 {
@@ -141,13 +149,29 @@ public sealed partial class GlossarySourceTests
     [GeneratedRegex(@"^\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|PRAGMA|WITH|BEGIN)\b", RegexOptions.CultureInvariant)]
     private static partial Regex Sql();
 
+    // Any attribute whose name ends in a text property (Text, PlaceholderText, HelpText, Content, Header, ToolTip and the
+    // like, a custom control's included), and an element's accessible name, in either quote style.
     [GeneratedRegex(
-        @"(?<![\w.:])(?:\w+:)?(?:Text|Content|Title|Message|ToolTip|PlaceholderText|Header|Description|Label|OnContent|OffContent|Subtitle" +
-        @"|AutomationProperties\.(?:Name|HelpText|ItemStatus)|ToolTipService\.ToolTip)\s*=\s*""(?<value>[^""]*)""",
+        @"(?<![\w.:])(?:\w+:)?(?:AutomationProperties\.(?:Name|ItemStatus)|(?:\w+\.)?\w*(?:" + TextPropertyNames + @"))" +
+        @"\s*=\s*(?:""(?<value>[^""]*)""|'(?<value>[^']*)')",
         RegexOptions.CultureInvariant)]
     private static partial Regex XamlTextAttribute();
 
-    [GeneratedRegex(@"<(?<tag>[\w:.]+)(?:\s[^<>]*)?>(?<text>[^<>]*\p{L}[^<>]*)</\k<tag>>", RegexOptions.CultureInvariant)]
+    private const string TextPropertyNames =
+        "Text|Content|Title|Message|ToolTip|Header|Description|Label|Subtitle|Caption|StringFormat|TargetNullValue|FallbackValue";
+
+    // The texts a binding shows: its format and its fallbacks, quoted or not.
+    [GeneratedRegex(@"\b(?:StringFormat|TargetNullValue|FallbackValue)\s*=\s*(?:'(?<text>[^']*)'|(?<text>\{\}.*?)(?=,\s*\w+\s*=|\}\s*$)|(?<text>[^,{}]*))", RegexOptions.CultureInvariant)]
+    private static partial Regex XamlBindingText();
+
+    [GeneratedRegex(@"<Setter\b(?<attrs>[^>]*)>", RegexOptions.CultureInvariant)]
+    private static partial Regex XamlSetter();
+
+    [GeneratedRegex(@"^(?:\w+:)?(?:AutomationProperties\.(?:Name|HelpText|ItemStatus)|(?:\w+\.)?\w*(?:" + TextPropertyNames + @"))$", RegexOptions.CultureInvariant)]
+    private static partial Regex XamlTextProperty();
+
+    // Every text node, so mixed content (<TextBlock>Press <Run .../> to start</TextBlock>) is read in pieces.
+    [GeneratedRegex(@">(?<text>[^<>]*\p{L}[^<>]*)<", RegexOptions.CultureInvariant)]
     private static partial Regex XamlTextContent();
 
     [GeneratedRegex(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
@@ -231,6 +255,9 @@ public sealed partial class GlossarySourceTests
                     """;
                 string F => $$"""{{hotkeyHole}} and {literal braces}""";
                 string G => "hotkeys";
+                string I => $"Status: {(ready ? "Your hotkey is ready" : "Not ready")}";
+                string J => $$"""Name: {{$"{hotkeyName}"}} and {{Describe(hotkey)}}""";
+                void K(ILogger log) => log.LogWarning($"Held {(held ? "Your hotkey in a log call's hole" : "no")}");
                 string H => "SELECT hotkey FROM settings";
                 public const string SystemPrompt = "Your hotkey in a request to the model";
             }
@@ -242,11 +269,15 @@ public sealed partial class GlossarySourceTests
             .Select(literal => literal.Text)
             .ToList();
 
-        Assert.Equal(4, found.Count);
+        Assert.Equal(5, found.Count);
         Assert.Contains(found, text => text.StartsWith("Change your hotkey ", StringComparison.Ordinal) && text.EndsWith(" times", StringComparison.Ordinal));
         Assert.Contains("Your \"hotkey\" in a verbatim string", found);
         Assert.Contains("Your hotkey after a quote character", found);
         Assert.Contains(found, text => text.Contains("Your hotkey in a raw string, \"quoted\" inside", StringComparison.Ordinal));
+
+        // A literal inside a hole is shown when the hole renders it; code inside a raw string's hole is not text.
+        Assert.Contains("Your hotkey is ready", found);
+        Assert.DoesNotContain(found, text => text.StartsWith("Name:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -259,12 +290,24 @@ public sealed partial class GlossarySourceTests
                 <ui:Button Content="{Binding Hotkey}" ToolTip="Your hotkey in a tooltip" Tag="hotkey"/>
                 <TextBlock>Your hotkey as content</TextBlock>
                 <TextBlock AutomationProperties.HelpText="Your hotkey &amp; more"/>
+                <TextBlock Text='Your hotkey in single quotes'/>
+                <Setter Property="ToolTip" Value="Your hotkey in a setter"/>
+                <Setter Property="Background" Value="HotkeyBrush"/>
+                <TextBlock Text="{Binding Count, StringFormat='{}{0} hotkey presses'}"/>
+                <settings:StatusRow PrimaryActionText="Your hotkey action" Tag="{Binding Hotkey}"/>
+                <TextBlock>Press <Run Text="{Binding Key}"/> to change your hotkey</TextBlock>
             </StackPanel>
             """;
 
-        var found = ReadXaml(xaml).Select(item => item.Text).ToList();
+        var found = ReadXaml(xaml).Select(item => item.Text.Trim()).ToList();
 
-        Assert.Equal(["Your hotkey in text", "Your hotkey in a tooltip", "Your hotkey as content", "Your hotkey & more"], found);
+        Assert.Equal(
+            [
+                "Your hotkey in text", "Your hotkey in a tooltip", "Your hotkey as content", "Your hotkey & more",
+                "Your hotkey in single quotes", "Your hotkey in a setter", "hotkey presses", "Your hotkey action",
+                "Press", "to change your hotkey",
+            ],
+            found);
     }
 
     [Fact]
@@ -371,13 +414,18 @@ public sealed partial class GlossarySourceTests
         var found = new List<(int Index, string Text)>();
         foreach (Match match in XamlTextAttribute().Matches(text))
         {
-            var value = match.Groups["value"].Value;
-            if (value.StartsWith('{') && !value.StartsWith("{}", StringComparison.Ordinal))
-            {
-                continue;
-            }
+            found.AddRange(XamlValueTexts(match.Groups["value"].Value).Select(value => (match.Index, value)));
+        }
 
-            found.Add((match.Index, WebUtility.HtmlDecode(value.StartsWith("{}", StringComparison.Ordinal) ? value[2..] : value)));
+        // A style's setter for a text property shows its value too.
+        foreach (Match setter in XamlSetter().Matches(text))
+        {
+            var property = XamlAttribute(setter.Groups["attrs"].Value, "Property");
+            var value = XamlAttribute(setter.Groups["attrs"].Value, "Value");
+            if (property is not null && value is not null && XamlTextProperty().IsMatch(property))
+            {
+                found.AddRange(XamlValueTexts(value).Select(shown => (setter.Index, shown)));
+            }
         }
 
         foreach (Match match in XamlTextContent().Matches(text))
@@ -386,6 +434,24 @@ public sealed partial class GlossarySourceTests
         }
 
         return found.OrderBy(item => item.Index).Select(item => (LineOf(text, item.Index), item.Text));
+    }
+
+    // What an attribute value shows: the value itself, or, for a markup extension, which is code, its binding's format and
+    // fallback texts. Format placeholders ({0}, {0:N0}) and the {} escape are not text.
+    private static IEnumerable<string> XamlValueTexts(string value)
+    {
+        var shown = value.StartsWith('{') && !value.StartsWith("{}", StringComparison.Ordinal)
+            ? XamlBindingText().Matches(value).Select(part => part.Groups["text"].Value)
+            : [value];
+        return shown
+            .Select(text => Regex.Replace(WebUtility.HtmlDecode(text), @"^\{\}|\{\d+(?:[,:][^}]*)?\}", " "))
+            .Where(text => !string.IsNullOrWhiteSpace(text));
+    }
+
+    private static string? XamlAttribute(string attributes, string name)
+    {
+        var match = Regex.Match(attributes, $@"(?<![\w.:]){Regex.Escape(name)}\s*=\s*(?:""(?<v>[^""]*)""|'(?<v>[^']*)')");
+        return match.Success ? match.Groups["v"].Value : null;
     }
 
     private static int LineOf(string text, int index) => text.AsSpan(0, index).Count('\n') + 1;
@@ -483,9 +549,12 @@ public sealed partial class GlossarySourceTests
             var i = 0;
             while (i < s.Length)
             {
-                if (TryRead(s, i, out var token))
+                var nested = new List<Token>();
+                if (TryRead(s, i, out var token, nested))
                 {
+                    // A literal inside an interpolation hole is text too, when the hole renders it.
                     tokens.Add(token);
+                    tokens.AddRange(nested);
                     i = Math.Max(token.End, i + 1);
                 }
                 else
@@ -533,7 +602,7 @@ public sealed partial class GlossarySourceTests
             return masked.Length;
         }
 
-        private static bool TryRead(string s, int i, out Token token)
+        private static bool TryRead(string s, int i, out Token token, List<Token>? nested = null)
         {
             token = default;
             var c = s[i];
@@ -593,16 +662,35 @@ public sealed partial class GlossarySourceTests
             if (quotes >= 3 && !verbatim)
             {
                 var close = new string('"', quotes);
-                var bodyStart = i + quotes;
-                var bodyEnd = s.IndexOf(close, bodyStart, StringComparison.Ordinal);
-                var body = s[bodyStart..(bodyEnd < 0 ? s.Length : bodyEnd)];
-                if (dollars > 0)
+                var raw = new StringBuilder();
+                var r = i + quotes;
+                while (r < s.Length && string.CompareOrdinal(s, r, close, 0, quotes) != 0)
                 {
-                    // A raw string's holes open with as many braces as it has dollar signs.
-                    body = Regex.Replace(body, $@"\{{{{{dollars},}}[^{{}}]*\}}{{{dollars},}}", " ");
+                    // A raw string's hole opens with as many braces as it has dollar signs; any braces before those are text.
+                    var run = 0;
+                    while (dollars > 0 && r + run < s.Length && s[r + run] == '{')
+                    {
+                        run++;
+                    }
+
+                    if (dollars > 0 && run >= dollars)
+                    {
+                        raw.Append(s, r, run - dollars);
+                        r = SkipHole(s, r + run, nested);
+                        for (var extra = 1; extra < dollars && r < s.Length && s[r] == '}'; extra++)
+                        {
+                            r++;
+                        }
+
+                        raw.Append(' ');
+                        continue;
+                    }
+
+                    raw.Append(s[r]);
+                    r++;
                 }
 
-                token = new Token(Kind.Literal, start, bodyEnd < 0 ? s.Length : bodyEnd + quotes, body);
+                token = new Token(Kind.Literal, start, Math.Min(r + quotes, s.Length), raw.ToString());
                 return true;
             }
 
@@ -620,7 +708,7 @@ public sealed partial class GlossarySourceTests
                         continue;
                     }
 
-                    k = SkipHole(s, k + 1);
+                    k = SkipHole(s, k + 1, nested);
                     text.Append(' ');
                     continue;
                 }
@@ -666,15 +754,21 @@ public sealed partial class GlossarySourceTests
             return true;
         }
 
-        // From just inside a hole's brace to just past its closing brace, nested literals and brackets skipped.
-        private static int SkipHole(string s, int k)
+        // From just inside a hole's brace to just past its closing brace, nested brackets skipped and nested literals
+        // collected: a hole such as {(ready ? "Ready" : "Not ready")} renders its literals.
+        private static int SkipHole(string s, int k, List<Token>? nested)
         {
             var depth = 0;
             while (k < s.Length)
             {
-                if (s[k] is '"' or '\'' or '$' or '@' && TryRead(s, k, out var nested) && nested.Kind != Kind.Comment)
+                if (s[k] is '"' or '\'' or '$' or '@' && TryRead(s, k, out var inner, nested) && inner.Kind != Kind.Comment)
                 {
-                    k = Math.Max(nested.End, k + 1);
+                    if (inner.Kind == Kind.Literal)
+                    {
+                        nested?.Add(inner);
+                    }
+
+                    k = Math.Max(inner.End, k + 1);
                     continue;
                 }
 
