@@ -391,7 +391,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
                                     CaptureTriggerBinding, StartupFailureNotice
-    Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
+    Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision: keep, trim,
+                                    suspend, relaunch), OverlayWarmup (when the shell warms the helper),
                                     OverlayPreviewGate, PillOutcome (what a finished dictation shows on the
                                     pill), PillTiming, OverlayPipeProtocol (every pipe verb and line),
                                     PillGeometry and PillTextScale (the pill's text-scaled size and place, and
@@ -1796,22 +1797,35 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 - **Orphan safety:** the overlay is launched into an OS **Job Object** (kill‑on‑close) and
   also runs a parent‑PID watchdog (`--parent`), so the pill can never outlive the engine.
 - **The helper's lifetime is decided in Core, and only there.** `Scribe.Core.Overlay.OverlayHelperLifetime`
-  (built on the internal `OverlayIdleDeadline` and `OverlayLaunchBackoff`) makes every keep, suspend and
-  relaunch decision; `OverlayProcessClient` only carries them out (process start, pipe I/O, kill) and has
+  (built on the internal `OverlayIdleDeadline` and `OverlayLaunchBackoff`) makes every keep, trim, suspend and
+  relaunch decision; `OverlayProcessClient` only carries them out (process start, pipe I/O, trim, kill) and has
   no tests of its own, so a new rule lands in the Core type with a scripted fake-clock test
   (`OverlayHelperLifetimeTests`). The rules:
-    - Every state command resets an idle deadline. After the keep-warm period with nothing on screen the
-      helper is suspended and the next show relaunches it. The app pushes the period with
-      `SetKeepWarm(ReleaseModelsAfterIdleMinutes)` at startup, with every state change and when Settings
-      saves; 0 keeps the helper resident.
+    - Every state command resets an idle deadline. When the keep-warm period passes with nothing on screen, the
+      pill turned on keeps the helper: its working set is trimmed (`OverlayDueWork.Trim`,
+      `SetProcessWorkingSetSizeEx(-1, -1)` through the client's own process handle) and it stays running, pipe and
+      all, so the next pill shows at once. With the pill turned off the helper is ended (`OverlayDueWork.Suspend`)
+      and the next show relaunches it. The app pushes the period and the pill setting together with
+      `SetKeepWarm(ReleaseModelsAfterIdleMinutes, ShowOverlay)` at startup, with every state change and when Settings
+      saves; 0 never trims or ends it. A trim keeps the helper's launch time and cancels nothing, and falls once per
+      idle period. The cost it removes: 84 of 472 dictations in Chris's logs found the suspended helper gone and
+      waited for a launch, 0.5 s on an idle machine and 2 to 11 s under the speech models' reload at the same
+      recording start.
     - Pausing dictation sends a stamped `ReleaseWhenIdle` right after the shell shows the `Paused` change, vetoed
-      like the idle suspend. A pause while idle is that change at once, and hides the pill first. A pause that ends
-      a recording, or comes while a dictation is processing, raises no `Paused` change at once: that dictation is
-      processed as usual, and its return to idle is the `Paused` change, which carries and shows its outcome (or
-      hides a quiet discard); the release then waits until the outcome has hidden (below).
+      like the idle suspend, and ends the helper whether or not the pill is on. A pause while idle is that change
+      at once, and hides the pill first. A pause that ends a recording, or comes while a dictation is processing,
+      raises no `Paused` change at once: that dictation is processed as usual, and its return to idle is the
+      `Paused` change, which carries and shows its outcome (or hides a quiet discard); the release then waits until
+      the outcome has hidden (below). The resume warms the helper again, and so does applying settings with the pill
+      on and dictation not paused (`OverlayWarmup`), so neither leaves the next dictation to launch it; a warmup on a
+      running helper is only the no-op `WARMUP`.
     - Both are re-checked at the commit point: a command stamped after the deadline was armed, or a
       recording or processing pill that must show, vetoes them. Stamps are taken when a command is
       queued, never in the consumer.
+    - A launch waits up to 30 s for the helper's pipe (`ConnectTimeoutMs`). Under load healthy helpers needed 6 to
+      10 s, and the old 8 s bound killed one 400 ms before its window was built, a 10 s hold with no pill. A helper
+      that dies still ends the wait at once (`ConnectBeforeExit`), and `CloseOverlay` cancels it. ReadyToRun measured
+      no gain for the helper's start (a median 511 against 539 ms, for 43 MiB more payload): don't add it.
     - A failed launch starts a cooldown of 1 s doubling to 60 s. While it runs nothing relaunches the
       helper; if a recording or processing pill must show, one retry at cooldown end replays only the
       latest state and position. A helper lost within 10 s of launching, judged by its process exit
@@ -1920,9 +1934,11 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   the controller logs `#<n> finished with outcome <Kind>` (the kind only), and a hold ends in
   `OverlayWindow.OutcomeTimer.Tick`. With Animation effects on, a show logs `StartStoryboard FadeInStoryboard begun`
   and a hide ends in `OverlayWindow.FadeOut completed; window hidden`; with them off, neither appears.
-  `PulseStoryboard` never appears. The client's lifetime lines are `Overlay helper suspended
-  after N idle minutes`, `Overlay helper released because dictation was paused` (with `, once the outcome on
-  screen had hidden` when it waited, after `Overlay release on pause waits N ms for the outcome on screen to hide.`),
+  `PulseStoryboard` never appears. The client's lifetime lines are `Overlay helper suspended after N idle
+  minutes`, `Overlay helper idle for N minutes: working set trimmed from N MB to N MB (ok True); it stays running
+  so the next pill shows at once.`, `Overlay helper released because dictation was paused` (with `, once the
+  outcome on screen had hidden` when it waited, after `Overlay release on pause waits N ms for the outcome on
+  screen to hide.`), `Overlay process launched pid=N pipe=... exe=... after N ms`,
   `Overlay relaunch retry due after a N ms cooldown`, `Overlay command <verb> failed; tearing down for relaunch.`
   and, at Debug, `Overlay command <verb> skipped: a newer state replaced it.` and `Overlay command <verb> skipped: a
   newer request superseded its preview.`
