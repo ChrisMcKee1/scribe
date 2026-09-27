@@ -54,6 +54,13 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     /// </summary>
     internal bool ReuseIdenticalSourceScan { get; init; } = true;
 
+    /// <summary>
+    /// When true (the default), rules are scanned with explicit loops rather than LINQ
+    /// iterators. False keeps the release 0.5.0 candidate pipeline for equivalence tests and
+    /// benchmarks.
+    /// </summary>
+    internal bool UseLoopCandidateScan { get; init; } = true;
+
     public TextPostProcessingResult ProcessDetailed(string text, string? sourceText = null)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -99,15 +106,17 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         var snippetApplications = new List<TextReplacement>();
         var dictionaryInput = ApplySinglePass(
             normalized,
-            snippetRules.SelectMany((rule, order) => rule.Find(normalized, order)),
+            FindSnippetCandidates(normalized, snippetRules),
             snippetApplications,
-            TextReplacementKind.Snippet);
+            TextReplacementKind.Snippet,
+            UseLoopCandidateScan);
 
         var replacements = new List<TextReplacement>();
         var output = ApplySinglePass(
             dictionaryInput,
-            rules.SelectMany((rule, order) => rule.Find(dictionaryInput, order)),
-            replacements);
+            FindDictionaryCandidates(dictionaryInput, rules),
+            replacements,
+            loopSort: UseLoopCandidateScan);
 
         // The source pass below scans with this same rule snapshot. Matching is a pure function of
         // (input, rules), and both passes record through the same ApplySinglePass with the same kind
@@ -123,7 +132,8 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             var canonical = ApplySinglePass(
                 application.Replacement,
-                rules.SelectMany((rule, order) => rule.Find(application.Replacement, order)));
+                FindDictionaryCandidates(application.Replacement, rules),
+                loopSort: UseLoopCandidateScan);
             return application with { Length = canonical.Length, Replacement = canonical };
         });
         AddLocatedReplacements(output, canonicalSnippets, replacements, replaceOverlaps: true);
@@ -142,14 +152,47 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             replacements.OrderBy(replacement => replacement.Start).ToList());
     }
 
-    private static List<TextReplacement> ScanSource(string source, CompiledRule[] rules)
+    private List<TextReplacement> ScanSource(string source, CompiledRule[] rules)
     {
         var glossaryApplications = new List<TextReplacement>();
         _ = ApplySinglePass(
             source,
-            rules.SelectMany((rule, order) => rule.Find(source, order)),
-            glossaryApplications);
+            FindDictionaryCandidates(source, rules),
+            glossaryApplications,
+            loopSort: UseLoopCandidateScan);
         return glossaryApplications;
+    }
+
+    private IEnumerable<ReplacementCandidate> FindSnippetCandidates(string text, SnippetRule[] rules)
+    {
+        if (!UseLoopCandidateScan)
+        {
+            return rules.SelectMany((rule, order) => rule.Find(text, order));
+        }
+
+        var candidates = new List<ReplacementCandidate>();
+        for (var order = 0; order < rules.Length; order++)
+        {
+            rules[order].AddMatches(text, order, candidates);
+        }
+
+        return candidates;
+    }
+
+    private IEnumerable<ReplacementCandidate> FindDictionaryCandidates(string text, CompiledRule[] rules)
+    {
+        if (!UseLoopCandidateScan)
+        {
+            return rules.SelectMany((rule, order) => rule.Find(text, order));
+        }
+
+        var candidates = new List<ReplacementCandidate>();
+        for (var order = 0; order < rules.Length; order++)
+        {
+            rules[order].AddMatches(text, order, candidates);
+        }
+
+        return candidates;
     }
 
     public void Reload()
@@ -395,13 +438,30 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         string text,
         IEnumerable<ReplacementCandidate> candidates,
         List<TextReplacement>? replacements = null,
-        TextReplacementKind kind = TextReplacementKind.Dictionary)
+        TextReplacementKind kind = TextReplacementKind.Dictionary,
+        bool loopSort = true)
     {
-        var selected = candidates
-            .OrderBy(candidate => candidate.Index)
-            .ThenByDescending(candidate => candidate.Length)
-            .ThenBy(candidate => candidate.RuleOrder)
-            .ToList();
+        var selected = loopSort
+            ? candidates as List<ReplacementCandidate> ?? candidates.ToList()
+            : candidates
+                .OrderBy(candidate => candidate.Index)
+                .ThenByDescending(candidate => candidate.Length)
+                .ThenBy(candidate => candidate.RuleOrder)
+                .ToList();
+        if (loopSort)
+        {
+            selected.Sort(static (left, right) =>
+            {
+                var index = left.Index.CompareTo(right.Index);
+                if (index != 0)
+                {
+                    return index;
+                }
+
+                var length = right.Length.CompareTo(left.Length);
+                return length != 0 ? length : left.RuleOrder.CompareTo(right.RuleOrder);
+            });
+        }
         if (selected.Count == 0)
         {
             return text;
@@ -521,6 +581,20 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         public IEnumerable<ReplacementCandidate> Find(string text, int order) =>
             _regex.Matches(text).Select(match =>
                 new ReplacementCandidate(match.Index, match.Length, _template, order, _phrase, match.Value));
+
+        public void AddMatches(string text, int order, List<ReplacementCandidate> candidates)
+        {
+            foreach (Match match in _regex.Matches(text))
+            {
+                candidates.Add(new ReplacementCandidate(
+                    match.Index,
+                    match.Length,
+                    _template,
+                    order,
+                    _phrase,
+                    match.Value));
+            }
+        }
     }
 
     /// <summary>
@@ -575,6 +649,25 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                     order,
                     _pattern,
                     match.Value);
+            }
+        }
+
+        public void AddMatches(string text, int order, List<ReplacementCandidate> candidates)
+        {
+            var canonicalStarts = _replacementContainsPattern ? CollectReplacementStarts(text) : [];
+            foreach (Match match in _regex.Matches(text))
+            {
+                var replacement = canonicalStarts.Count > 0 &&
+                    IsInsideAnyReplacement(canonicalStarts, match.Index, match.Length)
+                    ? match.Value
+                    : _replacement;
+                candidates.Add(new ReplacementCandidate(
+                    match.Index,
+                    match.Length,
+                    replacement,
+                    order,
+                    _pattern,
+                    match.Value));
             }
         }
 
