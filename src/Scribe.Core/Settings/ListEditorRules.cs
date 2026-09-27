@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Scribe.Core.Cleanup;
@@ -8,16 +9,48 @@ namespace Scribe.Core.Settings;
 
 public static partial class TextFilter
 {
+    // A list filter asks once per row with one query, and a WPF TextBox hands back the same string for its Text until the
+    // next edit: the property system resolves the deferred text once and stores the string in place of the deferred
+    // reference (dotnet/wpf, DependencyObject.GetEffectiveValue). So the normalized form is kept per query instance, for as
+    // long as that string lives, and every row after the first reuses it. Normalize depends only on the text, so it is what
+    // normalizing again would give, and nothing is kept alive once the query string is gone.
+    private static readonly ConditionalWeakTable<string, string> NormalizedQueries = new();
+
     public static bool Matches(string? query, params string?[] fields)
     {
-        var normalizedQuery = Normalize(query);
+        var normalizedQuery = NormalizeQuery(query);
         if (normalizedQuery.Length == 0)
         {
             return true;
         }
 
-        return fields.Any(field => Normalize(field).Contains(normalizedQuery, StringComparison.Ordinal));
+        // Enumerable.Any's check, which this loop replaced: the same exception for a null array.
+        ArgumentNullException.ThrowIfNull(fields, "source");
+        foreach (var field in fields)
+        {
+            if (Normalize(field).Contains(normalizedQuery, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
+
+    public static bool Matches(string? query, string? first, string? second)
+    {
+        var normalizedQuery = NormalizeQuery(query);
+        if (normalizedQuery.Length == 0)
+        {
+            return true;
+        }
+
+        return Normalize(first).Contains(normalizedQuery, StringComparison.Ordinal) ||
+            Normalize(second).Contains(normalizedQuery, StringComparison.Ordinal);
+    }
+
+    private static string NormalizeQuery(string? query) =>
+        string.IsNullOrWhiteSpace(query) ? string.Empty : NormalizedQueries.GetValue(query, static text => Normalize(text));
 
     private static string Normalize(string? value)
     {
