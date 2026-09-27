@@ -69,6 +69,12 @@ internal static class Program
         var decoding = ArgValue(args, "--decoding") ?? TranscriptionDecoding.Greedy;
         Console.WriteLine($"  decoding={decoding}");
 
+        if (args.Contains("--resources"))
+        {
+            var clips = fixtures.Select(f => WavReader.ReadMonoFloat(f.Path, out _)).ToList();
+            return ResourceSweep.Run(args, clips, decoding);
+        }
+
         var failures = RunEngineChecks(args, fixtures, decoding);
 
         // After the checks' recognizer is disposed, so the sweep never holds two models at once.
