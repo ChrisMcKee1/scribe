@@ -72,9 +72,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private bool _loggedMissing;
     private long _launchAttempts; // consumer only, for the log
 
-    // The keep-warm period and whether the pill is on, as last pushed: one object, so the consumer always applies the two
-    // together. The push that comes with every state change queues nothing when the pair is unchanged; until the first push
-    // the consumer never trims or ends the helper for being idle.
+    // The keep-warm period and whether the helper is kept resident, as last pushed: one object, so the consumer always
+    // applies the two together. The push that comes with every state change queues nothing when the pair is unchanged;
+    // until the first push the consumer never trims or ends the helper for being idle.
     private KeepWarmSetting? _keepWarm;
 
     private bool _subscribed;
@@ -938,9 +938,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         KillProcess(graceful: sentExit);
     }
 
-    // The pill is on and nothing used the helper for the keep-warm period: its working set goes back to Windows and it keeps
-    // running, pipe and writer included, so the next pill shows at once instead of after a relaunch. A trim that fails
-    // changes nothing else.
+    // The helper is kept resident (the pill is on, dictation not paused) and nothing used it for the keep-warm period: its
+    // working set goes back to Windows and it keeps running, pipe and writer included, so the next pill shows at once
+    // instead of after a relaunch. A trim that fails changes nothing else.
     private void TrimHelper()
     {
         var process = _process;
@@ -1276,7 +1276,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     }
 
     /// <summary>
-    /// The keep-warm period and whether the pill is turned on, pushed and applied as one value, so the consumer never
+    /// The keep-warm period and whether the helper is kept resident, pushed and applied as one value, so the consumer never
     /// applies one without the other. A record: the push compares a new pair with the last by value.
     /// </summary>
     private sealed record KeepWarmSetting(int Minutes, bool KeepResident);

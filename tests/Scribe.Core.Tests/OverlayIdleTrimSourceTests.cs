@@ -3,10 +3,10 @@ using System.Text.RegularExpressions;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// Stream PL: while the pill is on, the idle deadline trims the overlay helper instead of ending it, the shell warms it on
-/// the resume and after settings are applied, and a launch waits up to 30 s for the helper's pipe. The client and the shell
-/// cannot run in a test, so this pins their source; the decisions themselves are Core's (OverlayHelperLifetimeTests,
-/// OverlayWarmupTests).
+/// Stream PL: while the pill is on and dictation is not paused, the idle deadline trims the overlay helper instead of ending
+/// it, the shell warms it on the resume and after settings are applied, and a launch waits up to 30 s for the helper's
+/// pipe. The client and the shell cannot run in a test, so this pins their source; the decisions themselves are Core's
+/// (OverlayHelperLifetimeTests, OverlayWarmupTests).
 /// </summary>
 public sealed class OverlayIdleTrimSourceTests
 {
@@ -67,17 +67,32 @@ public sealed class OverlayIdleTrimSourceTests
     }
 
     [Fact]
-    public void The_shell_pushes_the_pill_setting_as_the_resident_flag_everywhere_it_pushes_the_keep_warm_period()
+    public void The_shell_pushes_the_resident_flag_Core_decides_everywhere_it_pushes_the_keep_warm_period()
     {
         var shell = Shell();
         Assert.Equal(3, Regex.Matches(shell, Regex.Escape("SetKeepWarm(")).Count);
-        Assert.Contains(
-            "_overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes, _controller.CurrentSettings.ShowOverlay);",
-            shell,
-            StringComparison.Ordinal);
-        Assert.Equal(
-            2,
-            Regex.Matches(shell, Regex.Escape("_overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes, settings.ShowOverlay);")).Count);
+        Assert.Equal(3, Regex.Matches(shell, Regex.Escape("OverlayWarmup.KeepResident(")).Count);
+
+        // At startup dictation is never paused: nothing restores a pause.
+        Assert.Matches(
+            new Regex(
+                @"_overlay\.SetKeepWarm\(\s*_controller\.CurrentSettings\.ReleaseModelsAfterIdleMinutes,\s*OverlayWarmup\.KeepResident\(_controller\.CurrentSettings\.ShowOverlay, paused: false\)\);"),
+            shell);
+
+        // Each render pushes for the state it renders, so a pause pushes false ahead of its release, and a resume true.
+        var render = Body(shell, "private void RenderDictationState(DictationStateChange change)");
+        var push = Regex.Match(
+            render,
+            @"_overlay\?\.SetKeepWarm\(\s*settings\.ReleaseModelsAfterIdleMinutes,\s*OverlayWarmup\.KeepResident\(settings\.ShowOverlay, state == DictationState\.Paused\)\);");
+        Assert.True(push.Success, "The render must push OverlayWarmup.KeepResident(settings.ShowOverlay, state == DictationState.Paused).");
+        var release = render.IndexOf("_overlay?.ReleaseWhenIdle();", StringComparison.Ordinal);
+        Assert.True(release > push.Index, "A pause must push the resident flag before it asks for the release.");
+
+        // The settings delegate reads the paused state from the state rendered last, for the push and the warmup alike.
+        Assert.Matches(
+            new Regex(
+                @"var paused = _lastRenderedState == DictationState\.Paused;\s*_overlay\?\.SetKeepWarm\(\s*settings\.ReleaseModelsAfterIdleMinutes,\s*OverlayWarmup\.KeepResident\(settings\.ShowOverlay, paused\)\);"),
+            SettingsDelegate(shell));
     }
 
     [Fact]
@@ -91,12 +106,10 @@ public sealed class OverlayIdleTrimSourceTests
                 @"if \(OverlayWarmup\.AfterRender\(previous == DictationState\.Paused, state == DictationState\.Paused, overlayEnabled\)\)\s*\{\s*_overlay\?\.Warmup\(\);\s*\}"),
             render);
 
-        var apply = shell[shell.IndexOf("_settingsWrites?.NoteExternalApply();", StringComparison.Ordinal)..];
-        apply = apply[..apply.IndexOf("return applying;", StringComparison.Ordinal)];
         Assert.Matches(
             new Regex(
-                @"_overlay\?\.SetKeepWarm\(settings\.ReleaseModelsAfterIdleMinutes, settings\.ShowOverlay\);\s*_overlay\?\.SetPosition\(settings\.OverlayPosition\);\s*if \(OverlayWarmup\.AfterSettingsApplied\(settings\.ShowOverlay, _lastRenderedState == DictationState\.Paused\)\)\s*\{\s*_overlay\?\.Warmup\(\);\s*\}"),
-            apply);
+                @"_overlay\?\.SetPosition\(settings\.OverlayPosition\);\s*if \(OverlayWarmup\.AfterSettingsApplied\(settings\.ShowOverlay, paused\)\)\s*\{\s*_overlay\?\.Warmup\(\);\s*\}"),
+            SettingsDelegate(shell));
     }
 
     [Fact]
@@ -113,6 +126,16 @@ public sealed class OverlayIdleTrimSourceTests
     private static string Client() => Code("src", "Scribe.App", "Overlay", "OverlayProcessClient.cs");
 
     private static string Shell() => Code("src", "Scribe.App", "App.xaml.cs");
+
+    // The settings delegate the shell hands the Settings window, from its first statement to its return.
+    private static string SettingsDelegate(string shell)
+    {
+        var start = shell.IndexOf("_settingsWrites?.NoteExternalApply();", StringComparison.Ordinal);
+        Assert.True(start >= 0, "The settings delegate was not found.");
+        var end = shell.IndexOf("return applying;", start, StringComparison.Ordinal);
+        Assert.True(end > start, "The settings delegate has no return.");
+        return shell[start..end];
+    }
 
     private static string Code(params string[] path) =>
         Regex.Replace(File.ReadAllText(Path.Combine([RepositoryRoot(), .. path])), @"//[^\n]*", string.Empty).ReplaceLineEndings("\n");

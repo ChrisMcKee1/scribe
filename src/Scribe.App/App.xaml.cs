@@ -501,9 +501,12 @@ public partial class App : Application
         // user's saved overlay position, overlay toggle, and AI-cleanup state on every launch.
         // The helper's idle lifetime follows the speech models' keep-warm setting but is decided inside
         // the client, never on the models' release, which could end a newer recording's pill. The period and
-        // whether the pill is on (which makes the idle deadline trim the helper rather than end it) are pushed
-        // together, here before the warmup can arm the deadline, and again with every state change.
-        _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes, _controller.CurrentSettings.ShowOverlay);
+        // whether the helper is kept resident (the idle deadline then trims it rather than ending it) are pushed
+        // together, here before the warmup can arm the deadline, and again with every state change. Resident means
+        // the pill is on and dictation is not paused (OverlayWarmup decides); dictation always starts unpaused.
+        _overlay.SetKeepWarm(
+            _controller.CurrentSettings.ReleaseModelsAfterIdleMinutes,
+            OverlayWarmup.KeepResident(_controller.CurrentSettings.ShowOverlay, paused: false));
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
         _ = SeedRecentDictationsAsync(services, services.GetRequiredService<HistoryDeletionNotifier>());
         UpdateTrayShortcut(_controller.CurrentSettings);
@@ -933,9 +936,14 @@ public partial class App : Application
 
         // Pushed with every state change, so a keep-warm saved in Settings reaches the overlay client
         // without its command thread ever reading the controller's settings. Unchanged values cost nothing.
+        // The resident flag is for the state rendered here, so a pause pushes false before its release below (the push is
+        // unstamped and vetoes nothing): while paused the idle deadline ends whatever brought the helper back, a preview or
+        // a release that a stamped command vetoed, instead of trimming it until the resume. The resume pushes true.
         if (settings is not null)
         {
-            _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes, settings.ShowOverlay);
+            _overlay?.SetKeepWarm(
+                settings.ReleaseModelsAfterIdleMinutes,
+                OverlayWarmup.KeepResident(settings.ShowOverlay, state == DictationState.Paused));
         }
 
         if (!overlayEnabled)
@@ -1800,9 +1808,12 @@ public partial class App : Application
                     // application asked for, before it says the change is in effect.
                     _settingsWrites?.NoteExternalApply();
                     var applying = _controller!.ApplySettings(settings);
-                    _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes, settings.ShowOverlay);
+                    var paused = _lastRenderedState == DictationState.Paused;
+                    _overlay?.SetKeepWarm(
+                        settings.ReleaseModelsAfterIdleMinutes,
+                        OverlayWarmup.KeepResident(settings.ShowOverlay, paused));
                     _overlay?.SetPosition(settings.OverlayPosition);
-                    if (OverlayWarmup.AfterSettingsApplied(settings.ShowOverlay, _lastRenderedState == DictationState.Paused))
+                    if (OverlayWarmup.AfterSettingsApplied(settings.ShowOverlay, paused))
                     {
                         _overlay?.Warmup(); // turning the pill on must not leave the next dictation to launch it
                     }
