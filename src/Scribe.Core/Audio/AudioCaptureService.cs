@@ -653,9 +653,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
         var rawStream = new RawSourceWaveStream(bytes, 0, length, format);
         ISampleProvider source = rawStream.ToSampleProvider();
 
-        ISampleProvider mono = format.Channels == 1
-            ? source
-            : new MonoDownmixSampleProvider(source);
+        // Mono too: the downmix passes a mono source through unchanged, and it bounds every read of the converter.
+        ISampleProvider mono = new MonoDownmixSampleProvider(source);
 
         ISampleProvider resampled = mono.WaveFormat.SampleRate == TargetSampleRate
             ? mono
