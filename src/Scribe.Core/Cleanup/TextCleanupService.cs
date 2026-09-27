@@ -279,9 +279,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // The agents built for an admitted vocabulary's glossary (AdmittedCleanup), by the system prompt they carry, so every
     // dictation of one generation shares one. Bounded, because each new generation brings a new glossary. Guarded by
-    // _gate and dropped with the other agents whenever the factory changes.
+    // _gate and dropped with the other agents whenever the factory changes, always through ClearAdmittedAgentsLocked.
     private const int MaxAdmittedAgents = 8;
     private readonly Dictionary<string, AIAgent> _admittedAgents = new(StringComparer.Ordinal);
+
+    // The last admitted system prompt and the parts it was built from, so the dictations that share a glossary and a
+    // writing style share one prompt instead of each building a copy of the whole glossary to look its agent up by.
+    // Guarded by _gate. It holds strings only, never CleanupOptions, so no key or secret outlives a Configure. It names
+    // only a prompt whose agent is cached, and ClearAdmittedAgentsLocked empties it with those agents, so no glossary
+    // or writing style outlives the agents that were built for it.
+    private PromptParts _admittedPromptParts;
+    private string? _admittedPrompt;
 
     // The hand-off transport over InnerHttpHandlerForTesting, built once. Guarded by _gate.
     private HttpClientPipelineTransport? _testTransport;
@@ -500,6 +508,30 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal object? ServingAgentForTesting
     {
         get { lock (_gate) { return _agent; } }
+    }
+
+    internal string? AdmittedPromptForTesting
+    {
+        get { lock (_gate) { return _admittedPrompt; } }
+    }
+
+    // The remembered prompt, the parts it was built from and the admitted agents it names, read together.
+    internal (string? Prompt, string? Guardrail, string? WritingStyle, string? Glossary, int CachedAgents, bool PromptIsCached)
+        AdmittedPromptMemoForTesting
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return (
+                    _admittedPrompt,
+                    _admittedPromptParts.Guardrail,
+                    _admittedPromptParts.WritingStyle,
+                    _admittedPromptParts.Glossary,
+                    _admittedAgents.Count,
+                    _admittedPrompt is not null && _admittedAgents.ContainsKey(_admittedPrompt));
+            }
+        }
     }
 
     public TextCleanupService(
@@ -878,7 +910,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         _styleAgents.Clear();
-        _admittedAgents.Clear();
+        ClearAdmittedAgentsLocked();
         return true;
     }
 
@@ -1002,7 +1034,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         _agent = null;
         _agentFactory = null;
         _styleAgents.Clear();
+        ClearAdmittedAgentsLocked();
+    }
+
+    // Must be called under _gate. The only clear of the admitted agents: the remembered prompt and the parts it was
+    // built from go with them, so whatever drops those agents (turning cleanup off, a configuration it cannot start, a
+    // new provider or model, a prompt rebuild, a new initialization, disposal or the cache's own bound) leaves no copy
+    // of a glossary or a writing style behind in the memo.
+    private void ClearAdmittedAgentsLocked()
+    {
         _admittedAgents.Clear();
+        _admittedPrompt = null;
+        _admittedPromptParts = default;
     }
 
     public Task<CleanupResult> CleanAsync(
@@ -1257,21 +1300,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary)
     {
         var glossary = vocabulary.GlossaryFor(CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider));
-        var prompt = BuildSystemPrompt(options with { WritingStyle = style ?? options.WritingStyle, Glossary = glossary });
-        if (_admittedAgents.TryGetValue(prompt, out var cached))
+        var parts = PromptParts.Of(options, style ?? options.WritingStyle, glossary);
+        var prompt = _admittedPrompt is { } remembered && parts == _admittedPromptParts ? remembered : parts.Build();
+        if (!_admittedAgents.TryGetValue(prompt, out var agent))
         {
-            return cached;
+            // Dropped, not disposed, as a rebuild drops the style agents: they share the client, and a dictation still
+            // holding one finishes on it.
+            if (_admittedAgents.Count >= MaxAdmittedAgents)
+            {
+                ClearAdmittedAgentsLocked();
+            }
+
+            agent = factory(prompt);
+            _admittedAgents[prompt] = agent;
         }
 
-        // Dropped, not disposed, as a rebuild drops the style agents: they share the client, and a dictation still
-        // holding one finishes on it.
-        if (_admittedAgents.Count >= MaxAdmittedAgents)
-        {
-            _admittedAgents.Clear();
-        }
-
-        var agent = factory(prompt);
-        _admittedAgents[prompt] = agent;
+        // Remembered only once its agent is cached, so a factory that throws leaves no prompt in the memo that no agent is
+        // cached for.
+        _admittedPrompt = prompt;
+        _admittedPromptParts = parts;
         return agent;
     }
 
@@ -3031,7 +3078,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _agent = agent;
                 _agentFactory = _pendingFactory;
                 _styleAgents.Clear();
-                _admittedAgents.Clear();
+                ClearAdmittedAgentsLocked();
                 _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
                 inUse = _foundryInUse;
             }
@@ -4629,36 +4676,37 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         SetInitStatus(CleanupStatus.Downloading, $"Downloading {alias}… {Math.Clamp(pct, 0, 100)}%");
     }
 
-    internal static string BuildSystemPrompt(CleanupOptions options)
-    {
-        var style = CleanupPrompt.ResolveWritingStyle(options.WritingStyle);
+    internal static string BuildSystemPrompt(CleanupOptions options) =>
+        PromptParts.Of(options, options.WritingStyle, options.Glossary).Build();
 
-        // The guardrail preamble is the fixed part of the prompt; it varies by prompt style (frontier
-        // vs local) and can be overridden per style by the user (with a restore-to-default in settings).
-        var isLocalPrompt = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) == CleanupPromptStyle.Local;
-        var guardrail = isLocalPrompt
-            ? CleanupPrompt.ResolveLocalPrompt(options.LocalPrompt)
-            : CleanupPrompt.ResolveFrontierPrompt(options.FrontierPrompt);
-        var prompt = guardrail + "\n\nWriting style:\n" + style;
+    // What a system prompt is made of. The prompt is a function of these parts alone, so equal parts make an equal prompt.
+    private readonly record struct PromptParts(string Guardrail, string WritingStyle, string? Glossary, bool NoThink)
+    {
+        public static PromptParts Of(CleanupOptions options, string? writingStyle, string? glossary) => new(
+            // The guardrail preamble is the fixed part of the prompt; it varies by prompt style (frontier
+            // vs local) and can be overridden per style by the user (with a restore-to-default in settings).
+            CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) == CleanupPromptStyle.Local
+                ? CleanupPrompt.ResolveLocalPrompt(options.LocalPrompt)
+                : CleanupPrompt.ResolveFrontierPrompt(options.FrontierPrompt),
+            CleanupPrompt.ResolveWritingStyle(writingStyle),
+            string.IsNullOrWhiteSpace(glossary) ? null : glossary.Trim(),
+            IsQwen3Family(options));
 
         // The user dictionary is folded in as its own block after the writing style, so the vocabulary
         // feature is preserved independently of whatever tone the user asked for.
-        if (!string.IsNullOrWhiteSpace(options.Glossary))
-        {
-            prompt += "\n\n" + options.Glossary.Trim();
-        }
-
+        //
         // Qwen3-family models support a "/no_think" directive that suppresses chain-of-thought, so
         // they return the corrected text directly with no reasoning preamble. Applies to Foundry
         // Local aliases and to BYO endpoints (Ollama etc.) serving a qwen3 model. (Measured: on the
         // small default qwen3-1.7b, letting it reason did not improve cleanup quality, so we keep the
         // directive on both prompt paths for the lower, more predictable dictation latency.)
-        if (IsQwen3Family(options))
-        {
-            prompt += " /no_think";
-        }
-
-        return prompt;
+        public string Build() => string.Concat(
+            Guardrail,
+            "\n\nWriting style:\n",
+            WritingStyle,
+            Glossary is null ? null : "\n\n",
+            Glossary,
+            NoThink ? " /no_think" : null);
     }
 
     /// <summary>
@@ -4747,7 +4795,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private static int EstimateMaxTokens(string text, CleanupProvider provider)
     {
         // English averages a little over one token per word; cleanup output tracks input length.
-        var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+        var words = CountWords(text);
 
         /*
          * Azure cleanup often runs on reasoning models whose hidden thinking counts against this
@@ -4939,8 +4987,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         // (3) Terse reply. A cleaned question ends with "?"; a short, non-question result is a candidate
         // answer that replaced (rather than edited) the input.
-        var candidateWords = WordSet(candidate);
-        if (candidateWords.Count is > 0 and <= 3 && !candidate.TrimEnd().EndsWith('?'))
+        var candidateWords = DistinctWords(candidate, limit: 3);
+        if (candidateWords is { Count: > 0 } && !candidate.TrimEnd().EndsWith('?'))
         {
             // A short, non-question reply to a dictated question is the model answering it.
             if (LooksLikeQuestion(original))
@@ -4950,7 +4998,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             // For a non-question input, only reject when the few output words are absent from a longer
             // utterance (a replacement, not an edit) and the output isn't a numeric reformat.
-            var originalWords = WordSet(original);
+            var originalWords = DistinctWords(original, limit: int.MaxValue)!;
             if (originalWords.Count >= 4 && !candidate.Any(char.IsDigit))
             {
                 var shared = 0;
@@ -4976,16 +5024,43 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal static bool LooksLikeQuestion(string text) =>
         !string.IsNullOrWhiteSpace(text) && (text.TrimEnd().EndsWith('?') || QuestionOpener.IsMatch(text));
 
-    // Distinct lowercased word tokens, used by the terse-answer signal to measure input overlap.
-    private static HashSet<string> WordSet(string text)
+    // Distinct lowercased word tokens, used by the terse-answer signal to measure input overlap, or null once there are
+    // more than limit of them: every cleaned answer reaches the signal, which asks only whether it has at most three.
+    internal static HashSet<string>? DistinctWords(string text, int limit)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match match in WordToken.Matches(text))
+        foreach (var match in WordToken.EnumerateMatches(text))
         {
-            set.Add(match.Value.ToLowerInvariant());
+            set.Add(text.Substring(match.Index, match.Length).ToLowerInvariant());
+            if (set.Count > limit)
+            {
+                return null;
+            }
         }
 
         return set;
+    }
+
+    // The count text.Split(null, StringSplitOptions.RemoveEmptyEntries) gives, without its strings: the runs of
+    // characters char.IsWhiteSpace does not count as white space.
+    internal static int CountWords(string text)
+    {
+        var words = 0;
+        var inWord = false;
+        foreach (var c in text)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                inWord = false;
+            }
+            else if (!inWord)
+            {
+                inWord = true;
+                words++;
+            }
+        }
+
+        return words;
     }
 
     /*

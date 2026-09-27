@@ -252,7 +252,8 @@ public static class CleanupPrompt
     /// </param>
     public static string BuildGlossary(IEnumerable<DictionaryEntry>? entries, int maxTerms = MaxGlossaryTermsCloud)
     {
-        var lines = SelectGlossaryLines(entries, maxTerms, MaxGlossaryChars).ToList();
+        var lines = new List<string>();
+        SelectGlossary(entries, maxTerms, MaxGlossaryChars, lines);
         if (lines.Count == 0)
         {
             return string.Empty;
@@ -276,19 +277,20 @@ public static class CleanupPrompt
     {
         var list = entries as IReadOnlyCollection<DictionaryEntry> ?? entries?.ToList() ?? [];
         return new GlossaryCount(
-            Included: SelectGlossaryLines(list, maxTerms, MaxGlossaryChars).Count(),
-            Eligible: SelectGlossaryLines(list, int.MaxValue, long.MaxValue).Count());
+            Included: SelectGlossary(list, maxTerms, MaxGlossaryChars, lines: null),
+            Eligible: SelectGlossary(list, int.MaxValue, long.MaxValue, lines: null));
     }
 
     // The glossary's lines in order: enabled entries whose written form is vocabulary, normalized and
     // de-duplicated, stopping at the term budget or before the line that would take the list past the size
-    // budget.
-    private static IEnumerable<string> SelectGlossaryLines(
-        IEnumerable<DictionaryEntry>? entries, int maxTerms, long maxChars)
+    // budget. Returns how many it selects and adds them to lines when that is given; a count builds no line,
+    // because a line's length is known from its parts (GlossaryLineLength).
+    private static int SelectGlossary(
+        IEnumerable<DictionaryEntry>? entries, int maxTerms, long maxChars, List<string>? lines)
     {
         if (entries is null || maxTerms <= 0)
         {
-            yield break;
+            return 0;
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -308,21 +310,12 @@ public static class CleanupPrompt
                 continue;
             }
 
-            var spoken = NormalizeTerm(entry.Pattern);
-            string line;
-            string key;
-            if (!string.IsNullOrEmpty(spoken) &&
-                !string.Equals(spoken, canonical, StringComparison.OrdinalIgnoreCase))
-            {
-                line = $"- {canonical} (transcribed as \"{spoken}\")";
-                key = canonical + "|" + spoken;
-            }
-            else
-            {
-                line = $"- {canonical}";
-                key = canonical;
-            }
-
+            var normalizedSpoken = NormalizeTerm(entry.Pattern);
+            var spoken = !string.IsNullOrEmpty(normalizedSpoken) &&
+                !string.Equals(normalizedSpoken, canonical, StringComparison.OrdinalIgnoreCase)
+                    ? normalizedSpoken
+                    : null;
+            var key = spoken is null ? canonical : canonical + "|" + spoken;
             if (!seen.Add(key))
             {
                 continue;
@@ -330,20 +323,31 @@ public static class CleanupPrompt
 
             // Stop on the size budget rather than truncating mid-list to a partial line: a glossary
             // that silently loses its tail is better than a request that fails on length.
-            if (chars + line.Length + 1 > maxChars)
+            var length = GlossaryLineLength(canonical, spoken);
+            if (chars + length + 1 > maxChars)
             {
-                yield break;
+                break;
             }
 
-            chars += line.Length + 1;
-            yield return line;
+            chars += length + 1;
+            lines?.Add(GlossaryLine(canonical, spoken));
 
             if (++count >= maxTerms)
             {
-                yield break;
+                break;
             }
         }
+
+        return count;
     }
+
+    // One line of the glossary: the written form, and the spoken form it is transcribed as when that differs.
+    internal static string GlossaryLine(string canonical, string? spoken) =>
+        spoken is null ? $"- {canonical}" : $"- {canonical} (transcribed as \"{spoken}\")";
+
+    // The length of GlossaryLine for the same parts, without building it. The two must change together.
+    internal static int GlossaryLineLength(string canonical, string? spoken) =>
+        spoken is null ? canonical.Length + 2 : canonical.Length + spoken.Length + 22;
 
     // Dictionary entries are user-supplied data, not prompt instructions. Flatten any newlines and
     // control characters (which could otherwise inject extra prompt lines or directives) into single
@@ -354,6 +358,12 @@ public static class CleanupPrompt
         if (string.IsNullOrEmpty(value))
         {
             return string.Empty;
+        }
+
+        // Nearly every term is already what the loop below makes of it, and then needs no copy.
+        if (value.Length <= MaxGlossaryTermChars && IsNormalizedTerm(value))
+        {
+            return value;
         }
 
         var sb = new StringBuilder(value.Length);
@@ -385,6 +395,40 @@ public static class CleanupPrompt
         return normalized.Length <= MaxGlossaryTermChars
             ? normalized
             : normalized[..MaxGlossaryTermChars].Trim();
+    }
+
+    // True when NormalizeTerm's loop would give the value back unchanged: no quote or backtick, and no control or
+    // white-space character other than single spaces between other characters.
+    private static bool IsNormalizedTerm(string value)
+    {
+        if (value[0] == ' ' || value[^1] == ' ')
+        {
+            return false;
+        }
+
+        var lastWasSpace = false;
+        foreach (var ch in value)
+        {
+            if (ch == ' ')
+            {
+                if (lastWasSpace)
+                {
+                    return false;
+                }
+
+                lastWasSpace = true;
+                continue;
+            }
+
+            if (ch is '"' or '`' || char.IsControl(ch) || char.IsWhiteSpace(ch))
+            {
+                return false;
+            }
+
+            lastWasSpace = false;
+        }
+
+        return true;
     }
 }
 
