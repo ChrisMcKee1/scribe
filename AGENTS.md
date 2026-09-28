@@ -670,6 +670,17 @@ matter are intermittent and hardware‑specific.
   writer logs `history committed N ms after it was queued`. Silence auto-stop lines carry the tracker's
   `NoiseFloor` and `VoiceThreshold` as numbers. AI cleanup skip and failure lines carry the provider
   and status names, codes the live redaction and `TraceTagPolicy` leave visible; the reasons stay out.
+- **Capture timing is a flag, and never on the start line** (`PerfFlags.CaptureTimingDiagnostics`, off by
+  default, AUDIO-O-10). With it on, every stop logs, at Debug and in numbers only, `#<n> capture timing:` the
+  device open, the stream start, the first packet (timed from the stream-start request, like the stream start, so a
+  packet that came before `StartRecording` returned reads as the smaller number), the packet count, when the stop
+  saw the stream end after the stop request (from `RequestStop` at the release), the signal analysis and the
+  conversion; a stop without audio has a template of its own that says no packet came, never a zero. The VAD logs
+  its windows, audio and time the same way. One `CaptureTiming` per capture is bound under the service's lock before
+  the stream starts, since NAudio's capture thread can deliver the first packet before `StartRecording` returns and
+  before the owner is assigned, and the capture thread only stamps it (no lock, no log, no allocation;
+  `CaptureTimingDiagnosticsTests` measures the callback). The start line is written before the first packet can be
+  known, so it never carries it. Off, no record is made and nothing is timed or logged.
 - **Retention is bounded and enforced** (`LogRetentionPolicy`): 7 days, 16 MB per day, 64 MB total
   (soft budgets: past its day budget a file takes only warnings and errors, and the total is enforced
   by the sweep). Swept at startup and at each midnight rollover. Today's file is never swept.
@@ -709,6 +720,13 @@ more than "not digital silence" (a -60 dBFS bar). `CaptureSignalAnalyzer` now re
 shape of every capture (peak/RMS in dBFS, clipping, DC offset, and **per-channel levels taken before
 the downmix**) so the next report of this arrives answerable. Statistics only, never audio.
 
+One and two channels of 32-bit float or 16-bit PCM, nearly every capture, run loops of their own (AUDIO-O-06): every
+accumulator in a local, no delegate and no modulo per sample, the samples visited in the same order with the same
+float and double operations, so every statistic is bit-identical to the general loop's. That is the whole
+justification for having no flag: `CaptureSignalAnalyzerDifferentialTests` keeps the 0.5.0 loop as the oracle and
+compares every field by bit pattern and `Describe()`. SIMD, a reordered or parallel reduction, or pooling would change
+the sums and needs a decision (and probably a flag) of its own; a native Arm64 run of that test is a completion gate.
+
 ## Transcription engine (one gate, cancellation, chunk seams)
 
 - **Ensure-ready and decode are one step.** `TranscriptionService.Transcribe` loads the model, when an
@@ -722,6 +740,22 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   acquiring it and between chunks. The native `Decode` cannot be interrupted, so a chunk boundary is
   the only safe place to stop, and stopping throws `OperationCanceledException`: a partial transcript
   must never be mistaken for a complete one. The controller passes its lifetime token.
+- **A long VAD trim can stop between windows, under a flag** (`PerfFlags.VadWindowCancellation`, off by default,
+  AUDIO-A-08). The controller passes its lifetime token to `IVadService.Trim(audio, token)`. With the flag on the
+  trim checks it before the gate, after acquiring it (before any load) and between 512-sample windows, and a canceled
+  trim throws `OperationCanceledException`: never a partial trim, the detector reset, `LastSpeechSeconds` unset, and
+  use and disposal still under the gate. A canceled 200 s trim on the real model threw about 10 ms after the cancel;
+  an uncanceled one measured 1.7% slower with the checks, inside the run's noise. With the flag off the token is not
+  looked at, and an `IVadService` that does not implement the overload gets `Trim(audio)` from its default.
+- **The managed audio path can be warmed once per process, under a flag** (`PerfFlags.WarmManagedAudioPath`, off by
+  default, AUDIO-O-13). The startup warm-load, once both models are loaded, calls `ManagedAudioPathWarmup.RunOnce`,
+  which converts a tenth of a second of silence (48 kHz float, one channel and two, its own recording and scratch
+  pool) and plans a silent capture just over the chunk limit. No decode (the recognizer's own warm-up decode at each
+  load is unchanged) and no VAD trim: the first trim of a fresh process measured no slower than a warm one. It touches
+  no service, never runs again (not even after an idle release reloads the models), and a failure is logged by its
+  shape and changes nothing else. Measured cold, in fresh processes: the first conversion after a launch 18.4 ms
+  without it and 8.6 ms with it, the first long capture's plan 5.6 and 4.0 ms, for about 15 ms of work on the
+  warm-load task.
 - **Long captures decode in chunks of at most 30 s** (`TranscriptionChunker`), one at a time, because
   the batch overload pads them into one encoder batch and multiplies the allocation chunking exists to
   cap. Seams are planned jointly: a dynamic program places every seam within 5 s of its even cut on the

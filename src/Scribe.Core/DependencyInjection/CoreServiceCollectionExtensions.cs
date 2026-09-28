@@ -50,6 +50,7 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<IHotkeyService, HotkeyService>();
         services.AddSingleton<ITextInjector, TextInjector>();
         services.AddSingleton<IVadService, VadService>();
+        services.AddSingleton<ManagedAudioPathWarmup>();
 
         services.AddSingleton<ScribeDatabase>();
         services.AddSingleton<ISettingsRepository, SettingsRepository>();

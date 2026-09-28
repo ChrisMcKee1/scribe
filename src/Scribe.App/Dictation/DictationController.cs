@@ -1123,7 +1123,7 @@ internal sealed class DictationController : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 currentStage = TryDictationReportClassifier.StageVoiceActivityDetection;
                 var vadTimer = Stopwatch.StartNew();
-                var trimmed = _vad.Trim(captured);
+                var trimmed = _vad.Trim(captured, cancellationToken);
                 vadTimer.Stop();
                 report.VadDuration = vadTimer.Elapsed;
                 report.VadAvailable = _vad.IsAvailable;

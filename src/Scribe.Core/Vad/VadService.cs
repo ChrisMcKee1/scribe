@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using SherpaOnnx;
@@ -35,6 +36,12 @@ public sealed class VadService : IVadService
     private readonly Func<ISpeechSegmentDetector?> _load;
     private readonly ILogger<VadService> _logger;
 
+    // PerfFlags, read once at construction. VadWindowCancellation: a trim given a token stops between windows when it is
+    // canceled (see Trim(CapturedAudio, CancellationToken)); off, the token is ignored exactly as before.
+    // CaptureTimingDiagnostics: each trim that runs the detector logs how long it took, numbers only.
+    private readonly bool _windowCancellation;
+    private readonly bool _timingDiagnostics;
+
     // Load, trim, unload and dispose all happen under this gate, so an idle Unload can never land between loading
     // the detector and using it, and Dispose can never free it under a trim that is still running.
     private readonly object _gate = new();
@@ -44,19 +51,21 @@ public sealed class VadService : IVadService
     private bool _disposed;
     private double? _lastSpeechSeconds;
 
-    public VadService(ModelLocator locator, ILogger<VadService> logger)
+    public VadService(ModelLocator locator, ILogger<VadService> logger, PerfFlags? perfFlags = null)
     {
         _logger = logger;
         _load = () => LoadSilero(locator);
+        (_windowCancellation, _timingDiagnostics) = ReadFlags(perfFlags);
     }
 
     /// <summary>
     /// Test seam: supplies the detector instead of loading Silero. A loader returning null stands for a missing model.
     /// </summary>
-    internal VadService(Func<ISpeechSegmentDetector?> load, ILogger<VadService> logger)
+    internal VadService(Func<ISpeechSegmentDetector?> load, ILogger<VadService> logger, PerfFlags? perfFlags = null)
     {
         _load = load;
         _logger = logger;
+        (_windowCancellation, _timingDiagnostics) = ReadFlags(perfFlags);
     }
 
     public bool IsAvailable
@@ -120,16 +129,27 @@ public sealed class VadService : IVadService
         return new SileroDetector(vad, windowSize);
     }
 
-    public CapturedAudio Trim(CapturedAudio audio)
+    public CapturedAudio Trim(CapturedAudio audio) => Trim(audio, CancellationToken.None);
+
+    /// <inheritdoc/>
+    public CapturedAudio Trim(CapturedAudio audio, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audio);
         if (audio.IsEmpty) return CapturedAudio.Empty;
+
+        // With PerfFlags.VadWindowCancellation off the token is never looked at, so the trim is the one it always was.
+        var token = _windowCancellation ? cancellationToken : CancellationToken.None;
+        token.ThrowIfCancellationRequested();
 
         lock (_gate)
         {
             // Checked under the gate before loading, so a trim racing Dispose can never bring the model back.
             ObjectDisposedException.ThrowIf(_disposed, this);
             _lastSpeechSeconds = null;
+
+            // And the cancellation after the gate, as the recognizer checks it: a dictation abandoned while this waited
+            // for another trim does not load a model it no longer wants.
+            token.ThrowIfCancellationRequested();
 
             // Loaded under the same gate as the trim. Loading before taking it let an idle Unload slip in between,
             // which turned this call into a silent pass-through of the untrimmed capture.
@@ -146,18 +166,38 @@ public sealed class VadService : IVadService
             var maxEnd = 0;
             var found = false;
             var voicedSamples = 0L;
+            var timed = _timingDiagnostics ? Stopwatch.GetTimestamp() : 0;
 
             var window = new float[windowSize];
             var iterations = samples.Length / windowSize;
-            for (var i = 0; i < iterations; i++)
+            try
             {
-                Array.Copy(samples, i * windowSize, window, 0, windowSize);
-                detector.AcceptWaveform(window);
-                Drain(detector, ref minStart, ref maxEnd, ref found, ref voicedSamples);
+                for (var i = 0; i < iterations; i++)
+                {
+                    // Between windows: a native window cannot be interrupted, so its boundary is the one place to stop.
+                    token.ThrowIfCancellationRequested();
+                    Array.Copy(samples, i * windowSize, window, 0, windowSize);
+                    detector.AcceptWaveform(window);
+                    Drain(detector, ref minStart, ref maxEnd, ref found, ref voicedSamples);
+                }
+
+                token.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // A canceled trim throws rather than return what it had found so far, which would pass for the speech of
+                // the whole capture, and the detector drops what it was fed; the speech total stays unset.
+                ResetAfterCancel(detector);
+                throw;
             }
 
             detector.Flush();
             Drain(detector, ref minStart, ref maxEnd, ref found, ref voicedSamples);
+
+            if (timed != 0)
+            {
+                TryLogTrimTiming(iterations, (int)audio.Duration.TotalMilliseconds, Stopwatch.GetElapsedTime(timed), found);
+            }
 
             if (!found)
             {
@@ -188,6 +228,57 @@ public sealed class VadService : IVadService
 
             return new CapturedAudio(trimmed, audio.SampleRate);
         }
+    }
+
+    private void ResetAfterCancel(ISpeechSegmentDetector detector)
+    {
+        try
+        {
+            detector.Reset();
+        }
+        catch (Exception ex)
+        {
+            // The cancellation is what the caller needs to see; the next trim resets the detector again before it starts.
+            TryLogResetFailure(ex);
+        }
+    }
+
+    // The two diagnostics the performance flags added to a trim, each written so that nothing it does, the failure's shape
+    // included, can throw: a line that cannot be written must never cost the dictation its trim, or turn a cancellation
+    // into some other failure. Arguments rather than a lambda, so no closure exists on the trim's path.
+    private void TryLogTrimTiming(int windows, int audioMs, TimeSpan elapsed, bool found)
+    {
+        try
+        {
+            _logger.LogDebug(
+                "VAD ran {Windows} windows over {AudioMs} ms of audio in {ElapsedMs:F1} ms (speech found: {Found}).",
+                windows,
+                audioMs,
+                Math.Round(elapsed.TotalMilliseconds, 1),
+                found);
+        }
+        catch
+        {
+            // Nothing useful is left to do.
+        }
+    }
+
+    private void TryLogResetFailure(Exception failure)
+    {
+        try
+        {
+            _logger.LogDebug("Resetting the VAD after a canceled trim failed ({Failure}).", FailureShape.Describe(failure));
+        }
+        catch
+        {
+            // Nothing useful is left to do.
+        }
+    }
+
+    private static (bool WindowCancellation, bool TimingDiagnostics) ReadFlags(PerfFlags? perfFlags)
+    {
+        var flags = perfFlags ?? PerfFlags.None;
+        return (flags.IsOn(PerfFlags.VadWindowCancellation), flags.IsOn(PerfFlags.CaptureTimingDiagnostics));
     }
 
     private static void Drain(

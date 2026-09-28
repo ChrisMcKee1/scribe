@@ -1,3 +1,4 @@
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.Tests.Concurrency;
 using Scribe.Core.Vad;
@@ -231,6 +232,286 @@ public sealed class VadServiceLifecycleTests
         Assert.Equal(0, detectors.Accepted);
     }
 
+    // PerfFlags.VadWindowCancellation (AUDIO-A-08): with it on, a trim given a token stops between windows; with it off
+    // the token is not looked at, so every test here runs both ways.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_trim_canceled_at_a_chosen_window_stops_there_only_with_the_flag(bool flagOn)
+    {
+        using var canceled = new CancellationTokenSource();
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>(), Flags(flagOn));
+        vad.Initialize();
+        detectors.OnAcceptAt = index =>
+        {
+            if (index == 10)
+            {
+                canceled.Cancel();
+            }
+        };
+        var audio = Numbered(seconds: 3);
+
+        if (flagOn)
+        {
+            // Windows 0 to 10 ran; the check before window 11 threw. Nothing of the trim is returned or kept, and the
+            // detector dropped what it was fed.
+            Assert.Throws<OperationCanceledException>(() => vad.Trim(audio, canceled.Token));
+            Assert.Equal(11, detectors.Accepted);
+            Assert.Null(vad.LastSpeechSeconds);
+            Assert.Equal("reset", detectors.LastCall);
+            Assert.Equal(2, detectors.Resets);
+        }
+        else
+        {
+            var trimmed = vad.Trim(audio, canceled.Token);
+            Assert.Equal(audio.Samples.AsSpan(16_000, 8_000).ToArray(), trimmed.Samples);
+            Assert.Equal(audio.Samples.Length / detectors.WindowSize, detectors.Accepted);
+            Assert.Equal(8_000 / (double)Rate, vad.LastSpeechSeconds);
+            Assert.Equal(1, detectors.Resets);
+        }
+
+        Assert.Null(detectors.Violation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_trim_canceled_before_it_starts_loads_nothing_only_with_the_flag(bool flagOn)
+    {
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>(), Flags(flagOn));
+        var audio = Numbered(seconds: 2);
+        var canceled = new CancellationToken(canceled: true);
+
+        if (flagOn)
+        {
+            Assert.Throws<OperationCanceledException>(() => vad.Trim(audio, canceled));
+            Assert.Equal(0, detectors.Loads);
+            Assert.False(vad.IsAvailable);
+        }
+        else
+        {
+            Assert.Equal(8_000, vad.Trim(audio, canceled).Samples.Length);
+            Assert.Equal(1, detectors.Loads);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_trim_canceled_while_it_waits_for_the_gate_does_not_bring_the_model_back_only_with_the_flag(bool flagOn)
+    {
+        using var inDispose = new ManualResetEventSlim();
+        using var releaseDispose = new ManualResetEventSlim();
+        using var releaseAtExit = new ReleaseAtExit(releaseDispose);
+        using var canceled = new CancellationTokenSource();
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>(), Flags(flagOn));
+        vad.Initialize();
+        vad.Trim(CapturedAudio.Empty, canceled.Token); // compiles the call path before the race
+        detectors.OnDispose = () =>
+        {
+            inDispose.Set();
+            releaseDispose.Wait();
+        };
+
+        var unloader = BlockedThreads.Start(vad.Unload);
+        Assert.True(inDispose.Wait(BlockedThreads.SafetyTimeout));
+
+        var audio = Numbered(seconds: 2);
+        CapturedAudio? trimmed = null;
+        Exception? failure = null;
+        var trimmer = BlockedThreads.Start(() =>
+        {
+            try
+            {
+                trimmed = vad.Trim(audio, canceled.Token);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        });
+        BlockedThreads.WaitUntilBlocked(trimmer);
+        canceled.Cancel();
+
+        detectors.OnDispose = null;
+        releaseDispose.Set();
+        BlockedThreads.Join(unloader);
+        BlockedThreads.Join(trimmer);
+
+        if (flagOn)
+        {
+            Assert.IsType<OperationCanceledException>(failure);
+            Assert.Null(trimmed);
+            Assert.Equal(1, detectors.Loads);
+            Assert.False(vad.IsAvailable);
+        }
+        else
+        {
+            Assert.Null(failure);
+            Assert.Equal(8_000, trimmed!.Samples.Length);
+            Assert.Equal(2, detectors.Loads);
+        }
+
+        Assert.Null(detectors.Violation);
+    }
+
+    [Fact]
+    public void A_canceled_trim_leaves_the_detector_ready_for_the_next_one()
+    {
+        using var canceled = new CancellationTokenSource();
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>(), Flags(flagOn: true));
+        detectors.OnAcceptAt = index =>
+        {
+            if (index == 5)
+            {
+                canceled.Cancel();
+            }
+        };
+        var audio = Numbered(seconds: 2);
+        Assert.Throws<OperationCanceledException>(() => vad.Trim(audio, canceled.Token));
+
+        detectors.OnAcceptAt = null;
+        var trimmed = vad.Trim(audio, CancellationToken.None);
+
+        Assert.Equal(audio.Samples.AsSpan(16_000, 8_000).ToArray(), trimmed.Samples);
+        Assert.Equal(8_000 / (double)Rate, vad.LastSpeechSeconds);
+        Assert.Equal(1, detectors.Loads);
+        Assert.Null(detectors.Violation);
+    }
+
+    [Fact]
+    public void An_uncanceled_trim_is_the_same_with_the_flag_on_or_off()
+    {
+        var results = new List<(float[] Samples, double? Speech, int Accepted, int Resets)>();
+        foreach (var flagOn in new[] { false, true })
+        {
+            using var live = new CancellationTokenSource();
+            var detectors = new FakeDetectors { Segments = [(16_000, 8_000), (32_000, 4_000)] };
+            using var vad = new VadService(detectors.Load, new CapturingLogger<VadService>(), Flags(flagOn));
+            var trimmed = vad.Trim(Numbered(seconds: 3), live.Token);
+            results.Add((trimmed.Samples, vad.LastSpeechSeconds, detectors.Accepted, detectors.Resets));
+        }
+
+        Assert.Equal(results[0].Samples, results[1].Samples);
+        Assert.Equal(results[0].Speech, results[1].Speech);
+        Assert.Equal(results[0].Accepted, results[1].Accepted);
+        Assert.Equal(results[0].Resets, results[1].Resets);
+    }
+
+    // PerfFlags.CaptureTimingDiagnostics (AUDIO-O-10): the trim's own time, numbers only.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void With_capture_timing_on_each_trim_logs_its_time_as_numbers(bool timingOn)
+    {
+        const string Template = "VAD ran {Windows} windows over {AudioMs} ms of audio in {ElapsedMs:F1} ms (speech found: {Found}).";
+        var log = new CapturingLogger<VadService>();
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        using var vad = new VadService(
+            detectors.Load, log, timingOn ? PerfFlags.Parse(PerfFlags.CaptureTimingDiagnostics) : PerfFlags.None);
+
+        vad.Trim(Numbered(seconds: 2));
+
+        var lines = log.Entries.Where(entry => entry.Value("{OriginalFormat}") as string == Template).ToList();
+        if (!timingOn)
+        {
+            Assert.Empty(lines);
+            return;
+        }
+
+        var line = Assert.Single(lines);
+        Assert.Equal(2 * Rate / detectors.WindowSize, line.Value("Windows"));
+        Assert.Equal(2_000, line.Value("AudioMs"));
+        Assert.IsType<double>(line.Value("ElapsedMs"));
+        Assert.Equal(true, line.Value("Found"));
+        Assert.All(
+            line.State.Where(pair => pair.Key != "{OriginalFormat}"),
+            pair => Assert.True(pair.Value is int or double or bool, $"{pair.Key} is not a number."));
+    }
+
+    // AUDIO-IR-01: the two diagnostics the flags added to a trim never cost the dictation its trim or its cancellation.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_timing_line_that_cannot_be_written_never_costs_the_trim(bool timingOn)
+    {
+        var flags = timingOn ? PerfFlags.Parse(PerfFlags.CaptureTimingDiagnostics) : PerfFlags.None;
+        var audio = Numbered(seconds: 3);
+        using var reference = new VadService(
+            new FakeDetectors { Segments = [(16_000, 8_000), (32_000, 4_000)] }.Load, new CapturingLogger<VadService>());
+        var expected = reference.Trim(audio);
+
+        var logger = new TemplateFailingLogger<VadService>("VAD ran ");
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000), (32_000, 4_000)] };
+        using var vad = new VadService(detectors.Load, logger, flags);
+
+        var trimmed = vad.Trim(audio);
+
+        Assert.Equal(expected.Samples, trimmed.Samples);
+        Assert.Equal(12_000 / (double)Rate, vad.LastSpeechSeconds);
+        Assert.Equal(timingOn ? 1 : 0, logger.Thrown);
+        Assert.Contains("VAD trimmed {FromMs} ms to {ToMs} ms of speech.", logger.Written);
+        Assert.Null(detectors.Violation);
+    }
+
+    [Fact]
+    public void A_reset_failure_that_cannot_be_logged_still_ends_in_the_cancellation()
+    {
+        using var canceled = new CancellationTokenSource();
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        var logger = new TemplateFailingLogger<VadService>("Resetting the VAD ");
+        using var vad = new VadService(detectors.Load, logger, Flags(flagOn: true));
+        detectors.OnAcceptAt = index =>
+        {
+            if (index == 5)
+            {
+                detectors.ResetFailure = new InvalidOperationException("The native detector failed to reset.");
+                canceled.Cancel();
+            }
+        };
+
+        // Exactly the cancellation, not the reset's failure and not the log sink's.
+        var thrown = Assert.Throws<OperationCanceledException>(() => vad.Trim(Numbered(seconds: 2), canceled.Token));
+
+        Assert.Equal(canceled.Token, thrown.CancellationToken);
+        Assert.Equal(1, logger.Thrown);
+        Assert.Null(vad.LastSpeechSeconds);
+    }
+
+    [Fact]
+    public void A_reset_failure_after_a_cancel_is_logged_by_its_shape_only()
+    {
+        const string FailureText = "The native detector failed to reset on user text.";
+        using var canceled = new CancellationTokenSource();
+        var detectors = new FakeDetectors { Segments = [(16_000, 8_000)] };
+        var log = new CapturingLogger<VadService>();
+        using var vad = new VadService(detectors.Load, log, Flags(flagOn: true));
+        detectors.OnAcceptAt = index =>
+        {
+            if (index == 5)
+            {
+                detectors.ResetFailure = new InvalidOperationException(FailureText);
+                canceled.Cancel();
+            }
+        };
+
+        Assert.Throws<OperationCanceledException>(() => vad.Trim(Numbered(seconds: 2), canceled.Token));
+
+        var line = Assert.Single(log.Entries, entry =>
+            entry.Value("{OriginalFormat}") as string == "Resetting the VAD after a canceled trim failed ({Failure}).");
+        Assert.Null(line.Exception);
+        Assert.False(line.Mentions(FailureText), "The reset failure's text reached the log.");
+    }
+
+    private static PerfFlags Flags(bool flagOn) => flagOn ? PerfFlags.Parse(PerfFlags.VadWindowCancellation) : PerfFlags.None;
+
     // Each sample carries its own index, so a trimmed span can be checked against the exact source slice.
     private static CapturedAudio Numbered(int seconds)
     {
@@ -248,6 +529,7 @@ public sealed class VadServiceLifecycleTests
         private int _loads;
         private int _disposals;
         private int _accepted;
+        private int _resets;
 
         public int WindowSize { get; } = 512;
 
@@ -258,6 +540,9 @@ public sealed class VadServiceLifecycleTests
 
         public Action? OnAccept { get; set; }
 
+        /// <summary>Runs inside each accepted window with its index since the last reset (the barrier the cancellation tests use).</summary>
+        public Action<int>? OnAcceptAt { get; set; }
+
         public Action? OnDispose { get; set; }
 
         public int Loads => Volatile.Read(ref _loads);
@@ -265,6 +550,14 @@ public sealed class VadServiceLifecycleTests
         public int Disposals => Volatile.Read(ref _disposals);
 
         public int Accepted => Volatile.Read(ref _accepted);
+
+        public int Resets => Volatile.Read(ref _resets);
+
+        /// <summary>Thrown by every reset from the moment it is set (none when null).</summary>
+        public Exception? ResetFailure { get; set; }
+
+        /// <summary>What the detector did last: "reset", "accept", "flush" or "pop".</summary>
+        public string? LastCall { get; private set; }
 
         /// <summary>Set when the detector is freed while in use, or used after being freed.</summary>
         public string? Violation { get; private set; }
@@ -279,19 +572,31 @@ public sealed class VadServiceLifecycleTests
         {
             private readonly Queue<(int Start, int Length)> _pending = new();
             private int _inUse;
+            private int _sinceReset;
             private bool _disposed;
 
             public int WindowSize => owner.WindowSize;
 
-            public void Reset() => Use(_pending.Clear);
+            public void Reset() => Use("reset", () =>
+            {
+                Interlocked.Increment(ref owner._resets);
+                if (owner.ResetFailure is { } failure)
+                {
+                    throw failure;
+                }
 
-            public void AcceptWaveform(float[] window) => Use(() =>
+                _sinceReset = 0;
+                _pending.Clear();
+            });
+
+            public void AcceptWaveform(float[] window) => Use("accept", () =>
             {
                 Interlocked.Increment(ref owner._accepted);
                 owner.OnAccept?.Invoke();
+                owner.OnAcceptAt?.Invoke(_sinceReset++);
             });
 
-            public void Flush() => Use(() =>
+            public void Flush() => Use("flush", () =>
             {
                 foreach (var segment in owner.Segments)
                 {
@@ -303,7 +608,7 @@ public sealed class VadServiceLifecycleTests
             {
                 var popped = (Start: 0, Length: 0);
                 var found = false;
-                Use(() => found = _pending.TryDequeue(out popped));
+                Use("pop", () => found = _pending.TryDequeue(out popped));
                 (start, length) = popped;
                 return found;
             }
@@ -320,13 +625,14 @@ public sealed class VadServiceLifecycleTests
                 Interlocked.Increment(ref owner._disposals);
             }
 
-            private void Use(Action action)
+            private void Use(string call, Action action)
             {
                 if (_disposed)
                 {
                     owner.Violation = "used after dispose";
                 }
 
+                owner.LastCall = call;
                 Interlocked.Increment(ref _inUse);
                 try
                 {

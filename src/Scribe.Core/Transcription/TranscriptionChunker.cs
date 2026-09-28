@@ -48,6 +48,17 @@ internal static class TranscriptionChunker
     /// </summary>
     private const double EnergyWindowSeconds = 0.1;
 
+    // The warm-up's rate: low enough that a capture just over the chunk limit stays a small array. The planner's code does
+    // not depend on the rate, only its sizes do.
+    private const int WarmUpSampleRate = 500;
+
+    /// <summary>
+    /// <see cref="Scribe.Core.Diagnostics.PerfFlags.WarmManagedAudioPath"/>, through
+    /// <see cref="Audio.ManagedAudioPathWarmup"/>: plans a silent capture just over <see cref="MaxChunkSeconds"/>, so the
+    /// seam planner the first long dictation runs is already compiled. Nothing is decoded.
+    /// </summary>
+    internal static void WarmUp() => _ = Plan(new float[(MaxChunkSeconds * WarmUpSampleRate) + 1], WarmUpSampleRate);
+
     /// <summary>
     /// Splits <paramref name="samples"/> into contiguous, non-overlapping spans of between
     /// <see cref="MinChunkSeconds"/> and <see cref="MaxChunkSeconds"/>, each seam within

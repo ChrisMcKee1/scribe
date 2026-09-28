@@ -470,6 +470,11 @@ public partial class App : Application
                 vad.Initialize();
                 transcription.Initialize();
                 log.LogInformation("Transcription engine warm-loaded.");
+
+                // PerfFlags.WarmManagedAudioPath (off by default, so this does nothing): once per process, the managed
+                // code the first dictation's stop compiles, after the models so it never competes with their load.
+                // Never throws.
+                services.GetRequiredService<ManagedAudioPathWarmup>().RunOnce();
             }
             catch (FileNotFoundException ex)
             {

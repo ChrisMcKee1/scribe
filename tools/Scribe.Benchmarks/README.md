@@ -24,6 +24,14 @@ dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak --cycles 300 -
 | `HotPathBenchmarks` | cleanup chunking, `AudioCaptureService.ReadAll`, a 100-rule dictionary pass, history audio serialization |
 | `ProcessDetailedBenchmarks` | `TextPostProcessor.ProcessDetailed` for short and long text, a 20-rule and an every-library (about 1,500 rule) dictionary, a source identical to the text or a raw transcript behind cleaned text, and snippets on or off. The `FullRescan` baseline arm is the original algorithm, which normalizes and scans the source a second time even when it is the text itself; `ProcessDetailed` is what ships and reuses that work when the source is identical. Both return identical results (pinned by `PostProcessorSourcePassTests`). |
 | `CaptureAssemblyBenchmarks` | allocations of assembling a capture from synthetic 48 kHz stereo float packets and converting it to 16 kHz mono. `FreshReservation` is the former shape (a new 30-second `MemoryStream` per capture); `ReusedBuffer` is the shipping `CaptureBufferPool` path. At 40 s both arms outgrow the reservation; the pool drops the grown buffer but keeps the zeroed reservation it started with, so the next capture reuses it. |
+| `AnalyzerOrderBenchmarks` | the capture signal analyzer every stop runs (AUDIO-O-06): the shipping `CaptureSignalAnalyzer.Analyze` against the single 0.5.0 loop kept verbatim as `Original`, 1 and 2 channels of 48 kHz float, 9.5 s and 55 s. The setup refuses to run unless both give the same report bit for bit. |
+| `ManagedAudioPathFirstCallBenchmarks` | what the first dictation's stop compiles in a fresh process, without and (on a build that has it) after the `PerfFlags.WarmManagedAudioPath` warm-up: the first conversion, the first VAD trim, the first long capture's seam plan, and the warm-up's own cost (AUDIO-O-13). Run it cold: `--filter *ManagedAudioPathFirstCallBenchmarks* --strategy ColdStart --launchCount 6 --warmupCount 0 --iterationCount 1`; under the default job it measures the warm floor. Needs the Silero model through `SCRIBE_MODELS_DIR`. |
+| `VadWindowCancellationBenchmarks` | an uncanceled 200 s VAD trim through the real Silero model with `PerfFlags.VadWindowCancellation` off and on (AUDIO-A-08; the row allows 3%). Needs `SCRIBE_MODELS_DIR`. |
+
+The audio classes build on older baselines too: anything a build may lack (the warm-up type, a flag's constructor or
+overload) is found by reflection, so the same file measures the baseline and the change. Their speech comes from the
+committed synthetic fixtures in `tests\fixtures\speech`, and their models from `SCRIBE_MODELS_DIR` under a data root of
+their own, never the app's data folder.
 
 ## Input experiments
 

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -38,6 +39,12 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private readonly CaptureScratchPool _scratch = new();
     private readonly object _sync = new();
 
+    // PerfFlags.CaptureTimingDiagnostics, read once at construction. With it on, each capture gets a CaptureTiming bound
+    // under _sync before its stream starts and dropped by Cleanup; the capture thread only stamps it (Volatile.Read, then
+    // CaptureTiming.MarkPacket). With it off the record is never made, and nothing is timed or logged for it.
+    private readonly bool _captureTimingDiagnostics;
+    private CaptureTiming? _timing;
+
     // The listeners for InputDevicesChanged, kept here so the watcher knows whether anything is listening.
     private readonly object _subscriptionGate = new();
     private Action<IReadOnlyList<AudioDevice>>? _inputDevicesChanged;
@@ -72,24 +79,26 @@ public sealed class AudioCaptureService : IAudioCaptureService
     /// </summary>
     internal static readonly TimeSpan DisposeOpenWait = TimeSpan.FromSeconds(10);
 
-    public AudioCaptureService(ILogger<AudioCaptureService> logger)
-        : this(logger, new WasapiCaptureDevices(logger), DisposeOpenWait, WatchWindowsEndpoints(logger))
+    public AudioCaptureService(ILogger<AudioCaptureService> logger, PerfFlags? perfFlags = null)
+        : this(logger, new WasapiCaptureDevices(logger), DisposeOpenWait, WatchWindowsEndpoints(logger), perfFlags)
     {
     }
 
     /// <summary>
-    /// Test seam: the capture endpoints, the bound disposal waits for an open in progress, and what watches the endpoints
-    /// for changes (nothing when null).
+    /// Test seam: the capture endpoints, the bound disposal waits for an open in progress, what watches the endpoints
+    /// for changes (nothing when null), and the performance flags (all off when null).
     /// </summary>
     internal AudioCaptureService(
         ILogger<AudioCaptureService> logger,
         ICaptureDevices devices,
         TimeSpan disposeOpenWait,
-        Func<ICaptureDevices, InputDeviceWatcher>? watch = null)
+        Func<ICaptureDevices, InputDeviceWatcher>? watch = null,
+        PerfFlags? perfFlags = null)
     {
         _logger = logger;
         _devices = devices;
         _disposeOpenWait = disposeOpenWait;
+        _captureTimingDiagnostics = (perfFlags ?? PerfFlags.None).IsOn(PerfFlags.CaptureTimingDiagnostics);
         if (watch is not null)
         {
             // Start never throws: a watcher that cannot register logs it and tries again when the list is next read.
@@ -166,6 +175,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public bool Start(string? deviceId = null, long owner = 0)
     {
+        var requested = _captureTimingDiagnostics ? Stopwatch.GetTimestamp() : 0;
         lock (_sync)
         {
             // Checked under the lock disposal waits for, so a Start that gets the lock once disposal began never reaches
@@ -226,7 +236,22 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     _captureFormat.BitsPerSample,
                     _captureFormat.Encoding);
 
+                // Bound to this capture before its stream starts: NAudio starts the stream on its capture thread, whose
+                // first packet can come before StartRecording returns, and before _captureOwner below is assigned.
+                CaptureTiming? timing = null;
+                if (_captureTimingDiagnostics)
+                {
+                    timing = new CaptureTiming(owner, _capture, requested);
+                    Volatile.Write(ref _timing, timing);
+                    timing.StreamStartRequested = Stopwatch.GetTimestamp();
+                }
+
                 _capture.StartRecording();
+                if (timing is not null)
+                {
+                    timing.StartReturned = Stopwatch.GetTimestamp();
+                }
+
                 _captureOwner = owner;
                 IsCapturing = true;
                 return true;
@@ -254,6 +279,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
             _stopRequested = true;
             capture = _capture;
+            _timing?.MarkStopRequested(Stopwatch.GetTimestamp());
         }
 
         try
@@ -275,6 +301,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         WaveFormat? format;
         ManualResetEventSlim? stopped;
         bool stopAlreadyRequested;
+        CaptureTiming? timing;
 
         lock (_sync)
         {
@@ -294,6 +321,9 @@ public sealed class AudioCaptureService : IAudioCaptureService
             // was asked for (disposal stops a capture nobody requested a stop for), not as a stream that ended on its own.
             stopAlreadyRequested = _stopRequested;
             _stopRequested = true;
+
+            timing = _timing;
+            timing?.MarkStopRequested(Stopwatch.GetTimestamp());
         }
 
         var quiesced = false;
@@ -309,6 +339,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 throw new TimeoutException("The microphone did not stop within three seconds.");
             }
 
+            var stopEnded = timing is null ? 0 : Stopwatch.GetTimestamp();
+
             // Only a stop that completed its handshake keeps the working buffer for the next capture;
             // one that timed out drops it. Either way Cleanup disposes the capture, which joins its
             // thread, before the buffer is zeroed and goes back.
@@ -321,10 +353,18 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
             if (raw is null || format is null || raw.Length == 0)
             {
+                if (timing is not null)
+                {
+                    TryLogTiming(timing, stopEnded, analyzed: 0, converted: 0, withAudio: false);
+                }
+
                 return CapturedAudio.Empty;
             }
 
-            var captured = ConvertCapture(raw, format, report => LastSignalReport = report, _logger, _scratch);
+            long analyzed = 0, converted = 0;
+            var captured = timing is null
+                ? ConvertCapture(raw, format, report => LastSignalReport = report, _logger, _scratch)
+                : ConvertTimed(raw, format, out analyzed, out converted);
             var signal = LastSignalReport!;
 
             // The signal shape is on this line deliberately. It separates failure modes that produce
@@ -339,11 +379,57 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 signal.Describe());
 
             WarnAboutSignalProblems(signal);
+            if (timing is not null)
+            {
+                TryLogTiming(timing, stopEnded, analyzed, converted, withAudio: true);
+            }
+
             return captured;
         }
         finally
         {
             Cleanup(capture, raw, stopped, retainBuffer: quiesced);
+        }
+    }
+
+    // PerfFlags.CaptureTimingDiagnostics: the conversion Stop runs, stamped when the signal analysis ends and when the
+    // conversion does. A method of its own, so the closure the stamp needs never exists with the flag off.
+    private CapturedAudio ConvertTimed(CaptureRecording raw, WaveFormat format, out long analyzed, out long converted)
+    {
+        long analysisEnded = 0;
+        var captured = ConvertCapture(
+            raw,
+            format,
+            report =>
+            {
+                LastSignalReport = report;
+                analysisEnded = Stopwatch.GetTimestamp();
+            },
+            _logger,
+            _scratch);
+
+        converted = Stopwatch.GetTimestamp();
+        analyzed = analysisEnded;
+        return captured;
+    }
+
+    // A diagnostic line on the stop path: it must never cost the user the capture it describes.
+    private void TryLogTiming(CaptureTiming timing, long stopEnded, long analyzed, long converted, bool withAudio)
+    {
+        try
+        {
+            if (withAudio)
+            {
+                timing.LogWithAudio(_logger, stopEnded, analyzed, converted);
+            }
+            else
+            {
+                timing.LogWithoutAudio(_logger, stopEnded);
+            }
+        }
+        catch
+        {
+            // Nothing useful is left to do.
         }
     }
 
@@ -404,18 +490,48 @@ public sealed class AudioCaptureService : IAudioCaptureService
         return new CapturedAudio(samples, TargetSampleRate);
     }
 
-    private void OnDataAvailable(object? sender, WaveInEventArgs e)
+    /// <summary>
+    /// <see cref="PerfFlags.WarmManagedAudioPath"/>, through <see cref="ManagedAudioPathWarmup"/>: runs
+    /// <see cref="ConvertCapture"/> over a tenth of a second of silence at 48 kHz float, one channel and two (the formats
+    /// nearly every capture has), so the conversion a stop runs is compiled before the first dictation needs it. Its own
+    /// recording and scratch pool, dropped afterwards: nothing of it is kept, and the capture's own buffers are never
+    /// touched. It is not free of large object heap arrays: the resampler's end-of-stream padding for the conversion's
+    /// 4,096-sample request is about 98 KB (measured at 98,336 bytes by the review of AUDIO-O-13), once per channel count.
+    /// </summary>
+    internal static void WarmConversionPath()
+    {
+        for (var channels = 1; channels <= 2; channels++)
+        {
+            var format = WaveFormat.CreateIeeeFloatWaveFormat(48_000, channels);
+            var silence = new byte[format.AverageBytesPerSecond / 10];
+            var recording = new CaptureRecording(new byte[silence.Length], reused: false);
+            recording.Write(silence);
+            _ = ConvertCapture(recording, format, static _ => { }, logger: null, new CaptureScratchPool());
+        }
+    }
+
+    private void OnDataAvailable(object? sender, WaveInEventArgs e) => OnPacket(sender, e.Buffer, e.BytesRecorded);
+
+    /// <summary>
+    /// One capture packet, on the capture thread. A method of its own so a test can measure what it allocates, which must
+    /// stay nothing: the recording keeps a reservation, and the timing record only takes a stamp.
+    /// </summary>
+    internal void OnPacket(object? sender, byte[] buffer, int bytesRecorded)
     {
         CaptureRecording? raw = _raw;
         WaveFormat? format = _captureFormat;
-        if (raw is null || format is null || e.BytesRecorded == 0)
+        if (raw is null || format is null || bytesRecorded == 0)
         {
             return;
         }
 
+        // PerfFlags.CaptureTimingDiagnostics: this capture's own record counts the packet and stamps the first one; with
+        // the flag off there is no record.
+        Volatile.Read(ref _timing)?.MarkPacket(sender);
+
         // Peak is computed unconditionally (not just for the level meter): the running maximum is
         // what lets the pipeline tell "you spoke while muted" apart from "no speech in the audio".
-        float peak = AppendChunk(raw, e.Buffer.AsSpan(0, e.BytesRecorded), format);
+        float peak = AppendChunk(raw, buffer.AsSpan(0, bytesRecorded), format);
         if (peak > _capturePeak)
         {
             _capturePeak = peak;
@@ -904,6 +1020,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
             _device = null;
             _stopRequested = false;
             _captureOwner = 0;
+            Volatile.Write(ref _timing, null);
         }
     }
 

@@ -3,6 +3,7 @@ using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
+using Scribe.Core.Tests.Concurrency;
 using Scribe.Core.Vad;
 using Xunit;
 
@@ -12,7 +13,7 @@ namespace Scribe.Core.Tests;
 /// VAD behavior against the real Silero v5 model. The model-dependent tests early-return when
 /// the model/fixtures are not present (e.g. CI without Download-Models.ps1).
 /// </summary>
-public sealed class VadServiceTests
+public sealed class VadServiceTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public void Trim_passes_through_when_sample_rate_is_not_16k()
@@ -192,6 +193,88 @@ public sealed class VadServiceTests
         vad.Unload(); // must not throw and must not load anything
 
         Assert.False(vad.IsAvailable);
+    }
+
+    /// <summary>
+    /// <see cref="Scribe.Core.Diagnostics.PerfFlags.VadWindowCancellation"/> on the real model (AUDIO-A-08): a 200 s trim
+    /// canceled part of the way through throws long before the whole trim would have ended, publishes no speech total,
+    /// and the detector then gives exactly the answer it gave before the cancel.
+    /// </summary>
+    [Fact]
+    public void A_long_trim_canceled_part_of_the_way_through_stops_between_windows_on_the_real_model()
+    {
+        // A data root of the test's own, so nothing here reads the app's data folder; the models come from SCRIBE_MODELS_DIR.
+        var locator = new ModelLocator(new AppPaths(Path.Combine(Path.GetTempPath(), "ScribeVadCancelTest", "no-data-root")));
+        var models = locator.Resolve();
+        if (!models.VadAvailable) return;
+
+        var wav = Path.Combine(models.Directory, "test_wavs", "en.wav");
+        if (!File.Exists(wav)) return;
+
+        var speech = LoadResampled16kMono(wav);
+        if (speech.Length == 0) return;
+
+        // 200 s: the speech again and again, a second of silence after each.
+        var samples = new float[RequiredSampleRate(200)];
+        for (var at = 0; at < samples.Length; at += speech.Length + RequiredSampleRate(1))
+        {
+            Array.Copy(speech, 0, samples, at, Math.Min(speech.Length, samples.Length - at));
+        }
+
+        var audio = new CapturedAudio(samples, 16000);
+        using var vad = new VadService(
+            locator,
+            NullLogger<VadService>.Instance,
+            Scribe.Core.Diagnostics.PerfFlags.Parse(Scribe.Core.Diagnostics.PerfFlags.VadWindowCancellation));
+        vad.Initialize();
+
+        var whole = System.Diagnostics.Stopwatch.StartNew();
+        var expected = vad.Trim(audio, CancellationToken.None);
+        whole.Stop();
+        var expectedSpeech = vad.LastSpeechSeconds;
+        Assert.False(expected.IsEmpty);
+
+        // Canceled from a thread of its own, a tenth of the way into the trim, so a busy thread pool cannot delay it. The
+        // thread is owned through every failure: it is joined in the finally, before its token source is disposed, and
+        // what its work threw is rethrown here (BlockedThreads). The moment of the cancel is the one it records.
+        long cancelRequested = 0;
+        long thrown = 0;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        using (var canceled = new CancellationTokenSource())
+        {
+            var canceler = BlockedThreads.Start(() =>
+            {
+                Thread.Sleep(whole.Elapsed / 10);
+                Volatile.Write(ref cancelRequested, System.Diagnostics.Stopwatch.GetTimestamp());
+                canceled.Cancel();
+            });
+
+            try
+            {
+                Assert.Throws<OperationCanceledException>(() => vad.Trim(audio, canceled.Token));
+                thrown = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
+            finally
+            {
+                BlockedThreads.Join(canceler);
+            }
+        }
+
+        var requested = Volatile.Read(ref cancelRequested);
+        Assert.True(requested != 0 && thrown >= requested, "The trim threw before its cancel was requested.");
+        var ran = System.Diagnostics.Stopwatch.GetElapsedTime(started, thrown);
+        Assert.True(
+            ran < whole.Elapsed * 0.75,
+            $"The canceled trim ran {ran.TotalMilliseconds:F0} ms of a {whole.Elapsed.TotalMilliseconds:F0} ms trim.");
+        Assert.Null(vad.LastSpeechSeconds);
+        output.WriteLine(
+            $"200 s trim: {whole.Elapsed.TotalMilliseconds:F1} ms whole; the cancel was requested " +
+            $"{System.Diagnostics.Stopwatch.GetElapsedTime(started, requested).TotalMilliseconds:F1} ms into the canceled trim, " +
+            $"which threw {System.Diagnostics.Stopwatch.GetElapsedTime(requested, thrown).TotalMilliseconds:F1} ms after it.");
+
+        var again = vad.Trim(audio, CancellationToken.None);
+        Assert.True(expected.Samples.AsSpan().SequenceEqual(again.Samples), "The trim after the cancel moved.");
+        Assert.Equal(expectedSpeech, vad.LastSpeechSeconds);
     }
 
     private static int RequiredSampleRate(int seconds) => 16000 * seconds;

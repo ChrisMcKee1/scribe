@@ -22,7 +22,6 @@ public sealed class PerfFlags
     private static readonly string[] KnownNames =
     [
         AggressiveIdleGc,
-        BoundedConversionReads,
         BoundedUsageTokenLookup,
         CacheWordPackPreview,
         CacheWordPackSort,
@@ -50,7 +49,6 @@ public sealed class PerfFlags
     // The flags, one constant per name (0.5.1). What each changes, and the old path it keeps when off, is on the
     // implementation that reads it.
     public const string AggressiveIdleGc = nameof(AggressiveIdleGc);
-    public const string BoundedConversionReads = nameof(BoundedConversionReads);
     public const string BoundedUsageTokenLookup = nameof(BoundedUsageTokenLookup);
     public const string CacheWordPackPreview = nameof(CacheWordPackPreview);
     public const string CacheWordPackSort = nameof(CacheWordPackSort);

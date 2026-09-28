@@ -47,6 +47,44 @@ internal sealed record CapturedLogEntry(
     public object? Value(string key) => State.FirstOrDefault(pair => pair.Key == key).Value;
 }
 
+/// <summary>
+/// A logger whose sink fails for every entry whose template starts with one prefix, and keeps every other entry: for the
+/// diagnostics that must never cost the work they describe. Counts how often it threw, so a test can prove the site ran.
+/// </summary>
+internal sealed class TemplateFailingLogger<T>(string templatePrefix) : ILogger<T>
+{
+    private readonly ConcurrentQueue<string> _written = new();
+    private int _thrown;
+
+    /// <summary>The templates of the entries it kept.</summary>
+    public IReadOnlyList<string> Written => [.. _written];
+
+    /// <summary>How many entries it refused by throwing.</summary>
+    public int Thrown => Volatile.Read(ref _thrown);
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        var values = state as IReadOnlyList<KeyValuePair<string, object?>> ?? [];
+        var template = values.FirstOrDefault(pair => pair.Key == "{OriginalFormat}").Value as string ?? string.Empty;
+        if (template.StartsWith(templatePrefix, StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _thrown);
+            throw new IOException("The log sink failed.");
+        }
+
+        _written.Enqueue(template);
+    }
+}
+
 /// <summary>Deterministic proof that a race actually overlapped, instead of a sleep that hopes it did.</summary>
 internal static class BlockedThreads
 {

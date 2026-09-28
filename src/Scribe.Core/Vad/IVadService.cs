@@ -36,6 +36,15 @@ public interface IVadService : IDisposable
     CapturedAudio Trim(CapturedAudio audio);
 
     /// <summary>
+    /// <see cref="Trim(CapturedAudio)"/> for a dictation that can be abandoned. With
+    /// <c>PerfFlags.VadWindowCancellation</c> on, the trim checks <paramref name="cancellationToken"/> before it waits for
+    /// the model, again before it loads it, and between windows, and a canceled trim throws
+    /// <see cref="OperationCanceledException"/>: never a partial trim, and the detector is reset for the next one. With the
+    /// flag off, and in an implementation that does not honour it, this is <see cref="Trim(CapturedAudio)"/>.
+    /// </summary>
+    CapturedAudio Trim(CapturedAudio audio, CancellationToken cancellationToken) => Trim(audio);
+
+    /// <summary>
     /// Releases the loaded VAD model. The service stays usable: the next <see cref="Trim"/> or
     /// <see cref="Initialize"/> reloads it on demand. No-op when nothing is loaded.
     /// </summary>
