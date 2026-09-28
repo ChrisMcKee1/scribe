@@ -95,21 +95,73 @@ public sealed class SaveCommandsEquivalenceTests
         Assert.Equal("19/2067", collision[0].Failure); // SQLITE_CONSTRAINT_UNIQUE; the save rolled back
     }
 
-    [Fact]
-    public void A_seeded_random_corpus_of_saves_ends_the_same_every_way()
+    [Theory]
+    [InlineData("UTF-8")]
+    [InlineData("UTF-16le")]
+    [InlineData("UTF-16be")]
+    public void A_seeded_random_corpus_of_saves_ends_the_same_every_way(string encoding)
     {
         var random = new Random(20260921);
         var failures = 0;
         for (var iteration = 0; iteration < 400; iteration++)
         {
             var (seed, entries) = RandomSave(random);
-            var outcomes = EachWay(seed, entries);
-            AssertAllSame(outcomes, $"iteration {iteration}");
+            var outcomes = EachWay(seed, entries, encoding: encoding);
+            AssertAllSame(outcomes, $"{encoding} iteration {iteration}");
             failures += outcomes[0].Failure is null ? 0 : 1;
         }
 
         // The corpus reaches both outcomes, so the comparison covers failures as well as successes.
         Assert.InRange(failures, 20, 380);
+    }
+
+    public static TheoryData<string, string> Utf16Collisions() => new()
+    {
+        // Stored text whose UTF-16 bytes are the UTF-8 bytes of the edit's text: U+A9C3 is C3 A9 in UTF-16LE, U+C3A9 is
+        // C3 A9 in UTF-16BE, and U+00E9 is C3 A9 in UTF-8. A diff comparing UTF-8 bytes would take the edit as done.
+        { "UTF-16le", "\uA9C3" },
+        { "UTF-16be", "\uC3A9" },
+        { "UTF-8", "\uA9C3" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Utf16Collisions))]
+    public void An_edit_whose_utf8_bytes_equal_the_stored_utf16_bytes_is_written_every_way(string encoding, string stored)
+    {
+        foreach (var flags in new[]
+                 {
+                     PerfFlags.None, PerfFlags.Parse(PerfFlags.ReuseSaveCommands), PerfFlags.Parse(PerfFlags.DictionaryDiffSave),
+                 })
+        {
+            using var database = ScribeDatabase.CreateInMemory(textEncoding: encoding);
+            database.Initialize();
+            Assert.Equal(encoding, Pragma(database, "encoding"));
+            var repository = new DictionaryRepository(database, flags);
+            var saved = repository.Add(new DictionaryEntry(0, stored, stored, true, true));
+
+            repository.SaveAll([saved with { Pattern = "\u00E9", Replacement = "\u00E9" }]);
+
+            var row = Assert.Single(repository.GetAll());
+            Assert.Equal("\u00E9", row.Pattern);
+            Assert.Equal("\u00E9", row.Replacement);
+        }
+    }
+
+    [Theory]
+    [InlineData("UTF-16le")]
+    [InlineData("UTF-16be")]
+    public void An_id_listed_twice_ends_with_its_last_entry_in_a_utf16_database_every_way(string encoding)
+    {
+        var outcomes = EachWay(
+            seed: [(5, "\u00E9", "\uA9C3", 1, 1), (6, "\uC3A9", "Y", 1, 2)],
+            [
+                new(5, "\u00E9", "\u00E9", true, true), new(5, "\u00E9", "\uA9C3", true, true),
+                new(6, "\uC3A9", "\u00E9", true, true), new(6, "\uC3A9", "Y", true, true),
+            ],
+            encoding: encoding);
+
+        AssertAllSame(outcomes);
+        Assert.Null(outcomes[0].Failure);
     }
 
     [Fact]
@@ -230,10 +282,11 @@ public sealed class SaveCommandsEquivalenceTests
     private static Outcome[] EachWay(
         IEnumerable<(long Id, string Pattern, string Replacement, object WholeWord, object Enabled)> seed,
         IReadOnlyList<DictionaryEntry> entries,
-        string[]? rawSeed = null) =>
+        string[]? rawSeed = null,
+        string encoding = "UTF-8") =>
         [.. Modes.Select(mode =>
         {
-            using var database = ScribeDatabase.CreateInMemory();
+            using var database = ScribeDatabase.CreateInMemory(textEncoding: encoding);
             database.Initialize();
             SeedDictionary(database, seed, rawSeed ?? []);
             string? failure = null;
@@ -264,6 +317,34 @@ public sealed class SaveCommandsEquivalenceTests
         }
     }
 
+    // Texts with characters whose UTF-8 and UTF-16 bytes collide (see Utf16Collisions), so the corpus reaches the case a
+    // byte comparison in the wrong encoding would get wrong: a whole text of such characters, and suffixes of them.
+    private static readonly string[] Suffixes = ["", "", "\u00E9", "\uA9C3", "\uC3A9", "\u00E9\u00E9"];
+
+    private static readonly string[] Colliding = ["\u00E9", "\uA9C3", "\uC3A9", "\u00E9\u00E9", "\uA9C3\uA9C3", "\uC3A9\uC3A9"];
+
+    private static string Suffix(Random random) => Suffixes[random.Next(Suffixes.Length)];
+
+    private static string Replacement(Random random) =>
+        random.Next(3) == 0 ? Colliding[random.Next(Colliding.Length)] : "r" + random.Next(3) + Suffix(random);
+
+    // Unique per row: row i may take the i-th wholly colliding text, which no other row can take.
+    private static string Pattern(Random random, int i) =>
+        i < Colliding.Length && random.Next(2) == 0 ? Colliding[i] : "p" + i + Suffix(random);
+
+    // The text with each colliding character swapped for its twin: U+00E9 for U+A9C3 or U+C3A9, and back.
+    private static string CollidingTwin(string text, Random random)
+    {
+        if (text.Contains('\u00E9'))
+        {
+            return text.Replace('\u00E9', random.Next(2) == 0 ? '\uA9C3' : '\uC3A9');
+        }
+
+        return text.Contains('\uA9C3') || text.Contains('\uC3A9')
+            ? text.Replace('\uA9C3', '\u00E9').Replace('\uC3A9', '\u00E9')
+            : text + "\u00E9";
+    }
+
     private static (List<(long, string, string, object, object)> Seed, List<DictionaryEntry> Entries) RandomSave(Random random)
     {
         var seed = new List<(long, string, string, object, object)>();
@@ -272,27 +353,33 @@ public sealed class SaveCommandsEquivalenceTests
         {
             object wholeWord = random.Next(6) switch { 0 => 0L, 1 => 7L, _ => 1L };
             object enabled = random.Next(7) switch { 0 => 0L, 1 => 2L, 2 => "1", _ => 1L };
-            seed.Add((i + 1, "p" + i, "r" + random.Next(3), wholeWord, enabled));
+            seed.Add((i + 1, Pattern(random, i), Replacement(random), wholeWord, enabled));
         }
 
         var entries = new List<DictionaryEntry>();
         foreach (var (id, pattern, replacement, wholeWord, enabled) in seed)
         {
             var asRead = new DictionaryEntry(id, pattern, replacement, !Equals(wholeWord, 0L), !Equals(enabled, 0L));
-            switch (random.Next(8))
+            switch (random.Next(9))
             {
                 case 0: break; // deleted
-                case 1: entries.Add(asRead with { Replacement = "changed" + random.Next(2) }); break;
-                case 2: entries.Add(asRead with { Pattern = "p" + random.Next(count + 3) }); break;
+                case 1: entries.Add(asRead with { Replacement = "changed" + random.Next(2) + Suffix(random) }); break;
+                case 2: entries.Add(asRead with { Pattern = "p" + random.Next(count + 3) + Suffix(random) }); break;
                 case 3: entries.Add(asRead with { Enabled = !asRead.Enabled }); break;
-                case 4: entries.Add(asRead with { Replacement = "first" }); entries.Add(asRead); break;
+                case 4: entries.Add(asRead with { Replacement = "first" + Suffix(random) }); entries.Add(asRead); break;
+                case 5:
+                    entries.Add(asRead with
+                    {
+                        Pattern = CollidingTwin(asRead.Pattern, random), Replacement = CollidingTwin(asRead.Replacement, random),
+                    });
+                    break;
                 default: entries.Add(asRead); break;
             }
         }
 
         for (var i = random.Next(0, 4); i > 0; i--)
         {
-            entries.Add(new DictionaryEntry(0, "p" + random.Next(count + 4), "new", random.Next(2) == 0, true));
+            entries.Add(new DictionaryEntry(0, "p" + random.Next(count + 4) + Suffix(random), "new", random.Next(2) == 0, true));
         }
 
         if (random.Next(3) == 0)
@@ -468,5 +555,13 @@ public sealed class SaveCommandsEquivalenceTests
             var j = random.Next(i + 1);
             (items[i], items[j]) = (items[j], items[i]);
         }
+    }
+
+    private static string Pragma(ScribeDatabase database, string name)
+    {
+        using var connection = database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA {name};";
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture)!;
     }
 }

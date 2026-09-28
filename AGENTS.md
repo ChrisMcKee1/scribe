@@ -1706,8 +1706,11 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   storage class of both texts and the stored integers of both flags, compared with what binding the entry
   writes, so a flag stored as 2 is still rewritten as 1. Rows are compared as the save changes them (an id
   listed twice ends with its last entry), and an id the inventory does not hold is always written, since a row
-  inserted earlier in the same save may carry it. `SaveCommandsEquivalenceTests` runs twin databases each way,
-  today's path the oracle, over those counterexamples and a seeded random corpus, failure codes included.
+  inserted earlier in the same save may carry it. The bytes compared are UTF-8, so the skipping applies only to a
+  database whose `PRAGMA encoding` is UTF-8; a UTF-16 database (SQLite and Scribe accept one) keeps every reused
+  UPDATE, because a UTF-16 stored text can have the very bytes another text has in UTF-8. `SaveCommandsEquivalenceTests`
+  runs twin databases each way, in all three encodings, today's path the oracle, over those counterexamples and a
+  seeded random corpus, failure codes included.
 
 ## Dictionary libraries: order and precedence (read before touching library order)
 

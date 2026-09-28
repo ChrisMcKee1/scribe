@@ -239,10 +239,15 @@ public sealed class DictionaryRepository : IDictionaryRepository
     // already holds exactly what it would write: the stored bytes of both texts and the stored integers of both flags,
     // compared with what binding the entry writes (so a flag stored as 2 is rewritten as 1, as today). The rows are
     // compared as the save changes them, entry by entry, so an id listed twice ends with its last entry, as today; an id
-    // the inventory does not hold is always written, since a row inserted earlier in this save may carry it.
+    // the inventory does not hold is always written, since a row inserted earlier in this save may carry it. The bytes
+    // compared are UTF-8, so the skipping applies only to a database that stores its text as UTF-8; a UTF-16 one (which
+    // SQLite and Scribe accept) keeps every reused UPDATE, since a UTF-16 stored text can have the very bytes another
+    // text has in UTF-8 (U+A9C3 is C3 A9 in UTF-16LE, as U+00E9 is in UTF-8).
     private static void SaveAllReusingCommands(
         SqliteConnection connection, SqliteTransaction transaction, IReadOnlyList<DictionaryEntry> entries, bool skipUnchanged)
     {
+        skipUnchanged = skipUnchanged && StoresTextAsUtf8(connection, transaction);
+
         // Delete first so an edit that renames row A to row B's old pattern while deleting B never
         // trips the unique index mid-save.
         var keptIds = entries.Where(e => e.Id != 0).Select(e => e.Id).ToHashSet();
@@ -420,6 +425,16 @@ public sealed class DictionaryRepository : IDictionaryRepository
         command.Parameters.Add("$replacement", SqliteType.Text),
         command.Parameters.Add("$whole_word", SqliteType.Integer),
         command.Parameters.Add("$enabled", SqliteType.Integer));
+
+    // The database's text encoding, fixed when it was created: "UTF-8", "UTF-16le" or "UTF-16be" (sqlite.org, PRAGMA
+    // encoding). Only UTF-8 stores text as the bytes DATA-O-07 compares.
+    private static bool StoresTextAsUtf8(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "PRAGMA encoding;";
+        return string.Equals(command.ExecuteScalar() as string, "UTF-8", StringComparison.OrdinalIgnoreCase);
+    }
 
     public int SeedIfEmpty(IEnumerable<DictionaryEntry> entries)
     {

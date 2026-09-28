@@ -464,8 +464,17 @@ public sealed class ScribeDatabase : IDisposable
     /// Creates an isolated, shared-cache in-memory database for tests. The database lives only
     /// while the keep-alive connection is open, so the instance must be disposed to release it.
     /// </summary>
-    internal static ScribeDatabase CreateInMemory(ILogger<ScribeDatabase>? logger = null)
+    /// <param name="textEncoding">
+    /// For tests of a database SQLite created in another text encoding ("UTF-16le" or "UTF-16be"; "UTF-8" is the
+    /// default): set on the empty database before anything is written, as a file created that way would have it.
+    /// </param>
+    internal static ScribeDatabase CreateInMemory(ILogger<ScribeDatabase>? logger = null, string? textEncoding = null)
     {
+        if (textEncoding is not null && textEncoding is not ("UTF-8" or "UTF-16le" or "UTF-16be"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(textEncoding), textEncoding, "An encoding SQLite names.");
+        }
+
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = $"scribe-{Guid.NewGuid():N}",
@@ -473,8 +482,14 @@ public sealed class ScribeDatabase : IDisposable
             Cache = SqliteCacheMode.Shared,
             ForeignKeys = true,
         };
-        return new ScribeDatabase(builder.ToString(), isMemory: true, logger ?? NullLogger<ScribeDatabase>.Instance);
+        return new ScribeDatabase(builder.ToString(), isMemory: true, logger ?? NullLogger<ScribeDatabase>.Instance)
+        {
+            _memoryTextEncoding = textEncoding,
+        };
     }
+
+    // CreateInMemory's text encoding, for tests; null keeps SQLite's default (UTF-8). Never set for a file database.
+    private string? _memoryTextEncoding;
 
     /// <summary>
     /// The connection string for the database file at <paramref name="path"/>. Microsoft.Data.Sqlite keys
@@ -591,6 +606,12 @@ public sealed class ScribeDatabase : IDisposable
         try
         {
             keepAlive.Open();
+            if (_isMemory && _memoryTextEncoding is not null)
+            {
+                // Tests only: the empty in-memory database takes its text encoding before anything is written to it.
+                Execute(keepAlive, "PRAGMA encoding = '" + _memoryTextEncoding + "';");
+            }
+
             Configure(keepAlive, autoCheckpoint: !_deferAutoCheckpoint);
 
             if (!_isMemory)
