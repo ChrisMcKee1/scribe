@@ -71,6 +71,10 @@ public static partial class UsageAnalyzer
     /// is vocabulary and <paramref name="mayShare"/> allows it (the usage report allows dictionary entries, and library
     /// entries only when AI cleanup may carry them, review finding A6). Null allows every term.
     /// </summary>
+    /// <param name="perfFlags">
+    /// Which of 0.5.1's counting changes run (<see cref="UsageCounting.From"/>). Null or none on is the counting 0.5.0
+    /// shipped; every combination returns the same snapshot.
+    /// </param>
     internal static Snapshot Compute(
         IEnumerable<HistoryEntry> entries,
         IEnumerable<DictionaryEntry> knownTerms,
@@ -79,7 +83,8 @@ public static partial class UsageAnalyzer
         Func<DictionaryEntry, bool>? mayShare,
         TimeZoneInfo? timeZone = null,
         int maxApps = 8,
-        int maxTerms = 16)
+        int maxTerms = 16,
+        PerfFlags? perfFlags = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(knownTerms);
@@ -117,7 +122,7 @@ public static partial class UsageAnalyzer
             AverageWords: selected.Count == 0 ? 0 : words / (double)selected.Count,
             TopApps: apps,
             Trend: trend,
-            Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare),
+            Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare, UsageCounting.From(perfFlags), out _),
             Granularity: granularity,
             LongestDictation: TimeSpan.FromMilliseconds(selected.Count == 0 ? 0 : selected.Max(entry => Math.Max(0, entry.AudioMilliseconds))));
     }
@@ -173,11 +178,49 @@ public static partial class UsageAnalyzer
 
     private const string TrailingPunctuation = ".,:;!?";
 
+    // The options of every phrase regex, the dictionary matcher's own (OrdinalPrefilter's guard is read with them).
+    private const RegexOptions PhraseOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+
+    /// <summary>
+    /// Which of 0.5.1's usage counting changes run, each off by default (off is 0.5.0's counting). Read once per snapshot.
+    /// </summary>
+    /// <param name="SparseAggregation">
+    /// <see cref="PerfFlags.SparseUsageAggregation"/>: a dictation's counts reach its terms through a form-to-term index,
+    /// instead of every form of every known term being looked up in every dictation.
+    /// </param>
+    /// <param name="TermIndex">
+    /// <see cref="PerfFlags.UsageTermIndex"/>: an ASCII phrase's regex runs only on dictations where an ordinal ignore-case
+    /// search finds the phrase (<see cref="OrdinalPrefilter"/>), and is built only when it first has to run.
+    /// </param>
+    internal readonly record struct UsageCounting(bool SparseAggregation, bool TermIndex)
+    {
+        public static UsageCounting From(PerfFlags? flags) =>
+            flags is null
+                ? default
+                : new(flags.IsOn(PerfFlags.SparseUsageAggregation), flags.IsOn(PerfFlags.UsageTermIndex));
+    }
+
+    /// <summary>
+    /// The term list <see cref="Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, Func{DictionaryEntry, bool}, TimeZoneInfo, int, int, PerfFlags)"/>
+    /// returns for entries already in its period, with how many of the phrase regexes it built (all of them unless
+    /// <see cref="PerfFlags.UsageTermIndex"/> is on).
+    /// </summary>
+    internal static IReadOnlyList<TermUsage> ExtractTermsForTesting(
+        IReadOnlyList<HistoryEntry> entries,
+        IEnumerable<DictionaryEntry> knownTerms,
+        int maxTerms,
+        Func<DictionaryEntry, bool>? mayShare,
+        PerfFlags? perfFlags,
+        out int phraseRegexesBuilt) =>
+        ExtractTerms(entries, knownTerms, maxTerms, mayShare, UsageCounting.From(perfFlags), out phraseRegexesBuilt);
+
     private static IReadOnlyList<TermUsage> ExtractTerms(
         IReadOnlyList<HistoryEntry> entries,
         IEnumerable<DictionaryEntry> knownTerms,
         int maxTerms,
-        Func<DictionaryEntry, bool>? mayShare)
+        Func<DictionaryEntry, bool>? mayShare,
+        UsageCounting counting,
+        out int phraseRegexesBuilt)
     {
         var known = knownTerms
             .Where(entry => entry.Enabled && !string.IsNullOrWhiteSpace(entry.Replacement))
@@ -204,7 +247,7 @@ public static partial class UsageAnalyzer
 
         // Forms represented by Token are counted through one tokenization pass and hash
         // lookups. Only forms Token cannot represent, normally multi-token phrases, retain
-        // compiled regex matching.
+        // regex matching.
         var singleTokenForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phraseMatchers = new List<PhraseMatcher>();
         foreach (var form in known.SelectMany(term => term.Forms).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -215,7 +258,7 @@ public static partial class UsageAnalyzer
             }
             else
             {
-                phraseMatchers.Add(new PhraseMatcher(form, CreatePhraseRegex(form)));
+                phraseMatchers.Add(new PhraseMatcher(form, deferred: counting.TermIndex));
             }
         }
 
@@ -232,6 +275,10 @@ public static partial class UsageAnalyzer
         var formCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var lastTokenMatchEnds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var seenNovelForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Each form's owners: a form belongs to every term that lists it, each term listing it once (its forms are distinct).
+        var sparse = counting.SparseAggregation ? new SparseTermCounts(known.ConvertAll(term => term.Forms)) : null;
+
         foreach (var entry in entries)
         {
             formCounts.Clear();
@@ -263,13 +310,26 @@ public static partial class UsageAnalyzer
                     current.Occurrences + 1);
             }
 
+            // Once per dictation: whether an ordinal search may rule an ASCII phrase out of it (OrdinalPrefilter).
+            var prefilter = counting.TermIndex && OrdinalPrefilter.IsSound(text);
             foreach (var matcher in phraseMatchers)
             {
+                if (prefilter && matcher.Ascii && !OrdinalPrefilter.MayMatch(text, matcher.Text))
+                {
+                    continue;
+                }
+
                 var count = matcher.Pattern.Count(text);
                 if (count > 0)
                 {
                     formCounts[matcher.Text] = count;
                 }
+            }
+
+            if (sparse is not null)
+            {
+                sparse.Add(formCounts, termDictations, termOccurrences);
+                continue;
             }
 
             for (var i = 0; i < known.Count; i++)
@@ -287,6 +347,15 @@ public static partial class UsageAnalyzer
                     termDictations[i]++;
                     termOccurrences[i] += count;
                 }
+            }
+        }
+
+        phraseRegexesBuilt = 0;
+        foreach (var matcher in phraseMatchers)
+        {
+            if (matcher.IsBuilt)
+            {
+                phraseRegexesBuilt++;
             }
         }
 
@@ -358,10 +427,12 @@ public static partial class UsageAnalyzer
         }
     }
 
-    // Compiled because each surviving phrase regex still runs against every history entry.
+    // Interpreted, not compiled: the phrases are built again on every Usage load, and emitting and jitting a thousand
+    // compiled regexes per load (every word pack's phrases) cost more than running them interpreted over the history saves.
+    // Same pattern and options, so the same matches (UsageAnalyzerTests.Cheap_path_matches_legacy_terms_for_seeded_histories).
     private static Regex CreatePhraseRegex(string phrase) => new(
         $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(phrase)}(?![\p{{L}}\p{{N}}])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        PhraseOptions);
 
     private static DateOnly LocalDate(DateTimeOffset timestamp, TimeZoneInfo zone) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, zone).DateTime);
@@ -372,7 +443,94 @@ public static partial class UsageAnalyzer
         return date.AddDays(-offset);
     }
 
-    private sealed record PhraseMatcher(string Text, Regex Pattern);
+    // A phrase and its regex: built at once (0.5.0), or, under UsageTermIndex, the first time a dictation needs it. An
+    // escaped literal always compiles, so building it later changes no outcome.
+    private sealed class PhraseMatcher
+    {
+        private Regex? _pattern;
+
+        public PhraseMatcher(string text, bool deferred)
+        {
+            Text = text;
+            if (deferred)
+            {
+                Ascii = System.Text.Ascii.IsValid(text);
+            }
+            else
+            {
+                _pattern = CreatePhraseRegex(text);
+            }
+        }
+
+        public string Text { get; }
+
+        // Whether OrdinalPrefilter may rule the phrase out; only read under UsageTermIndex.
+        public bool Ascii { get; }
+
+        public Regex Pattern => _pattern ??= CreatePhraseRegex(Text);
+
+        public bool IsBuilt => _pattern is not null;
+    }
+
+    /// <summary>The options every phrase regex is built with, for the test that holds them to the matcher's.</summary>
+    internal static RegexOptions PhraseRegexOptions => PhraseOptions;
+
+    // SparseUsageAggregation: a dictation's form counts reach the terms through each form's owners, giving every term the
+    // largest count among its forms, as the dense loop does, without visiting the terms none of its forms reached.
+    private sealed class SparseTermCounts
+    {
+        private readonly Dictionary<string, List<int>> _owners = new(StringComparer.OrdinalIgnoreCase);
+        private readonly int[] _dictationMax;
+        private readonly List<int> _touched = [];
+
+        public SparseTermCounts(IReadOnlyList<List<string>> formsByTerm)
+        {
+            for (var i = 0; i < formsByTerm.Count; i++)
+            {
+                foreach (var form in formsByTerm[i])
+                {
+                    if (!_owners.TryGetValue(form, out var owners))
+                    {
+                        _owners[form] = owners = [];
+                    }
+
+                    owners.Add(i);
+                }
+            }
+
+            _dictationMax = new int[formsByTerm.Count];
+        }
+
+        public void Add(Dictionary<string, int> formCounts, int[] termDictations, int[] termOccurrences)
+        {
+            foreach (var (form, count) in formCounts)
+            {
+                if (count <= 0 || !_owners.TryGetValue(form, out var owners))
+                {
+                    continue;
+                }
+
+                foreach (var i in owners)
+                {
+                    if (_dictationMax[i] == 0)
+                    {
+                        _touched.Add(i);
+                    }
+
+                    _dictationMax[i] = Math.Max(_dictationMax[i], count);
+                }
+            }
+
+            foreach (var i in _touched)
+            {
+                termDictations[i]++;
+                termOccurrences[i] += _dictationMax[i];
+                _dictationMax[i] = 0;
+            }
+
+            _touched.Clear();
+        }
+    }
 
     [GeneratedRegex(@"[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*")]
     private static partial Regex Word();

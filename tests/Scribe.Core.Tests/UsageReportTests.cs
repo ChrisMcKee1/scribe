@@ -3,7 +3,7 @@ using Scribe.Core.Models;
 
 namespace Scribe.Core.Tests;
 
-public sealed class UsageReportTests
+public sealed partial class UsageReportTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 22, 18, 0, 0, TimeSpan.Zero);
 

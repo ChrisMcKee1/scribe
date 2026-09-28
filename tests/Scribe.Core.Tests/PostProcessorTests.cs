@@ -1,3 +1,4 @@
+using Scribe.Core.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -6,15 +7,19 @@ using Xunit;
 
 namespace Scribe.Core.Tests;
 
-public sealed class PostProcessorTests
+public class PostProcessorTests
 {
-    private static (TextPostProcessor processor, DictionaryRepository repo, ScribeDatabase db) Create(
+    // The matcher's performance flags these tests run under: none here, the old path; a derived class turns one on
+    // (MatcherFlagSuites.cs), so every test below also runs with the prefilter.
+    protected virtual PerfFlags MatcherFlags => PerfFlags.None;
+
+    private (TextPostProcessor processor, DictionaryRepository repo, ScribeDatabase db) Create(
         params DictionaryEntry[] seed)
     {
         var db = ScribeDatabase.CreateInMemory();
         var repo = new DictionaryRepository(db);
         if (seed.Length > 0) repo.SeedIfEmpty(seed);
-        var processor = new TextPostProcessor(repo, NullLogger<TextPostProcessor>.Instance);
+        var processor = new TextPostProcessor(repo, NullLogger<TextPostProcessor>.Instance, perfFlags: MatcherFlags);
         return (processor, repo, db);
     }
 
@@ -38,7 +43,7 @@ public sealed class PostProcessorTests
             DictionaryEntry.New("a p i m", "APIM"),
             DictionaryEntry.New("azure", "AZURE-from-library"));
         var processor = new TextPostProcessor(
-            repo, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: libraries);
+            repo, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: libraries, perfFlags: MatcherFlags);
 
         using (db)
         {
@@ -55,7 +60,7 @@ public sealed class PostProcessorTests
         repo.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
         var libraries = new StubLibraries(DictionaryEntry.New("a p i m", "APIM"));
         var processor = new TextPostProcessor(
-            repo, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: libraries);
+            repo, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: libraries, perfFlags: MatcherFlags);
 
         using (db)
         {

@@ -503,6 +503,29 @@ Enter modifiers, and reports producer return and observed target consumption sep
 simulates a pacing choice, not that target's implementation. Build this tool during headless work, never run it on a
 desktop in use. The strict classifier tests have no window or clipboard; real-target validation remains a separate gate.
 
+The language and matching flags (0.5.1), each off by default, the old path kept beside it and tested against it:
+
+- `MatcherPrefilter`: the dictionary pass skips a rule whose ASCII spoken form an ordinal ignore-case search does not find
+  in the text, without running its regex. That is sound only in a text without the characters the regex engine equates
+  with ASCII that `OrdinalIgnoreCase` does not (U+212A KELVIN SIGN on .NET 10): `OrdinalPrefilter` reads that set from
+  the engine at run time, never from a list, `OrdinalPrefilterTests` fails if a runtime changes it, and a text holding one
+  runs every regex. The regex still decides every match (`MatcherFlagEquivalenceTests`, and every matcher suite runs under
+  both settings).
+- `SparseUsageAggregation` and `UsageTermIndex`, independent of each other: the Usage page's counting. The first reaches
+  a dictation's terms through a form-to-term index instead of looking every form of every known term up in every
+  dictation; the second runs an ASCII phrase's regex only on the dictations where the same search finds the phrase, and
+  builds it only when it first has to run (the phrase regexes use the matcher's options for that reason).
+  `UsageEquivalenceCorpus` runs the old path against all four combinations.
+
+The changes proven by an oracle need no flag: the phrase regexes built without `Compiled`
+(`UsageAnalyzerTests.Cheap_path_matches_legacy_terms_for_seeded_histories`,
+`UsageReportTests.Cheap_path_preserves_snapshot_and_scope`), the dictionary cleanup counting an ASCII term the same search
+does not find as 0 without building its regex (`DictionaryUsageAnalyzerTests.Term_counts_match_legacy_regex_for_seeded_corpora`),
+the letter-digit shape's one digit where it had a run
+(`DictionarySuggestionMinerSpanTests.Every_token_of_up_to_six_characters_is_judged_as_the_previous_pattern_judged_it`), the
+case relations' staged buckets (`SpokenFormFoldTests.Case_relations_equal_the_reference_builder_for_every_code_unit`), and
+`Regex.Count` (`Word_count_matches_legacy_regex_for_seeded_unicode`, `Evidence_count_matches_legacy_regex_for_seeded_unicode`).
+
 ## Project structure
 
 ```
@@ -629,7 +652,10 @@ back into the code-behind; that is a recurring smell.
   build time, so no dictation pays a compile and first match at runtime, and a pattern without a culture
   name matches in the invariant culture, which is what fixed the AI cleanup guards' case-insensitive
   matching under Turkish and Azeri. A pattern built at runtime from user data (such as one per phrase)
-  cannot be generated.
+  cannot be generated, and is built without `Compiled` when it is made again on every load (the Usage
+  page's phrase regexes: emitting and jitting a thousand per load cost more than it saved). Count matches with
+  `Regex.Count`, never `Matches(...).Count`. `src\.editorconfig` makes both rules (SYSLIB1045, CA1875) warnings for
+  product code only; tests and tools keep the defaults (`AnalyzerPolicyTests`).
 - **Tests never call `SqliteConnection.ClearAllPools()`.** xUnit runs test classes in parallel, and the
   process-wide clear can dispose a pooled connection another class is using. To release a database file
   before moving, damaging, copying or deleting it, call `DatabasePools.Release(new AppPaths(root))` (or

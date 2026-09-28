@@ -4,7 +4,7 @@ using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests;
 
-public class DictionaryUsageAnalyzerTests
+public partial class DictionaryUsageAnalyzerTests
 {
     private static readonly IReadOnlyList<DictionaryLibrary> NoLibraries = [];
 

@@ -83,10 +83,12 @@ public partial class DictionarySuggestionMinerSpanTests
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
     {
-        // Tokens the stoplist, the acronym or the camel-hump shape decides. The letter-digit pattern backtracks between two
-        // overlapping loops, and its generated code allocates while it runs unoptimized (tier 0, or a Debug build of
-        // Scribe.Core, measured at 96 bytes a call either way, string or span), so no zero is asserted for tokens it decides.
-        private static readonly string[] DecidedEarly = ["TODO", "OK", "ABC", ".NET", "OpenAI", "iOS", "ReBAC", "GitHub"];
+        // Tokens of every shape, and prose that none of them takes. The letter-digit pattern used to backtrack between two
+        // overlapping loops (a run of digits, then letters or digits), and its generated code allocated while it ran
+        // unoptimized (tier 0, or a Debug build of Scribe.Core, measured at 96 bytes a call either way, string or span), so the
+        // tokens it decides were left out; with one digit in place of the run it no longer backtracks, and they are in.
+        private static readonly string[] DecidedEarly =
+            ["TODO", "OK", "ABC", ".NET", "OpenAI", "iOS", "ReBAC", "GitHub", "K8s", "S3", "net10", "GPT4", "net10a", "hello", "the"];
 
         private static readonly string[] Mixed = ["ok", "OpenAI", "K8s", "TODO", "net10", "hello", "ReBAC", "GPT4", "ABC", ".NET", "iOS", "the"];
 

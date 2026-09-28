@@ -1,0 +1,7 @@
+# Regular expression rules for the product code only (0.5.1, combined.md row 16). A static pattern is source-generated
+# (SYSLIB1045), and a count of matches is taken with Regex.Count, not Matches(...).Count (CA1875). Tests and tools keep
+# the defaults: their regexes are oracles and scaffolding that run a few times. Warnings, not errors: the build is kept
+# warning-clean, and AnalyzerPolicyTests.Regex_analyzer_policy_covers_src_only checks the scope.
+[*.cs]
+dotnet_diagnostic.SYSLIB1045.severity = warning
+dotnet_diagnostic.CA1875.severity = warning

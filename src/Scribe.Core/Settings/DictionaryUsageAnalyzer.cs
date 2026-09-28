@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
@@ -105,7 +106,7 @@ public static partial class DictionaryUsageAnalyzer
         // One corpus, joined on newlines. A dictionary pattern can never usefully contain a newline
         // (the matcher's input preserves CR/LF), so joining cannot invent a match that spans two
         // unrelated dictations.
-        var corpus = string.Join('\n', usable);
+        var corpus = new ScanCorpus(string.Join('\n', usable));
 
         var unused = candidates
             .Select(entry => Score(corpus, entry))
@@ -147,7 +148,9 @@ public static partial class DictionaryUsageAnalyzer
     }
 
     /// <summary>Counts the evidence for one term in both directions.</summary>
-    public static TermUsage Score(string corpus, DictionaryEntry entry)
+    public static TermUsage Score(string corpus, DictionaryEntry entry) => Score(new ScanCorpus(corpus), entry);
+
+    private static TermUsage Score(ScanCorpus corpus, DictionaryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -167,7 +170,7 @@ public static partial class DictionaryUsageAnalyzer
         return new TermUsage(entry, patternHits, replacementHits);
     }
 
-    private static LibraryUsage ScoreLibrary(string corpus, DictionaryLibrary library, bool aiExcluded)
+    private static LibraryUsage ScoreLibrary(ScanCorpus corpus, DictionaryLibrary library, bool aiExcluded)
     {
         var keep = new List<DictionaryEntry>();
         var unused = 0;
@@ -194,10 +197,19 @@ public static partial class DictionaryUsageAnalyzer
         };
     }
 
-    private static int Count(string corpus, string term, bool wholeWord)
+    private static int Count(ScanCorpus corpus, string term, bool wholeWord)
     {
         var trimmed = (term ?? string.Empty).Trim();
-        if (trimmed.Length == 0 || string.IsNullOrEmpty(corpus))
+        if (trimmed.Length == 0 || string.IsNullOrEmpty(corpus.Text))
+        {
+            return 0;
+        }
+
+        // A term of ASCII characters that an ordinal ignore-case search does not find has no regex match in a corpus
+        // OrdinalPrefilter judges sound (its remarks prove it for these options), so its count is 0 without building a regex
+        // for it: most of the thousands of terms a scan counts never occur. Every term the search finds, and every other term,
+        // is counted by the regex exactly as before.
+        if (corpus.Sound && Ascii.IsValid(trimmed) && !OrdinalPrefilter.MayMatch(corpus.Text, trimmed))
         {
             return 0;
         }
@@ -206,7 +218,15 @@ public static partial class DictionaryUsageAnalyzer
         // the matcher can still fire, which is the one error this feature must not make.
         var escaped = Regex.Escape(trimmed);
         var pattern = wholeWord ? $@"(?<!\w){escaped}(?!\w)" : escaped;
-        return Regex.Count(corpus, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return Regex.Count(corpus.Text, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    // The scan's text and, judged once for all the terms counted in it, whether OrdinalPrefilter's search may rule a term out.
+    private sealed class ScanCorpus(string? text)
+    {
+        public string? Text { get; } = text;
+
+        public bool Sound { get; } = !string.IsNullOrEmpty(text) && OrdinalPrefilter.IsSound(text);
     }
 
     private static string Describe(

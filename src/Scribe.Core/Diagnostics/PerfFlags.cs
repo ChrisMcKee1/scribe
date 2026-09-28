@@ -45,6 +45,7 @@ public sealed class PerfFlags
         InputTimings,
         LeanFooterRefresh,
         LightTraceBridge,
+        MatcherPrefilter,
         OverlappedIntegrityCheck,
         PillBeforeTray,
         PreciseLocalTypingSettle,
@@ -53,8 +54,10 @@ public sealed class PerfFlags
         ServiceLocalHookProbe,
         SkipVelopackWhenPackaged,
         SnapshotInjectionLayout,
+        SparseUsageAggregation,
         StartupStageTiming,
         StopInactiveProgress,
+        UsageTermIndex,
         VadWindowCancellation,
         WarmManagedAudioPath,
     ];
@@ -83,6 +86,7 @@ public sealed class PerfFlags
     public const string InputTimings = nameof(InputTimings);
     public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
     public const string LightTraceBridge = nameof(LightTraceBridge);
+    public const string MatcherPrefilter = nameof(MatcherPrefilter);
     public const string OverlappedIntegrityCheck = nameof(OverlappedIntegrityCheck);
     public const string PillBeforeTray = nameof(PillBeforeTray);
     public const string PreciseLocalTypingSettle = nameof(PreciseLocalTypingSettle);
@@ -91,8 +95,10 @@ public sealed class PerfFlags
     public const string ServiceLocalHookProbe = nameof(ServiceLocalHookProbe);
     public const string SkipVelopackWhenPackaged = nameof(SkipVelopackWhenPackaged);
     public const string SnapshotInjectionLayout = nameof(SnapshotInjectionLayout);
+    public const string SparseUsageAggregation = nameof(SparseUsageAggregation);
     public const string StartupStageTiming = nameof(StartupStageTiming);
     public const string StopInactiveProgress = nameof(StopInactiveProgress);
+    public const string UsageTermIndex = nameof(UsageTermIndex);
     public const string VadWindowCancellation = nameof(VadWindowCancellation);
     public const string WarmManagedAudioPath = nameof(WarmManagedAudioPath);
 

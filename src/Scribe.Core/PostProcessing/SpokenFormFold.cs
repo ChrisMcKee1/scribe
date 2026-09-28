@@ -48,7 +48,11 @@ internal static class SpokenFormFold
         }
     }));
 
-    private static readonly Lazy<Dictionary<char, List<char>>> s_caseRelated = new(BuildCaseRelated);
+    private static readonly Lazy<Dictionary<char, List<char>>> s_caseRelated = new(() => BuildCaseRelated(OrdinalIgnoreCaseHash));
+
+    // OrdinalIgnoreCase gives strings it calls equal the same hash code, so characters it calls equal share a bucket.
+    private static int OrdinalIgnoreCaseHash(char c) =>
+        string.GetHashCode(new ReadOnlySpan<char>(in c), StringComparison.OrdinalIgnoreCase);
 
     public static string Fold(string text) => string.Create(text.Length, text, static (span, source) =>
     {
@@ -114,7 +118,8 @@ internal static class SpokenFormFold
     }
 
     // Invariant upper and lower case both ways, OrdinalIgnoreCase, and dotted and dotless i with i, as symmetric links.
-    private static Dictionary<char, List<char>> BuildCaseRelated()
+    // The hash is a parameter only so a test can force collisions; production passes OrdinalIgnoreCaseHash.
+    internal static Dictionary<char, List<char>> BuildCaseRelated(Func<char, int> hash)
     {
         var related = new Dictionary<char, List<char>>();
         void Link(char a, char b)
@@ -141,8 +146,12 @@ internal static class SpokenFormFold
             }
         }
 
-        // OrdinalIgnoreCase gives strings it calls equal the same hash code, so characters it calls equal share a bucket.
-        var buckets = new Dictionary<int, List<char>>();
+        // Characters OrdinalIgnoreCase calls equal share a hash, so only characters whose hash another character has can
+        // be linked by it. Almost every hash belongs to one character: its first character is kept in a slot, and a list
+        // is made only when a second one turns up, holding the first, then every later one in character order, which is
+        // the order a list per hash held them in. Every pair in a list is compared, as before.
+        var first = new Dictionary<int, char>();
+        var collisions = new Dictionary<int, List<char>>();
         for (var i = 0; i <= char.MaxValue; i++)
         {
             var c = (char)i;
@@ -154,16 +163,21 @@ internal static class SpokenFormFold
             Link(c, char.ToUpperInvariant(c));
             Link(c, char.ToLowerInvariant(c));
 
-            var hash = string.GetHashCode(new ReadOnlySpan<char>(in c), StringComparison.OrdinalIgnoreCase);
-            if (!buckets.TryGetValue(hash, out var bucket))
+            var code = hash(c);
+            if (!first.TryAdd(code, c))
             {
-                buckets[hash] = bucket = [];
-            }
+                if (!collisions.TryGetValue(code, out var bucket))
+                {
+                    collisions[code] = bucket = [first[code]];
+                }
 
-            bucket.Add(c);
+                bucket.Add(c);
+            }
         }
 
-        foreach (var bucket in buckets.Values.Where(b => b.Count > 1))
+        // In the order of each bucket's first character, the order the per-hash lists were visited in, so every relation
+        // list comes out exactly as before, element for element.
+        foreach (var bucket in collisions.Values.OrderBy(bucket => bucket[0]))
         {
             for (var i = 0; i < bucket.Count; i++)
             {

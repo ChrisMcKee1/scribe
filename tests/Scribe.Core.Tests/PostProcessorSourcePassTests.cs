@@ -1,3 +1,4 @@
+using Scribe.Core.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -12,19 +13,22 @@ namespace Scribe.Core.Tests;
 /// source pass changes highlight metadata even when it cannot change the text, so these assert full
 /// replacement records (start, length, pattern, replacement, kind), not just the output string.
 /// </summary>
-public sealed class PostProcessorSourcePassTests
+public class PostProcessorSourcePassTests
 {
     private static TextReplacement Azure(int start) =>
         new(start, 5, "azure", "Azure", TextReplacementKind.Dictionary);
 
     // Every oracle case runs against the original algorithm (reuse off) and the shipping one, so a
     // change to either is caught against the same executed probe.
-    private static (TextPostProcessor Processor, ScribeDatabase Db) CreateAzure(bool reuse)
+    // None here, the old path; a derived class runs every test with the prefilter (MatcherFlagSuites.cs).
+    protected virtual PerfFlags MatcherFlags => PerfFlags.None;
+
+    private (TextPostProcessor Processor, ScribeDatabase Db) CreateAzure(bool reuse)
     {
         var db = ScribeDatabase.CreateInMemory();
         var repo = new DictionaryRepository(db);
         repo.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
-        return (new TextPostProcessor(repo, NullLogger<TextPostProcessor>.Instance)
+        return (new TextPostProcessor(repo, NullLogger<TextPostProcessor>.Instance, perfFlags: MatcherFlags)
         {
             ReuseIdenticalSourceScan = reuse,
         }, db);
@@ -151,7 +155,7 @@ public sealed class PostProcessorSourcePassTests
         dictionary.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
         var snippets = new SnippetRepository(db);
         snippets.SaveAll([Snippet.New("brb", "be right back")]);
-        var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets)
+        var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets, perfFlags: MatcherFlags)
         {
             ReuseIdenticalSourceScan = reuse,
         };
@@ -278,7 +282,7 @@ public sealed class PostProcessorSourcePassTests
         TextPostProcessor SnippetsOnly,
         TextPostProcessor Plain);
 
-    private static Processors CreateProcessors(ScribeDatabase db, ScribeDatabase emptyDb)
+    private Processors CreateProcessors(ScribeDatabase db, ScribeDatabase emptyDb)
     {
         var dictionary = new DictionaryRepository(db);
         dictionary.SeedIfEmpty(
@@ -308,15 +312,15 @@ public sealed class PostProcessorSourcePassTests
         var noDictionary = new DictionaryRepository(emptyDb);
 
         return new Processors(
-            new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets),
-            new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets)
+            new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets, perfFlags: MatcherFlags),
+            new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets, perfFlags: MatcherFlags)
             {
                 ReuseIdenticalSourceScan = false,
             },
             // With no dictionary, the output is exactly the snippet-expanded input the dictionary
             // pass scans; with no rules at all, it is exactly the normalized text.
-            new TextPostProcessor(noDictionary, NullLogger<TextPostProcessor>.Instance, snippets),
-            new TextPostProcessor(noDictionary, NullLogger<TextPostProcessor>.Instance));
+            new TextPostProcessor(noDictionary, NullLogger<TextPostProcessor>.Instance, snippets, perfFlags: MatcherFlags),
+            new TextPostProcessor(noDictionary, NullLogger<TextPostProcessor>.Instance, perfFlags: MatcherFlags));
     }
 
     private static void AssertSameResult(TextPostProcessingResult expected, TextPostProcessingResult actual)

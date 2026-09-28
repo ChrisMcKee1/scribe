@@ -31,6 +31,22 @@ public static class UsageReport
     }
 
     /// <summary>
+    /// Computes a report's snapshot from what the report read: <see cref="UsageAnalyzer.Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, Func{DictionaryEntry, bool}, TimeZoneInfo, int, int, PerfFlags)"/>
+    /// with the report's flags. A test hands in an earlier implementation, so the whole report, scope included, can be
+    /// compared with what that implementation gives.
+    /// </summary>
+    internal delegate UsageAnalyzer.Snapshot SnapshotComputation(
+        IReadOnlyList<HistoryEntry> entries,
+        IReadOnlyList<DictionaryEntry> knownTerms,
+        DateTimeOffset sinceUtc,
+        DateTimeOffset nowUtc,
+        Func<DictionaryEntry, bool> mayShare);
+
+    internal static SnapshotComputation Analyzer(PerfFlags? perfFlags) =>
+        (entries, knownTerms, sinceUtc, nowUtc, mayShare) =>
+            UsageAnalyzer.Compute(entries, knownTerms, sinceUtc, nowUtc, mayShare, perfFlags: perfFlags);
+
+    /// <summary>
     /// Reads retained history, the enabled dictionary and the library vocabulary dictation uses, then computes the
     /// snapshot for the last <paramref name="periodDays"/> days, or for all retained history when null.
     /// </summary>
@@ -51,6 +67,10 @@ public static class UsageReport
     /// then says the user lets AI cleanup have it (fail closed). Dictionary labels are shareable exactly as before: when
     /// every replacement behind a label is vocabulary (<see cref="Cleanup.CleanupPrompt.IsVocabularyReplacement"/>).
     /// </para>
+    /// <para>
+    /// <paramref name="perfFlags"/> chooses which of 0.5.1's usage counting changes run; every combination gives the same
+    /// report (<see cref="UsageAnalyzer.UsageCounting"/>).
+    /// </para>
     /// </remarks>
     public static Result Build(
         IHistoryRepository history,
@@ -59,7 +79,8 @@ public static class UsageReport
         IReadOnlyCollection<string> enabledLibraryIds,
         int? periodDays,
         DateTimeOffset nowUtc,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        PerfFlags? perfFlags = null)
     {
         ArgumentNullException.ThrowIfNull(history);
         ArgumentNullException.ThrowIfNull(dictionary);
@@ -67,14 +88,15 @@ public static class UsageReport
         ArgumentNullException.ThrowIfNull(enabledLibraryIds);
 
         return libraries is ILibraryVocabularySource source
-            ? Build(history.GetRecent, dictionary.GetEnabled, () => source.Current, periodDays, nowUtc, cancellationToken)
+            ? Build(history.GetRecent, dictionary.GetEnabled, () => source.Current, periodDays, nowUtc, cancellationToken, Analyzer(perfFlags))
             : Build(
                 history.GetRecent,
                 dictionary.GetEnabled,
                 () => libraries.GetEnabledLibraryEntries(enabledLibraryIds),
                 periodDays,
                 nowUtc,
-                cancellationToken);
+                cancellationToken,
+                Analyzer(perfFlags));
     }
 
     // Release 0.4.4's path, for a service that is not a vocabulary source: every library entry counts toward coverage,
@@ -85,14 +107,16 @@ public static class UsageReport
         Func<IReadOnlyList<DictionaryEntry>> readEnabledLibraryEntries,
         int? periodDays,
         DateTimeOffset nowUtc,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        SnapshotComputation? compute = null) =>
         Build(
             readRecentHistory,
             readEnabledDictionary,
             () => (readEnabledLibraryEntries(), (LibraryVocabulary?)null),
             periodDays,
             nowUtc,
-            cancellationToken);
+            cancellationToken,
+            compute ?? Analyzer(null));
 
     // The vocabulary source's path: one snapshot gives the library entries and the shareable subset.
     internal static Result Build(
@@ -101,7 +125,8 @@ public static class UsageReport
         Func<LibraryVocabulary> readVocabulary,
         int? periodDays,
         DateTimeOffset nowUtc,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        SnapshotComputation? compute = null) =>
         Build(
             readRecentHistory,
             readEnabledDictionary,
@@ -112,7 +137,8 @@ public static class UsageReport
             },
             periodDays,
             nowUtc,
-            cancellationToken);
+            cancellationToken,
+            compute ?? Analyzer(null));
 
     private static Result Build(
         Func<int, IReadOnlyList<HistoryEntry>> readRecentHistory,
@@ -120,7 +146,8 @@ public static class UsageReport
         Func<(IReadOnlyList<DictionaryEntry> Entries, LibraryVocabulary? Vocabulary)> readLibraries,
         int? periodDays,
         DateTimeOffset nowUtc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SnapshotComputation compute)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // One row past the cap reveals whether the period holds more than was read.
@@ -142,7 +169,7 @@ public static class UsageReport
         cancellationToken.ThrowIfCancellationRequested();
 
         var shareable = new ShareableTerms(dictionaryEntries, vocabulary);
-        var snapshot = UsageAnalyzer.Compute(entries, knownTerms, since, nowUtc, shareable.MayShare);
+        var snapshot = compute(entries, knownTerms, since, nowUtc, shareable.MayShare);
         cancellationToken.ThrowIfCancellationRequested();
 
         var periodCapped = recent.Count > HistoryLimit &&

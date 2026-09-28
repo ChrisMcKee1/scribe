@@ -4,7 +4,7 @@ using Xunit;
 
 namespace Scribe.Core.Tests;
 
-public sealed class UsageAnalyzerTests
+public sealed partial class UsageAnalyzerTests
 {
     private static readonly DateTimeOffset Now = new(2026, 6, 15, 12, 0, 0, TimeSpan.Zero);
 
@@ -54,8 +54,9 @@ public sealed class UsageAnalyzerTests
         Assert.Equal("Unknown app", app.Name);
     }
 
-    [Fact]
-    public void Compute_recognizes_patterns_and_canonical_multiword_replacements()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_recognizes_patterns_and_canonical_multiword_replacements(string flags)
     {
         var entries = new[]
         {
@@ -68,7 +69,7 @@ public sealed class UsageAnalyzerTests
             DictionaryEntry.New("next js", "Next.js"),
         };
 
-        var snapshot = UsageAnalyzer.Compute(entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
+        var snapshot = Compute(flags, entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         Assert.Contains(snapshot.Terms, term =>
             term == new UsageAnalyzer.TermUsage("Tailwind CSS", 2, 2, Covered: true) { Shareable = true });
@@ -76,8 +77,9 @@ public sealed class UsageAnalyzerTests
             term == new UsageAnalyzer.TermUsage("Next.js", 2, 2, Covered: true) { Shareable = true });
     }
 
-    [Fact]
-    public void Compute_suggests_only_recurring_jargon_shapes()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_suggests_only_recurring_jargon_shapes(string flags)
     {
         var entries = new[]
         {
@@ -86,7 +88,7 @@ public sealed class UsageAnalyzerTests
             Entry(3, Now.AddHours(-2), "Hello ordinary prose", 1_000, null),
         };
 
-        var snapshot = UsageAnalyzer.Compute(entries, [], Now.AddDays(-1), Now, TimeZoneInfo.Utc);
+        var snapshot = Compute(flags, entries, [], Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         var term = Assert.Single(snapshot.Terms);
         Assert.Equal(new UsageAnalyzer.TermUsage("CloudThing", 2, 2, Covered: false), term);
@@ -130,12 +132,14 @@ public sealed class UsageAnalyzerTests
         Assert.True(weekly.Trend.Count <= 31);
     }
 
-    [Fact]
-    public void Compute_skips_dictionary_entries_with_no_usable_forms()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_skips_dictionary_entries_with_no_usable_forms(string flags)
     {
         // A 1-char pattern plus 1-char replacement leaves an empty form list; this used to
         // throw InvalidOperationException from Max() and blank the whole Usage page.
-        var snapshot = UsageAnalyzer.Compute(
+        var snapshot = Compute(
+            flags,
             [Entry(1, Now, "a short note", 1_000, null)],
             [DictionaryEntry.New(" a ", " b ")],
             Now.AddDays(-1),
@@ -145,8 +149,9 @@ public sealed class UsageAnalyzerTests
         Assert.DoesNotContain(snapshot.Terms, term => term.Covered);
     }
 
-    [Fact]
-    public void Compute_counts_dotted_and_leading_dot_forms_with_word_boundaries()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_counts_dotted_and_leading_dot_forms_with_word_boundaries(string flags)
     {
         var entries = new[]
         {
@@ -159,7 +164,7 @@ public sealed class UsageAnalyzerTests
             DictionaryEntry.New("dot net", ".NET"),
         };
 
-        var snapshot = UsageAnalyzer.Compute(entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
+        var snapshot = Compute(flags, entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         Assert.Contains(snapshot.Terms, term =>
             term == new UsageAnalyzer.TermUsage("Next.js", 1, 1, Covered: true) { Shareable = true });
@@ -169,8 +174,9 @@ public sealed class UsageAnalyzerTests
             term == new UsageAnalyzer.TermUsage(".NET", 2, 2, Covered: true) { Shareable = true });
     }
 
-    [Fact]
-    public void Compute_does_not_match_forms_inside_larger_words()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_does_not_match_forms_inside_larger_words(string flags)
     {
         var entries = new[]
         {
@@ -178,7 +184,8 @@ public sealed class UsageAnalyzerTests
             Entry(2, Now.AddHours(-1), "Rust is fine", 1_000, null),
         };
 
-        var snapshot = UsageAnalyzer.Compute(
+        var snapshot = Compute(
+            flags,
             entries,
             [DictionaryEntry.New("rust", "Rust")],
             Now.AddDays(-1),
@@ -189,8 +196,9 @@ public sealed class UsageAnalyzerTests
         Assert.Equal(new UsageAnalyzer.TermUsage("Rust", 1, 1, Covered: true) { Shareable = true }, term);
     }
 
-    [Fact]
-    public void Compute_matches_multiword_forms_case_insensitively_and_takes_max_across_forms()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_matches_multiword_forms_case_insensitively_and_takes_max_across_forms(string flags)
     {
         var entries = new[]
         {
@@ -203,7 +211,7 @@ public sealed class UsageAnalyzerTests
             DictionaryEntry.New("next js", "Next.js"),
         };
 
-        var snapshot = UsageAnalyzer.Compute(entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
+        var snapshot = Compute(flags, entries, terms, Now.AddDays(-1), Now, TimeZoneInfo.Utc);
 
         Assert.Contains(snapshot.Terms, term =>
             term == new UsageAnalyzer.TermUsage("Tailwind CSS", 1, 1, Covered: true) { Shareable = true });
@@ -213,10 +221,12 @@ public sealed class UsageAnalyzerTests
             term == new UsageAnalyzer.TermUsage("Next.js", 1, 1, Covered: true) { Shareable = true });
     }
 
-    [Fact]
-    public void Compute_preserves_non_overlapping_counts_for_single_token_forms()
+    [Theory]
+    [MemberData(nameof(UsageFlagSets))]
+    public void Compute_preserves_non_overlapping_counts_for_single_token_forms(string flags)
     {
-        var snapshot = UsageAnalyzer.Compute(
+        var snapshot = Compute(
+            flags,
             [Entry(1, Now, "a-a-a", 1_000, null)],
             [DictionaryEntry.New("a-a", "A-A")],
             Now.AddDays(-1),
@@ -226,6 +236,18 @@ public sealed class UsageAnalyzerTests
         var term = Assert.Single(snapshot.Terms, term => term.Covered);
         Assert.Equal(new UsageAnalyzer.TermUsage("A-A", 1, 1, Covered: true) { Shareable = true }, term);
     }
+
+    public static TheoryData<string> UsageFlagSets => UsageEquivalenceCorpus.FlagSets();
+
+    // The internal overload, with the flags; no sharing rule, as the public overload has none.
+    private static UsageAnalyzer.Snapshot Compute(
+        string flags,
+        IEnumerable<HistoryEntry> entries,
+        IEnumerable<DictionaryEntry> terms,
+        DateTimeOffset since,
+        DateTimeOffset now,
+        TimeZoneInfo zone) =>
+        UsageAnalyzer.Compute(entries, terms, since, now, mayShare: null, zone, perfFlags: PerfFlags.Parse(flags));
 
     private static HistoryEntry Entry(
         long id,

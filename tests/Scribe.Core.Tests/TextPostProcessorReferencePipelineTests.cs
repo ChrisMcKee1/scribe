@@ -1,3 +1,4 @@
+using Scribe.Core.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -25,10 +26,20 @@ public sealed class TextPostProcessorReferencePipelineTests
 
     private static readonly string[] Separators = [" ", " ", " ", "  ", "\t", ", ", ". ", "? ", " ,", " .", "! ", ": ", "\n", " \t "];
 
+    // The matcher's flag sets (0.5.1): none, and the prefilter.
+    public static TheoryData<bool, string> ReuseAndMatcherFlags => new()
+    {
+        { false, "" },
+        { true, "" },
+        { false, PerfFlags.MatcherPrefilter },
+        { true, PerfFlags.MatcherPrefilter },
+    };
+
+    public static TheoryData<string> MatcherFlagSets => new() { "", PerfFlags.MatcherPrefilter };
+
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Generated_dictations_match_the_reference_pipeline_record_for_record(bool reuse)
+    [MemberData(nameof(ReuseAndMatcherFlags))]
+    public void Generated_dictations_match_the_reference_pipeline_record_for_record(bool reuse, string matcherFlags)
     {
         var random = new Random(reuse ? 20_260_927 : 20_260_928);
         for (var i = 0; i < 400; i++)
@@ -36,7 +47,8 @@ public sealed class TextPostProcessorReferencePipelineTests
             var dictionary = RandomEntries(random, random.Next(0, 14));
             var snippets = RandomSnippets(random);
             var processor = new TextPostProcessor(
-                new DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance, new SnippetStub(snippets))
+                new DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance, new SnippetStub(snippets),
+                perfFlags: PerfFlags.Parse(matcherFlags))
             {
                 ReuseIdenticalSourceScan = reuse,
             };
@@ -54,8 +66,9 @@ public sealed class TextPostProcessorReferencePipelineTests
         }
     }
 
-    [Fact]
-    public void Generated_word_pack_entries_merged_under_the_dictionary_match_the_reference_pipeline()
+    [Theory]
+    [MemberData(nameof(MatcherFlagSets))]
+    public void Generated_word_pack_entries_merged_under_the_dictionary_match_the_reference_pipeline(string matcherFlags)
     {
         var random = new Random(20_260_929);
         for (var i = 0; i < 200; i++)
@@ -64,7 +77,8 @@ public sealed class TextPostProcessorReferencePipelineTests
             var library = RandomEntries(random, random.Next(1, 14));
             var snippets = RandomSnippets(random);
             var processor = new TextPostProcessor(
-                new DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance, new SnippetStub(snippets));
+                new DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance, new SnippetStub(snippets),
+                perfFlags: PerfFlags.Parse(matcherFlags));
             var compiled = processor.Compile(dictionary, library);
             var effective = DictionaryLibraryComposer.Merge(dictionary, library);
 
@@ -93,6 +107,25 @@ public sealed class TextPostProcessorReferencePipelineTests
     }
 
     [Theory]
+    [MemberData(nameof(TieCases))]
+    public void Ties_and_the_expansion_guard_resolve_as_the_reference_pipeline_resolves_them_on_every_matcher_path(
+        string text, string firstPattern, string firstReplacement, string secondPattern, string secondReplacement)
+    {
+        AssertTies(text, firstPattern, firstReplacement, secondPattern, secondReplacement, PerfFlags.Parse(PerfFlags.MatcherPrefilter));
+    }
+
+    public static TheoryData<string, string, string, string, string> TieCases => new()
+    {
+        { "we flew to new york and york", "new york", "New York", "york", "York" },
+        { "New York is not york", "york", "New York", "new", "NEW" },
+        { "azure azure devops", "azure", "Azure", "azure", "AZURE" },
+        { "hello comma world period", "comma", ",", "period", "." },
+        { "use c# and .net on k8s", "c#", "C#", ".net", ".NET" },
+        { "gpt five gpt five", "gpt five", "GPT-5", "gpt", "GPT" },
+        { "\u212Aube kube KUBE", "kube", "Kube", "k", "K" },
+    };
+
+    [Theory]
     [InlineData("we flew to new york and york", "new york", "New York", "york", "York")]
     [InlineData("New York is not york", "york", "New York", "new", "NEW")]
     [InlineData("azure azure devops", "azure", "Azure", "azure", "AZURE")]
@@ -100,7 +133,11 @@ public sealed class TextPostProcessorReferencePipelineTests
     [InlineData("use c# and .net on k8s", "c#", "C#", ".net", ".NET")]
     [InlineData("gpt five gpt five", "gpt five", "GPT-5", "gpt", "GPT")]
     public void Ties_and_the_expansion_guard_resolve_as_the_reference_pipeline_resolves_them(
-        string text, string firstPattern, string firstReplacement, string secondPattern, string secondReplacement)
+        string text, string firstPattern, string firstReplacement, string secondPattern, string secondReplacement) =>
+        AssertTies(text, firstPattern, firstReplacement, secondPattern, secondReplacement, PerfFlags.None);
+
+    private static void AssertTies(
+        string text, string firstPattern, string firstReplacement, string secondPattern, string secondReplacement, PerfFlags flags)
     {
         DictionaryEntry[] dictionary =
         [
@@ -108,7 +145,7 @@ public sealed class TextPostProcessorReferencePipelineTests
             new(2, secondPattern, secondReplacement),
             new(3, secondPattern, secondReplacement.ToLowerInvariant(), WholeWord: false),
         ];
-        var processor = new TextPostProcessor(new DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance);
+        var processor = new TextPostProcessor(new DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance, perfFlags: flags);
         var compiled = processor.Compile(dictionary, []);
 
         foreach (var source in new[] { null, text, text.ToUpperInvariant() })

@@ -1,3 +1,4 @@
+using Scribe.Core.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
@@ -16,7 +17,7 @@ namespace Scribe.Core.Tests.Libraries;
 /// meet a rule that stays in effect, a copy or a row kept on. Most cases compare finished text before and after the
 /// switch through the real repository, composer and post-processor.
 /// </summary>
-public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
+public class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 {
     // --- Switched off, with the rules it still uses copied ---
 
@@ -1340,9 +1341,12 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     }
 
     /// <summary>Finished text and each rule's replacements, from the real post-processor over this dictionary and these libraries.</summary>
-    private static TextPostProcessor Processor(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries) =>
+    // None here, the old path; a derived class runs every test with the prefilter (MatcherFlagSuites.cs).
+    protected virtual PerfFlags MatcherFlags => PerfFlags.None;
+
+    private TextPostProcessor Processor(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries) =>
         new(new StoredDictionary(Saves(dictionary).Entries), NullLogger<TextPostProcessor>.Instance, snippets: null,
-            libraries: new ComposedLibraries([.. libraries]));
+            libraries: new ComposedLibraries([.. libraries]), perfFlags: MatcherFlags);
 
     // Where each of these rules wrote in `text`, in the text's own coordinates. A trace sits in the finished text, which is
     // shifted from the input by the replacements before it; a spoken form matches exactly its own length, so the shift is
@@ -1416,7 +1420,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         Applied(ticked, [.. ticked.Where(l => !switching.Any(u => IsFor(u, l)) || plan.KeepsOn(l.Id, l.BuiltIn))]);
 
     // The library asked for is kept on, nothing is copied, and dictation writes what it wrote, which is `before` when given.
-    private static void AssertKeptOnAndUnchanged(
+    private void AssertKeptOnAndUnchanged(
         LibrarySwitchOffCopy.Result plan,
         string id,
         IReadOnlyList<DictionaryEntry> dictionary,
@@ -1475,7 +1479,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     /// Finished text from the real post-processor over this dictionary and these libraries, with the dictionary stored as
     /// Save stores it and read back in the repository's order.
     /// </summary>
-    private static Func<string, string> Dictation(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries) =>
+    private Func<string, string> Dictation(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries) =>
         Processor(dictionary, libraries).Process;
 
     /// <summary>
@@ -1516,7 +1520,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     /// What dictation writes for each input: the dictionary stored as Save stores it (trimmed) in a real repository, which
     /// reads it back sorted by spoken form, the libraries through the real composition, and the real post-processor.
     /// </summary>
-    private static string[] Dictated(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries, IEnumerable<string> inputs)
+    private string[] Dictated(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries, IEnumerable<string> inputs)
     {
         using var database = ScribeDatabase.CreateInMemory();
         var repository = new DictionaryRepository(database);
@@ -1528,7 +1532,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         }
 
         var processor = new TextPostProcessor(
-            repository, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: new ComposedLibraries([.. libraries]));
+            repository, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: new ComposedLibraries([.. libraries]), perfFlags: MatcherFlags);
         return [.. inputs.Select(processor.Process)];
     }
 
@@ -1545,7 +1549,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     /// id a ticked row names), unless the plan keeps its library on, and the copies in a real dictionary. Returns finished
     /// text before and after.
     /// </summary>
-    private static (string[] Before, string[] After, LibrarySwitchOffCopy.Result Plan) SwitchOffThroughTheService(
+    private (string[] Before, string[] After, LibrarySwitchOffCopy.Result Plan) SwitchOffThroughTheService(
         IReadOnlyList<(string FileName, string Csv)> customFiles,
         IReadOnlyList<(string Id, bool BuiltIn, bool Ticked)> rows,
         (string Id, bool BuiltIn) switchOff,
@@ -1605,7 +1609,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             }
 
             string[] Dictate() =>
-                [.. TwinInputs.Select(new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: service).Process)];
+                [.. TwinInputs.Select(new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: service, perfFlags: MatcherFlags).Process)];
 
             Save(rows);
             var before = Dictate();

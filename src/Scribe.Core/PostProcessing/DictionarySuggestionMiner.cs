@@ -128,7 +128,9 @@ public static partial class DictionarySuggestionMiner
     [GeneratedRegex(@"^\.?[A-Za-z]*[a-z][A-Z][A-Za-z]*$")]
     private static partial Regex CamelHump();
 
-    // Letters and digits mixed in one token, starting with a letter: K8s, S3, net10, GPT4.
-    [GeneratedRegex(@"^[A-Za-z]+[0-9]+[A-Za-z0-9]*$")]
+    // Letters and digits mixed in one token, starting with a letter: K8s, S3, net10, GPT4. One digit, not a run of them: a run
+    // followed by letters or digits accepts exactly the same tokens, and its two overlapping loops made the regex backtrack
+    // (and allocate while unoptimized, DictionarySuggestionMinerSpanTests.Allocations).
+    [GeneratedRegex(@"^[A-Za-z]+[0-9][A-Za-z0-9]*$")]
     private static partial Regex LetterDigit();
 }

@@ -1,3 +1,4 @@
+using Scribe.Core.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -6,9 +7,12 @@ using Xunit;
 
 namespace Scribe.Core.Tests;
 
-public sealed class SnippetTests
+public class SnippetTests
 {
-    private static (TextPostProcessor Processor, SnippetRepository Snippets, ScribeDatabase Db) Create(
+    // None here, the old path; a derived class runs every test with the prefilter (MatcherFlagSuites.cs).
+    protected virtual PerfFlags MatcherFlags => PerfFlags.None;
+
+    private (TextPostProcessor Processor, SnippetRepository Snippets, ScribeDatabase Db) Create(
         params Snippet[] seed)
     {
         var db = ScribeDatabase.CreateInMemory();
@@ -19,7 +23,7 @@ public sealed class SnippetTests
             snippets.SaveAll(seed);
         }
 
-        var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets);
+        var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets, perfFlags: MatcherFlags);
         return (processor, snippets, db);
     }
 
@@ -164,7 +168,7 @@ public sealed class SnippetTests
         dictionary.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
         var snippets = new SnippetRepository(db);
         snippets.SaveAll([Snippet.New("cloud check", "verify the azure deployment")]);
-        var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets);
+        var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets, perfFlags: MatcherFlags);
 
         // Snippets expand first, so the dictionary then fixes casing inside the template.
         Assert.Equal("verify the Azure deployment", processor.Process("cloud check"));

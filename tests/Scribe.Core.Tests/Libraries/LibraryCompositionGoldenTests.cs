@@ -31,12 +31,16 @@ public sealed class LibraryCompositionGoldenTests
         "github: get hub", "microsoft-azure: azure",
     ];
 
-    [Fact]
-    public void Dictation_badges_and_prompts_match_the_outputs_captured_before_the_list_was_sorted()
+    [Theory]
+    [InlineData("")]
+    [InlineData(Scribe.Core.Diagnostics.PerfFlags.MatcherPrefilter)]
+    public void Dictation_badges_and_prompts_match_the_outputs_captured_before_the_list_was_sorted(string matcherFlags)
     {
+        // The finished text comes from the real post-processor, so the golden also holds with the matcher's prefilter
+        // (0.5.1, MatcherPrefilter).
         using var fixture = new LibraryFixture();
 
-        LibraryGolden.AssertMatchesGolden(LibraryGolden.Render(fixture));
+        LibraryGolden.AssertMatchesGolden(LibraryGolden.Render(fixture, Scribe.Core.Diagnostics.PerfFlags.Parse(matcherFlags)));
     }
 
     [Fact]

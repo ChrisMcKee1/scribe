@@ -145,9 +145,10 @@ public partial class UsageAnalyzerMemoryTests
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             var during = RuntimeWork.Now().Since(work);
 
-            // A ratio, not a size: both still build a compiled regex per phrase and the snapshot's records, and a new novel
-            // term still needs its string. What went is a Match per word and per token, the substrings of every token, a
-            // MatchCollection per phrase per dictation, and three collections per dictation.
+            // A ratio, not a size: both still build a regex per phrase (the oracle a compiled one, the analyzer, since 0.5.1's
+            // PD1c, an interpreted one) and the snapshot's records, and a new novel term still needs its string. What went is a
+            // Match per word and per token, the substrings of every token, a MatchCollection per phrase per dictation, three
+            // collections per dictation, and the compiled regexes' emitted code.
             Assert.True(
                 allocated * 5 < oracleBytes,
                 $"{allocated} bytes against the previous implementation's {oracleBytes} for 600 dictations. During it: {during}.");
@@ -334,7 +335,7 @@ public partial class UsageAnalyzerMemoryTests
 
     // UsageAnalyzer's computation as it was before the allocation change, copied from 10c9a0b verbatim apart from its XML
     // documentation, so every snapshot above is compared with what the previous implementation returned for the same input.
-    private static partial class Oracle
+    internal static partial class Oracle
     {
         internal static Snapshot Compute(
             IEnumerable<HistoryEntry> entries,

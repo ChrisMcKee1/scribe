@@ -118,7 +118,8 @@ public partial class SettingsWindow
                             [.. vocabulary.AiScope.PermittedLibraryIds],
                             request.Value.Days,
                             now,
-                            request.Cancellation);
+                            request.Cancellation,
+                            _perfFlags);
                     },
                     request.Cancellation);
             }

@@ -9,7 +9,7 @@ namespace Scribe.Core.Tests;
 /// dictionary cleanup relies on it to prove two spoken forms can never meet the same text. These tests check it against
 /// the matcher, the comparer and invariant case mapping directly, character by character.
 /// </summary>
-public sealed class SpokenFormFoldTests
+public sealed partial class SpokenFormFoldTests
 {
     private const RegexOptions MatcherOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
 

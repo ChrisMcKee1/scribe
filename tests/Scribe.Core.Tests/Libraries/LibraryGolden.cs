@@ -36,7 +36,11 @@ internal static class LibraryGolden
         "# Regenerate only for a change you mean: set SCRIBE_WRITE_LIBRARY_GOLDEN=1, run LibraryCompositionGoldenTests, and\n" +
         "# review the diff.\n";
 
-    public static string Render(LibraryFixture fixture)
+    /// <param name="matcherFlags">
+    /// The post-processor's performance flags for the finished-text section (0.5.1's MatcherPrefilter); none is
+    /// the old path. The golden is the same file under every value.
+    /// </param>
+    public static string Render(LibraryFixture fixture, Scribe.Core.Diagnostics.PerfFlags? matcherFlags = null)
     {
         var text = new StringBuilder(Header);
         var libraries = fixture.Service.GetLibraries();
@@ -166,7 +170,8 @@ internal static class LibraryGolden
             // The real post-processor, fed the composition's rules exactly as dictation will be fed them.
             Section(text, $"{name}: finished text from the post-processor");
             var processor = new TextPostProcessor(
-                fixture.Dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: new ComposedRules(libraryEntries));
+                fixture.Dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: new ComposedRules(libraryEntries),
+                perfFlags: matcherFlags);
             foreach (var sentence in LibraryFixture.Sentences)
             {
                 Line(text, $"{sentence} => {processor.Process(sentence)}");
