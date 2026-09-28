@@ -2030,8 +2030,10 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   asks. A failure is kept and thrown to the first caller, as if it had run the initialization, and the
   next call tries again; exit waits for a check in progress; the keep-alive connection holds the
   checked file open, so no other file can take its place before the first use. Its log lines go
-  straight to the file provider until the host exists (`StartupLogger`), and they still come before the
-  banner, as the banner's own load put them. `ScribeDatabaseBackgroundInitializationTests` compares twin
+  straight to the file provider until the host exists (`StartupLogger`, in Core), and they still come before the
+  banner, as the banner's own load put them. A failure the database logs through it is handed on as its shape
+  (`FailureShape.DescribeWithStack`, on the lines after the message), never as the exception object, before the host
+  exists and after (`StartupLoggerTests`). `ScribeDatabaseBackgroundInitializationTests` compares twin
   damaged files (garbage, a history page, an audio_blobs page, the freelist trunk) checked each way.
 
 ## Microphone choice and the Windows default (read before touching capture devices)
