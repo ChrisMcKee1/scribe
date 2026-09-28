@@ -403,7 +403,9 @@ spaces, any case), read once at startup and registered in `AddScribeCore`. Off i
 the variable runs what the previous release ran; a default flips only in a later release, on field evidence. A change
 the maintainer approved as the new default ships on instead, and its flag, named for the old behaviour, brings the old
 path back for one release, for comparison (`ForcedIdleGc`: 0.5.0's Forced idle collection); remove the name after that
-release. Add the name to `PerfFlags`' known list and a constant, take `PerfFlags` from the container, and test both paths. The session
+release. Add the name to `PerfFlags`' known list and a constant, take `PerfFlags` from the container, and test both paths. A
+name lands with the code that reads it and goes with it: `PerfFlagsTests` fails for a known name that nothing in `src` reads.
+The session
 banner's `perf:` line lists the names that are on and counts unknown ones, never echoing the value. A change proven
 equivalent exhaustively (or by a fuzz corpus with the old code deciding every result) needs no flag; name that test.
 

@@ -109,6 +109,26 @@ public sealed class PerfFlagsTests
     }
 
     [Fact]
+    public void Every_known_flag_is_read_by_the_code_it_names()
+    {
+        // A name in the list with no code behind it would claim a change that does not run, and turning it on would do
+        // nothing while the banner said it ran. Every known name must be read somewhere in src, outside PerfFlags itself.
+        var src = Path.Combine(FindRepositoryRoot(), "src");
+        var separator = Path.DirectorySeparatorChar;
+        var code = string.Join('\n', Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{separator}bin{separator}", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains($"{separator}obj{separator}", StringComparison.OrdinalIgnoreCase)
+                && !path.EndsWith($"{separator}Diagnostics{separator}PerfFlags.cs", StringComparison.OrdinalIgnoreCase))
+            .Select(File.ReadAllText));
+
+        var unread = PerfFlags.Known
+            .Where(name => !System.Text.RegularExpressions.Regex.IsMatch(code, $@"\bPerfFlags\.{name}\b"))
+            .ToList();
+
+        Assert.True(unread.Count == 0, "Known flags that nothing in src reads: " + string.Join(", ", unread));
+    }
+
+    [Fact]
     public void The_flags_are_read_once_for_the_whole_process()
     {
         var code = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Scribe.Core", "DependencyInjection", "CoreServiceCollectionExtensions.cs"));
