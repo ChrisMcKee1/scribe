@@ -193,42 +193,79 @@ public static class SettingsChangeTracker
 
     private static bool DictionaryRowsChanged(
         IReadOnlyList<DictionaryDraftRow>? rows,
-        IReadOnlyList<LoadedDictionaryDraftRow>? loadedRows)
-    {
-        var loaded = (loadedRows ?? [])
-            .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
-        var draft = (rows ?? [])
-            .Where(row => !SettingsDraftValidator.IsPlaceholder(row))
-            .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
-        if (!SameKeys(loaded.Keys, draft.Keys))
-        {
-            return true;
-        }
-
-        foreach (var (key, before) in loaded)
-        {
-            var after = draft[key];
-            if (!Same(before.Pattern, after.Pattern) ||
+        IReadOnlyList<LoadedDictionaryDraftRow>? loadedRows) =>
+        RowsChanged(
+            rows,
+            loadedRows,
+            static row => row.RowKey,
+            static row => row.RowKey,
+            SettingsDraftValidator.IsPlaceholder,
+            static (before, after) =>
+                !Same(before.Pattern, after.Pattern) ||
                 !Same(before.Replacement, after.Replacement) ||
                 before.WholeWord != after.WholeWord ||
-                before.Enabled != after.Enabled)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+                before.Enabled != after.Enabled);
 
     private static bool SnippetRowsChanged(
         IReadOnlyList<SnippetDraftRow>? rows,
-        IReadOnlyList<LoadedSnippetDraftRow>? loadedRows)
+        IReadOnlyList<LoadedSnippetDraftRow>? loadedRows) =>
+        RowsChanged(
+            rows,
+            loadedRows,
+            static row => row.RowKey,
+            static row => row.RowKey,
+            SettingsDraftValidator.IsPlaceholder,
+            static (before, after) =>
+                !Same(before.Phrase, after.Phrase) ||
+                !Same(before.Template, after.Template) ||
+                before.Enabled != after.Enabled);
+
+    private static bool ProfileRowsChanged(
+        IReadOnlyList<ProfileDraftRow>? rows,
+        IReadOnlyList<LoadedProfileDraftRow>? loadedRows) =>
+        RowsChanged(
+            rows,
+            loadedRows,
+            static row => row.RowKey,
+            static row => row.RowKey,
+            SettingsDraftValidator.IsPlaceholder,
+            static (before, after) =>
+                !Same(before.Name, after.Name) ||
+                !Same(before.Apps, after.Apps) ||
+                !Same(before.WritingStyle, after.WritingStyle) ||
+                before.NewlineHandling != after.NewlineHandling);
+
+    // Loaded and draft rows are matched by key, placeholders left out of the draft. The footer asks on every keystroke,
+    // and its draft usually lists the loaded rows in their order, so ChangedInOrder answers that case in one pass, without
+    // the two dictionaries and the key set of the match by key below. It never throws, and answers only when the match by
+    // key would give the same answer without throwing; every other case takes the match by key, which throws or answers
+    // as before.
+    private static bool RowsChanged<TDraft, TLoaded>(
+        IReadOnlyList<TDraft>? rows,
+        IReadOnlyList<TLoaded>? loadedRows,
+        Func<TDraft, string> draftKey,
+        Func<TLoaded, string> loadedKey,
+        Func<TDraft, bool> isPlaceholder,
+        Func<TLoaded, TDraft, bool> differs)
     {
-        var loaded = (loadedRows ?? [])
-            .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
-        var draft = (rows ?? [])
-            .Where(row => !SettingsDraftValidator.IsPlaceholder(row))
-            .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
+        var draftRows = rows ?? [];
+        var loadedList = loadedRows ?? [];
+        if (ChangedInOrder(draftRows, loadedList, draftKey, loadedKey, isPlaceholder, differs) is { } inOrder)
+        {
+            return inOrder;
+        }
+
+        var loaded = loadedList.ToDictionary(loadedKey, StringComparer.Ordinal);
+        var draft = new Dictionary<string, TDraft>(StringComparer.Ordinal);
+        for (var i = 0; i < draftRows.Count; i++)
+        {
+            var row = draftRows[i];
+            if (!isPlaceholder(row))
+            {
+                draft.Add(draftKey(row), row);
+            }
+        }
+
         if (!SameKeys(loaded.Keys, draft.Keys))
         {
             return true;
@@ -236,10 +273,7 @@ public static class SettingsChangeTracker
 
         foreach (var (key, before) in loaded)
         {
-            var after = draft[key];
-            if (!Same(before.Phrase, after.Phrase) ||
-                !Same(before.Template, after.Template) ||
-                before.Enabled != after.Enabled)
+            if (differs(before, draft[key]))
             {
                 return true;
             }
@@ -248,33 +282,63 @@ public static class SettingsChangeTracker
         return false;
     }
 
-    private static bool ProfileRowsChanged(
-        IReadOnlyList<ProfileDraftRow>? rows,
-        IReadOnlyList<LoadedProfileDraftRow>? loadedRows)
+    // Answers only when no row is null, each draft row that is not a placeholder has the key of the loaded row at its
+    // position, no loaded row is left over, and the loaded keys are distinct and not null: then the match by key pairs
+    // exactly these rows and throws nothing. The whole draft is walked even after a difference, so that a key that stops
+    // lining up later still sends the rows to the match by key.
+    private static bool? ChangedInOrder<TDraft, TLoaded>(
+        IReadOnlyList<TDraft> rows,
+        IReadOnlyList<TLoaded> loadedRows,
+        Func<TDraft, string> draftKey,
+        Func<TLoaded, string> loadedKey,
+        Func<TDraft, bool> isPlaceholder,
+        Func<TLoaded, TDraft, bool> differs)
     {
-        var loaded = (loadedRows ?? [])
-            .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
-        var draft = (rows ?? [])
-            .Where(row => !SettingsDraftValidator.IsPlaceholder(row))
-            .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
-        if (!SameKeys(loaded.Keys, draft.Keys))
+        var changed = false;
+        var next = 0;
+        for (var i = 0; i < rows.Count; i++)
         {
-            return true;
+            if (rows[i] is not { } row)
+            {
+                return null;
+            }
+
+            if (isPlaceholder(row))
+            {
+                continue;
+            }
+
+            if (next == loadedRows.Count ||
+                loadedRows[next] is not { } before ||
+                !string.Equals(draftKey(row), loadedKey(before), StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            changed = changed || differs(before, row);
+            next++;
         }
 
-        foreach (var (key, before) in loaded)
+        if (next != loadedRows.Count)
         {
-            var after = draft[key];
-            if (!Same(before.Name, after.Name) ||
-                !Same(before.Apps, after.Apps) ||
-                !Same(before.WritingStyle, after.WritingStyle) ||
-                before.NewlineHandling != after.NewlineHandling)
+            return null;
+        }
+
+        if (loadedRows.Count == 0)
+        {
+            return changed;
+        }
+
+        var keys = new HashSet<string>(loadedRows.Count, StringComparer.Ordinal);
+        for (var i = 0; i < loadedRows.Count; i++)
+        {
+            if (loadedKey(loadedRows[i]) is not { } key || !keys.Add(key))
             {
-                return true;
+                return null;
             }
         }
 
-        return false;
+        return changed;
     }
 
     private static bool ProfilesChanged(IReadOnlyList<AppProfile> baseline, IReadOnlyList<AppProfile> draft)

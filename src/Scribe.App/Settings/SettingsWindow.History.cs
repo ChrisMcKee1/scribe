@@ -496,7 +496,10 @@ public partial class SettingsWindow
     {
         RefreshHistoryEmptyTextFromCommitted();
         RefreshUsageInsightAvailability();
-        LoadPerformanceStats();
+        if (SectionDiagnostics.Visibility == Visibility.Visible)
+        {
+            LoadPerformanceStats();
+        }
     }
 
     private void RefreshHistoryEmptyTextFromCommitted()

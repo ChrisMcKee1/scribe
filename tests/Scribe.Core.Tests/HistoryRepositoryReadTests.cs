@@ -1,8 +1,11 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Scribe.Core.Models;
 
 using Scribe.Core.Persistence;
+
+using Scribe.Core.Settings;
 
 
 
@@ -178,6 +181,154 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
     [Fact]
 
+    public void Search_matches_unknown_app_names_but_not_known_process_names()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        var unknown = repository.Add(Entry("plain text", targetApp: "customwriter.exe"));
+
+        repository.Add(Entry("plain text", targetApp: "WINWORD.EXE"));
+
+
+
+        Assert.Equal([unknown.Id], repository.Search("writer", 10).Select(entry => entry.Id));
+
+        Assert.Empty(repository.Search("winword", 10));
+
+    }
+
+
+
+    [Fact]
+
+    public void Search_matches_the_client_side_predicate_for_unicode_apps_literals_and_limits()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        repository.Add(Entry(Now.AddMinutes(1), "Émile writes a note", targetApp: "notepad"));
+
+        repository.Add(Entry(Now.AddMinutes(2), "Greek δς sample", targetApp: "δς.exe"));
+
+        repository.Add(Entry(Now.AddMinutes(3), "İstanbul and Izmir", targetApp: "Éditeur.exe"));
+
+        repository.Add(Entry(Now.AddMinutes(4), "literal 100% and ABC_123", targetApp: "Writer  Pro.exe"));
+
+        repository.Add(Entry(Now.AddMinutes(5), "plain code text", targetApp: " code.exe "));
+
+        repository.Add(Entry(Now.AddMinutes(6), "plain word text", targetApp: "WINWORD.EXE"));
+
+        repository.Add(Entry(Now.AddMinutes(7), "needle oldest", targetApp: "notepad"));
+
+        repository.Add(Entry(Now.AddMinutes(8), "needle middle", targetApp: "notepad"));
+
+        repository.Add(Entry(Now.AddMinutes(9), "needle newest", targetApp: "notepad"));
+
+
+
+        AssertMatchesReference(database, repository, "émile", 10);
+
+        AssertMatchesReference(database, repository, "δσ", 10);
+
+        AssertMatchesReference(database, repository, "é", 10);
+
+        AssertMatchesReference(database, repository, "été", 10);
+
+        AssertMatchesReference(database, repository, "ÉTÉ", 10);
+
+        AssertMatchesReference(database, repository, "𐐨", 10);
+
+        AssertMatchesReference(database, repository, "Writer Pro", 10);
+
+        AssertMatchesReference(database, repository, "VS Code", 10);
+
+        AssertMatchesReference(database, repository, " Word ", 10);
+
+        AssertMatchesReference(database, repository, "word", 10);
+
+        AssertMatchesReference(database, repository, "100%", 10);
+
+        AssertMatchesReference(database, repository, "ABC_123", 10);
+
+        AssertMatchesReference(database, repository, "needle", 2);
+
+    }
+
+
+
+    [Fact]
+
+    public void Search_keeps_sqlite_text_limit_when_accented_case_differs()
+
+    {
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        var oldMatches = new List<HistoryEntry>();
+
+        for (var index = 0; index < 50; index++)
+
+        {
+
+            oldMatches.Add(repository.Add(Entry(Now.AddMinutes(index), $"été row {index}")));
+
+        }
+
+        var newestNonMatch = repository.Add(Entry(Now.AddMinutes(100), "ÉTÉ newest"));
+
+
+
+        var results = repository.Search("été", 50);
+
+
+
+        Assert.DoesNotContain(results, entry => entry.Id == newestNonMatch.Id);
+
+        Assert.Equal(oldMatches.OrderByDescending(entry => entry.TimestampUtc).Select(entry => entry.Id), results.Select(entry => entry.Id));
+
+    }
+
+
+
+    [Fact]
+
+    public void Rolled_back_lazy_history_columns_are_not_cached_as_available()
+
+    {
+
+        CreateSchemaWithoutOptionalHistoryColumns(_folder.DatabasePath);
+
+        using var database = _folder.Open();
+
+        var repository = new HistoryRepository(database);
+
+        Assert.ThrowsAny<Exception>(() => repository.Add(Entry("first write rolls back", targetApp: null) with { Text = null! }));
+
+
+
+        var saved = repository.Add(Entry("second write succeeds"));
+
+
+
+        Assert.Equal("second write succeeds", repository.GetRecent(1).Single().Text);
+
+        Assert.True(saved.Id > 0);
+
+    }
+
+
+
+    [Fact]
+
     public void Ordered_search_waits_for_accepted_history_writes()
 
     {
@@ -258,5 +409,206 @@ public sealed class HistoryRepositoryReadTests : IDisposable
 
         new(0, timestampUtc, text, AudioMilliseconds: 1000, DecodeMilliseconds: 100, TargetApp: targetApp);
 
-}
 
+
+    private static void AssertMatchesReference(
+
+        ScribeDatabase database,
+
+        HistoryRepository repository,
+
+        string query,
+
+        int limit)
+
+    {
+
+        Assert.Equal(
+
+            ReferenceSearch(database, query, limit),
+
+            repository.Search(query, limit).Select(entry => entry.Id));
+
+    }
+
+
+
+    private static IReadOnlyList<long> ReferenceSearch(ScribeDatabase database, string query, int limit)
+
+    {
+
+        if (limit <= 0 || string.IsNullOrWhiteSpace(query))
+
+        {
+
+            return [];
+
+        }
+
+
+
+        using var connection = database.Open();
+
+        using var command = connection.CreateCommand();
+
+        command.CommandText =
+
+            """
+
+            SELECT id, text LIKE $query ESCAPE '\' AS text_match, target_app
+
+            FROM history
+
+            WHERE text LIKE $query ESCAPE '\'
+
+                OR target_app IS NOT NULL
+
+            ORDER BY timestamp_utc DESC, id DESC;
+
+            """;
+
+        command.Parameters.AddWithValue("$query", $"%{EscapeLike(query.Trim())}%");
+
+        var results = new List<long>();
+
+        using var reader = command.ExecuteReader();
+
+        while (reader.Read() && results.Count < limit)
+
+        {
+
+            if (reader.GetInt64(1) != 0 ||
+
+                (!reader.IsDBNull(2) && AppDisplayName.For(reader.GetString(2)).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+
+            {
+
+                results.Add(reader.GetInt64(0));
+
+            }
+
+        }
+
+
+
+        return results;
+
+    }
+
+
+
+    private static string EscapeLike(string query) =>
+
+        query.Replace("\\", "\\\\", StringComparison.Ordinal)
+
+            .Replace("%", "\\%", StringComparison.Ordinal)
+
+            .Replace("_", "\\_", StringComparison.Ordinal);
+
+
+
+    private static void CreateSchemaWithoutOptionalHistoryColumns(string path)
+
+    {
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+
+        {
+
+            DataSource = path,
+
+            Mode = SqliteOpenMode.ReadWriteCreate,
+
+            Pooling = false,
+
+            ForeignKeys = true,
+
+        }.ToString());
+
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+
+        command.CommandText =
+
+            """
+
+            PRAGMA journal_mode=WAL;
+
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+
+            CREATE TABLE audio_blobs (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                sample_rate INTEGER NOT NULL,
+
+                samples BLOB NOT NULL,
+
+                created_utc TEXT NOT NULL);
+
+            CREATE TABLE history (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                timestamp_utc TEXT NOT NULL,
+
+                text TEXT NOT NULL,
+
+                audio_ms INTEGER NOT NULL,
+
+                decode_ms INTEGER NOT NULL,
+
+                target_app TEXT NULL,
+
+                audio_blob_id INTEGER NULL REFERENCES audio_blobs (id) ON DELETE SET NULL);
+
+            CREATE INDEX ix_history_timestamp ON history (timestamp_utc DESC);
+
+            CREATE TABLE dictionary (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                pattern TEXT NOT NULL,
+
+                replacement TEXT NOT NULL,
+
+                whole_word INTEGER NOT NULL DEFAULT 1,
+
+                enabled INTEGER NOT NULL DEFAULT 1);
+
+            CREATE UNIQUE INDEX ux_dictionary_pattern ON dictionary (pattern);
+
+            CREATE TABLE cleanup_failures (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                timestamp_utc TEXT NOT NULL,
+
+                provider TEXT NULL,
+
+                model TEXT NULL,
+
+                reason TEXT NOT NULL,
+
+                sample TEXT NULL);
+
+            CREATE TABLE snippets (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                phrase TEXT NOT NULL,
+
+                template TEXT NOT NULL,
+
+                enabled INTEGER NOT NULL DEFAULT 1);
+
+            PRAGMA user_version=7;
+
+            """;
+
+        command.ExecuteNonQuery();
+
+    }
+
+}

@@ -1,5 +1,7 @@
-﻿using System;
+using System;
+using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Threading;
 
 namespace Scribe.Overlay.Logging;
@@ -13,9 +15,20 @@ namespace Scribe.Overlay.Logging;
 /// </summary>
 public static class OverlayLog
 {
+    private const int MaxExceptionFrames = 32;
+    private const int MaxExceptionFrameChars = 512;
+
     private static readonly object Gate = new();
     private static string? _path;
     private static DateOnly _pathDate;
+
+    // A StreamWriter given only a stream encodes as UTF-8 without a byte order mark and throws on text that is not well
+    // formed; it buffers 1,024 characters and encodes a line that fits them in one piece when it is disposed. Such a line is
+    // written the same way here without the writer's and the stream's buffers; a longer one keeps the writer, which writes
+    // it in pieces.
+    private static readonly UTF8Encoding LineEncoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly byte[] NewLineBytes = LineEncoding.GetBytes(Environment.NewLine);
+    private const int WriterBufferChars = 1024;
 
     private static string Path
     {
@@ -53,36 +66,11 @@ public static class OverlayLog
     public static void Write(string message, string level = "Information")
     {
         // Diagnostics are best-effort and must NEVER throw into the overlay's UI/IPC code, including
-        // from Path resolution (directory creation) or an unexpected writer failure below.
+        // from Path resolution, directory creation or an unexpected writer failure below.
         try
         {
             var line = $"{DateTime.Now:HH:mm:ss.fff} [{level}] Overlay: {message}";
-            var path = Path;
-
-            // Both the WPF host and this process append to the same file; tolerate brief lock contention.
-            for (var attempt = 0; attempt < 12; attempt++)
-            {
-                try
-                {
-                    lock (Gate)
-                    {
-                        using var stream = new FileStream(
-                            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                        using var writer = new StreamWriter(stream);
-                        writer.WriteLine(line);
-                    }
-
-                    return;
-                }
-                catch (IOException)
-                {
-                    Thread.Sleep(15);
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    Thread.Sleep(15);
-                }
-            }
+            AppendLine(line);
         }
         catch
         {
@@ -92,6 +80,162 @@ public static class OverlayLog
 
     public static void Warn(string message) => Write(message, "Warning");
 
-    public static void Error(string message, Exception? ex = null) =>
-        Write(ex is null ? message : $"{message}: {ex}", "Error");
+    public static void Error(string message, Exception? ex = null)
+    {
+        try
+        {
+            Write(ex is null ? message : message + FormatExceptionShape(ex), "Error");
+        }
+        catch
+        {
+            try
+            {
+                Write(message + " (" + SafeExceptionType(ex) + ")", "Error");
+            }
+            catch
+            {
+                // Never let diagnostics replace the original failure.
+            }
+        }
+    }
+
+    private static string FormatExceptionShape(Exception ex)
+    {
+        try
+        {
+            var builder = new StringBuilder()
+                .Append(" (")
+                .Append(SafeExceptionType(ex))
+                .Append(" 0x")
+                .Append(ex.HResult.ToString("X8", CultureInfo.InvariantCulture))
+                .Append(')');
+            AppendExceptionFrames(builder, ex, MaxExceptionFrames);
+            return builder.ToString();
+        }
+        catch
+        {
+            return " (" + SafeExceptionType(ex) + ")";
+        }
+    }
+
+    private static string SafeExceptionType(Exception? ex)
+    {
+        try
+        {
+            return ex?.GetType().Name ?? "Exception";
+        }
+        catch
+        {
+            return "Exception";
+        }
+    }
+
+    private static int AppendExceptionFrames(StringBuilder builder, Exception? exception, int remaining)
+    {
+        if (exception is null || remaining <= 0)
+        {
+            return remaining;
+        }
+
+        try
+        {
+            remaining = AppendStackFrames(builder, exception.StackTrace, remaining);
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+
+            if (exception is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    remaining = AppendExceptionFrames(builder, inner, remaining);
+                    if (remaining <= 0)
+                    {
+                        return 0;
+                    }
+                }
+
+                return remaining;
+            }
+
+            return AppendExceptionFrames(builder, exception.InnerException, remaining);
+        }
+        catch
+        {
+            return remaining;
+        }
+    }
+
+    private static int AppendStackFrames(StringBuilder builder, string? stackTrace, int remaining)
+    {
+        if (string.IsNullOrWhiteSpace(stackTrace) || remaining <= 0)
+        {
+            return remaining;
+        }
+
+        foreach (var rawLine in stackTrace.Split('\n'))
+        {
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+
+            var line = rawLine.TrimEnd('\r');
+            var trimmed = line.AsSpan().TrimStart();
+            if (!trimmed.StartsWith("at ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var frame = trimmed.Length > MaxExceptionFrameChars
+                ? trimmed[..MaxExceptionFrameChars]
+                : trimmed;
+            builder.AppendLine().Append(frame);
+            remaining--;
+        }
+
+        return remaining;
+    }
+
+    private static void AppendLine(string line)
+    {
+        var path = Path;
+
+        // Both the WPF host and this process append to the same file; tolerate brief lock contention.
+        for (var attempt = 0; attempt < 12; attempt++)
+        {
+            try
+            {
+                lock (Gate)
+                {
+                    if (line.Length + Environment.NewLine.Length <= WriterBufferChars)
+                    {
+                        using var stream = new FileStream(
+                            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
+                        var bytes = new byte[LineEncoding.GetByteCount(line) + NewLineBytes.Length];
+                        NewLineBytes.CopyTo(bytes, LineEncoding.GetBytes(line, 0, line.Length, bytes, 0));
+                        stream.Write(bytes, 0, bytes.Length);
+                    }
+                    else
+                    {
+                        using var stream = new FileStream(
+                            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                        using var writer = new StreamWriter(stream);
+                        writer.WriteLine(line);
+                    }
+                }
+
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(15);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Thread.Sleep(15);
+            }
+        }
+    }
 }

@@ -101,6 +101,15 @@ public sealed class OverlayPipeProtocolTests
     }
 
     [Fact]
+    public void Meter_lines_in_the_normal_level_range_are_cached()
+    {
+        var line = OverlayPipeProtocol.MeterLine(500);
+        Assert.Same(line, OverlayPipeProtocol.MeterLine(500));
+        Assert.Equal("METER -1", OverlayPipeProtocol.MeterLine(-1));
+        Assert.Equal("METER 1001", OverlayPipeProtocol.MeterLine(1001));
+    }
+
+    [Fact]
     public void The_position_anchors_are_the_engine_s_positions_by_name()
     {
         var anchors = EnumMembers(File.ReadAllText(OverlayFile("OverlayAnchor.cs")), "OverlayAnchor");

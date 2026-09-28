@@ -88,6 +88,11 @@ internal sealed class OverlayIpcServer : IDisposable
     // reference to Scribe.Core; OverlayPipeProtocolTests keeps this switch and that list equal.
     private void Dispatch(string line)
     {
+        if (TryDispatchMeter(line))
+        {
+            return;
+        }
+
         var trimmed = line.Trim();
         if (trimmed.Length == 0)
         {
@@ -125,10 +130,7 @@ internal sealed class OverlayIpcServer : IDisposable
                 _window.Hide();
                 break;
             case "METER":
-                if (int.TryParse(arg.Trim(), out var v))
-                {
-                    _window.SetMeter(v / 1000.0);
-                }
+                DispatchMeter(arg);
                 break;
             case "POSITION":
                 if (Enum.TryParse<OverlayAnchor>(arg.Trim(), ignoreCase: true, out var anchor))
@@ -149,6 +151,33 @@ internal sealed class OverlayIpcServer : IDisposable
             default:
                 OverlayLog.Warn($"OverlayIpcServer unknown command '{cmd}'");
                 break;
+        }
+    }
+
+    // METER arrives up to 40 times a second while recording, so it is read on the line's own characters, without the two
+    // substrings Dispatch cuts from other lines. It takes exactly the lines the switch reads as METER: trimmed as
+    // string.Trim trims, a verb equal to "METER" ignoring case is one ToUpperInvariant makes "METER" (no character outside
+    // ASCII upper-cases to M, E, T or R), and the level is parsed the same way. So no line reaches the switch's METER case,
+    // which is kept so that the switch still names every verb.
+    private bool TryDispatchMeter(string line)
+    {
+        var trimmed = line.AsSpan().Trim();
+        var sp = trimmed.IndexOf(' ');
+        var cmd = sp < 0 ? trimmed : trimmed[..sp];
+        if (!cmd.Equals("METER", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        DispatchMeter(sp < 0 ? ReadOnlySpan<char>.Empty : trimmed[(sp + 1)..]);
+        return true;
+    }
+
+    private void DispatchMeter(ReadOnlySpan<char> arg)
+    {
+        if (int.TryParse(arg.Trim(), out var v))
+        {
+            _window.SetMeter(v / 1000.0);
         }
     }
 

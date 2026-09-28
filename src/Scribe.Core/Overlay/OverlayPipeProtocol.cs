@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Scribe.Core.Models;
 
@@ -11,6 +12,8 @@ namespace Scribe.Core.Overlay;
 /// </summary>
 public static class OverlayPipeProtocol
 {
+    private static readonly string[] MeterLines = CreateMeterLines();
+
     /// <summary>Launches the helper ahead of the first show; the window is built hidden, so it does nothing else.</summary>
     public const string Warmup = "WARMUP";
 
@@ -78,7 +81,29 @@ public static class OverlayPipeProtocol
     public static string ProcessingLine(bool aiCleanup) => Processing + (aiCleanup ? " 1" : " 0");
 
     /// <summary>The live input level, scaled to 0 to 1000.</summary>
-    public static string MeterLine(int level) => Meter + " " + level.ToString(CultureInfo.InvariantCulture);
+    public static string MeterLine(int level) =>
+        (uint)level < (uint)MeterLines.Length
+            ? MeterLines[level]
+            : FormatMeterLine(level);
+
+    // Every other int: formatted on the stack with int.TryFormat and copied once into the returned string, its only
+    // allocation in every JIT tier. An interpolated string handler here allocated a box for the int while the JIT profiled
+    // its generic code.
+    private static string FormatMeterLine(int level)
+    {
+        Span<char> line = stackalloc char[LongestMeterLine];
+        Meter.CopyTo(line);
+        line[Meter.Length] = ' ';
+        if (!level.TryFormat(line[(Meter.Length + 1)..], out var digits, provider: CultureInfo.InvariantCulture))
+        {
+            throw new UnreachableException("The digits of every int fit the line.");
+        }
+
+        return new string(line[..(Meter.Length + 1 + digits)]);
+    }
+
+    // "METER -2147483648", the longest line an int makes.
+    private const int LongestMeterLine = 17;
 
     /// <summary>The anchor.</summary>
     public static string PositionLine(OverlayPosition position) => Position + " " + position;
@@ -88,5 +113,16 @@ public static class OverlayPipeProtocol
     {
         var clean = (argument ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
         return clean.Length == 0 ? verb : verb + " " + clean;
+    }
+
+    private static string[] CreateMeterLines()
+    {
+        var lines = new string[1001];
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lines[i] = Meter + " " + i.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return lines;
     }
 }

@@ -73,6 +73,18 @@ public sealed class AudioCapturePeakTests
     }
 
     [Fact]
+    public void Float_peak_ignores_nan_samples()
+    {
+        var format = WaveFormat.CreateIeeeFloatWaveFormat(48000, 1);
+        var samples = Enumerable.Repeat(0.25f, 128).ToArray();
+        samples[37] = float.NaN;
+        samples[91] = -0.75f;
+        var buffer = FloatBuffer(samples);
+
+        Assert.Equal(0.75f, AudioCaptureService.ComputePeak(buffer, format), 3);
+    }
+
+    [Fact]
     public void Pcm16_peak_is_normalized()
     {
         var format = new WaveFormat(16000, 16, 1);

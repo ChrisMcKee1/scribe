@@ -71,7 +71,7 @@ public static class KeyNames
     /// </summary>
     public static bool IsAmbiguousWpfName(uint virtualKey, string name) =>
         AmbiguousWpfNames.TryGetValue(virtualKey, out var names) &&
-        names.Contains(name.Trim(), StringComparer.OrdinalIgnoreCase);
+        ContainsOrdinalIgnoreCase(names, name.Trim());
 
     /// <summary>
     /// A key name from what <c>GetKeyNameTextW</c> returned for the scan code of <paramref name="virtualKey"/> on the
@@ -223,5 +223,18 @@ public static class KeyNames
         }
 
         return codes;
+    }
+
+    private static bool ContainsOrdinalIgnoreCase(string[] values, string value)
+    {
+        foreach (var candidate in values)
+        {
+            if (string.Equals(candidate, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

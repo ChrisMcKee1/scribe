@@ -18,6 +18,7 @@ internal static class Program
         "(PowerManagementApplier); this job opts out with DontEnforcePowerPlan, so it measures under the plan " +
         "shown as power= above and leaves that machine-wide setting alone.";
 
+    [STAThread]
     private static int Main(string[] args)
     {
         var host = ExecutionEnvironment.Capture();
@@ -26,6 +27,11 @@ internal static class Program
         if (SoakHarness.IsRequested(args))
         {
             return SoakHarness.Run(args, host);
+        }
+
+        if (AppShellProbe.IsRequested(args))
+        {
+            return AppShellProbe.Run(args, host);
         }
 
         if (!BenchmarkTarget.TryResolve(host.ProcessArchitecture, out var runtimeIdentifier, out var platform))
@@ -42,9 +48,14 @@ internal static class Program
                 "build and run emulated too, which is not what a native install executes.");
         }
 
+        var useDefaultJob = args.Contains("--scribe-default-job", StringComparer.Ordinal);
+        var benchmarkArgs = args
+            .Where(arg => !string.Equals(arg, "--scribe-default-job", StringComparison.Ordinal))
+            .ToArray();
+
         // DontEnforcePowerPlan: without it BenchmarkDotNet switches the whole machine to High
         // performance for the run, which neither represents a user's PC nor is this tool's to change.
-        var job = Job.ShortRun
+        var job = (useDefaultJob ? Job.Default : Job.ShortRun)
             .WithPlatform(platform)
             .WithMsBuildArguments($"/p:RuntimeIdentifier={runtimeIdentifier}")
             .DontEnforcePowerPlan();
@@ -75,7 +86,7 @@ internal static class Program
         var config = ManualConfig.Create(DefaultConfig.Instance)
             .AddJob(job)
             .AddColumn(new ExecutionEnvironmentColumn());
-        var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, config).ToList();
+        var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(benchmarkArgs, config).ToList();
 
         PrintResultEnvironment(host, summaries);
         return 0;

@@ -19,37 +19,41 @@ namespace Scribe.App.Tray;
 /// The icon is loaded at the notification area's current small-icon size, rather than handing the
 /// shell a 64 px frame to scale down. That lets the hand-tuned 16, 20, 24 and 32 px frames draw when
 /// the taskbar asks for them.
+///
+/// Each state keeps the first icon made from its .ico as a template that is never handed out, and every icon handed
+/// back is made over the template's copy of the bytes (<c>new Icon(template, size, size)</c> shares them), where making
+/// it from a stream copies the whole 97 to 117 KB file, a Large Object Heap array, on every state change.
 /// </remarks>
 internal static class TrayIcons
 {
-    private static readonly byte[]? IdleData = ReadResource("scribe.ico");
-    private static readonly byte[]? RecordingData = ReadResource("scribe-recording.ico");
-    private static readonly byte[]? ProcessingData = ReadResource("scribe-processing.ico");
-    private static readonly byte[]? PausedData = ReadResource("scribe-paused.ico");
+    private static readonly IconSource Idle = new("scribe.ico");
+    private static readonly IconSource Recording = new("scribe-recording.ico");
+    private static readonly IconSource Processing = new("scribe-processing.ico");
+    private static readonly IconSource Paused = new("scribe-paused.ico");
 
     /// <summary>Neutral idle icon (ready to dictate).</summary>
     public static Icon CreateIdle() => CreateIdle(GetPreferredSize());
 
     /// <inheritdoc cref="CreateIdle()"/>
-    public static Icon CreateIdle(int size) => Create(IdleData, size);
+    public static Icon CreateIdle(int size) => Idle.Create(size);
 
     /// <summary>Recording icon (capture in progress).</summary>
     public static Icon CreateRecording() => CreateRecording(GetPreferredSize());
 
     /// <inheritdoc cref="CreateRecording()"/>
-    public static Icon CreateRecording(int size) => Create(RecordingData, size);
+    public static Icon CreateRecording(int size) => Recording.Create(size);
 
     /// <summary>Processing icon (transcribing / injecting).</summary>
     public static Icon CreateProcessing() => CreateProcessing(GetPreferredSize());
 
     /// <inheritdoc cref="CreateProcessing()"/>
-    public static Icon CreateProcessing(int size) => Create(ProcessingData, size);
+    public static Icon CreateProcessing(int size) => Processing.Create(size);
 
     /// <summary>Paused icon with the waveform muted to slate.</summary>
     public static Icon CreatePaused() => CreatePaused(GetPreferredSize());
 
     /// <inheritdoc cref="CreatePaused()"/>
-    public static Icon CreatePaused(int size) => Create(PausedData, size);
+    public static Icon CreatePaused(int size) => Paused.Create(size);
 
     public static int GetPreferredSize() => TrayIconSize.Resolve();
 
@@ -77,24 +81,54 @@ internal static class TrayIcons
         }
     }
 
-    private static Icon Create(byte[]? data, int size)
+    private sealed class IconSource(string fileName)
     {
-        if (data is not null)
+        private readonly Lock _gate = new();
+        private byte[]? _data = ReadResource(fileName);
+        private Icon? _template;
+
+        public Icon Create(int size)
         {
-            try
+            if (Template(size) is { } template)
             {
-                using var stream = new MemoryStream(data);
-                return new Icon(stream, size, size);
+                try
+                {
+                    return new Icon(template, size, size);
+                }
+                catch
+                {
+                    // Fall through to the framework icon.
+                }
             }
-            catch
-            {
-                // Fall through to the framework icon.
-            }
+
+            // A damaged resource must not prevent the tray app from starting. This icon is always
+            // available from the framework and keeps the application controllable so it can quit.
+            return (Icon)SystemIcons.Application.Clone();
         }
 
-        // A damaged resource must not prevent the tray app from starting. This icon is always
-        // available from the framework and keeps the application controllable so it can quit.
-        return (Icon)SystemIcons.Application.Clone();
+        // Made the first time a size succeeds, exactly as that call made its icon before, so a size whose frame cannot be
+        // made still falls back, and the next call tries again.
+        private Icon? Template(int size)
+        {
+            lock (_gate)
+            {
+                if (_template is null && _data is { } data)
+                {
+                    try
+                    {
+                        using var stream = new MemoryStream(data);
+                        _template = new Icon(stream, size, size);
+                        _data = null; // the template holds its own copy
+                    }
+                    catch
+                    {
+                        // Falls back below; the bytes stay for the next call.
+                    }
+                }
+
+                return _template;
+            }
+        }
     }
 
     private static class TrayIconSize

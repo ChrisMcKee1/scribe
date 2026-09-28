@@ -159,4 +159,112 @@ public class CaptureSignalAnalyzerTests
         Assert.Contains("ch1(", text);
         Assert.Contains("dBFS", text);
     }
+
+    [Theory]
+    [MemberData(nameof(NonFiniteChannelCases))]
+    public void Non_finite_samples_match_the_release_050_analyzer(float left, float right, bool expectedChannelsDiverge)
+    {
+        var raw = Interleaved(128, frame => frame == 17 ? left : 0.25f, frame => frame == 29 ? right : 0.125f);
+
+        var expected = AnalyzeLikeRelease050(MemoryMarshal.Cast<byte, float>(raw), channels: 2, sampleRate: 48_000);
+        var actual = CaptureSignalAnalyzer.Analyze(raw, Stereo48Float);
+        var expectedDivergence = ChannelsDivergeLikeRelease050(expected.PerChannel);
+
+        AssertSameFloat(expected.Peak, actual.Peak);
+        AssertSameFloat(expected.Rms, actual.Rms);
+        AssertSameFloat(expected.DcOffset, actual.DcOffset);
+        Assert.Equal(expected.HasSilentChannel, actual.HasSilentChannel);
+        Assert.Equal(expectedChannelsDiverge, expectedDivergence);
+        Assert.Equal(expectedChannelsDiverge, actual.ChannelsDiverge);
+        Assert.Equal(expected.PerChannel.Count, actual.PerChannel.Count);
+        for (var index = 0; index < expected.PerChannel.Count; index++)
+        {
+            AssertSameFloat(expected.PerChannel[index].Peak, actual.PerChannel[index].Peak);
+            AssertSameFloat(expected.PerChannel[index].Rms, actual.PerChannel[index].Rms);
+        }
+    }
+
+    public static TheoryData<float, float, bool> NonFiniteChannelCases() => new()
+    {
+        { float.NaN, 0.75f, false },
+        { 0.75f, float.NaN, false },
+        { float.NaN, float.NaN, false },
+        { float.PositiveInfinity, 0.75f, true },
+        { 0.75f, float.PositiveInfinity, true },
+        { float.PositiveInfinity, float.PositiveInfinity, false },
+        { float.NegativeInfinity, 0.75f, true },
+        { 0.75f, float.NegativeInfinity, true },
+        { float.PositiveInfinity, float.NegativeInfinity, false },
+        { float.NaN, float.PositiveInfinity, false },
+        { float.NegativeInfinity, float.NaN, false },
+    };
+
+    private static bool ChannelsDivergeLikeRelease050(IReadOnlyList<ChannelLevel> perChannel)
+    {
+        if (perChannel.Count < 2) return false;
+        var loudest = perChannel.Max(c => c.Rms);
+        var quietest = perChannel.Min(c => c.Rms);
+        return loudest > 0 && quietest / loudest < 0.5f;
+    }
+
+    private static CaptureSignalReport AnalyzeLikeRelease050(ReadOnlySpan<float> samples, int channels, int sampleRate)
+    {
+        if (samples.Length < channels)
+        {
+            return new CaptureSignalReport(channels, sampleRate, 0, 0, 0, 0, 0, []);
+        }
+
+        var peaks = new float[channels];
+        var sumSquares = new double[channels];
+        var counts = new long[channels];
+        double sum = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var value = samples[i];
+            var channel = i % channels;
+            var magnitude = Math.Abs(value);
+
+            if (magnitude > peaks[channel]) peaks[channel] = magnitude;
+            sumSquares[channel] += value * (double)value;
+            counts[channel]++;
+            sum += value;
+
+            if (magnitude >= CaptureSignalAnalyzer.ClipThreshold) clipped++;
+            if (magnitude < CaptureSignalAnalyzer.NearSilenceThreshold) nearSilent++;
+        }
+
+        var perChannel = new List<ChannelLevel>(channels);
+        for (var c = 0; c < channels; c++)
+        {
+            var rms = counts[c] == 0 ? 0f : (float)Math.Sqrt(sumSquares[c] / counts[c]);
+            perChannel.Add(new ChannelLevel(c, peaks[c], rms));
+        }
+
+        var totalSquares = sumSquares.Sum();
+        var overallRms = (float)Math.Sqrt(totalSquares / samples.Length);
+
+        return new CaptureSignalReport(
+            channels,
+            sampleRate,
+            peaks.Max(),
+            overallRms,
+            clipped / (double)samples.Length,
+            nearSilent / (double)samples.Length,
+            (float)(sum / samples.Length),
+            perChannel);
+    }
+
+    private static void AssertSameFloat(float expected, float actual)
+    {
+        if (float.IsNaN(expected))
+        {
+            Assert.True(float.IsNaN(actual));
+            return;
+        }
+
+        Assert.Equal(expected, actual);
+    }
 }

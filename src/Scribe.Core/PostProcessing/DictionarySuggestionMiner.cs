@@ -21,6 +21,9 @@ public static partial class DictionarySuggestionMiner
         "OK", "AM", "PM", "TODO", "FYI", "ASAP", "LOL",
     };
 
+    private static readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> StoplistSpans =
+        Stoplist.GetAlternateLookup<ReadOnlySpan<char>>();
+
     /// <summary>
     /// Returns suggested dictionary entries: terms matching a jargon pattern that occur in at least
     /// <paramref name="minDictations"/> distinct dictations and aren't already covered by the
@@ -91,10 +94,23 @@ public static partial class DictionarySuggestionMiner
     /// Whether a token is worth suggesting: jargon-shaped and not one of the stoplist's everyday abbreviations. Usage's
     /// "Words you could add" and Learn from history both ask this, so "PM" from "2 PM" is offered by neither.
     /// </summary>
-    internal static bool IsCandidate(string token) => !Stoplist.Contains(token) && IsJargonShaped(token);
+    internal static bool IsCandidate(string token)
+    {
+        // Regex.IsMatch(string) threw for a null token, naming its parameter; the span overload would not.
+        ArgumentNullException.ThrowIfNull(token, "input");
+        return IsCandidate(token.AsSpan());
+    }
+
+    /// <summary>
+    /// <see cref="IsCandidate(string)"/> for a token that is still part of a longer text, so the caller need not copy it out.
+    /// </summary>
+    internal static bool IsCandidate(ReadOnlySpan<char> token) => !StoplistSpans.Contains(token) && IsJargonShaped(token);
 
     // High-precision "this is jargon" shapes; ordinary prose words match none of them.
     internal static bool IsJargonShaped(string token) =>
+        Acronym().IsMatch(token) || CamelHump().IsMatch(token) || LetterDigit().IsMatch(token);
+
+    private static bool IsJargonShaped(ReadOnlySpan<char> token) =>
         Acronym().IsMatch(token) || CamelHump().IsMatch(token) || LetterDigit().IsMatch(token);
 
     private static string TrimPunctuation(string token)

@@ -43,9 +43,12 @@ public sealed class CleanupVocabulary
     /// The glossary block for <paramref name="maxTerms"/> (<see cref="CleanupPrompt.GlossaryTermBudget"/>), rendered by
     /// <see cref="CleanupPrompt.BuildGlossary"/>; null when there is nothing to add.
     /// </summary>
-    public string? GlossaryFor(int maxTerms) => _glossaries.GetOrAdd(maxTerms, budget =>
-    {
-        var glossary = CleanupPrompt.BuildGlossary(GlossaryEntries, budget);
-        return string.IsNullOrEmpty(glossary) ? null : glossary;
-    });
+    public string? GlossaryFor(int maxTerms) => _glossaries.GetOrAdd(
+        maxTerms,
+        static (budget, entries) =>
+        {
+            var glossary = CleanupPrompt.BuildGlossary(entries, budget);
+            return string.IsNullOrEmpty(glossary) ? null : glossary;
+        },
+        GlossaryEntries);
 }

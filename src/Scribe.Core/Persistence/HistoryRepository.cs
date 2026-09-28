@@ -19,6 +19,10 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     private readonly ScribeDatabase _database;
     private readonly HistoryDeletionNotifier _deletions;
+    private bool _audioEncodingColumnAvailable;
+    private bool _historyCleanupColumnAvailable;
+    private bool _historyModelColumnAvailable;
+    private bool _historyRatingColumnAvailable;
 
     public HistoryRepository(ScribeDatabase database, HistoryDeletionNotifier? deletions = null)
     {
@@ -58,14 +62,16 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             using var transaction = connection.BeginTransaction();
 
             long? blobId = entry.AudioBlobId;
-            if (audio is not null && InsertAudioBlob(connection, audio) is { } newBlobId)
+            var audioEncodingColumnAvailable = false;
+            if (audio is not null && InsertAudioBlob(connection, audio) is { } inserted)
             {
-                blobId = newBlobId;
+                blobId = inserted.Id;
                 storedAudio = true;
+                audioEncodingColumnAvailable = inserted.EncodingColumnAvailable;
             }
 
-            var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
-            var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
+            var hasCleanupColumn = _historyCleanupColumnAvailable || EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
+            var hasModelColumn = _historyModelColumnAvailable || EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
             var optionalColumns =
                 (hasCleanupColumn ? ", cleanup_ms" : string.Empty) +
                 (hasModelColumn ? ", transcription_model_id" : string.Empty);
@@ -99,6 +105,9 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
             var id = (long)(historyCommand.ExecuteScalar() ?? 0L);
             transaction.Commit();
+            _audioEncodingColumnAvailable |= audioEncodingColumnAvailable;
+            _historyCleanupColumnAvailable |= hasCleanupColumn;
+            _historyModelColumnAvailable |= hasModelColumn;
             saved = entry with { Id = id, AudioBlobId = blobId };
         }
 
@@ -122,9 +131,11 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         using (_database.EnterWriteScope())
         {
             using var connection = _database.Open();
-            blobId = InsertAudioBlob(connection, audio)
+            var inserted = InsertAudioBlob(connection, audio)
                 ?? throw new ArgumentOutOfRangeException(
                     nameof(audio), "The capture is larger than the stored audio limit.");
+            blobId = inserted.Id;
+            _audioEncodingColumnAvailable |= inserted.EncodingColumnAvailable;
         }
 
         _database.NotifyStorageChanged(StorageChange.AudioStored);
@@ -135,14 +146,15 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     // large to keep. The PCM16 header makes a blob readable even where the encoding column is
     // missing, so the format no longer depends on the column; the column is still written wherever
     // it exists, for anything that reads it.
-    private long? InsertAudioBlob(SqliteConnection connection, CapturedAudio audio)
+    private InsertedAudioBlob? InsertAudioBlob(SqliteConnection connection, CapturedAudio audio)
     {
         if (AudioBlobCodec.EncodedLength(audio.Samples.Length, AudioBlobEncoding.Pcm16) > MaxAudioBlobBytes)
         {
             return null;
         }
 
-        var hasEncoding = EnsureColumn(connection, "audio_blobs", "encoding", "INTEGER NOT NULL DEFAULT 0");
+        var hasEncoding = _audioEncodingColumnAvailable ||
+            EnsureColumn(connection, "audio_blobs", "encoding", "INTEGER NOT NULL DEFAULT 0");
         using var command = connection.CreateCommand();
         command.CommandText = hasEncoding
             ? """
@@ -163,7 +175,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             command.Parameters.AddWithValue("$encoding", (int)AudioBlobEncoding.Pcm16);
         }
 
-        return (long)(command.ExecuteScalar() ?? 0L);
+        return new InsertedAudioBlob((long)(command.ExecuteScalar() ?? 0L), hasEncoding);
     }
 
     public IReadOnlyList<HistoryEntry> GetRecent(int limit = 100)
@@ -220,10 +232,35 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         using var reader = command.ExecuteReader();
         while (reader.Read() && results.Count < limit)
         {
-            var entry = ReadHistoryEntry(reader);
-            if (reader.GetInt64(10) != 0 || FriendlyAppMatches(entry, query))
+            // Each read that can throw runs for every row and in ReadHistoryEntry's order, so a row that cannot be read fails
+            // the search where it always did. The transcript and the model id, whose reads cannot throw once they are known
+            // not to be NULL, are read only for a row that matches.
+            var id = reader.GetInt64(0);
+            var timestampUtc = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+            if (reader.IsDBNull(2))
             {
-                results.Add(entry);
+                _ = reader.GetString(2);
+            }
+
+            var audioMilliseconds = reader.GetInt32(3);
+            var decodeMilliseconds = reader.GetInt32(4);
+            int? cleanupMilliseconds = reader.IsDBNull(5) ? null : reader.GetInt32(5);
+            var targetApp = reader.IsDBNull(6) ? null : reader.GetString(6);
+            long? audioBlobId = reader.IsDBNull(7) ? null : reader.GetInt64(7);
+            var aiRating = reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9);
+            if (reader.GetInt64(10) != 0 || FriendlyAppMatches(targetApp, query))
+            {
+                results.Add(new HistoryEntry(
+                    id,
+                    timestampUtc,
+                    reader.GetString(2),
+                    audioMilliseconds,
+                    decodeMilliseconds,
+                    cleanupMilliseconds,
+                    targetApp,
+                    audioBlobId,
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    aiRating));
             }
         }
 
@@ -232,9 +269,9 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     private SqliteCommand CreateHistoryReadCommand(SqliteConnection connection, string extraSelect = "")
     {
-        var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
-        var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
-        var hasRatingColumn = EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL");
+        var hasCleanupColumn = EnsureHistoryColumnAvailable(connection, "cleanup_ms", "INTEGER NULL", ref _historyCleanupColumnAvailable);
+        var hasModelColumn = EnsureHistoryColumnAvailable(connection, "transcription_model_id", "TEXT NULL", ref _historyModelColumnAvailable);
+        var hasRatingColumn = EnsureHistoryColumnAvailable(connection, "ai_rating", "INTEGER NULL", ref _historyRatingColumnAvailable);
         var cleanupExpression = hasCleanupColumn ? "cleanup_ms" : "NULL";
         var modelExpression = hasModelColumn ? "transcription_model_id" : "NULL";
         var ratingExpression = hasRatingColumn ? "ai_rating" : "NULL";
@@ -272,9 +309,9 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9));
 
-    private static bool FriendlyAppMatches(HistoryEntry entry, string query) =>
-        !string.IsNullOrWhiteSpace(entry.TargetApp) &&
-        AppDisplayName.For(entry.TargetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+    private static bool FriendlyAppMatches(string? targetApp, string query) =>
+        !string.IsNullOrWhiteSpace(targetApp) &&
+        AppDisplayName.For(targetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static string EscapeLike(string query) =>
         query.Replace("\\", "\\\\", StringComparison.Ordinal)
@@ -308,7 +345,8 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     public CapturedAudio? GetAudio(long blobId)
     {
         using var connection = _database.Open();
-        var hasEncoding = HasColumn(connection, "audio_blobs", "encoding");
+        var hasEncoding = _audioEncodingColumnAvailable || HasColumn(connection, "audio_blobs", "encoding");
+        _audioEncodingColumnAvailable |= hasEncoding;
         using var command = connection.CreateCommand();
         command.CommandText = hasEncoding
             ? "SELECT sample_rate, samples, encoding FROM audio_blobs WHERE id = $id;"
@@ -342,7 +380,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     {
         using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
-        if (!EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL"))
+        if (!EnsureHistoryColumnAvailable(connection, "ai_rating", "INTEGER NULL", ref _historyRatingColumnAvailable))
         {
             return;
         }
@@ -700,6 +738,34 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         string declaration) =>
         EnsureColumn(connection, "history", columnName, declaration);
 
+    private static bool EnsureHistoryColumnAvailable(
+        SqliteConnection connection,
+        string columnName,
+        string declaration,
+        ref bool available) =>
+        EnsureColumnAvailable(connection, "history", columnName, declaration, ref available);
+
+    private static bool EnsureColumnAvailable(
+        SqliteConnection connection,
+        string table,
+        string columnName,
+        string declaration,
+        ref bool available)
+    {
+        if (available)
+        {
+            return true;
+        }
+
+        var exists = EnsureColumn(connection, table, columnName, declaration);
+        if (exists)
+        {
+            available = true;
+        }
+
+        return exists;
+    }
+
     private static bool EnsureColumn(
         SqliteConnection connection,
         string table,
@@ -745,4 +811,6 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
         return false;
     }
+
+    private readonly record struct InsertedAudioBlob(long Id, bool EncodingColumnAvailable);
 }

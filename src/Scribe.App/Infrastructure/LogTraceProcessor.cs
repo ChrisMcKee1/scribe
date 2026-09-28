@@ -36,11 +36,11 @@ internal sealed class LogTraceProcessor : BaseProcessor<Activity>
             // Surface error spans (e.g. a partial SendInput) at Warning so they're easy to spot.
             if (activity.Status == ActivityStatusCode.Error)
             {
-                _log.LogWarning("trace {Span}{Detail}", span, TraceTagPolicy.FormatStatusDetail(activity.StatusDescription));
+                TraceLogMessages.TraceWarning(_log, span, TraceTagPolicy.FormatStatusDetail(activity.StatusDescription));
             }
             else
             {
-                _log.LogInformation("trace {Span}", span);
+                TraceLogMessages.TraceInformation(_log, span);
             }
         }
         catch (Exception)
@@ -48,4 +48,14 @@ internal sealed class LogTraceProcessor : BaseProcessor<Activity>
             // Diagnostics are best-effort.
         }
     }
+}
+
+
+internal static partial class TraceLogMessages
+{
+    [LoggerMessage(EventId = 4100, Level = LogLevel.Warning, Message = "trace {Span}{Detail}")]
+    public static partial void TraceWarning(ILogger logger, string span, string detail);
+
+    [LoggerMessage(EventId = 4101, Level = LogLevel.Information, Message = "trace {Span}")]
+    public static partial void TraceInformation(ILogger logger, string span);
 }
