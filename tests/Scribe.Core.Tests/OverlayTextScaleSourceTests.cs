@@ -145,10 +145,11 @@ public sealed class OverlayTextScaleSourceTests
         var compiled = project.Descendants("Compile").Select(c => (string?)c.Attribute("Include")).ToArray();
         Assert.Contains(@"..\Scribe.Core\Overlay\PillGeometry.cs", compiled);
         Assert.Contains(@"..\Scribe.Core\Overlay\PillTextScale.cs", compiled);
+        Assert.Contains(@"..\Scribe.Core\Overlay\PillLevelBars.cs", compiled);
         Assert.Empty(project.Descendants("ProjectReference"));
 
-        // Both files must build in the overlay on its own implicit usings, with nothing else from Scribe.Core.
-        foreach (var name in new[] { "PillGeometry.cs", "PillTextScale.cs" })
+        // The files must build in the overlay on its own implicit usings, with nothing else from Scribe.Core.
+        foreach (var name in new[] { "PillGeometry.cs", "PillTextScale.cs", "PillLevelBars.cs" })
         {
             var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.Core", "Overlay", name));
             Assert.DoesNotMatch(new Regex(@"^using ", RegexOptions.Multiline), source);

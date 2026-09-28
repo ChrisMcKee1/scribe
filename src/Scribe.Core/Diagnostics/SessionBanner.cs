@@ -99,7 +99,8 @@ public static class SessionBanner
         int? audioDeviceCount = null,
         string? computeCapability = null,
         string? communicationsAudioDevice = null,
-        bool? selectedAudioDeviceAvailable = null)
+        bool? selectedAudioDeviceAvailable = null,
+        PerfFlags? perfFlags = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(paths);
@@ -147,6 +148,9 @@ public static class SessionBanner
         {
             lines.Add("settings: unavailable (the settings store did not load)");
         }
+
+        // Which switched-off performance changes this process runs (SCRIBE_PERF_FLAGS): names only, never the value.
+        lines.Add("perf: " + (perfFlags ?? PerfFlags.None).Describe());
 
         // Soft budgets (see LogRetentionPolicy): warnings always get through past the daily figure, and
         // the total is enforced at startup and midnight, so saying "cap" would overstate them.

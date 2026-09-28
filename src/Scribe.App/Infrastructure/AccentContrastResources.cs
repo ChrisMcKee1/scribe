@@ -68,9 +68,10 @@ internal static class AccentContrastKeys
 /// Whether Scribe's accent contrast overrides apply to an element. Scribe's styles set it from
 /// <see cref="AccentContrastKeys.Applies"/> and add it to the conditions of every trigger that replaces a colour WPF-UI
 /// or WPF draws, so in a contrast theme none of those triggers is active and the theme draws exactly what it drew
-/// before: a trigger that is not active sets nothing, whatever its precedence.
+/// before: a trigger that is not active sets nothing, whatever its precedence. Public because the tray menu's template is
+/// parsed at run time (XamlReader), which resolves only public types.
 /// </summary>
-internal static class AccentContrastFlag
+public static class AccentContrastFlag
 {
     public static readonly DependencyProperty AppliesProperty = DependencyProperty.RegisterAttached(
         "Applies", typeof(bool), typeof(AccentContrastFlag), new FrameworkPropertyMetadata(false));
@@ -98,7 +99,8 @@ internal static class AccentContrastFlag
 /// Only brushes are written, and only where the theme's own does not read: elsewhere the theme's brush stays, so an
 /// accent that never needed this draws exactly as before. The colour keys stay WPF-UI's own. In a contrast theme every
 /// brush this class set is taken back and <see cref="AccentContrastKeys.Applies"/> turns Scribe's own triggers off, so
-/// the theme's system pairs are exactly what they were.
+/// the theme's system pairs are exactly what they were, except where WPF-UI's contrast dictionaries leave a key as the
+/// placeholder red: those (<see cref="ContrastPlaceholderRepairs"/>) are drawn in the system colour WinUI uses there.
 /// </para>
 /// </remarks>
 internal static class AccentContrastResources
@@ -193,6 +195,7 @@ internal static class AccentContrastResources
     private static ILogger? _log;
     private static string? _lastOutcome;
     private static string? _lastResolverOutcome;
+    private static string? _lastContrastRepairOutcome;
     private static int _lastMissing = -1;
     private static bool _refreshing;
     private static bool _refreshRequested;
@@ -421,6 +424,8 @@ internal static class AccentContrastResources
         WriteScribe(resources, AccentContrastKeys.SelectedItemIndicator,
             plan.SelectedSubtleItemCue is { } subtleCue ? Frozen(subtleCue.Indicator) : Brushes.Transparent);
 
+        RepairContrastPlaceholders(resources, wpfTheme == ApplicationTheme.HighContrast);
+
         // On last when entering one, once every value its triggers read is in place.
         if (plan.Applies)
         {
@@ -487,10 +492,87 @@ internal static class AccentContrastResources
         }
     }
 
+    // WPF-UI 4.3.0's contrast dictionaries leave some brushes and colours as the placeholder #FF0000
+    // (ContrastPlaceholderRepairs lists the ones Scribe draws, with the system colour WinUI draws for each role). While
+    // that dictionary is loaded, each key is overridden in the application dictionary with the dictionary's own system
+    // colour, which the rest of the window is drawn in; once it is not, the override is removed and the theme's own shows
+    // again. The tray menu's copy of these resources is reconciled by TrayIconHost.
+    private static void RepairContrastPlaceholders(ResourceDictionary resources, bool contrastDictionary)
+    {
+        var theme = contrastDictionary ? FindThemeDictionary(resources) : null;
+        var repaired = 0;
+        var placeholders = 0;
+        foreach (var repair in ContrastPlaceholderRepairs.All)
+        {
+            if (!contrastDictionary)
+            {
+                WriteOverride(resources, repair.Key, null);
+                continue;
+            }
+
+            if (theme is not null && IsPlaceholder(theme[repair.Key]))
+            {
+                placeholders++;
+            }
+
+            var color = SystemColor(theme, repair.Color);
+            WriteOverride(resources, repair.Key, repair.Kind == ContrastResourceKind.Color ? color : Frozen(From(color)));
+            repaired++;
+        }
+
+        LogContrastRepairs(repaired, placeholders);
+    }
+
+    private static Color SystemColor(ResourceDictionary? contrastTheme, ContrastSystemColor role)
+    {
+        var (key, windows) = role switch
+        {
+            ContrastSystemColor.GrayText => ("SystemColorGrayTextColor", SystemColors.GrayTextColor),
+            _ => ("SystemColorWindowTextColor", SystemColors.WindowTextColor),
+        };
+
+        return contrastTheme?[key] is Color themed ? themed : windows;
+    }
+
+    private static bool IsPlaceholder(object? value) =>
+        (value is Color color ? From(color) : BrushColor(value)) is { } drawn && drawn == ContrastPlaceholderRepairs.Placeholder;
+
+    // Counts only, once per distinct outcome: how many keys are drawn in system colours now, and how many of them
+    // WPF-UI's contrast dictionary still leaves as the placeholder (0 after an upgrade that fixes them upstream).
+    private static void LogContrastRepairs(int repaired, int placeholders)
+    {
+        if (_log is not { } log)
+        {
+            return;
+        }
+
+        try
+        {
+            var outcome = $"{repaired}|{placeholders}";
+            if (outcome == _lastContrastRepairOutcome)
+            {
+                return;
+            }
+
+            _lastContrastRepairOutcome = outcome;
+            if (repaired > 0)
+            {
+                log.LogInformation(
+                    "Contrast theme: {Repaired} WPF-UI colour(s) drawn in system colours; {Placeholders} of them are still WPF-UI's placeholder.",
+                    repaired,
+                    placeholders);
+            }
+        }
+        catch
+        {
+        }
+    }
+
     // A theme dictionary brush: overridden in the application dictionary while the plan changes it, and the override
     // removed when it does not, so the theme's own shows again. Compared with the value there now, not only with what
-    // was last written, so nothing is written twice and nothing another writer put there is taken for Scribe's.
-    private static void WriteOverride(ResourceDictionary resources, string key, SolidColorBrush? desired)
+    // was last written, so nothing is written twice and nothing another writer put there is taken for Scribe's. The
+    // contrast repairs write colours through it as well as brushes.
+    private static void WriteOverride(ResourceDictionary resources, string key, object? desired)
     {
         var current = resources[key];
         var mine = Written.TryGetValue(key, out var written) && ReferenceEquals(current, written);

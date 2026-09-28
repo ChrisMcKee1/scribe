@@ -22,6 +22,9 @@ public static class CoreServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddScribeCore(this IServiceCollection services)
     {
+        // Read once: every consumer sees the same flags for the whole process (see PerfFlags).
+        services.AddSingleton(_ => Scribe.Core.Diagnostics.PerfFlags.FromEnvironment());
+
         services.AddSingleton(_ =>
         {
             var paths = new AppPaths();

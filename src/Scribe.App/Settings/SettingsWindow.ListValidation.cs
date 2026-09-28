@@ -1,7 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Media;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
 
@@ -67,7 +66,7 @@ public partial class SettingsWindow
     private void ShowValidation(FrameworkElement panel, TextBlock text, Wpf.Ui.Controls.SymbolIcon icon, Control field, string message)
     {
         text.Text = message;
-        icon.Foreground = TryFindResource("SystemFillColorCriticalBrush") as Brush ?? Brushes.Red;
+        icon.SetResourceReference(ForegroundProperty, "SystemFillColorCriticalBrush");
         panel.Visibility = Visibility.Visible;
         AutomationProperties.SetHelpText(field, message);
         if (field.IsKeyboardFocusWithin)

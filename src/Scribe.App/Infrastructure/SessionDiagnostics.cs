@@ -24,7 +24,8 @@ public sealed class SessionDiagnostics(
     ISettingsRepository settings,
     IAudioCaptureService audio,
     ModelLocator models,
-    ILogger<SessionDiagnostics> log)
+    ILogger<SessionDiagnostics> log,
+    PerfFlags? perfFlags = null)
 {
     /// <summary>Identity of this run, quoted in the banner and on every dictation.</summary>
     public SessionIdentity Session { get; } = SessionIdentity.ForCurrentProcess();
@@ -101,7 +102,8 @@ public sealed class SessionDiagnostics(
             communicationsAudioDevice: inputs?.FirstOrDefault(d => d.IsCommunicationsDefault && !d.IsDefault)?.Name,
             selectedAudioDeviceAvailable: current?.InputDeviceId is { Length: > 0 } chosen && inputs is not null
                 ? inputs.Any(d => string.Equals(d.Id, chosen, StringComparison.Ordinal))
-                : null);
+                : null,
+            perfFlags: perfFlags);
     }
 
     private AppSettings? TryLoadSettings()

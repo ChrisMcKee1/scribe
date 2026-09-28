@@ -21,12 +21,6 @@ namespace Scribe.Overlay;
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
-    // The level bars' heights at full level, as fractions of 16 DIP: the icon's proportions. Each bar is laid out 16 DIP
-    // tall and scaled to the larger of the 4 DIP floor and its proportion of the level, so a level update is five
-    // render-transform writes and never a layout pass (the old meter's width change laid out 40 times a second).
-    private static readonly double[] BarProportions = [0.26, 0.56, 1.0, 0.56, 0.26];
-    private const double BarFloor = 4.0 / 16.0;
-
     // How long each state stays on screen. The overlay cannot reference Scribe.Core, so these copy
     // Scribe.Core.Overlay.PillTiming, and a test keeps them equal; the storyboards' durations are checked the same way.
     // An outcome holds the pill on screen: a Hide that arrives during the hold (the app's own hide after processing) is
@@ -384,14 +378,17 @@ public sealed partial class OverlayWindow : Window
             return;
         }
 
-        SetBars(level < 0 ? 0 : level > 1 ? 1 : level);
+        SetBars(level);
     });
 
+    // PillLevelBars (Scribe.Core, compiled in here) gives each bar's height: a 4 DIP floor, and above it the icon's
+    // proportions of the other 12 DIP. A level update is five render-transform writes and never a layout pass (the old
+    // meter's width change laid out 40 times a second).
     private void SetBars(double level)
     {
         for (var i = 0; i < _barScales.Length; i++)
         {
-            _barScales[i].ScaleY = Math.Max(BarFloor, BarProportions[i] * level);
+            _barScales[i].ScaleY = PillLevelBars.ScaleOf(i, level);
         }
     }
 

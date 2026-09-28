@@ -5,6 +5,7 @@
         xmlns:cleanup="clr-namespace:Scribe.Core.Cleanup;assembly=Scribe.Core"
         xmlns:infra="clr-namespace:Scribe.App.Infrastructure"
         xmlns:models="clr-namespace:Scribe.Core.Models;assembly=Scribe.Core"
+        xmlns:coresettings="clr-namespace:Scribe.Core.Settings;assembly=Scribe.Core"
         xmlns:settings="clr-namespace:Scribe.App.Settings"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
@@ -219,9 +220,9 @@
                             </Border>
                         </Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
-                            </Trigger>
+                            <!-- No hover fill in a contrast theme: WPF-UI 4.3.0's contrast dictionaries define the menu hover
+                                 (MenuBarItemBackgroundSelected) as the placeholder #FF0000, which drew rail items red, down to
+                                 1.89:1 behind their text. -->
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
@@ -241,6 +242,74 @@
                                 <Setter TargetName="Border" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
                                 <Setter TargetName="SelectionIndicator" Property="Visibility" Value="Visible"/>
                                 <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemForeground}}"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- The Dictionary page's two tabs, Your words and Word packs (0.5.1). WPF-UI's tab is a line of body text that people
+             read past, so each tab is an icon, its name and a summary under it that the page keeps current ("31 words",
+             "11 of 11 on", from DictionaryTabsText), and the selected tab stands on an underline. While the flag is on, the
+             underline and the selected tab's filled icon take the planned selection colour, as the rail's do; in a contrast
+             theme they take the theme's Highlight, and the selected tab keeps WPF-UI's own TabViewItemForegroundSelected,
+             which its content inherits as before. The Header stays the tab's plain name, which UI Automation reads and Find a
+             setting looks up; each tab's AutomationProperties.HelpText carries its summary and line. -->
+        <Style x:Key="DictionaryTab" TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
+            <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Grid Background="Transparent">
+                            <Border x:Name="TabBorder" Padding="12,7,16,10" CornerRadius="6,6,0,0" Background="Transparent" SnapsToDevicePixels="True">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ui:SymbolIcon x:Name="TabIcon" Grid.Column="0" Margin="0,0,10,0" VerticalAlignment="Center"
+                                                   Symbol="{Binding Path=(infra:TabHeader.Icon), RelativeSource={RelativeSource TemplatedParent}}"
+                                                   FontSize="{DynamicResource ScribeFontSubtitle}"/>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"
+                                                          TextElement.FontSize="{DynamicResource ScribeFontBodyLarge}"
+                                                          TextElement.FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding Path=(infra:TabHeader.Summary), RelativeSource={RelativeSource TemplatedParent}}"
+                                                   FontSize="{DynamicResource ScribeFontCaption}"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Rectangle x:Name="TabUnderline" Height="3" RadiusX="1.5" RadiusY="1.5" Margin="12,0,12,0"
+                                       VerticalAlignment="Bottom" Visibility="Hidden" IsHitTestVisible="False"
+                                       Fill="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <!-- Hover only while the flag is on: in WPF-UI 4.3.0's contrast dictionaries the menu and subtle fills
+                                 (MenuBarItemBackgroundSelected, SubtleFillColor*) are the placeholder #FF0000, so a contrast
+                                 theme keeps the tab on its window colour and shows focus with the focus visual. -->
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                            </MultiTrigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Foreground" Value="{DynamicResource TabViewItemForegroundSelected}"/>
+                                <Setter TargetName="TabUnderline" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="TabIcon" Property="Filled" Value="True"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                                    <Condition Property="IsSelected" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="TabUnderline" Property="Fill" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemIndicator}}"/>
+                                <Setter TargetName="TabIcon" Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemIndicator}}"/>
                             </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -448,11 +517,24 @@
             </Setter>
         </Style>
 
+        <!-- A word pack row's two lines: Primary text, and Tertiary while a search finds nothing in that word pack (Dimmed).
+             Both are DynamicResource references, so the text follows a theme change made while the window is open. 0.5.0
+             read the brush once into the row (TextBrush), which kept the theme it was read in: black text on the dark
+             theme's rows, or white on the light theme's, until the list was rebuilt. -->
+        <Style x:Key="LibraryRowText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Dimmed}" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- The selected word pack's name, SemiBold with the row's outline (see LibraryRow). Only the name line of the name
              cell: its source line and the other columns stay as they are, because the other columns size to their
              content and a wider SemiBold value there would move them. The name sits in the cell template's panel, which
              gives it the 2 px margin a text column's text gets, so the style adds no margin of its own. -->
-        <Style x:Key="LibraryNameText" TargetType="TextBlock">
+        <Style x:Key="LibraryNameText" TargetType="TextBlock" BasedOn="{StaticResource LibraryRowText}">
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}}}" Value="True">
                     <Setter Property="FontWeight" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedRowNameWeight}}"/>
@@ -1597,7 +1679,7 @@
                                        Text="Teach Scribe how to write the words it hears, like &quot;dot net&quot; as .NET."/>
                         </StackPanel>
                         <TabControl x:Name="DictionaryTabs" Grid.Row="1">
-                            <TabItem x:Name="YourWordsTab" Header="Your words">
+                            <TabItem x:Name="YourWordsTab" Header="Your words" Style="{StaticResource DictionaryTab}" infra:TabHeader.Icon="PersonEdit24">
                                 <!-- The tab scrolls as a whole only when a short window at large text can't hold its rows and a
                                      usable grid; the grid row's height is fitted in code (FitYourWordsGridToScroll). -->
                                 <ScrollViewer x:Name="YourWordsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="YourWordsScroll_ScrollChanged">
@@ -1605,10 +1687,13 @@
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                         <RowDefinition x:Name="YourWordsGridRow" Height="300"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                                    <Grid x:Name="DictionaryTextChangesNotice" Grid.Row="0" Visibility="Collapsed" Margin="0,0,0,8">
+                                    <!-- What this tab holds, and the way to the other tab (DictionaryTabsText). -->
+                                    <TextBlock x:Name="YourWordsIntroText" Grid.Row="0" Style="{StaticResource PageSubtitle}" MaxWidth="1000" Margin="0,0,0,12"><Run Text="{x:Static coresettings:DictionaryTabsText.YourWordsGuide}"/><Run Text=" "/><Hyperlink x:Name="YourWordsToWordPacksLink" Click="YourWordsToWordPacksLink_Click"><Run Text="{x:Static coresettings:DictionaryTabsText.YourWordsLink}"/></Hyperlink></TextBlock>
+                                    <Grid x:Name="DictionaryTextChangesNotice" Grid.Row="1" Visibility="Collapsed" Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -1616,7 +1701,7 @@
                                         <ui:InfoBar x:Name="DictionaryTextChangesInfoBar" Grid.Column="0" IsOpen="True" IsClosable="False" Severity="Warning" Title="Dictionary and snippets are off"/>
                                         <ui:Button x:Name="DictionaryTextChangesActionButton" Grid.Column="1" Margin="8,0,0,0" MinWidth="88" Content="Turn on" Click="TextChangesNoticeButton_Click"/>
                                     </Grid>
-                                    <Grid x:Name="YourWordsToolbarGrid" Grid.Row="1" Margin="0,0,0,10" SizeChanged="YourWordsToolbarGrid_SizeChanged">
+                                    <Grid x:Name="YourWordsToolbarGrid" Grid.Row="2" Margin="0,0,0,10" SizeChanged="YourWordsToolbarGrid_SizeChanged">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
@@ -1668,7 +1753,7 @@
                                                     AutomationProperties.Name="Find a word"
                                                     TextChanged="DictionarySearchBox_TextChanged"/>
                                     </Grid>
-                                    <Grid Grid.Row="2">
+                                    <Grid Grid.Row="3">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="*"/>
                                             <RowDefinition Height="Auto"/>
@@ -1759,7 +1844,7 @@
                                             <TextBlock x:Name="DictionaryValidationText" Grid.Column="1" Style="{StaticResource CardDescription}" Foreground="{DynamicResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
                                         </Grid>
                                     </Grid>
-                                    <StackPanel Grid.Row="3" Margin="2,8,2,0">
+                                    <StackPanel Grid.Row="4" Margin="2,8,2,0">
                                         <TextBlock x:Name="DictionaryOnCountText" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/>
                                         <TextBlock x:Name="DictionaryCoverageStatus" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"/>
                                         <TextBlock x:Name="DictionaryAiVocabularyText" Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.AddToDictionaryVocabularyLine}" TextWrapping="Wrap" Margin="0,4,0,0"/>
@@ -1770,7 +1855,7 @@
                                 </Grid>
                                 </ScrollViewer>
                             </TabItem>
-                            <TabItem x:Name="WordPacksTab" Header="Word packs">
+                            <TabItem x:Name="WordPacksTab" Header="Word packs" Style="{StaticResource DictionaryTab}" infra:TabHeader.Icon="BoxMultiple24">
                                 <Grid x:Name="SectionWordPacks" SizeChanged="SectionWordPacks_SizeChanged">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1779,12 +1864,12 @@
                                     </Grid.RowDefinitions>
                                     <Grid x:Name="WordPacksIntroPanel" Grid.Row="0" Margin="0,0,0,12" MaxWidth="1000" HorizontalAlignment="Left">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="WordPacksIntroText" Style="{StaticResource PageSubtitle}" Text="Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win."/>
+                                        <TextBlock x:Name="WordPacksIntroText" Style="{StaticResource PageSubtitle}" MaxWidth="1000"><Run Text="{x:Static coresettings:DictionaryTabsText.WordPacksGuide}"/><Run Text=" "/><Hyperlink x:Name="WordPacksToYourWordsLink" Click="WordPacksToYourWordsLink_Click"><Run Text="{x:Static coresettings:DictionaryTabsText.WordPacksLink}"/></Hyperlink></TextBlock>
 
                                     </Grid>
                                     <Grid x:Name="WordPacksToolbarGrid" Grid.Row="1" Margin="0,0,0,10" SizeChanged="WordPacksToolbarGrid_SizeChanged"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*" MinWidth="180"/></Grid.ColumnDefinitions><WrapPanel x:Name="WordPacksToolbarButtons" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"><ui:Button x:Name="LibraryNewButton" Content="New word pack" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="LibraryNewButton_Click"/><ui:Button x:Name="LibraryImportButton" Content="Import a word pack..." Icon="{ui:SymbolIcon ArrowDownload24}" Margin="0,0,8,0" Click="LibraryImportButton_Click" ToolTip="Add a word pack from a CSV file."/><ui:Button x:Name="LibraryMoreButton" Content="More" Icon="{ui:SymbolIcon MoreHorizontal24}" Margin="0,0,8,0" Click="LibraryMoreButton_Click"/><ui:Button x:Name="WordPacksIntroInfoButton" Appearance="Transparent" Icon="{ui:SymbolIcon Info24}" Visibility="Collapsed" AutomationProperties.Name="About word packs" Click="WordPacksIntroInfoButton_Click"/></WrapPanel><ui:TextBox x:Name="LibrarySearchBox" Grid.Column="2" PlaceholderText="Search all word packs (Ctrl+F)" AutomationProperties.Name="Search all word packs" ClearButtonEnabled="True" TextChanged="LibrarySearchBox_TextChanged"><ui:TextBox.Icon><ui:SymbolIcon Symbol="Search24"/></ui:TextBox.Icon></ui:TextBox></Grid>
                                     <Grid x:Name="WordPacksMainGrid" Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition x:Name="WordPacksListColumn" Width="220" MinWidth="220"/><ColumnDefinition x:Name="WordPacksPaneGap" Width="12"/><ColumnDefinition x:Name="WordPacksCardColumn" Width="*" MinWidth="360"/></Grid.ColumnDefinitions>
-                                        <ui:Card x:Name="WordPacksListCard" Grid.Column="0" Padding="0" Style="{StaticResource PanelCard}"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><ui:Button x:Name="WordPacksBackButton" Grid.Row="0" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><DataGrid x:Name="LibraryGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionChanged="LibraryGrid_SelectionChanged" MouseDoubleClick="LibraryGrid_MouseDoubleClick" PreviewKeyDown="LibraryGrid_PreviewKeyDown" KeyDown="LibraryGrid_KeyDown" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" RowStyle="{StaticResource LibraryRow}" AutomationProperties.Name="Word packs"><DataGrid.Columns><DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True" ClipboardContentBinding="{Binding Name}" CellStyle="{StaticResource LibraryNameCell}"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="2,4" VerticalAlignment="Center"><DockPanel LastChildFill="True"><TextBlock Text="•" DockPanel.Dock="Left" Margin="0,0,4,0" Visibility="{Binding UnsavedVisibility}"/><TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40" ToolTip="{Binding Name}" Foreground="{Binding TextBrush}"/></DockPanel><TextBlock Text="{Binding DisplaySource}" FontSize="{DynamicResource ScribeFontCaption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Foreground="{Binding TextBrush}"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid></Grid></ui:Card>
+                                        <ui:Card x:Name="WordPacksListCard" Grid.Column="0" Padding="0" Style="{StaticResource PanelCard}"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><ui:Button x:Name="WordPacksBackButton" Grid.Row="0" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><DataGrid x:Name="LibraryGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionChanged="LibraryGrid_SelectionChanged" MouseDoubleClick="LibraryGrid_MouseDoubleClick" PreviewKeyDown="LibraryGrid_PreviewKeyDown" KeyDown="LibraryGrid_KeyDown" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" RowStyle="{StaticResource LibraryRow}" AutomationProperties.Name="Word packs"><DataGrid.Columns><DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTemplateColumn Header="Word pack" Width="*" IsReadOnly="True" ClipboardContentBinding="{Binding Name}" CellStyle="{StaticResource LibraryNameCell}"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Margin="2,4" VerticalAlignment="Center"><DockPanel LastChildFill="True"><TextBlock Text="•" DockPanel.Dock="Left" Margin="0,0,4,0" Visibility="{Binding UnsavedVisibility}"/><TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40" ToolTip="{Binding Name}"/></DockPanel><TextBlock Text="{Binding DisplaySource}" Style="{StaticResource LibraryRowText}" FontSize="{DynamicResource ScribeFontCaption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid></Grid></ui:Card>
                                         <ui:Card x:Name="WordPacksCard" Grid.Column="2" Padding="16,12" Style="{StaticResource EditorPanelCard}"><ScrollViewer x:Name="WordPacksCardScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="WordPacksCardScroll_ScrollChanged"><Grid x:Name="WordPacksCardContent"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid Grid.Row="0" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0"><ui:Button x:Name="WordPacksCardBackButton" Content="Back to word packs" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Margin="0,0,0,8" HorizontalAlignment="Left" Click="WordPacksBackButton_Click"/><TextBlock x:Name="LibraryDetailName" Style="{StaticResource DetailTitle}" AutomationProperties.HeadingLevel="Level2"/><ui:TextBox x:Name="LibraryDetailRenameBox" Visibility="Collapsed" MinWidth="260" Margin="0,0,8,0" KeyDown="LibraryDetailRenameBox_KeyDown" LostKeyboardFocus="LibraryDetailRenameBox_LostKeyboardFocus" AutomationProperties.Name="Word pack name"/><TextBlock x:Name="LibraryRenameValidation" Style="{StaticResource CardDescription}" Visibility="Collapsed"/><TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource CardDescription}" Margin="0,2,0,0"/><StackPanel x:Name="LibraryDescriptionPanel" Orientation="Horizontal" Margin="0,4,0,0"><TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource CardDescription}" TextWrapping="Wrap"/><ui:Button x:Name="LibraryDetailsButton" Content="Details" Appearance="Transparent" Padding="6,0" Margin="4,0,0,0" Click="LibraryDetailsButton_Click"/></StackPanel><TextBlock x:Name="LibraryDetailDescFull" Style="{StaticResource CardDescription}" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,4,0,0"/><CheckBox x:Name="LibraryUseCheck" Content="Use this word pack" Style="{StaticResource SettingCheckBox}" Margin="0,8,0,0" Checked="LibraryUseCheck_Changed" Unchecked="LibraryUseCheck_Changed"/><CheckBox x:Name="LibraryAiCheck" Content="Use in AI cleanup" Style="{StaticResource SettingCheckBox}" Margin="0,2,0,0" Checked="LibraryAiCheck_Changed" Unchecked="LibraryAiCheck_Changed"/><TextBlock x:Name="LibraryAiHelpText" Style="{StaticResource CardDescription}" Margin="28,0,0,0"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0"><ui:Button x:Name="LibraryExportButton" Content="Export..." Margin="0,0,8,0" Click="LibraryExportButton_Click" ToolTip="Save the selected word pack as a CSV file."/><ui:Button x:Name="LibraryDetailMoreButton" Content="More" Icon="{ui:SymbolIcon MoreHorizontal24}" Click="LibraryDetailMoreButton_Click"/></StackPanel></Grid><Grid x:Name="WordPackNoticeHost" Grid.Row="1" Margin="0,0,0,8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ui:InfoBar x:Name="WordPackNoticeBar" IsOpen="False" IsClosable="True" Severity="Informational"/><StackPanel x:Name="WordPackNoticeActionsPanel" Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0" Visibility="Collapsed"/></Grid><Grid Grid.Row="2" Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ui:Button x:Name="LibraryAddWordButton" Content="Add word" Icon="{ui:SymbolIcon Add24}" Margin="0,0,8,0" Click="LibraryAddWordButton_Click"/><ui:Button x:Name="LibrarySortButton" Grid.Column="1" Content="Sort" Icon="{ui:SymbolIcon ChevronDown24}" Margin="0,0,8,0" Click="LibrarySortButton_Click"/><TextBlock x:Name="LibraryTermCountText" Grid.Column="3" Style="{StaticResource CardDescription}" VerticalAlignment="Center" HorizontalAlignment="Right"/></Grid><Grid Grid.Row="3"><DataGrid x:Name="LibraryTermsGrid" Height="240" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" Sorting="LibraryTermsGrid_Sorting" PreviewKeyDown="LibraryTermsGrid_PreviewKeyDown" KeyDown="LibraryTermsGrid_KeyDown" MouseDoubleClick="LibraryTermsGrid_MouseDoubleClick" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0" AutomationProperties.Name="Words in selected word pack" AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}"><DataGrid.Columns><DataGridCheckBoxColumn x:Name="LibraryTermUseColumn" Header="Use" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto" ElementStyle="{StaticResource LibraryOnCheckBox}" EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/><DataGridTextColumn x:Name="LibraryTermSpokenColumn" Header="Scribe hears" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*"/><DataGridTextColumn x:Name="LibraryTermWrittenColumn" Header="Scribe writes" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*" CellStyle="{StaticResource WordPackWrittenCell}"/><DataGridTemplateColumn x:Name="LibraryTermActionColumn" Header="" Width="44"><DataGridTemplateColumn.CellTemplate><DataTemplate><ui:Button Appearance="Transparent" Icon="{ui:SymbolIcon MoreHorizontal24}" Padding="6,2" Margin="0" AutomationProperties.Name="{Binding MoreActionName}" Click="LibraryTermMoreButton_Click"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid><StackPanel x:Name="LibraryDetailEmptyPanel" VerticalAlignment="Center" HorizontalAlignment="Center"><TextBlock x:Name="LibraryDetailEmpty" TextAlignment="Center" Style="{StaticResource CardDescription}" TextWrapping="Wrap" Text="Choose a word pack to edit, or create your own."/><StackPanel x:Name="LibrarySearchLinksPanel" Margin="0,8,0,0" HorizontalAlignment="Center"/><ui:Button x:Name="LibraryEmptyActionButton" Content="New word pack" Margin="0,12,0,0" HorizontalAlignment="Center" Click="LibraryEmptyActionButton_Click"/></StackPanel></Grid><Border x:Name="LibraryOffLine" Grid.Row="4" Style="{StaticResource CalloutBorder}" Visibility="Collapsed"><TextBlock Style="{StaticResource StatusText}" Text="This word pack is off. You can still edit its words."/></Border><ui:Card x:Name="WordDetailsPanel" Grid.Row="4" Style="{StaticResource EditorPanelCard}" Margin="0,8,0,0" Visibility="Collapsed"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid Grid.Row="0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Word details" Style="{StaticResource DetailTitle}"/><TextBlock x:Name="WordDetailsWordText" Style="{StaticResource CardDescription}"/></StackPanel><ui:Button x:Name="WordDetailsBackButton" Grid.Column="1" Content="Back to words" Icon="{ui:SymbolIcon ArrowLeft24}" Visibility="Collapsed" Click="WordDetailsBackButton_Click"/></Grid><Grid Grid.Row="1" Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,8,0"><TextBlock x:Name="WordDetailsSpokenTitle" Text="Scribe hears" Style="{StaticResource CardTitle}"/><TextBox x:Name="WordDetailsSpokenBox" AutomationProperties.LabeledBy="{Binding ElementName=WordDetailsSpokenTitle}" MinHeight="64" AcceptsReturn="True" TextWrapping="Wrap" TextChanged="WordDetailsBox_TextChanged"/></StackPanel><StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock x:Name="WordDetailsWrittenTitle" Text="Scribe writes" Style="{StaticResource CardTitle}"/><TextBox x:Name="WordDetailsWrittenBox" AutomationProperties.LabeledBy="{Binding ElementName=WordDetailsWrittenTitle}" MinHeight="64" AcceptsReturn="True" TextWrapping="Wrap" TextChanged="WordDetailsBox_TextChanged"/></StackPanel></Grid><StackPanel Grid.Row="2" Margin="0,8,0,0"><CheckBox x:Name="WordDetailsWholeWordCheck" Content="Whole words only" Checked="WordDetailsWholeWordCheck_Changed" Unchecked="WordDetailsWholeWordCheck_Changed"/><TextBlock x:Name="WordDetailsSourceText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsStatusText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsGlossaryText" Style="{StaticResource CardDescription}"/><TextBlock x:Name="WordDetailsHintsText" Style="{StaticResource CardDescription}"/><ui:Button x:Name="WordDetailsDictionaryButton" Content="Go to dictionary entry" Appearance="Transparent" HorizontalAlignment="Left" Margin="0,8,0,0" Visibility="Collapsed" Click="WordDetailsDictionaryButton_Click"/></StackPanel></Grid></ui:Card></Grid></ScrollViewer></ui:Card>
                                     </Grid>
                                 </Grid>

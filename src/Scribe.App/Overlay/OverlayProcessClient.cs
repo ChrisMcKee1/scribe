@@ -21,7 +21,7 @@ namespace Scribe.App.Overlay;
 ///
 /// All pipe/process work is serialised onto a single background thread fed by a command queue: public
 /// methods only enqueue, so the UI thread never blocks on process launch or pipe I/O, and commands are
-/// delivered in order. The live input-level meter is smoothed here (matching the old WPF curve) and
+/// delivered in order. The live input level becomes the bars' level through <see cref="PillLevelMeter"/> and is
 /// throttled before being sent as integer <c>METER</c> commands to avoid flooding the pipe. Every line
 /// is built by <see cref="OverlayPipeProtocol"/>, whose verbs the overlay parses (a test keeps the two equal).
 ///
@@ -42,7 +42,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private const int ConnectTimeoutMs = 30000;
     private const int WriteTimeoutMs = 1500;
     private const int GracefulExitMs = 1000;
-    private const long MeterIntervalMs = 25; // ~40 meter updates/sec is plenty for a VU bar
+    // At most one level update per 25 ms. With WASAPI's 10 ms capture callbacks that is every third callback, about 33 a
+    // second; the meter itself runs on every callback, so only the send rate depends on this.
+    private static readonly TimeSpan MeterInterval = TimeSpan.FromMilliseconds(25);
     private static readonly TimeSpan ConnectObserveBound = TimeSpan.FromSeconds(1);
 
 #if DEBUG
@@ -78,11 +80,17 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private KeepWarmSetting? _keepWarm;
 
     private bool _subscribed;
-    private float _meterLevel;
-    private long _lastMeterMs;
     private volatile bool _closed;
     private int _meterQueued;
     private int _latestMeter;
+
+    // The bars' level, owned by the capture thread that raises LevelChanged. A new recording bumps the epoch, and that
+    // thread resets the meter when it sees the bump, so nothing else ever writes the meter's state.
+    private readonly PillLevelMeter _meter = new();
+    private int _meterEpoch;
+    private int _meterEpochSeen;
+    private long _lastLevelTimestamp;
+    private long _lastMeterSentTimestamp;
 
     // The latest state the engine asked for, replayed to a relaunched helper. One immutable object, so
     // the consumer can never pair one state's command with another state's demand, and a new object for
@@ -110,7 +118,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         CancelPreview();
         Subscribe();
-        _meterLevel = 0f;
+        Interlocked.Increment(ref _meterEpoch);
         var desired = DesiredState.Recording();
         _desired = desired;
         Enqueue(OverlayPipeProtocol.Recording, desired, ensureAlive: true);
@@ -1079,20 +1087,27 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private void OnLevelChanged(object? sender, float level)
     {
-        // Perceptual curve + fast-attack / gentle-decay smoothing, matching the old WPF overlay so the
-        // bar reads like a VU meter. Smoothing updates every sample; only the send is throttled.
-        var v = level <= 0f ? 0f : MathF.Sqrt(Math.Min(1f, level));
-        _meterLevel = v > _meterLevel ? v : (_meterLevel * 0.82f) + (v * 0.18f);
+        // PillLevelMeter (Scribe.Core, tested) turns each capture callback's peak into the bars' level: a dBFS window that
+        // ordinary speech fills, then a timed fast rise and slower fall. It runs on every callback; only the send is
+        // throttled. The first callback of a new recording starts it again from silence.
+        var now = Stopwatch.GetTimestamp();
+        var epoch = Volatile.Read(ref _meterEpoch);
+        if (epoch != _meterEpochSeen)
+        {
+            _meterEpochSeen = epoch;
+            _meter.Reset();
+            _lastMeterSentTimestamp = 0;
+        }
 
-        var now = Environment.TickCount64;
-        if (now - _lastMeterMs < MeterIntervalMs)
+        var shown = _meter.Update(level, Stopwatch.GetElapsedTime(_lastLevelTimestamp, now));
+        _lastLevelTimestamp = now;
+        if (_lastMeterSentTimestamp != 0 && Stopwatch.GetElapsedTime(_lastMeterSentTimestamp, now) < MeterInterval)
         {
             return;
         }
 
-        _lastMeterMs = now;
-        var scaled = (int)Math.Round(Math.Clamp(_meterLevel, 0f, 1f) * 1000f);
-        EnqueueMeter(scaled);
+        _lastMeterSentTimestamp = now;
+        EnqueueMeter((int)Math.Round(Math.Clamp(shown, 0, 1) * 1000));
     }
 
     private void EnqueueMeter(int scaled)

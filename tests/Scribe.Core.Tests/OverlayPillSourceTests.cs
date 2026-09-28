@@ -303,14 +303,16 @@ public sealed class OverlayPillSourceTests
     }
 
     [Fact]
-    public void The_level_bars_are_the_icon_s_proportions_and_follow_the_level_by_render_transform()
+    public void The_level_bars_rise_from_their_floor_by_render_transform_with_heights_from_Core()
     {
         var window = XDocument.Load(OverlayFile("OverlayWindow.xaml"));
         var bars = window.Descendants(Presentation + "ScaleTransform").ToArray();
         Assert.Equal(["Bar1Scale", "Bar2Scale", "Bar3Scale", "Bar4Scale", "Bar5Scale"], bars.Select(b => (string?)b.Attribute(Xaml + "Name")));
+        Assert.Equal(PillLevelBars.Count, bars.Length);
         foreach (var bar in bars)
         {
-            Assert.Equal("0.25", (string?)bar.Attribute("ScaleY")); // the 4 DIP floor of a 16 DIP bar
+            // The 4 DIP floor of a 16 DIP bar, as the window first draws it.
+            Assert.Equal(PillLevelBars.Floor.ToString(CultureInfo.InvariantCulture), (string?)bar.Attribute("ScaleY"));
             var rectangle = bar.Parent!.Parent!;
             Assert.Equal("Rectangle", rectangle.Name.LocalName);
             Assert.Equal("3", (string?)rectangle.Attribute("Width"));
@@ -319,13 +321,25 @@ public sealed class OverlayPillSourceTests
             Assert.Equal("{ThemeResource PillLevelBrush}", (string?)rectangle.Attribute("Fill"));
         }
 
+        // Every height comes from PillLevelBars, which the overlay compiles itself; no copy of the arithmetic is left here.
         var code = StripComments(File.ReadAllText(OverlayFile("OverlayWindow.xaml.cs")));
-        Assert.Contains("BarProportions = [0.26, 0.56, 1.0, 0.56, 0.26];", code, StringComparison.Ordinal);
-        Assert.Contains("BarFloor = 4.0 / 16.0;", code, StringComparison.Ordinal);
         var setBars = Body(code, "private void SetBars(double level)");
-        Assert.Contains(".ScaleY = Math.Max(BarFloor, BarProportions[i] * level);", setBars, StringComparison.Ordinal);
+        Assert.Contains(".ScaleY = PillLevelBars.ScaleOf(i, level);", setBars, StringComparison.Ordinal);
+        Assert.DoesNotContain("BarProportions", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("BarFloor", code, StringComparison.Ordinal);
         Assert.DoesNotContain(".Width =", code, StringComparison.Ordinal);
         Assert.DoesNotContain(".Height =", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_app_turns_the_microphone_level_into_the_bars_level_through_the_Core_meter()
+    {
+        var client = StripComments(File.ReadAllText(Path.Combine(
+            OverlaySourceFolder(), "..", "Scribe.App", "Overlay", "OverlayProcessClient.cs")));
+        var onLevel = Body(client, "private void OnLevelChanged(object? sender, float level)");
+        Assert.Contains("_meter.Update(level, ", onLevel, StringComparison.Ordinal);
+        Assert.Contains("_meter.Reset();", onLevel, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sqrt", onLevel, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -9,7 +9,6 @@ using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using Scribe.App.Infrastructure;
@@ -364,9 +363,7 @@ public partial class SettingsWindow
         var active = _librarySearchResult?.IsActive == true;
         var count = active ? _librarySearchResult!.CountIn(row.Id) : 0;
         row.MatchCount = active ? count : null;
-        row.TextBrush = active && count == 0
-            ? TryFindResource("TextFillColorTertiaryBrush") as Brush
-            : TryFindResource("TextFillColorPrimaryBrush") as Brush;
+        row.Dimmed = active && count == 0;
     }
 
     private void LibraryNewButton_Click(object sender, RoutedEventArgs e)
@@ -442,16 +439,22 @@ public partial class SettingsWindow
         menu.IsOpen = true;
     }
 
+    // The short layout's stand-in for the Word packs line: the same words and the same way to the Your words tab.
     private void WordPacksIntroInfoButton_Click(object sender, RoutedEventArgs e)
     {
         var menu = new ContextMenu { PlacementTarget = WordPacksIntroInfoButton };
         menu.Items.Add(new TextBlock
         {
-            Text = "Ready-made lists of words, like product names. Turn on the ones you use. Your own words always win.",
+            Text = DictionaryTabsText.WordPacksGuide,
             TextWrapping = TextWrapping.Wrap,
             MaxWidth = 320,
             Margin = new Thickness(12, 8, 12, 8),
         });
+
+        // A menu item raises Click once its menu has closed, so the tab it opens takes the focus the menu gave back.
+        var toYourWords = new MenuItem { Header = DictionaryTabsText.WordPacksLink };
+        toYourWords.Click += (_, _) => OpenDictionaryTab(YourWordsTab);
+        menu.Items.Add(toYourWords);
         menu.IsOpen = true;
     }
 
@@ -1823,6 +1826,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         }
 
         _updatingLibraryRows = false;
+        UpdateDictionaryTabSummaries();
         if (selectId is not null)
         {
             var selected = _libraryRows.FirstOrDefault(row => string.Equals(row.Id, selectId, StringComparison.OrdinalIgnoreCase));
@@ -2591,7 +2595,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         private bool _aiCleanup;
         private int? _matchCount;
         private bool _unsaved;
-        private Brush? _textBrush;
+        private bool _dimmed;
 
         public string Id { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
@@ -2633,15 +2637,19 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
 
         public Visibility UnsavedVisibility => Unsaved ? Visibility.Visible : Visibility.Collapsed;
 
-        public Brush? TextBrush
+        /// <summary>
+        /// Whether a search is running and found nothing in this word pack. The row's text style dims it with a
+        /// DynamicResource, so the colour follows the theme; the row holds no brush of its own.
+        /// </summary>
+        public bool Dimmed
         {
-            get => _textBrush;
+            get => _dimmed;
             set
             {
-                if (!Equals(_textBrush, value))
+                if (_dimmed != value)
                 {
-                    _textBrush = value;
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TextBrush)));
+                    _dimmed = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Dimmed)));
                 }
             }
         }

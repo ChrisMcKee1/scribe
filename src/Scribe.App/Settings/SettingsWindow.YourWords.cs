@@ -162,6 +162,7 @@ public partial class SettingsWindow
         UpdateDictionaryGlossaryHint();
         UpdateDictionaryCoverage();
         UpdateSelectedDictionaryCoverageStatus();
+        UpdateDictionaryTabSummaries();
     }
 
     private bool DictionaryFilter(object item)

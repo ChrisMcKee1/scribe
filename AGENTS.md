@@ -364,6 +364,20 @@ a settings window, or startup:
    let the `windows-11-arm` CI runner exercise it on real hardware. Opening a PR is the cheapest way
    to get that.
 
+### Performance flags (switched-off changes)
+
+A performance change that could alter behaviour ships off, behind a `Scribe.Core.Diagnostics.PerfFlags` name, and is
+turned on per process with the `SCRIBE_PERF_FLAGS` environment variable (names separated by commas, semicolons or
+spaces, any case), read once at startup and registered in `AddScribeCore`. Off is the old path, so an install without
+the variable runs what the previous release ran; a default flips only in a later release, on field evidence. Add the
+name to `PerfFlags`' known list and a constant, take `PerfFlags` from the container, and test both paths. The session
+banner's `perf:` line lists the names that are on and counts unknown ones, never echoing the value. A change proven
+equivalent exhaustively (or by a fuzz corpus with the old code deciding every result) needs no flag; name that test.
+
+```powershell
+$env:SCRIBE_PERF_FLAGS = "FlagOne,FlagTwo"; $env:SCRIBE_DATA_DIR = "C:\scratch\data"; dotnet run --project src/Scribe.App
+```
+
 ## Project structure
 
 ```
@@ -397,7 +411,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     OverlayPreviewGate, PillOutcome (what a finished dictation shows on the
                                     pill), PillTiming, OverlayPipeProtocol (every pipe verb and line),
                                     PillGeometry and PillTextScale (the pill's text-scaled size and place, and
-                                    when a new text scale applies; the overlay compiles both files itself)
+                                    when a new text scale applies), PillLevelMeter and PillLevelBars (the
+                                    listening bars' level and heights); the overlay compiles PillGeometry,
+                                    PillTextScale and PillLevelBars itself
     Appearance/                     AccentContrastPlanner, AccentForegroundChooser, ContrastShade, WcagContrast,
                                     SrgbColor: the foreground on every accent and palette fill, and the lightness
                                     of accent text, links and switch tracks (see Accent contrast); AccentResolver
@@ -1885,11 +1901,23 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 - **The pill is drawn in Signal On** (the palette decision's section 5, `OverlayWindow.xaml`): an opaque navy
   gradient face with a sheen over its top 45%, and one edge drawn inside it for the state: 1.5 DIP blue while
   listening, a 1 DIP neutral hairline while processing and after text was typed, 1 DIP pink when nothing, or not
-  all, was typed. No plate, glow, bloom or red wash, and no record dot. Listening shows five level bars in the
-  icon's proportions (0.26, 0.56, 1, 0.56, 0.26 of 16 DIP over a 4 DIP floor), each laid out 16 DIP tall and scaled
-  by the level with a `ScaleY` render transform, so a level update never runs a layout pass. Processing shows three
-  dots, the same for transcribing and AI cleanup; the words say which. It is the same in both app themes and
-  never follows the Windows accent.
+  all, was typed. No plate, glow, bloom or red wash, and no record dot. Listening shows five level bars, each laid out
+  16 DIP tall and scaled by the level with a `ScaleY` render transform, so a level update never runs a layout pass.
+  Processing shows three dots, the same for transcribing and AI cleanup; the words say which. It is the same in both
+  app themes and never follows the Windows accent.
+- **The level bars move with the voice** (0.5.1). `PillLevelMeter` (Core, on the app side) turns each capture
+  callback's peak into the level: its dBFS over a -54 to -6 dBFS window, a 10 ms attack and a 120 ms release timed by
+  the elapsed time between callbacks (so the attack and release times hold at any callback interval; a peak is still the
+  peak of whatever audio a callback carried), reset at each recording. It is a fixed display mapping, not gain control:
+  steady room noise at -45 dBFS holds the centre bar near 6 DIP, and a headset peaking above -6 dBFS stands at full
+  height. `OverlayProcessClient` sends it at most every 25 ms. `PillLevelBars` (Core, compiled into the overlay) gives
+  each bar's height: a 4 DIP floor in silence, and above it the icon's proportions (0.26, 0.56, 1, 0.56, 0.26) of the
+  other 12 DIP, so at full level the bars stand 7.1, 10.7 and 16 DIP. 0.5.0 used the square root of the linear peak and
+  scaled each bar to its proportion of the whole 16 DIP with the floor as a minimum: ordinary speech moved the centre bar
+  from 4 to about 6 DIP and never the outer two. On a speech fixture at the field's median level (RMS -26 dBFS) the
+  centre bar now sits near 13 DIP and the outer ones near 6.4 while speaking, and all five rest on the floor in pauses.
+  `PillLevelMeterTests` and `PillLevelBarsTests` pin the numbers; `OverlayPillSourceTests` pins that the overlay and the
+  client use them. The macOS overlay has its own meter, so its `PORTING-PLAN.md` row may be stale.
 - **Every colour the pill draws is a `Scribe.Core.Appearance.PillPalette` colour**, and the palette reads every
   brand value from `ScribeBrand` (decision PD15). The brushes are theme resources in the overlay's `App.xaml`:
   Default and Light hold the same values, and HighContrast draws system colours only, fully opaque, with a 2 DIP
@@ -1912,8 +1940,8 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `PillGeometry` (Core) sizes and anchors the window, keeping the 8 DIP margin and clamping it into the work area;
   `PillTextScale` applies a new s, read at each show and on `TextScaleFactorChanged` (dispatched to the UI thread),
   at once on screen, after a running fade in, and at the next show when hidden or fading out. The overlay compiles
-  both files through linked `Compile` items, not a reference to Scribe.Core; `OverlayTextScaleSourceTests` pins the
-  rest from source.
+  both files, and `PillLevelBars`, through linked `Compile` items, not a reference to Scribe.Core;
+  `OverlayTextScaleSourceTests` pins the rest from source.
 - **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
   produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and always the one fixed line
   `PillOutcome.CleanupDidNotRun`, "See Settings, AI cleanup": never the cleanup's reason, which is a sentence the pill
@@ -2055,11 +2083,21 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   text colour, drawn over the transparent ring WPF-UI's template reserves, only where its fill is under 3:1 (a
   SemiBold label widened user-authored names and added a horizontal scroll bar); a selected library row always gets
   its strong-stroke outline and SemiBold name in light and dark. A filled text button needs no boundary.
-- **Contrast themes are untouched.** With WPF-UI's contrast dictionary loaded, or with Windows in a contrast theme
-  while Scribe applies light or dark itself, the plan is empty: every brush the class wrote is removed, and
-  `AccentContrastFlag` (set from the `ScribeAccentContrastApplies` resource) is off. Every Scribe trigger that replaces
-  a WPF-UI or WPF colour has the flag among its conditions, so in a contrast theme none is active, whatever its
-  precedence; a new trigger of that kind needs it too.
+- **Contrast themes are untouched, but for WPF-UI's placeholders.** With WPF-UI's contrast dictionary loaded, or with
+  Windows in a contrast theme while Scribe applies light or dark itself, the plan is empty: every brush the class wrote
+  is removed, and `AccentContrastFlag` (set from the `ScribeAccentContrastApplies` resource) is off. Every Scribe trigger
+  that replaces a WPF-UI or WPF colour has the flag among its conditions, so in a contrast theme none is active,
+  whatever its precedence; a new trigger of that kind needs it too. The exception is the keys WPF-UI's contrast
+  dictionaries leave as the placeholder red that Scribe draws as text or a line on that dictionary's own surfaces (see
+  "WPF-UI 4.3.0's contrast dictionaries have placeholder colours"): `ContrastPlaceholderRepairs` (Core) lists each with
+  the system colour WinUI uses for its role, and `AccentContrastResources` writes them while that dictionary is loaded.
+  The one trigger that runs only while the flag is off is the tray menu's highlight, which draws the system `Highlight`
+  behind `HighlightText`; `AccentContrastFlag` is public because that template is parsed at run time. **The tray menu
+  copies the application's resources** (WPF-UI's `ApplicationThemeManager.Apply(element)`, which adds and never removes),
+  so `TrayIconHost.ApplyMenuTheme` first removes what it copied last time and the application's own entries no longer
+  hold (`CopiedResourceKeys`, Core, compared with `ResourceDictionary.Keys`: `Contains` also searches the merged theme
+  dictionaries, which define every key the application overrides); without that a repair, or an accent correction the
+  next plan drops, stayed in the tray after the theme changed.
 - **Scribe's own keys** (`AccentContrastKeys`, defaults in App.xaml, all inert until the flag is on): per-appearance
   badge foregrounds (WPF-UI draws every badge appearance in `BadgeForeground`), the danger button's labels, the three
   pressed labels, the two link colours and the selection cues.
@@ -2121,6 +2159,42 @@ Each of these compiled warning-clean and showed only at run time or in a render,
 - **A profile preset's name is its identity in the menu.** The App profiles menu greys out a preset that is already
   added by matching profile names (`ProfilePresets.Preset.IsNamed`), so a renamed preset keeps its old name in
   `FormerNames` ("Terminals and shells" is now "Command windows"), or everyone who added it before is offered it again.
+- **Take theme colours by resource reference, never by value** (0.5.1). A brush read once with `FindResource` or
+  `TryFindResource`, a brush a row or view model holds, a `{StaticResource}` of a theme brush, and WPF's Win32
+  `SystemColors` brushes all keep the theme they were read in, or ignore the app's theme altogether. In 0.5.0 the Word
+  packs list bound each row's text to `LibraryRow.TextBrush`, which the first load never set (null: the names and their
+  source lines drew nothing) and a later rebuild read once (after Windows switched between light and dark it drew dark
+  text on dark rows, or light on light); the App profiles menu drew its descriptions in the Win32 grey on the dark
+  flyout. Use `DynamicResource` in XAML, `SetResourceReference` in code, and for a state colour a bool on the row with a
+  `DataTrigger` (`LibraryRow.Dimmed` and the `LibraryRowText` style). `ThemeColorSourceTests` scans `src\Scribe.App` for
+  all of these (a pattern check, not proof: XAML built in C# strings is not scanned); `AccentContrastResources`, which
+  re-plans after every theme change, is its one allowed file.
+- **WPF-UI 4.3.0's contrast dictionaries have placeholder colours.** HC1, HC2, HCBlack and HCWhite set 84 Color resources
+  (every `SubtleFillColor*`, `ControlFillColor*`, `TextFillColor*` and `SystemFillColor*` colour among them; the
+  `...Brush` keys built on the system colours are fine) to `#FF0000`, and every brush built on them is red too: the
+  menu highlight (`MenuBarItemBackgroundSelected`, `...Pressed`, `MenuBarItemTextForegroundPressed`), the menu separator
+  (`MenuBarItemBorderBrush`) and the status brushes (`SystemFillColorSuccessBrush`, `...CautionBrush`,
+  `...CriticalBrush`). While that dictionary is loaded, `ContrastPlaceholderRepairs` draws the status brushes and the
+  separator in its WindowText and disabled menu text (`TextFillColorDisabled`) in its GrayText, and the log says how many
+  are still placeholders (0 once WPF-UI fixes them). **The menu highlight is not repaired**: its fill is also WPF-UI's
+  ListBoxItem hover, and WPF-UI's MenuItem templates draw a highlighted item's label in the item's own inherited
+  Foreground, so a Highlight fill would need HighlightText on every label over it and none elsewhere (a submenu's items
+  inherit their parent's, a checked item's mark sits on its own box, a profile description and a shortcut hint keep their
+  own colours); an Astra review measured 1.04:1 to 1.46:1 where the first attempt missed. Only replaced templates can
+  draw that pair (the tray menu's does), so every other menu still highlights WPF-UI's red in a contrast theme; that is
+  upstream. `ContrastPlaceholderRepairsTests` holds the full placeholder list and fails when app code draws one that is
+  neither repaired nor listed with its reason: add it with WinUI's colour for its role (Common_themeresources_any.xaml,
+  MenuFlyout_themeresources.xaml), and re-derive the list on a WPF-UI upgrade. A Scribe template still draws a hover or
+  pressed fill only while `AccentContrastFlag` is on, and in a contrast theme either draws nothing or the system pair.
+- **The Dictionary page's tabs are drawn to be seen** (0.5.1): people missed the Word packs tab and could not tell their
+  words from word packs. The keyed `DictionaryTab` style gives each tab an icon (`TabHeader.Icon`), its name, a summary
+  under it that the page keeps current (`TabHeader.Summary`: "31 words", "11 of 11 on"), and an underline under the
+  selected tab in the planned selection colour (Highlight in a contrast theme); each tab opens with one line that says
+  what it holds and links to the other. The words live in `DictionaryTabsText` (Core, tested), and
+  `SettingsWindow.DictionaryTabs.cs` updates the summaries and each tab's `AutomationProperties.HelpText` from
+  `RefreshDictionaryStatus` and `RefreshWordPackList`. The `Header` stays the tab's plain name, because UI Automation, Find
+  a setting (`SelectDictionarySearchTab`) and `SettingsSearchIndexTests` read it; the selected tab keeps WPF-UI's
+  `TabViewItemForegroundSelected`, which the tab's content inherits.
 
 ## Azure authentication (read before touching credentials)
 

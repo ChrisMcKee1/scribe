@@ -122,21 +122,28 @@ public partial class SettingsWindow
         menu.IsOpen = true;
     }
 
-    private static StackPanel ProfilePresetHeader(string title, string description) => new()
+    private static StackPanel ProfilePresetHeader(string title, string description)
     {
-        Children =
+        var detail = new TextBlock
         {
-            new TextBlock { Text = title },
-            new TextBlock
+            Text = description,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 360,
+        };
+
+        // Resource references, so the menu follows the theme and Windows text size. SystemColors.GrayTextBrush, which this
+        // used, is the Win32 grey (#6D6D6D): it ignores dark mode and read under 3:1 on the dark flyout.
+        detail.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        detail.SetResourceReference(TextBlock.FontSizeProperty, "ScribeFontCaption");
+        return new StackPanel
+        {
+            Children =
             {
-                Text = description,
-                FontSize = 12,
-                Foreground = System.Windows.SystemColors.GrayTextBrush,
-                TextWrapping = TextWrapping.Wrap,
-                MaxWidth = 360,
+                new TextBlock { Text = title },
+                detail,
             },
-        },
-    };
+        };
+    }
 
     private void AddBlankProfile()
     {

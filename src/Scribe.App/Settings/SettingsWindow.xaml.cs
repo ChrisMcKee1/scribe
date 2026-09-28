@@ -4796,13 +4796,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (!string.IsNullOrWhiteSpace(copyFailureText))
         {
-            panel.Children.Add(new TextBlock
+            var failure = new TextBlock
             {
                 Text = copyFailureText,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 10, 0, 0),
-                Foreground = TryFindResource("SystemFillColorCriticalBrush") as Brush,
-            });
+            };
+            failure.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
+            panel.Children.Add(failure);
         }
 
         panel.Children.Add(new Wpf.Ui.Controls.TextBox

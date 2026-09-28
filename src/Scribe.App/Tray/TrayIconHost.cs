@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
+using Scribe.Core.Appearance;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -28,6 +29,9 @@ namespace Scribe.App.Tray;
 internal sealed class TrayIconHost : IDisposable
 {
     private readonly ContextMenu _menu;
+
+    // The application-level resource keys ApplyMenuTheme last copied into the menu.
+    private readonly HashSet<object> _copiedApplicationKeys = [];
     private readonly TaskbarIcon _icon;
     private readonly UiThreadDispatch _ui;
     private readonly ICommand _settingsCommand;
@@ -149,6 +153,16 @@ internal sealed class TrayIconHost : IDisposable
     {
         try
         {
+            // WPF-UI's Apply copies every application-level entry into the menu and never removes one, so an override
+            // AccentContrastResources has since taken back (a contrast repair once the contrast theme ends, or an accent
+            // correction the next plan does not need) would stay here and outrank the theme. Take back what was copied
+            // last time and is gone from the application's own entries now, then copy again. Keys, not Contains:
+            // Contains also searches the merged theme dictionaries, which define every key the application overrides.
+            if (Application.Current is { } app)
+            {
+                CopiedResourceKeys.Reconcile(_copiedApplicationKeys, app.Resources.Keys.Cast<object>(), key => _menu.Resources.Remove(key));
+            }
+
             ApplicationThemeManager.Apply(_menu);
         }
         catch
@@ -412,6 +426,10 @@ internal sealed class TrayIconHost : IDisposable
     private void ApplyTrayTemplate(MenuItem item, bool hasSubmenu)
     {
         item.Template = hasSubmenu ? _submenuHeaderTemplate : _menuItemTemplate;
+
+        // The template's contrast-theme highlight is keyed on the flag, which the menu holds as a copy of the application's
+        // resource (ApplyMenuTheme copies it again after every theme change and accent plan).
+        item.SetResourceReference(AccentContrastFlag.AppliesProperty, AccentContrastKeys.Applies);
     }
 
     // Adapted from WPF-UI 4.3.0's SubmenuItemTemplateKey and SubmenuHeaderTemplateKey (Controls/Menu/MenuItem.xaml): the
@@ -419,6 +437,9 @@ internal sealed class TrayIconHost : IDisposable
     // gives a checkable item a check box in its own leading column and every other item no column at all, so labels
     // started at two different x positions. Here every item and header reserves one leading column, which shows a
     // check mark only while the item is checked. IsCheckable stays on the item, so UI Automation still reports it.
+    // In a contrast theme (the flag off) a highlighted, hovered or pressed item draws the system highlight pair instead of
+    // WPF-UI's resources, which its contrast dictionaries define as the placeholder #FF0000 (red, and red text on red
+    // while pressed). The nested markup extensions end "} }", because "}}" would close this raw string's interpolation.
     private static ControlTemplate CreateMenuItemTemplate(bool hasSubmenu)
     {
         var chevronColumn = hasSubmenu ? "<ColumnDefinition Width=\"Auto\"/>" : string.Empty;
@@ -461,6 +482,7 @@ internal sealed class TrayIconHost : IDisposable
             <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                             xmlns:infra="clr-namespace:Scribe.App.Infrastructure;assembly=Scribe"
                              TargetType="{x:Type MenuItem}">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -503,6 +525,24 @@ internal sealed class TrayIconHost : IDisposable
                     <Trigger Property="IsChecked" Value="True">
                         <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible"/>
                     </Trigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="infra:AccentContrastFlag.Applies" Value="False"/>
+                            <Condition Property="IsHighlighted" Value="True"/>
+                        </MultiTrigger.Conditions>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey} }"/>
+                        <Setter TargetName="Border" Property="TextElement.Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey} }"/>
+                        <Setter TargetName="Header" Property="TextElement.Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey} }"/>
+                    </MultiTrigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="infra:AccentContrastFlag.Applies" Value="False"/>
+                            <Condition Property="IsMouseOver" Value="True"/>
+                        </MultiTrigger.Conditions>
+                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey} }"/>
+                        <Setter TargetName="Border" Property="TextElement.Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey} }"/>
+                        <Setter TargetName="Header" Property="TextElement.Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey} }"/>
+                    </MultiTrigger>
                     <Trigger Property="IsEnabled" Value="False">
                         <Setter Property="Foreground">
                             <Setter.Value>

@@ -427,7 +427,7 @@ UpdateTryDictationPage();
             _ => (Wpf.Ui.Controls.SymbolRegular.CheckmarkCircle24, "SystemFillColorSuccessBrush"),
         };
         TryDictationSummaryIcon.Symbol = symbol;
-        TryDictationSummaryIcon.Foreground = (Brush)FindResource(brush);
+        TryDictationSummaryIcon.SetResourceReference(ForegroundProperty, brush);
     }
 
     private void AnnounceTryDictationSummary()
