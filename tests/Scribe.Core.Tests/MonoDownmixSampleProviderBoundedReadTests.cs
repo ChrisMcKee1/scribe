@@ -130,6 +130,12 @@ public sealed class MonoDownmixSampleProviderBoundedReadTests
     [Collection(AllocationMeasurementCollection.Name)]
     public sealed class Allocations
     {
+        // Each read is measured on a fresh provider, up to three times, and passes when one measurement is within the
+        // bound. A read whose own work allocates more does so every time and fails all three; the full suite once measured
+        // 7,336 bytes over the bound in one run of six, with nothing jitted, no collection and no exception on the thread,
+        // which is one-time work of the process, not of the read (a rerun of the class never repeated it).
+        private const int Attempts = 3;
+
         [Fact]
         public void A_long_multichannel_read_allocates_one_block_for_each_buffer()
         {
@@ -138,20 +144,13 @@ public sealed class MonoDownmixSampleProviderBoundedReadTests
             var format = WaveFormat.CreateIeeeFloatWaveFormat(16_000, 2);
             Warm(format);
             var raw = Signal(format, frames: 16_000 * 30, seed: 1);
-            var downmix = new MonoDownmixSampleProvider(new RawSourceWaveStream(raw, 0, raw.Length, format).ToSampleProvider());
-            var output = new float[16_000 * 30];
-
-            var work = RuntimeWork.Now();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var read = downmix.Read(output);
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            var during = RuntimeWork.Now().Since(work);
-
-            Assert.Equal(16_000 * 30, read);
 
             // The downmix's float block and the converter's byte block, each at most one block plus an array header.
             var bound = 2 * ((MonoDownmixSampleProvider.MaxSamplesPerRead * sizeof(float)) + 256);
-            Assert.True(allocated <= bound, $"The read allocated {allocated} bytes, more than {bound}. During it: {during}.");
+            AssertReadWithin(
+                () => new MonoDownmixSampleProvider(new RawSourceWaveStream(raw, 0, raw.Length, format).ToSampleProvider()),
+                frames: 16_000 * 30,
+                bound);
         }
 
         [Fact]
@@ -161,18 +160,38 @@ public sealed class MonoDownmixSampleProviderBoundedReadTests
             var format = new WaveFormat(48_000, 16, 1);
             Warm(format);
             var raw = Signal(format, frames: 48_000 * 30, seed: 2);
-            var mono = new MonoDownmixSampleProvider(new RawSourceWaveStream(raw, 0, raw.Length, format).ToSampleProvider());
-            var output = new float[48_000 * 30];
 
-            var work = RuntimeWork.Now();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var read = mono.Read(output);
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            var during = RuntimeWork.Now().Since(work);
-
-            Assert.Equal(48_000 * 30, read);
             var bound = (MonoDownmixSampleProvider.MaxSamplesPerRead * sizeof(float)) + 256;
-            Assert.True(allocated <= bound, $"The read allocated {allocated} bytes, more than {bound}. During it: {during}.");
+            AssertReadWithin(
+                () => new MonoDownmixSampleProvider(new RawSourceWaveStream(raw, 0, raw.Length, format).ToSampleProvider()),
+                frames: 48_000 * 30,
+                bound);
+        }
+
+        private static void AssertReadWithin(Func<MonoDownmixSampleProvider> create, int frames, long bound)
+        {
+            var measured = new List<string>(Attempts);
+            for (var attempt = 1; attempt <= Attempts; attempt++)
+            {
+                var provider = create();
+                var output = new float[frames];
+
+                var work = RuntimeWork.Now();
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                var read = provider.Read(output);
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                var during = RuntimeWork.Now().Since(work);
+
+                Assert.Equal(frames, read);
+                if (allocated <= bound)
+                {
+                    return;
+                }
+
+                measured.Add($"read {attempt}: {allocated} bytes, during it {during}");
+            }
+
+            Assert.Fail($"Every read allocated more than {bound} bytes. " + string.Join("; ", measured) + ".");
         }
 
         // The same calls once, on this thread, so the measured read is not also the first call.
