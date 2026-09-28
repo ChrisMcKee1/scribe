@@ -246,15 +246,23 @@ public sealed class DictionaryRepository : IDictionaryRepository
         // Delete first so an edit that renames row A to row B's old pattern while deleting B never
         // trips the unique index mid-save.
         var keptIds = entries.Where(e => e.Id != 0).Select(e => e.Id).ToHashSet();
-        var stored = skipUnchanged ? new Dictionary<long, StoredRow>() : null;
+
+        // An index and a list rather than one dictionary of rows: for a couple of thousand rows each stays under the
+        // large object heap's threshold, so a Save does not end in a full collection.
+        var storedIndex = skipUnchanged ? new Dictionary<long, int>(keptIds.Count) : null;
+        var stored = skipUnchanged ? new List<StoredRow>(keptIds.Count) : null;
         var toDelete = new List<long>();
         using (var read = connection.CreateCommand())
         {
             read.Transaction = transaction;
             read.CommandText = skipUnchanged
                 ? """
-                  SELECT id, CAST(pattern AS BLOB), typeof(pattern), CAST(replacement AS BLOB), typeof(replacement),
-                         whole_word, typeof(whole_word), enabled, typeof(enabled)
+                  SELECT id,
+                         CASE WHEN typeof(pattern) = 'text' THEN CAST(pattern AS BLOB) END,
+                         CASE WHEN typeof(replacement) = 'text' THEN CAST(replacement AS BLOB) END,
+                         CASE WHEN typeof(whole_word) = 'integer' AND typeof(enabled) = 'integer'
+                                   AND whole_word IN (0, 1) AND enabled IN (0, 1)
+                              THEN whole_word + 2 * enabled ELSE -1 END
                   FROM dictionary;
                   """
                 : "SELECT id FROM dictionary;";
@@ -268,7 +276,8 @@ public sealed class DictionaryRepository : IDictionaryRepository
                 }
                 else if (stored is not null)
                 {
-                    stored[id] = StoredRow.Read(reader);
+                    storedIndex![id] = stored.Count;
+                    stored.Add(StoredRow.Read(reader));
                 }
             }
         }
@@ -314,14 +323,10 @@ public sealed class DictionaryRepository : IDictionaryRepository
                     continue;
                 }
 
-                StoredRow written = default;
-                if (stored is not null)
+                if (stored is not null &&
+                    storedIndex!.TryGetValue(entry.Id, out var at) && stored[at].Holds(entry))
                 {
-                    written = StoredRow.Of(entry);
-                    if (stored.TryGetValue(entry.Id, out var current) && current.Equals(written))
-                    {
-                        continue;
-                    }
+                    continue;
                 }
 
                 if (update is null)
@@ -342,9 +347,9 @@ public sealed class DictionaryRepository : IDictionaryRepository
                 updateBody.Bind(entry);
                 updateId!.Value = entry.Id;
                 update.ExecuteNonQuery();
-                if (stored is not null && stored.ContainsKey(entry.Id))
+                if (stored is not null && storedIndex!.TryGetValue(entry.Id, out var written))
                 {
-                    stored[entry.Id] = written;
+                    stored[written] = StoredRow.WrittenBy(entry);
                 }
             }
         }
@@ -355,28 +360,46 @@ public sealed class DictionaryRepository : IDictionaryRepository
         }
     }
 
-    // A row's values as SQLite holds them, for DATA-O-07's comparison: each text as its stored bytes and storage class,
-    // each flag as its stored value and storage class. Equal only when an UPDATE would write the very same thing.
-    private readonly record struct StoredRow(
-        string Pattern, string PatternType, string Replacement, string ReplacementType,
-        object? WholeWord, string WholeWordType, object? Enabled, string EnabledType)
+    // A row's values as SQLite holds them, for DATA-O-07's comparison: each text's stored bytes when it is stored as text
+    // (else null), and both flags as whole_word + 2 * enabled when both are stored as the integers 0 or 1 (else -1). It
+    // holds an entry only when an UPDATE would write the very same thing: the same UTF-8 bytes (a lone surrogate encoded
+    // with the replacement binding gives it) and the same 1s and 0s, so a flag stored as 2, text stored as a blob or
+    // invalid UTF-8 is written again. Small on purpose: a few thousand of them stay off the large object heap.
+    private readonly record struct StoredRow(byte[]? Pattern, byte[]? Replacement, int Flags)
     {
-        // Byte strings are compared as Base64 text, which is exact and gives the record value equality.
         internal static StoredRow Read(SqliteDataReader reader) => new(
-            Bytes(reader, 1), reader.GetString(2), Bytes(reader, 3), reader.GetString(4),
-            reader.GetValue(5), reader.GetString(6), reader.GetValue(7), reader.GetString(8));
+            reader.IsDBNull(1) ? null : (byte[])reader.GetValue(1),
+            reader.IsDBNull(2) ? null : (byte[])reader.GetValue(2),
+            reader.GetInt32(3));
 
-        // What binding the entry stores: UTF-8 text (with the replacement a lone surrogate gets) and 1 or 0. A null text,
-        // which binding refuses, matches no stored row, so its UPDATE runs and fails as it always did.
-        internal static StoredRow Of(DictionaryEntry entry) => new(
-            TextBytes(entry.Pattern), "text", TextBytes(entry.Replacement), "text",
-            entry.WholeWord ? 1L : 0L, "integer", entry.Enabled ? 1L : 0L, "integer");
+        // A null text, which binding refuses, is held by no row, so its UPDATE runs and fails as it always did.
+        internal static StoredRow WrittenBy(DictionaryEntry entry) => new(
+            entry.Pattern is null ? null : System.Text.Encoding.UTF8.GetBytes(entry.Pattern),
+            entry.Replacement is null ? null : System.Text.Encoding.UTF8.GetBytes(entry.Replacement),
+            FlagsOf(entry));
 
-        private static string TextBytes(string? text) =>
-            text is null ? "unbound" : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+        internal bool Holds(DictionaryEntry entry) =>
+            Flags == FlagsOf(entry) && TextHolds(Pattern, entry.Pattern) && TextHolds(Replacement, entry.Replacement);
 
-        private static string Bytes(SqliteDataReader reader, int ordinal) =>
-            reader.IsDBNull(ordinal) ? "null" : Convert.ToBase64String((byte[])reader.GetValue(ordinal));
+        private static int FlagsOf(DictionaryEntry entry) => (entry.WholeWord ? 1 : 0) + (2 * (entry.Enabled ? 1 : 0));
+
+        private static bool TextHolds(byte[]? stored, string? text)
+        {
+            if (stored is null || text is null)
+            {
+                return false;
+            }
+
+            var count = System.Text.Encoding.UTF8.GetByteCount(text);
+            if (count != stored.Length)
+            {
+                return false;
+            }
+
+            Span<byte> written = count <= 256 ? stackalloc byte[count] : new byte[count];
+            System.Text.Encoding.UTF8.GetBytes(text, written);
+            return written.SequenceEqual(stored);
+        }
     }
 
     // The four body parameters of a reused command, typed as AddWithValue types them from the same values.

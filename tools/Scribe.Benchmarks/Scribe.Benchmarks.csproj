@@ -24,6 +24,10 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
+    <!-- The app's host and tracing packages at their central versions, only so StartupProbe can build the host
+         App.StartAsync builds (DATA-O-01, DATA-O-03 and DATA-O-05b cold-start timings). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
 
 </Project>

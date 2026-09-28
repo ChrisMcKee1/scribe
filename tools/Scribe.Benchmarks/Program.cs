@@ -39,6 +39,11 @@ internal static class Program
             return IdleReleaseHarness.Run(args, host);
         }
 
+        if (StartupProbe.IsRequested(args))
+        {
+            return StartupProbe.Run(args, host);
+        }
+
         if (!BenchmarkTarget.TryResolve(host.ProcessArchitecture, out var runtimeIdentifier, out var platform))
         {
             Console.Error.WriteLine(

@@ -357,6 +357,10 @@ pwsh ./scripts/New-ScenarioFixtures.ps1
 dotnet run -c Release --project tools/Scribe.Benchmarks
 dotnet run -c Release --project tools/Scribe.Benchmarks -- --scribe-default-job --filter *TextInjection*
 dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak
+# Cold starts, which BenchmarkDotNet cannot show: fresh child processes build the host App.StartAsync builds (Core
+# services, telemetry, a temp data folder, never yours) and make the banner's first settings load. warmup
+# (DataLayerWarmUp), trace (LightTraceBridge) or integrity (OverlappedIntegrityCheck, with --mb of recordings).
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --startup-probe warmup --runs 15 [--affinity 2]
 
 # Offline AI-cleanup quality eval (no network, no judge model)
 dotnet run --project tools/Scribe.Evals
