@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A child process for AppendOnlyLogTests (DATA-O-02): writes numbered lines to one daily log through the app's
+       DailyLogFile or the overlay's OverlayLog, so two real processes append to one file the way Scribe and its overlay
+       helper do. Headless: no window, no input. The overlay's writer and the append-only open are compiled in from source,
+       as the overlay itself compiles them. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Scribe.Core\Scribe.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Scribe.Overlay\Logging\OverlayLog.cs" Link="Linked\OverlayLog.cs" />
+    <Compile Include="..\..\src\Scribe.Core\Diagnostics\AppendOnlyFile.cs" Link="Linked\AppendOnlyFile.cs" />
+  </ItemGroup>
+
+</Project>

@@ -26,6 +26,13 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scribe.Core\Scribe.Core.csproj" />
     <ProjectReference Include="..\..\tools\Scribe.Evals\Scribe.Evals.csproj" />
+    <!-- Built beside the tests, never referenced: AppendOnlyLogTests starts it twice to append from two processes. -->
+    <ProjectReference Include="..\Scribe.LogAppendChild\Scribe.LogAppendChild.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The overlay's writer of the shared log (it has no Scribe.Core reference, so it is compiled here from its source). -->
+    <Compile Include="..\..\src\Scribe.Overlay\Logging\OverlayLog.cs" Link="Linked\OverlayLog.cs" />
   </ItemGroup>
 
 </Project>

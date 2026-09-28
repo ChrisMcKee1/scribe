@@ -60,4 +60,10 @@
     <Compile Include="..\Scribe.Core\Overlay\PillLevelBars.cs" Link="Shared\PillLevelBars.cs" />
   </ItemGroup>
 
+  <!-- The shared daily log's append-only open (DATA-O-02), which the app's DailyLogFile uses too, so both writers open the
+       file the same way when the app passes the launch argument. Tested in Scribe.Core (AppendOnlyLogTests). -->
+  <ItemGroup>
+    <Compile Include="..\Scribe.Core\Diagnostics\AppendOnlyFile.cs" Link="Shared\AppendOnlyFile.cs" />
+  </ItemGroup>
+
 </Project>

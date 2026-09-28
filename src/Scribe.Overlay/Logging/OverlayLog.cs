@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
+using Scribe.Core.Diagnostics;
 
 namespace Scribe.Overlay.Logging;
 
@@ -29,6 +30,11 @@ public static class OverlayLog
     private static readonly UTF8Encoding LineEncoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly byte[] NewLineBytes = LineEncoding.GetBytes(Environment.NewLine);
     private const int WriterBufferChars = 1024;
+
+    // DATA-O-02: the app passes this at launch only when its own writer appends the same way (PerfFlags.AppendOnlyLog, and
+    // this helper declares that it follows the argument), so the pair never runs two ways. Never read from the environment.
+    private static readonly bool AppendOnly = HasArgument(Environment.GetCommandLineArgs(), AppendOnlyFile.LaunchArgument);
+    private static int _modeAnnounced;
 
     private static string Path
     {
@@ -198,10 +204,10 @@ public static class OverlayLog
         return remaining;
     }
 
-    private static void AppendLine(string line)
+    // Appends one line to path with the retries two processes sharing a file need; whatever throws past them is caught by
+    // Write. The overload below hands it the day's file and this helper's way.
+    private static void AppendLine(string path, string line, bool appendOnly)
     {
-        var path = Path;
-
         // Both the WPF host and this process append to the same file; tolerate brief lock contention.
         for (var attempt = 0; attempt < 12; attempt++)
         {
@@ -209,7 +215,16 @@ public static class OverlayLog
             {
                 lock (Gate)
                 {
-                    if (line.Length + Environment.NewLine.Length <= WriterBufferChars)
+                    if (appendOnly)
+                    {
+                        // The whole record in one write, however long (DATA-O-02), encoded before the file is opened: a
+                        // handle that may only append puts it after whatever the app wrote, never over it or through it.
+                        var record = new byte[LineEncoding.GetByteCount(line) + NewLineBytes.Length];
+                        NewLineBytes.CopyTo(record, LineEncoding.GetBytes(line, 0, line.Length, record, 0));
+                        using var appendOnlyStream = AppendOnlyFile.Open(path);
+                        appendOnlyStream.Write(record, 0, record.Length);
+                    }
+                    else if (line.Length + Environment.NewLine.Length <= WriterBufferChars)
                     {
                         using var stream = new FileStream(
                             path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
@@ -237,5 +252,36 @@ public static class OverlayLog
                 Thread.Sleep(15);
             }
         }
+    }
+
+    private static void AppendLine(string line)
+    {
+        var path = Path;
+        if (AppendOnly && Interlocked.Exchange(ref _modeAnnounced, 1) == 0)
+        {
+            // Once per process, so the log shows which way this helper appended; the old way adds no line.
+            AppendLine(path, $"{DateTime.Now:HH:mm:ss.fff} [Information] Overlay: shared log append-only (launch argument).", true);
+        }
+
+        AppendLine(path, line, AppendOnly);
+    }
+
+    /// <summary>
+    /// Test seam (AppendOnlyLogTests and its child writer): the retry loop above for a test's own file and way. Unused in the
+    /// overlay.
+    /// </summary>
+    internal static void AppendLineForTests(string path, string line, bool appendOnly) => AppendLine(path, line, appendOnly);
+
+    private static bool HasArgument(string[] arguments, string name)
+    {
+        foreach (var argument in arguments)
+        {
+            if (string.Equals(argument, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

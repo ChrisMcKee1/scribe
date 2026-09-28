@@ -23,6 +23,7 @@ public sealed class PerfFlags
     // known name that nothing in src reads.
     private static readonly string[] KnownNames =
     [
+        AppendOnlyLog,
         AsyncDeviceList,
         BatchCleanupSelectionCounts,
         BoundedDiagnosticsReads,
@@ -53,6 +54,7 @@ public sealed class PerfFlags
 
     // The flags, one constant per name (0.5.1). What each changes, and the old path it keeps when off (or, for a flag named
     // for the old behaviour, brings back when on), is on the implementation that reads it.
+    public const string AppendOnlyLog = nameof(AppendOnlyLog);
     public const string AsyncDeviceList = nameof(AsyncDeviceList);
     public const string BatchCleanupSelectionCounts = nameof(BatchCleanupSelectionCounts);
     public const string BoundedDiagnosticsReads = nameof(BoundedDiagnosticsReads);

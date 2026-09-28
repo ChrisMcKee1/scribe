@@ -42,11 +42,12 @@ internal sealed class FileLoggerProvider : ILoggerProvider
     public FileLoggerProvider(
         string logsDirectory,
         LogLevel minimumLevel = LogLevel.Debug,
-        long dailyBudgetBytes = LogRetentionPolicy.DefaultDailyBudgetBytes)
+        long dailyBudgetBytes = LogRetentionPolicy.DefaultDailyBudgetBytes,
+        AppendOnlyLogMode? appendMode = null)
     {
         _minimumLevel = minimumLevel;
         _file = DailyLogFile.Open(
-            logsDirectory ?? string.Empty, FallbackDirectory(), dailyBudgetBytes, OnDayChanged);
+            logsDirectory ?? string.Empty, FallbackDirectory(), dailyBudgetBytes, OnDayChanged, appendMode: appendMode);
         _writer = new BackgroundLogWriter(_file);
 
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;

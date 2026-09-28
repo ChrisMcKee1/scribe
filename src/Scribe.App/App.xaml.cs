@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -166,6 +167,10 @@ public partial class App : Application
     {
         StartShowSettingsListener();
 
+        // Read once for the whole process, here: some of what the flags change runs before the container exists, and the
+        // container is handed this same instance below, so every consumer sees one answer (PerfFlags).
+        var perfFlags = PerfFlags.FromEnvironment();
+
         // Tray app: never exit just because a window closed; quit happens explicitly from the tray.
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
@@ -184,6 +189,7 @@ public partial class App : Application
         StartupStages?.Mark("paths");
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddScribeCore();
+        builder.Services.Replace(ServiceDescriptor.Singleton(perfFlags));
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton<AzureCliInstaller>();
         builder.Services.AddSingleton<StartupRegistration>();
@@ -199,7 +205,10 @@ public partial class App : Application
         // Held in a static so Settings can report whether logging is ACTUALLY working rather
         // than displaying the folder it was asked to use. A packaged build was found writing
         // nothing for an entire session while the About page confidently showed a path.
-        var logSink = new FileLoggerProvider(paths.LogsDir);
+        // The append mode is shared with the overlay client, which decides it for each helper it launches (DATA-O-02).
+        var logAppendMode = new AppendOnlyLogMode(
+            perfFlags.IsOn(PerfFlags.AppendOnlyLog), AppendOnlyLogMode.ReadVersion(typeof(App).Assembly.Location));
+        var logSink = new FileLoggerProvider(paths.LogsDir, appendMode: logAppendMode);
         LogSink = logSink;
 
         // A factory registration rather than AddProvider(instance): the container disposes what a
@@ -411,7 +420,8 @@ public partial class App : Application
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<ILogger<OverlayProcessClient>>(),
-            services.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>());
+            services.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>(),
+            logAppendMode);
 
         // State changes are raised on whichever thread made them and can arrive out of order; the relay posts each to this
         // thread without making the raising thread wait, and shows only the newest (see PresentationRelay).

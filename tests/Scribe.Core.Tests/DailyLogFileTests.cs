@@ -27,13 +27,17 @@ public class DailyLogFileTests : IDisposable
     private static LogRecord At(DateOnly day, int hour, int minute, string text, LogLevel level = LogLevel.Information) =>
         new(day.ToDateTime(new TimeOnly(hour, minute)), level, text);
 
+    /// <summary>How the file under test appends: today's stream here, append-only in <see cref="DailyLogFileAppendOnlyTests"/>.</summary>
+    protected virtual AppendOnlyLogMode? AppendMode => null;
+
     private DailyLogFile Open(
         long dailyBudgetBytes = LogRetentionPolicy.DefaultDailyBudgetBytes,
         Action<LogDayChange>? dayChanged = null,
         string? preferred = null,
         string? fallback = null) =>
         DailyLogFile.Open(
-            preferred ?? LogsDir, fallback, dailyBudgetBytes, dayChanged, retryDelay: TimeSpan.Zero, clock: () => _now);
+            preferred ?? LogsDir, fallback, dailyBudgetBytes, dayChanged, retryDelay: TimeSpan.Zero, clock: () => _now,
+            appendMode: AppendMode);
 
     private string PathFor(DateOnly day, string? directory = null) => ScribeLogFiles.PathFor(directory ?? LogsDir, day);
 

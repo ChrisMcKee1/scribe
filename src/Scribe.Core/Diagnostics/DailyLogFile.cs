@@ -56,6 +56,7 @@ public sealed class DailyLogFile : ILogRecordSink
     private readonly TimeSpan _retryDelay;
     private readonly Action<LogDayChange>? _dayChanged;
     private readonly Func<DateTime> _clock;
+    private readonly AppendOnlyLogMode? _appendMode;
     private readonly object _statusGate = new();
     private ArrayBufferWriter<byte> _pending = new(InitialBufferBytes);
 
@@ -73,12 +74,17 @@ public sealed class DailyLogFile : ILogRecordSink
     private bool _dayBudgetAnnounced;
 
     private DailyLogFile(
-        long dailyBudgetBytes, TimeSpan retryDelay, Action<LogDayChange>? dayChanged, Func<DateTime> clock)
+        long dailyBudgetBytes,
+        TimeSpan retryDelay,
+        Action<LogDayChange>? dayChanged,
+        Func<DateTime> clock,
+        AppendOnlyLogMode? appendMode)
     {
         _dailyBudgetBytes = dailyBudgetBytes;
         _retryDelay = retryDelay < TimeSpan.Zero ? TimeSpan.Zero : retryDelay;
         _dayChanged = dayChanged;
         _clock = clock;
+        _appendMode = appendMode;
     }
 
     /// <summary>
@@ -91,16 +97,21 @@ public sealed class DailyLogFile : ILogRecordSink
     /// </param>
     /// <param name="retryDelay">Pause between attempts on a sharing collision. Tests pass zero.</param>
     /// <param name="clock">Local time source that decides the day. Defaults to <see cref="DateTime.Now"/>.</param>
+    /// <param name="appendMode">
+    /// How each batch is appended (<see cref="PerfFlags.AppendOnlyLog"/>), read before every write; null is today's
+    /// <see cref="FileMode.Append"/> stream.
+    /// </param>
     public static DailyLogFile Open(
         string preferredDirectory,
         string? fallbackDirectory,
         long dailyBudgetBytes = LogRetentionPolicy.DefaultDailyBudgetBytes,
         Action<LogDayChange>? dayChanged = null,
         TimeSpan? retryDelay = null,
-        Func<DateTime>? clock = null)
+        Func<DateTime>? clock = null,
+        AppendOnlyLogMode? appendMode = null)
     {
         var file = new DailyLogFile(
-            dailyBudgetBytes, retryDelay ?? DefaultRetryDelay, dayChanged, clock ?? (static () => DateTime.Now));
+            dailyBudgetBytes, retryDelay ?? DefaultRetryDelay, dayChanged, clock ?? (static () => DateTime.Now), appendMode);
         file.OpenFirstUsable(preferredDirectory ?? string.Empty, fallbackDirectory, file.Today());
         return file;
     }
@@ -408,9 +419,12 @@ public sealed class DailyLogFile : ILogRecordSink
             {
                 // Opened, appended once and closed for every batch. A handle kept open would be cheaper,
                 // but FileStream writes at its own tracked offset, so it would overwrite whatever the
-                // overlay appended in between. Unbuffered, so the whole batch is a single write.
-                using var stream = new FileStream(
-                    path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
+                // overlay appended in between. Unbuffered, so the whole batch is a single write. The same
+                // happens inside one open, between the open and the write, unless the handle may only
+                // append (DATA-O-02), which is the mode the app and its overlay share when it is on.
+                using var stream = _appendMode?.AppendOnly == true
+                    ? AppendOnlyFile.Open(path)
+                    : new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
                 stream.Write(bytes);
                 return;
             }

@@ -56,6 +56,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private readonly IAudioCaptureService _audio;
     private readonly ILogger<OverlayProcessClient>? _log;
+
+    // DATA-O-02: the shared log's append mode for the app and each helper it launches (null: today's way for both).
+    private readonly Scribe.Core.Diagnostics.AppendOnlyLogMode? _appendMode;
     private readonly BlockingCollection<Command> _queue = new();
     private readonly Thread _consumer;
 
@@ -107,12 +110,18 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     /// <param name="audio">Source of the live input level shown while recording.</param>
     /// <param name="log">Optional logger.</param>
+    /// <param name="perfFlags">The performance flags this client reads (<see cref="PerfFlags.DeduplicateOverlayMeter"/>).</param>
+    /// <param name="appendMode">The shared log's append mode, decided for every helper launched (DATA-O-02).</param>
     public OverlayProcessClient(
-        IAudioCaptureService audio, ILogger<OverlayProcessClient>? log = null, PerfFlags? perfFlags = null)
+        IAudioCaptureService audio,
+        ILogger<OverlayProcessClient>? log = null,
+        PerfFlags? perfFlags = null,
+        Scribe.Core.Diagnostics.AppendOnlyLogMode? appendMode = null)
     {
         _audio = audio ?? throw new ArgumentNullException(nameof(audio));
         _log = log;
         _meterDelivery = new OverlayMeterDelivery((perfFlags ?? PerfFlags.None).IsOn(PerfFlags.DeduplicateOverlayMeter));
+        _appendMode = appendMode;
         _consumer = new Thread(Consume) { IsBackground = true, Name = "ScribeOverlayIpc" };
         _consumer.Start();
     }
@@ -833,6 +842,21 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             // The overlay watches this pid and self-exits if we die before the pipe ever connects.
             psi.ArgumentList.Add("--parent");
             psi.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+            // One way of appending to the shared log for the pair (DATA-O-02): decided for this helper and applied to the
+            // app's own writer before it starts; the helper appends only when told to here.
+            if (_appendMode is { Requested: true } appendMode)
+            {
+                var appendOnly = appendMode.DecideForLaunch(_exePath);
+                if (appendOnly)
+                {
+                    psi.ArgumentList.Add(Scribe.Core.Diagnostics.AppendOnlyLogMode.LaunchArgument);
+                }
+
+                TryLog(
+                    LogLevel.Information, null, "Shared log for this overlay launch: {Mode}.",
+                    appendOnly ? "append-only" : "the old way (the overlay is another build or its version is unreadable)");
+            }
 
             // A close can land after this launch was decided; never spawn a helper only to kill it again.
             if (_closing.IsCancellationRequested)

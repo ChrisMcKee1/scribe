@@ -301,7 +301,7 @@ anything was dictated.
 # One-time: download ASR + VAD models (~670 MB) into src/Scribe.App/models (gitignored)
 pwsh ./scripts/Download-Models.ps1
 
-# Build the whole solution (8 projects: Core, App, Overlay, tests, and four tools)
+# Build the whole solution (9 projects: Core, App, Overlay, the tests and their log-append child, and four tools)
 dotnet build Scribe.slnx -c Debug
 
 # Run the app (Scribe appears in the system tray)
@@ -405,7 +405,9 @@ the maintainer approved as the new default ships on instead, and its flag, named
 path back for one release, for comparison (`ForcedIdleGc`: 0.5.0's Forced idle collection); remove the name after that
 release. Add the name to `PerfFlags`' known list and a constant, take `PerfFlags` from the container, and test both paths. A
 name lands with the code that reads it and goes with it: `PerfFlagsTests` fails for a known name that nothing in `src` reads.
-The session
+The app reads the flags once, at the top of `StartAsync`, because the log writer and the data layer's warm-up start
+before the host exists, and hands the container that same instance in place of `AddScribeCore`'s registration, so every
+reader in the process sees one answer. The session
 banner's `perf:` line lists the names that are on and counts unknown ones, never echoing the value. A change proven
 equivalent exhaustively (or by a fuzz corpus with the old code deciding every result) needs no flag; name that test.
 
@@ -453,7 +455,7 @@ desktop in use. The strict classifier tests have no window or clipboard; real-ta
 ## Project structure
 
 ```
-Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools)
+Scribe.slnx                         solution (Core, App, Overlay, tests and the log-append child, 4 tools)
   src/Scribe.Core/                  services + domain (UNIT-TESTABLE, no UI)
     Audio/ Vad/ Transcription/      capture → 16 kHz mono (pooled capture buffer and conversion scratch, bounded reads),
                                     Silero VAD, Parakeet ASR
@@ -520,6 +522,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness;
                                     Libraries/Integration/ the word pack parts together, over real files)
+  tests/Scribe.LogAppendChild/      headless child writer for AppendOnlyLogTests: two of them append to one daily
+                                    log at once, through DailyLogFile and the overlay's OverlayLog
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
                                     will read in stream M1), term-keys.json (the library term key's answers, for
@@ -626,6 +630,22 @@ cause of one.**
   **fully non‑throwing** end to end (`DailyLogFile`, behind `FileLoggerProvider`'s queued writer, on
   the app side; `OverlayLog` on the overlay side). A throwing logger once tore down a healthy overlay
   (see below).
+- **Both writers can append only, one mode for the pair** (DATA-O-02, `PerfFlags.AppendOnlyLog`, off by
+  default). A `FileMode.Append` stream writes at the end-of-file offset it captured when it opened, so a
+  line the other process appends between that open and the write is written over (the two-process
+  test's old-way control lost about 5% of 10,000 simultaneous lines); a handle with FILE_APPEND_DATA
+  and without FILE_WRITE_DATA (`AppendOnlyFile.Open`, which the overlay compiles in) always appends.
+  Everything else stays: one open, one write and one close per batch or line, `FileShare.ReadWrite`,
+  retry and swallow. The app decides the mode for each helper it launches
+  (`AppendOnlyLogMode.DecideForLaunch`: on only when the flag is on and the helper's `Scribe.Overlay.dll`
+  carries the app's informational version) and applies it to its own writer before the helper starts;
+  the helper follows only the `--append-only-log` launch argument, never its environment, and says so
+  in its first line. In that mode every overlay line, however long, is one encoded write; off, the
+  overlay writes as UI-3 left it. Unchanged in both modes: the overlay makes its logs folder only when
+  its day changes, so a folder deleted mid-day loses its lines until the next day. `AppendOnlyLogTests`
+  (two real processes through `tests/Scribe.LogAppendChild`, mixed pairs both ways, renamed and
+  replaced day files, faults) and `DailyLogFileAppendOnlyTests` (every `DailyLogFileTests` case again,
+  appended only) pin it.
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch
   that kills a process). Route diagnostics in catch blocks through non‑throwing helpers
   (`TryLog`). When in doubt, log *more* lifecycle/state detail, not less.
