@@ -13,11 +13,13 @@ namespace Scribe.Benchmarks;
 /// refresh of its coverage badges and glossary count, each against the draft of the current revision and dictionary
 /// entries built afresh from the grid: equal values, other objects.
 /// <para>
-/// RepeatedPreview is a refresh that changed nothing the preview reads (a search keystroke). RepeatedPreviewWithStatuses
-/// adds the status the page reads for every row of the selected library. TwoCallers is both pages refreshing against one
-/// draft: the grid's dictionary order with the saved budget, and the dictionary sorted with the budget on screen.
-/// NewDraftPreview is the preview of a revision seen for the first time, as after an edit, and includes building that
-/// draft. Setup composes what the window composed when the draft appeared.
+/// The Hit arms ask for a preview Preview has kept: HitRepeatedPreview is a refresh that changed nothing the preview reads
+/// (a search keystroke), HitRepeatedPreviewWithStatuses adds the status the page reads for every row of the selected
+/// library, and HitTwoCallers is both pages refreshing against one draft (the grid's dictionary order with the saved
+/// budget, and the dictionary sorted with the budget on screen). The Miss arm, MissNewDraftPreview, asks for the preview
+/// of a revision seen for the first time, as after an edit, which composes and keeps it; it includes building that draft.
+/// Setup composes what the window composed when the draft appeared. A fresh composition on its own is
+/// <see cref="LibraryCompositionBenchmarks.Preview"/>.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -92,10 +94,10 @@ public class LibraryPreviewMemoBenchmarks
     }
 
     [Benchmark(Baseline = true)]
-    public LibraryComposition RepeatedPreview() => LibraryComposition.Preview(_draft, _catalog, _grid, _savedBudget);
+    public LibraryComposition HitRepeatedPreview() => LibraryComposition.Preview(_draft, _catalog, _grid, _savedBudget);
 
     [Benchmark]
-    public int RepeatedPreviewWithStatuses()
+    public int HitRepeatedPreviewWithStatuses()
     {
         var composition = LibraryComposition.Preview(_draft, _catalog, _grid, _savedBudget);
         var own = 0;
@@ -111,11 +113,11 @@ public class LibraryPreviewMemoBenchmarks
     }
 
     [Benchmark]
-    public int TwoCallers() =>
+    public int HitTwoCallers() =>
         LibraryComposition.Preview(_draft, _catalog, _grid, _savedBudget).Rules.Count +
         LibraryComposition.Preview(_draft, _catalog, _sorted, _onScreenBudget).Rules.Count;
 
     [Benchmark]
-    public LibraryComposition NewDraftPreview() =>
+    public LibraryComposition MissNewDraftPreview() =>
         LibraryComposition.Preview(new LibraryDraft(3, 1, _draftLibraries, _catalog.LocalState, []), _catalog, _grid, _savedBudget);
 }
