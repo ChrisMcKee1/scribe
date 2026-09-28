@@ -552,6 +552,8 @@ public sealed class CleanupPromptRebuildTests
             [nameof(CleanupOptions.AzureClientId)] = baseline with { AzureClientId = "other" },
             [nameof(CleanupOptions.AzureClientSecret)] = baseline with { AzureClientSecret = "other" },
             [nameof(CleanupOptions.CopilotModel)] = baseline with { CopilotModel = "other" },
+            // Changes what every Microsoft Foundry request carries, so it reconnects and probes again.
+            [nameof(CleanupOptions.PromptCaching)] = baseline with { PromptCaching = false },
         };
         string[] promptFields =
         [

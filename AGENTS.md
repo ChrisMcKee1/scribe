@@ -189,6 +189,26 @@ own, which is what makes those wire tests measure Scribe's control; and the fail
 not relax any of them. Only the Azure agents carry the control: custom OpenAI-compatible endpoints and
 Foundry Local send no `store` field.
 
+**`store=false` does not cover Microsoft Foundry's prompt cache; `AppSettings.AiCleanupPromptCaching` does.** On (the
+property initializer, so every install reads as on) keeps the request Scribe has always sent, and the service's own
+caching applies. Off makes the same wrapper (`WithStoredOutputDisabled(options, promptCaching: false)`) add
+`prompt_cache_options` `{"mode":"explicit"}` through the options' JSON patch (`PromptCachePolicy.TurnOff`) to every
+options object it hands either surface, the fail-closed branches included, with no breakpoint anywhere in the request.
+Microsoft documents that mode as "Azure OpenAI uses only explicit breakpoints for cache reads and writes. If the request
+contains no explicit breakpoints, it doesn't use prompt caching or incur cache-write charges", for GPT-5.6 and later on
+standard deployments (<https://learn.microsoft.com/azure/foundry/openai/how-to/prompt-caching>). The choice is bound
+when the agent is built (`CreateAzureResponsesAgent` and `CreateAzureChatCompletionsAgent` take it), so the probe, Test
+connection, the Chat Completions fallback, every dictation and every one-off completion of a configuration carry the
+same answer; `CleanupOptions.PromptCaching` is a connection field, so a change reconnects, probes again and changes the
+`CleanupRecipient`. The same page's FAQ ("Can I disable prompt caching?") says earlier models and PTU-M deployments
+"don't support this option; prompt caching remains enabled by default", and that models before GPT-5.6 answer the field
+with a 400. A 400 that names the field fails cleanly: the reason says this deployment can't turn caching off
+(`PromptCachePolicy.DescribeRejection`), the Chat Completions fallback is not tried for it, cleanup stays unavailable and
+Scribe types what it hears. **Never drop the field and send again**: that would be the request with caching on, under a setting that
+says off. Custom endpoints, Foundry Local and GitHub Copilot never get the field; their own policy applies, and Settings
+says so. `PromptCacheWireTests` pins the wire on both surfaces in both states, and `PromptCacheServiceTests` the probe,
+the refusal and the fallback through the production service.
+
 ### What cleanup sends (keep the disclosure true)
 
 Settings, `PRIVACY.md` and the README make promises about what AI cleanup sends, and the code has to keep
@@ -242,6 +262,14 @@ anything was dictated.
 - **Cleanup goes only where a save sent it.** A change the window stores outside a Save applies the
   settings as stored (`StoredSettingsReapply`), never the window's editing document, which after a failed
   Save still names the provider that was picked (see "Settings document" below).
+- **What a remote service may keep is disclosed with the setting that limits it.** `store=false` does not cover
+  Microsoft Foundry's prompt cache, so the card's third paragraph (`CleanupDisclosure.WhatTheServiceMayCache`), the
+  setting's name and trade-off (`PromptCachingTitle`, `PromptCachingTradeOff`), `PRIVACY.md` and the README say what the
+  cache may keep (derived from the dictation, the instructions and the vocabulary), for how long as Microsoft documents it
+  (at least 30 minutes on newer models, up to 24 hours on some), that Scribe cannot clear it, what turning the setting off
+  asks for (Microsoft Foundry not to use its prompt cache for new cleanup requests, never that nothing is kept), that it
+  works on GPT-5.6 and later models on Standard deployments, and that earlier models and provisioned deployments can't
+  turn caching off. Another AI service and GitHub Copilot follow their own policy, and their panels say so. `CleanupDisclosureTests` holds the texts to those facts.
 - If you change what a request carries (a new field, a relevance filter, a new provider), change
   `CleanupDisclosure`, `PRIVACY.md` and the tests in the same change, and note that the matching macOS
   disclosure may be stale.
@@ -372,8 +400,10 @@ a settings window, or startup:
 A performance change that could alter behaviour ships off, behind a `Scribe.Core.Diagnostics.PerfFlags` name, and is
 turned on per process with the `SCRIBE_PERF_FLAGS` environment variable (names separated by commas, semicolons or
 spaces, any case), read once at startup and registered in `AddScribeCore`. Off is the old path, so an install without
-the variable runs what the previous release ran; a default flips only in a later release, on field evidence. Add the
-name to `PerfFlags`' known list and a constant, take `PerfFlags` from the container, and test both paths. The session
+the variable runs what the previous release ran; a default flips only in a later release, on field evidence. A change
+the maintainer approved as the new default ships on instead, and its flag, named for the old behaviour, brings the old
+path back for one release, for comparison (`ForcedIdleGc`: 0.5.0's Forced idle collection); remove the name after that
+release. Add the name to `PerfFlags`' known list and a constant, take `PerfFlags` from the container, and test both paths. The session
 banner's `perf:` line lists the names that are on and counts unknown ones, never echoing the value. A change proven
 equivalent exhaustively (or by a fuzz corpus with the old code deciding every result) needs no flag; name that test.
 
@@ -651,7 +681,9 @@ matter are intermittent and hardware‑specific.
 - **Every session opens with a banner** (`SessionBanner`, written from `SessionDiagnostics`):
   session id, pid, version, install channel, package family, OS/arch/runtime, cores/RAM, resolved
   paths, model and whether its files are actually on disk, audio devices, and the hotkey/pipeline/
-  cleanup/injection settings. A daily file rolls at midnight, so without this the file a user hands
+  cleanup/injection settings. For Microsoft Foundry the cleanup part names the sign-in (`auth=`), whether a saved API
+  key is configured (`apiKey=`), because a saved key wins over either sign-in, so `auth=` alone does not say how a
+  dictation authenticates, and whether its prompt cache may be used (`promptCache=on|off`). A daily file rolls at midnight, so without this the file a user hands
   over frequently has no record of how the process started. `OnExit` writes the matching
   `session end` line; its absence before the next banner means the process died.
 - **Every dictation is stamped `#<n>`** and logs its start (trigger, mode, key, device, target app, and how long
@@ -670,6 +702,23 @@ matter are intermittent and hardware‑specific.
   writer logs `history committed N ms after it was queued`. Silence auto-stop lines carry the tracker's
   `NoiseFloor` and `VoiceThreshold` as numbers. AI cleanup skip and failure lines carry the provider
   and status names, codes the live redaction and `TraceTagPolicy` leave visible; the reasons stay out.
+  Each AI cleanup attempt logs one Debug line, `AI cleanup attempt: N request(s) in N ms, after N ms of
+  selection; Azure CLI gate N ms over N wait(s), N ended before admission; Azure CLI token N ms over N call(s), N
+  unfinished; shared token wait N ms over N wait(s), N without the token; tokens in N, cached N, out N, reasoning N.`,
+  from a timing record the operation's admission carries (`CleanupPhaseTimings`). Each phase is recorded when it ends,
+  however it ends (a wait for the Azure CLI gate by admission or by cancellation, a call with a token or not, a wait on
+  another request's token acquisition under `CliAccessTokenCache`), and counted, so a phase that never ran reads `over
+  0`, never as a measured 0 ms; a count the service did not report is `unset`, never 0. Under
+  `PerfFlags.CleanupPhaseTelemetry` the line adds the send path's `headers N ms over N response(s); last body bytes read
+  at N ms over N body(ies), N empty, N unfinished`, through a read-through response content that buffers and keeps
+  nothing: a body is timed to its last read that returned bytes, once a read with room in its buffer returns nothing
+  (an empty read request is no evidence of the end), and a body that ended empty, or was released before its end, is
+  counted and given no time. Off, the transport path is untouched. The line is written in the attempt's finally behind a
+  non-throwing boundary: a logger that fails at `IsEnabled` or while writing changes nothing the caller gets
+  (`CleanupAttemptLogResilienceTests`). With Microsoft Foundry's prompt cache off, a response that reports cached
+  input tokens logs a Warning with the count, since that deployment may not honor the setting. The idle release logs `Idle release collection (Trigger, Mode): GC
+  committed N -> N MB, heap N MB, pause N ms, call N ms.` whenever its collection ran, a raced release included, and
+  the release line says whether the idle countdown or a pause asked for it.
 - **Capture timing is a flag, and never on the start line** (`PerfFlags.CaptureTimingDiagnostics`, off by
   default, AUDIO-O-10). With it on, every stop logs, at Debug and in numbers only, `#<n> capture timing:` the
   device open, the stream start, the first packet (timed from the stream-start request, like the stream start, so a
@@ -846,6 +895,18 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
   close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a
   duration ceiling armed for one recording could end the next.
+- **The idle release makes one collection, Aggressive from 0.5.1; `PerfFlags.ForcedIdleGc` brings back 0.5.0's Forced
+  one for this release.** `DictationController.ReleaseIdleModels` runs on the idle countdown
+  (`ReleaseModelsAfterIdleMinutes`) and on a pause made while nothing records (`IdleReleaseRequests.OnPauseChange`), even
+  with the countdown off. `RunIdleRelease` refuses it while a dictation records, processes or finishes, while another
+  release runs and once closing; `IdleModelRelease` unloads, releases the capture service's retained buffers and scratch
+  pool (`ReleaseRetainedBuffers`), re-checks the claim, and only then calls `IdleCollection.Compact`:
+  `GCCollectionMode.Aggressive` (decommit as much as possible; the maintainer approved it as the default after the
+  Forced collection left 263.9 MB committed for a 44.6 MB heap at idle), or Forced under the flag. The collection runs
+  outside the lifecycle's gate, so a recording that starts after the last check meets it, and like any blocking
+  collection it suspends the hook threads; Aggressive's pause is longer (about 18 against 7 ms in the platform pair's
+  surrogate). Never add a second collection, a timer or a process-wide GC setting, and never collect in a unit test:
+  tests go through the fake collector seam (`IdleCollectionTests`).
 - **History is written behind the dictation.** The controller returns to Idle the moment text is
   inserted and hands the entry to the ordered `HistoryWriter`: one entry committing plus one pending.
   When both are taken, the next dictation's processing thread waits up to 5 s
@@ -2334,10 +2395,32 @@ builds the `TokenCredential`; everything else goes through it.
   and therefore alter the behavior of `DefaultAzureCredential` at runtime in any app running on
   that machine", and that once several `Exclude` flags are set "the advantages of using
   `DefaultAzureCredential` diminish".
-- **The credential instance is cached and reused** because Azure.Identity caches tokens per
-  instance and Microsoft warns that an app which doesn't reuse them "may encounter HTTP 429
-  throttling responses from Microsoft Entra ID". Any change of identity MUST call
+- **The credential instance is cached and reused** because Microsoft warns that an app which doesn't reuse
+  credentials "may encounter HTTP 429 throttling responses from Microsoft Entra ID". Any change of identity MUST call
   `AzureCredentialInvalidation.Invalidate()`, or the next request authenticates as the old one.
+- **Reusing the instance is not token caching for Azure CLI sign-in.** Only MSAL-based credentials cache tokens
+  (`ClientSecretCredential` for a service principal); `AzureCliCredential` has no token cache and runs
+  `az account get-access-token` on every call (Azure.Identity's token-cache table lists it without caching support), and
+  the cleanup clients authenticate through System.ClientModel's `BearerTokenPolicy`, which asks the credential on every
+  request and every retry (1.15.0, and 1.16.0 unchanged; unlike Azure.Core's caching `BearerTokenAuthenticationPolicy`,
+  which Settings' ARM discovery uses). So with Azure CLI sign-in every cleanup request starts an `az` process and waits
+  for the CLI gate below; the cleanup log's attempt line reports that gate wait and the token call, numbers only.
+- **`PerfFlags.CliAccessTokenCache` (off by default) keeps the Azure CLI access token in memory for cleanup only.**
+  `AzureCredentialFactory.Create(request, cacheCliTokens)` wraps an Azure CLI credential in `CachingCliTokenCredential`
+  for the two serving clients (Responses and the Chat Completions fallback); Settings discovery and Test connection keep
+  `Create(request)`, the uncached instance, and a service principal is never wrapped. A token is served from memory until
+  its refresh hint or five minutes before its expiry, whichever comes first (expiry is a ceiling), keyed by scopes, tenant
+  and CAE, with claims and proof of possession bypassing it. One acquisition per key runs at a time, and it is cancelled
+  when its last waiter leaves; an abandoned or failed acquisition stores nothing. `AzureCredentialInvalidation.Invalidate()`
+  moves a version every call reads, so a client that already holds the instance acquires again on its next request, and an
+  acquisition in flight answers the callers admitted before the change but is never stored. No timer, no background
+  refresh, nothing on disk. What needs the maintainer's approval: an account change made outside Scribe (`az login` as
+  another account of the same tenant or subscription, or `az logout`) is seen at the next refresh, up to the token's
+  remaining life less five minutes later, instead of at the next request. Entra's default access-token lifetime is "a
+  random value ranging between 60-90 minutes" and "varies depending on the client application requesting the token, the
+  resource the token is issued for, and whether Conditional Access is enabled in the tenant"
+  (<https://learn.microsoft.com/entra/identity-platform/configurable-token-lifetimes>), so the window is not a fixed bound.
+  `CachingCliTokenCredentialTests` pins every rule on synthetic credentials; no test runs `az`.
 - **Azure CLI token requests are serialized** through `AzureCliProcessCoordinator`: `az` shares one
   token cache, and concurrent processes made it time out on multi-tenant machines. A service
   principal never shells out, so it skips that path.

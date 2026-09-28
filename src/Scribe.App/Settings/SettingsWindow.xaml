@@ -1378,6 +1378,7 @@
                                         <!-- The wording lives in Core (CleanupDisclosure), next to the limits it quotes, so a test holds it to the code. -->
                                         <TextBlock Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
                                         <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0" Text="{x:Static cleanup:CleanupDisclosure.WhatTheServiceMayCache}"/>
                                         <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0">
                                             <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md" RequestNavigate="Hyperlink_RequestNavigate">Read the privacy policy</Hyperlink>
                                         </TextBlock>
@@ -1537,6 +1538,18 @@
                                                        Visibility="Collapsed"
                                                        Text="With an API key, Scribe uses your resource's main address instead of the project address. That's expected."/>
                                             <settings:SettingsStatusRow x:Name="AzureVerifyStatusRow" PrimaryActionInvoked="AzureStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="AzureStatusRow_SecondaryActionInvoked"/>
+
+                                            <!-- AppSettings.AiCleanupPromptCaching. The trade-off lives in Core (CleanupDisclosure), with the facts its tests hold it to. -->
+                                            <StackPanel Margin="0,16,0,0">
+                                                <CheckBox x:Name="AiPromptCachingCheck" Style="{StaticResource SettingCheckBox}"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=AiPromptCachingTitle}"
+                                                          AutomationProperties.HelpText="{Binding Text, ElementName=AiPromptCachingHint}"
+                                                          Checked="AiPromptCachingCheck_Toggled"
+                                                          Unchecked="AiPromptCachingCheck_Toggled">
+                                                    <TextBlock x:Name="AiPromptCachingTitle" Text="Let Microsoft Foundry cache what Scribe sends" Style="{StaticResource CardTitle}"/>
+                                                </CheckBox>
+                                                <TextBlock Margin="28,2,0,0" x:Name="AiPromptCachingHint" Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.PromptCachingTradeOff}"/>
+                                            </StackPanel>
                                         </StackPanel>
 
                                         <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->
@@ -1568,6 +1581,7 @@
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Enter a key if your service needs one. Saved encrypted on this PC with your Windows account."/>
                                             <settings:SettingsStatusRow x:Name="CustomStatusRow" PrimaryActionInvoked="CustomStatusRow_PrimaryActionInvoked"/>
+                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0" Text="{x:Static cleanup:CleanupDisclosure.CustomServiceCaching}"/>
                                         </StackPanel>
 
                                         <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">
@@ -1594,6 +1608,7 @@
                                             </Grid>
                                             <TextBlock x:Name="CopilotModelHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Leave empty to use your account's default model."/>
+                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0" Text="{x:Static cleanup:CleanupDisclosure.CopilotCaching}"/>
                                         </StackPanel>
                                     </StackPanel>
                                 </ui:Card>

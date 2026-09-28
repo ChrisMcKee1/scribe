@@ -4,11 +4,18 @@ namespace Scribe.Evals.Benchmark;
 internal sealed record BenchDimensions(int Mechanics, int Fidelity, int Disfluency, int Instruction);
 
 /// <summary>Token usage for one timed cleanup request.</summary>
+/// <param name="CachedInputTokens">Input tokens the service read from its prompt cache (<c>cached_tokens</c>); null when not reported.</param>
+/// <param name="CacheWriteTokens">
+/// Input tokens the service wrote to its prompt cache (<c>cache_write_tokens</c>, GPT-5.6 and later on Standard
+/// deployments); null when not reported, which is not the same as none written.
+/// </param>
 internal sealed record BenchTokenUsage(
     long? InputTokens,
     long? OutputTokens,
     long? ReasoningTokens,
-    long? TotalTokens);
+    long? TotalTokens,
+    long? CachedInputTokens = null,
+    long? CacheWriteTokens = null);
 
 /// <summary>One case's outcome for a model (the aggregate lives on <see cref="BenchResult"/>).</summary>
 internal sealed record BenchCaseResult(

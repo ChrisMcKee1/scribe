@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.Runtime;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
@@ -72,6 +71,9 @@ internal sealed class DictationController : IDisposable
     // everything captured still transcribes.
     private readonly DictationLifecycle<CaptureContext> _lifecycle;
 
+    // The startup snapshot of the performance flags; ForcedIdleGc brings back 0.5.0's Forced idle collection.
+    private readonly PerfFlags _perfFlags;
+
     // Replaced wholesale by ApplySettings and only ever read as a snapshot, so a volatile reference is enough.
     private AppSettings _settings = AppSettings.CreateDefault();
     private bool _prepared;
@@ -101,7 +103,8 @@ internal sealed class DictationController : IDisposable
         ICleanupFailureLog failureLog,
         LastTranscriptStore lastTranscript,
         ISettingsRepository settingsRepository,
-        ILogger<DictationController> log)
+        ILogger<DictationController> log,
+        PerfFlags? perfFlags = null)
     {
         _hotkeys = hotkeys;
         _audio = audio;
@@ -116,7 +119,9 @@ internal sealed class DictationController : IDisposable
         _lastTranscript = lastTranscript;
         _settingsRepository = settingsRepository;
         _log = log;
-        _lifecycle = new DictationLifecycle<CaptureContext>(ReleaseIdleModels, OnDurationLimitReached);
+        _perfFlags = perfFlags ?? PerfFlags.None;
+        _lifecycle = new DictationLifecycle<CaptureContext>(
+            () => ReleaseIdleModels(IdleReleaseTrigger.IdleDeadline), OnDurationLimitReached);
     }
 
     /// <summary>
@@ -279,13 +284,17 @@ internal sealed class DictationController : IDisposable
     /// buffers, because the capture service never retains a buffer a capture is using. The buffers go on
     /// every claimed release, with or without resident models, and before the compaction so that collection
     /// returns them too. The compaction and the announcement are skipped when a recording began after the
-    /// claim; what remains is activity that begins while the collection itself is running, which that
-    /// collection briefly pauses like every other managed thread.
+    /// claim; what remains is activity that begins after the last check, before or while the collection itself runs,
+    /// which that collection briefly pauses like every other managed thread. The collection's mode is
+    /// <see cref="IdleCollection"/>'s: Aggressive, or 0.5.0's Forced under <see cref="PerfFlags.ForcedIdleGc"/>; either way it is
+    /// the one collection of this release, at this point only.
     /// </remarks>
-    private void ReleaseIdleModels()
+    /// <param name="trigger">What asked for the release: the idle countdown, or a pause made while nothing recorded.</param>
+    private void ReleaseIdleModels(IdleReleaseTrigger trigger)
     {
         try
         {
+            IdleCollectionResult? collected = null;
             var outcome = _lifecycle.RunIdleRelease(
                 anythingResident: () => _transcription.IsReady || _vad.IsAvailable,
                 unload: () =>
@@ -293,11 +302,7 @@ internal sealed class DictationController : IDisposable
                     _transcription.Unload();
                     _vad.Unload();
                 },
-                compact: () =>
-                {
-                    GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-                    GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-                },
+                compact: () => collected = IdleCollection.Compact(_perfFlags),
                 announce: () =>
                 {
                     try
@@ -318,8 +323,29 @@ internal sealed class DictationController : IDisposable
                     }
                 });
 
+            // Whenever the collection ran, the released and the raced release alike: its pause is what a raced release is
+            // about. Numbers and enum names only.
+            if (collected is { } collection)
+            {
+                TryLog(log => log.LogInformation(
+                    "Idle release collection ({Trigger}, {Mode}): GC committed {CommittedBeforeMB:F1} -> " +
+                    "{CommittedAfterMB:F1} MB, heap {HeapMB:F1} MB, pause {PauseMs:F1} ms, call {ElapsedMs:F1} ms.",
+                    trigger,
+                    collection.Mode,
+                    collection.CommittedBeforeBytes / 1048576.0,
+                    collection.CommittedAfterBytes / 1048576.0,
+                    collection.HeapAfterBytes / 1048576.0,
+                    collection.Pause.TotalMilliseconds,
+                    collection.Elapsed.TotalMilliseconds));
+            }
+
             switch (outcome)
             {
+                case IdleReleaseOutcome.Released when trigger == IdleReleaseTrigger.PauseRequest:
+                    _log.LogInformation(
+                        "Speech models released because dictation was paused; they reload on the next dictation.");
+                    break;
+
                 case IdleReleaseOutcome.Released:
                     _log.LogInformation(
                         "Speech models released after {Minutes} idle minutes; they reload on the next dictation.",
@@ -570,7 +596,8 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureAuthMode,
         settings.AiCleanupAzureClientId,
         settings.AiCleanupAzureClientSecret,
-        settings.AiCleanupCopilotModel);
+        settings.AiCleanupCopilotModel,
+        settings.AiCleanupPromptCaching);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -588,9 +615,9 @@ internal sealed class DictationController : IDisposable
         // Pausing is the user saying "Scribe should stand down": release the models right away
         // rather than waiting out the idle window. Resume just re-arms the countdown; the next
         // dictation reloads on demand.
-        if (paused && !stopRecording)
+        if (IdleReleaseRequests.OnPauseChange(paused, change))
         {
-            _ = Task.Run(ReleaseIdleModels);
+            _ = Task.Run(() => ReleaseIdleModels(IdleReleaseTrigger.PauseRequest));
         }
         else if (!paused)
         {

@@ -141,7 +141,11 @@ service **you** configure, together with its cleanup instructions, your writing 
 dictionary plus the word packs you let AI cleanup use, and it asks Microsoft Foundry not to store the response
 (Microsoft's abuse monitoring can still keep a sample of flagged prompts and responses for review, as
 its [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)
-explains). The [privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly
+explains). That does not turn off Microsoft Foundry's prompt cache, which may keep temporary data derived
+from each request for at least 30 minutes (up to 24 hours on some models). Turning off **Let Microsoft Foundry
+cache what Scribe sends** asks Microsoft Foundry not to use its prompt cache for new cleanup requests; that works
+on GPT-5.6 and later models on Standard deployments (earlier models and provisioned deployments can't turn caching
+off), and Scribe can't clear what the cache already holds. The [privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly
 what each request carries. **Test connection** checks a Microsoft Foundry or other remote setup with the
 settings on the page before you save them. And when you want exactly what Scribe heard, **turn AI
 cleanup off straight from the tray menu** with no settings trip required.
@@ -358,7 +362,10 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
   let AI cleanup use (up to 5,000 words or phrases),
   whether or not the dictation mentions them. It goes only to the service **you** configure, under
   **your** credentials. Scribe asks Microsoft Foundry not to store the response, though Microsoft's
-  abuse monitoring can still keep a sample of flagged prompts and responses for review.
+  abuse monitoring can still keep a sample of flagged prompts and responses for review, and its prompt
+  cache may keep temporary data derived from each request. Turning off **Let Microsoft Foundry cache what
+  Scribe sends** asks it not to use that cache for new cleanup requests (this works on GPT-5.6 and later models
+  on Standard deployments; earlier models and provisioned deployments can't turn caching off).
 - **Even the stats are local.** Performance and Usage are computed from history already on your disk.
   The Usage page's AI summary runs only when you click it and sends bounded aggregate data without
   dictation text, audio, app names or timestamps.

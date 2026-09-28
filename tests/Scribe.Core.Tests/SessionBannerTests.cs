@@ -163,6 +163,39 @@ public class SessionBannerTests : IDisposable
     }
 
     [Fact]
+    public void The_banner_says_whether_a_saved_azure_key_decides_the_route_without_the_key()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+        settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        settings.AiCleanupAzureAuthMode = AzureAuthMode.AzureCli;
+
+        Assert.Contains("auth=AzureCli apiKey=unset", Compose(settings));
+
+        // Blank is not a key: the service signs in instead.
+        settings.AiCleanupAzureApiKey = "   ";
+        Assert.Contains("auth=AzureCli apiKey=unset", Compose(settings));
+
+        settings.AiCleanupAzureApiKey = "sk-banner-canary";
+        var text = Compose(settings);
+        Assert.Contains("auth=AzureCli apiKey=configured", text);
+        Assert.DoesNotContain("sk-banner-canary", text);
+    }
+
+    [Theory]
+    [InlineData(true, "promptCache=on")]
+    [InlineData(false, "promptCache=off")]
+    public void The_banner_says_whether_microsoft_foundry_may_use_its_prompt_cache(bool caching, string shape)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+        settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        settings.AiCleanupPromptCaching = caching;
+
+        Assert.Contains("apiKey=unset " + shape, Compose(settings), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Unset_optional_configuration_reads_as_unset_rather_than_configured()
     {
         var settings = AppSettings.CreateDefault();

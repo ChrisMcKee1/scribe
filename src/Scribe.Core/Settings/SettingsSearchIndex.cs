@@ -96,6 +96,7 @@ public static class SettingsSearchIndex
         Entry("ai.azure.endpoint", SettingsPage.AiCleanup, "AzureEndpointBox", "Endpoint", ["address", "url", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureManualDetails]),
         Entry("ai.azure.deployment", SettingsPage.AiCleanup, "AzureDeploymentBox", "Deployment name", ["model", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureManualDetails]),
         Entry("ai.azure.key", SettingsPage.AiCleanup, "AzureApiKeyBox", "API key", ["resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureApiKey]),
+        Entry("ai.azure.cache", SettingsPage.AiCleanup, "AiPromptCachingCheck", "Let Microsoft Foundry cache what Scribe sends", ["cache", "caching", "prompt cache", "privacy", "retention"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.custom.endpoint", SettingsPage.AiCleanup, "CustomEndpointBox", "Server address", ["url", "ollama", "lm studio", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.custom.model", SettingsPage.AiCleanup, "CustomModelBox", "Model name", ["model", "ollama", "lm studio", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.custom.key", SettingsPage.AiCleanup, "CustomApiKeyBox", "API key (optional)", ["secret", "token"], "Another AI service", [RequiresAi, RequiresCustom]),

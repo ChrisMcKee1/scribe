@@ -237,6 +237,29 @@ responses, but Microsoft's abuse monitoring can still keep a sample of prompts
 and responses it flags for review, as Microsoft's data privacy documentation for
 Foundry models describes.
 
+Asking Microsoft Foundry not to store responses does not turn off its separate
+prompt cache. With "Let Microsoft Foundry cache what Scribe sends" on, which is
+the default, Microsoft may keep temporary processing data derived from cleanup
+requests, including the dictation, the cleanup instructions and your
+vocabulary, so that it can reuse it for later requests. How long depends on the
+model and deployment: Microsoft documents that newer models keep a cached
+prefix for at least 30 minutes and possibly longer, and that some models keep
+cached data for up to 24 hours. Microsoft states that prompt caches are not
+shared between Azure subscriptions. Scribe cannot clear what the cache already
+holds. When you turn the setting off, Scribe asks Microsoft Foundry not to use
+its prompt cache for new cleanup requests: every Microsoft Foundry request
+Scribe makes, the connection test included, asks for the documented mode that
+does not use prompt caching. Microsoft documents that mode for GPT-5.6 and later
+models on Standard deployments, and states that earlier models and provisioned
+(PTU-M) deployments don't support it, so they can't turn caching off, as its
+[prompt caching documentation](https://learn.microsoft.com/azure/foundry/openai/how-to/prompt-caching)
+describes. When a deployment refuses the option, AI cleanup does not run and
+Scribe types what it heard, and Scribe does not send the request again without
+the option. Microsoft's other retention, including abuse monitoring, applies
+either way.
+Another AI service and GitHub Copilot follow their own caching policy; the
+setting does not change what Scribe sends to them.
+
 The GitHub Copilot provider differs from the others in how it connects. There is
 no endpoint you configure and no key Scribe stores. Scribe runs the GitHub
 Copilot command-line tool that is already installed and signed in on this device, so requests
@@ -344,6 +367,10 @@ You can:
 - Keep a word pack out of AI cleanup's vocabulary while still using it on this PC,
   with that word pack's Use in AI cleanup setting (word packs you create or import
   start with it off, and the built-in ones with it on)
+- Turn off "Let Microsoft Foundry cache what Scribe sends" so that Scribe asks
+  Microsoft Foundry not to use its prompt cache for new cleanup requests (this
+  works on GPT-5.6 and later models on Standard deployments; earlier models and
+  provisioned deployments can't turn caching off)
 - Avoid invoking AI dictionary suggestions and AI usage insights
 - Disable audio history
 - Review and delete individual history entries

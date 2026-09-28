@@ -3,7 +3,8 @@ namespace Scribe.Core.Cleanup;
 /// <summary>
 /// Who a request made through <see cref="ITextCleanupService.CompleteAsync"/> reaches: the configuration the
 /// service is serving, identified by everything that decides where a request goes (provider, endpoint,
-/// deployment or model, credentials) and by nothing the prompt says. <see cref="ITextCleanupService.Recipient"/>
+/// deployment or model, credentials) and whether Microsoft Foundry may cache it (the prompt cache setting), and by
+/// nothing the prompt says. <see cref="ITextCleanupService.Recipient"/>
 /// hands one out while cleanup is ready; a caller that asks the user before sending passes it back, and the
 /// service sends only while it is still serving exactly that configuration. A Save or a tray change in between
 /// then cannot redirect what the user agreed to send.

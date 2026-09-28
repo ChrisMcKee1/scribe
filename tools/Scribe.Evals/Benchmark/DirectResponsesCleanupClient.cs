@@ -96,16 +96,26 @@ internal sealed class DirectResponsesCleanupClient
 
         var response = await _client.CreateResponseAsync(options, cancellationToken).ConfigureAwait(false);
         var result = response.Value;
-        var usage = result.Usage is null
-            ? null
-            : new BenchTokenUsage(
-                result.Usage.InputTokenCount,
-                result.Usage.OutputTokenCount,
-                result.Usage.OutputTokenDetails?.ReasoningTokenCount,
-                result.Usage.TotalTokenCount);
+        var usage = result.Usage is null ? null : ToUsage(result.Usage);
 
         return (result.GetOutputText(), usage);
     }
+
+    /// <summary>The benchmark's usage record for one Responses answer: typed counts, and the cache-write count when present.</summary>
+    internal static BenchTokenUsage ToUsage(ResponseTokenUsage usage) => new(
+        usage.InputTokenCount,
+        usage.OutputTokenCount,
+        usage.OutputTokenDetails?.ReasoningTokenCount,
+        usage.TotalTokenCount,
+        usage.InputTokenDetails?.CachedTokenCount,
+        CacheWriteTokens(usage.InputTokenDetails));
+
+    // OpenAI 2.12.0 has no typed cache_write_tokens; the service's field arrives among the details' unknown properties,
+    // which only the (evaluation-only) JsonPatch exposes. Tools only; a failed read leaves the count null.
+#pragma warning disable SCME0001
+    private static long? CacheWriteTokens(ResponseInputTokenUsageDetails? details) =>
+        details is not null && details.Patch.TryGetValue("$.cache_write_tokens"u8, out long writes) ? writes : null;
+#pragma warning restore SCME0001
 }
 
 #pragma warning restore OPENAI001

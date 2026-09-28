@@ -32,24 +32,63 @@ internal readonly record struct AzureCredentialRequest(
 /// </remarks>
 internal static class AzureCredentialFactory
 {
-    // Azure.Identity caches tokens per credential instance, and Microsoft warns that an app which
-    // "doesn't reuse credentials may encounter HTTP 429 throttling responses from Microsoft Entra
-    // ID". Settings discovery and cleanup validation both build credentials on their own schedules,
-    // so hand back the same instance while the identity is unchanged.
+    // Microsoft warns that an app which "doesn't reuse credentials may encounter HTTP 429 throttling responses from
+    // Microsoft Entra ID". Settings discovery and cleanup validation both build credentials on their own schedules, so
+    // hand back the same instance while the identity is unchanged. Reusing the instance caches tokens only where the
+    // credential itself does: ClientSecretCredential keeps an MSAL token cache, but AzureCliCredential has none and runs
+    // `az account get-access-token` on every call, and the cleanup clients' System.ClientModel BearerTokenPolicy asks the
+    // credential on every request (every retry included), so with Azure CLI sign-in each cleanup request runs az once.
     private static readonly Lock Gate = new();
     private static AzureCredentialRequest _cachedRequest;
     private static TokenCredential? _cached;
 
-    internal static TokenCredential Create(AzureCredentialRequest request)
+    // PerfFlags.CliAccessTokenCache's instance, kept apart so Settings discovery (no flag) and cleanup (flag) never evict
+    // each other's credential.
+    private static AzureCredentialRequest _cachedCachingRequest;
+    private static TokenCredential? _cachedCaching;
+    private static int _invalidationVersion;
+
+    /// <summary>
+    /// Bumped by every <see cref="Invalidate"/>: a <see cref="CachingCliTokenCredential"/> a serving client already holds
+    /// compares it on each call, so an identity change made through Scribe reaches that client's next request.
+    /// </summary>
+    internal static int InvalidationVersion => Volatile.Read(ref _invalidationVersion);
+
+    /// <summary>
+    /// The credential without the access-token cache: Settings discovery, Test connection, and cleanup while
+    /// PerfFlags.CliAccessTokenCache is off.
+    /// </summary>
+    internal static TokenCredential Create(AzureCredentialRequest request) => Create(request, cacheCliTokens: false);
+
+    /// <param name="request">The identity to present.</param>
+    /// <param name="cacheCliTokens">
+    /// PerfFlags.CliAccessTokenCache: wrap an Azure CLI credential in the in-memory token cache. A service principal is
+    /// returned as it always is (MSAL caches its tokens), whatever this says.
+    /// </param>
+    internal static TokenCredential Create(AzureCredentialRequest request, bool cacheCliTokens)
     {
+        var normalized = Normalize(request);
+        var caching = cacheCliTokens && normalized.Mode == AzureAuthMode.AzureCli;
         lock (Gate)
         {
-            if (_cached is not null && _cachedRequest == Normalize(request))
+            if (caching)
+            {
+                if (_cachedCaching is not null && _cachedCachingRequest == normalized)
+                {
+                    return _cachedCaching;
+                }
+
+                var wrapped = new CachingCliTokenCredential(Build(normalized), sharedWait: RecordSharedTokenWait);
+                _cachedCachingRequest = normalized;
+                _cachedCaching = wrapped;
+                return wrapped;
+            }
+
+            if (_cached is not null && _cachedRequest == normalized)
             {
                 return _cached;
             }
 
-            var normalized = Normalize(request);
             var credential = Build(normalized);
             _cachedRequest = normalized;
             _cached = credential;
@@ -59,6 +98,11 @@ internal static class AzureCredentialFactory
 
     internal static TokenCredential CreateUncached(AzureCredentialRequest request) =>
         Build(Normalize(request));
+
+    // The cleanup log's numbers for a request that waited on another request's token acquisition: timing only, on the
+    // admission of the flow that waited (the cache itself never looks at admission).
+    private static void RecordSharedTokenWait(TimeSpan wait, bool received) =>
+        CleanupAdmission.Current?.Timings?.AddSharedTokenWait(wait, received);
 
     /// <summary>
     /// Drops the cached credential. Called when settings change so a re-entered secret or a fresh
@@ -70,6 +114,9 @@ internal static class AzureCredentialFactory
         {
             _cachedRequest = default;
             _cached = null;
+            _cachedCachingRequest = default;
+            _cachedCaching = null;
+            Interlocked.Increment(ref _invalidationVersion);
         }
     }
 

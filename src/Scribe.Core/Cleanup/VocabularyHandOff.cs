@@ -1,4 +1,5 @@
 using System.ClientModel.Primitives;
+using System.Diagnostics;
 using Scribe.Core.Libraries;
 
 namespace Scribe.Core.Cleanup;
@@ -95,6 +96,12 @@ internal sealed class CleanupAdmission
     internal int HandedOver => Volatile.Read(ref _handedOver);
 
     internal int Refused => Volatile.Read(ref _refused);
+
+    /// <summary>
+    /// The operation's timing record, numbers only, for a dictation's cleanup; null for probes and one-off completions.
+    /// The credential and the hand-off add to it from inside the SDK pipeline.
+    /// </summary>
+    internal CleanupPhaseTimings? Timings { get; init; }
 
     /// <summary>Makes this the ambient admission of the calling flow until the result is disposed.</summary>
     internal Entered Enter()
@@ -245,13 +252,38 @@ internal sealed class VocabularyHandOffHandler : DelegatingHandler
             return Task.FromException<HttpResponseMessage>(new VocabularyHandOffRefusedException(HandOffRefusal.NoAdmission));
         }
 
+        // PerfFlags.CleanupPhaseTelemetry only: time this attempt to its response headers and last body byte. Off, the send
+        // below is returned exactly as it always was.
+        var phases = admission.Timings is { CapturePhases: true } timings ? timings : null;
+        var handOffStarted = phases is null ? 0 : Stopwatch.GetTimestamp();
+
         Task<HttpResponseMessage>? sending = null;
         if (!admission.TryHandOff(() => sending = StartSend(request, cancellationToken), out var refusal))
         {
             return Task.FromException<HttpResponseMessage>(new VocabularyHandOffRefusedException(refusal));
         }
 
-        return sending!;
+        return phases is null ? sending! : TimeResponseAsync(sending!, phases, handOffStarted);
+    }
+
+    // Outside the permission gate: the send is already started; this only notes when its headers arrive and swaps in a
+    // read-through content that notes the last body bytes read. Timing never changes what the send returns: if it cannot
+    // be set up, the response goes back as it came.
+    private static async Task<HttpResponseMessage> TimeResponseAsync(
+        Task<HttpResponseMessage> sending, CleanupPhaseTimings timings, long started)
+    {
+        var response = await sending.ConfigureAwait(false);
+        try
+        {
+            timings.AddHeaders(Stopwatch.GetElapsedTime(started));
+            response.Content = new CleanupPhaseTimings.TimedContent(response.Content, timings, started);
+        }
+        catch (Exception)
+        {
+            // The original content stays in place.
+        }
+
+        return response;
     }
 
     // The pipeline's synchronous path, which Scribe never takes: the same hand-off, and the wait outside the gate.

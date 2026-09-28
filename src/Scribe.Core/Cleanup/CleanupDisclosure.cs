@@ -41,6 +41,39 @@ public static class CleanupDisclosure
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
 
+    /// <summary>
+    /// The same card's third paragraph: what a remote service may keep in its prompt cache, which asking it not to store
+    /// responses does not cover, and the setting that turns it off for Microsoft Foundry.
+    /// </summary>
+    public static string WhatTheServiceMayCache { get; } =
+        "Asking Microsoft Foundry not to store responses does not turn off its separate prompt cache. Microsoft Foundry " +
+        "may keep temporary data derived from cleanup requests, including the dictation, the instructions and your " +
+        "vocabulary, for at least 30 minutes (up to 24 hours on some models). Turning off " +
+        $"\"{PromptCachingTitle}\" asks Microsoft Foundry not to use its prompt cache for new cleanup requests. That works " +
+        "on GPT-5.6 and later models on Standard deployments; earlier models and provisioned deployments can't turn " +
+        "caching off. Scribe can't clear what the cache already holds. Another AI service and GitHub Copilot follow " +
+        "their own caching policy.";
+
+    /// <summary>The Microsoft Foundry prompt cache setting (<c>AppSettings.AiCleanupPromptCaching</c>), as Settings names it.</summary>
+    public const string PromptCachingTitle = "Let Microsoft Foundry cache what Scribe sends";
+
+    /// <summary>The trade-off under the setting.</summary>
+    public static string PromptCachingTradeOff { get; } =
+        "On: Microsoft Foundry may reuse parts of recent requests to respond faster, and may keep temporary data derived " +
+        "from them, including your dictation, the instructions and your vocabulary, for at least 30 minutes (up to 24 " +
+        "hours on some models). Off: Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests. " +
+        "AI cleanup can be slower, and Scribe can't clear what the cache already holds. Off works on GPT-5.6 and later " +
+        "models on Standard deployments; earlier models and provisioned deployments can't turn caching off, so AI " +
+        "cleanup stops and Scribe types what it hears until you turn this back on.";
+
+    /// <summary>Under another AI service's fields: the setting is Microsoft Foundry's, and this service decides for itself.</summary>
+    public const string CustomServiceCaching =
+        "Whether this service caches what Scribe sends follows its own policy. Scribe doesn't change it.";
+
+    /// <summary>Under GitHub Copilot's fields, for the same reason.</summary>
+    public const string CopilotCaching =
+        "Whether GitHub caches what Scribe sends follows GitHub's own policy. Scribe doesn't change it.";
+
     public static string SummaryFor(CleanupProvider provider) => provider switch
     {
         CleanupProvider.FoundryLocal => "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.",

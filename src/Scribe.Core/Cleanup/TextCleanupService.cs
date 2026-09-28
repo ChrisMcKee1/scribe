@@ -1,6 +1,7 @@
 ﻿using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -277,6 +278,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // reach the service (tests and tools that build it directly).
     private readonly ILibraryVocabularySource? _vocabularySource;
 
+    // The startup snapshot of the performance flags: CleanupPhaseTelemetry times the send path of each dictation's cleanup,
+    // and CliAccessTokenCache lets an Azure CLI sign-in reuse its access token (CachingCliTokenCredential).
+    private readonly Diagnostics.PerfFlags _perfFlags;
+
+    // Off (the default) keeps one az process per token request, as every release did.
+    private bool CachesCliTokens => _perfFlags.IsOn(Diagnostics.PerfFlags.CliAccessTokenCache);
+
     // The agents built for an admitted vocabulary's glossary (AdmittedCleanup), by the system prompt they carry, so every
     // dictation of one generation shares one. Bounded, because each new generation brings a new glossary. Guarded by
     // _gate and dropped with the other agents whenever the factory changes, always through ClearAdmittedAgentsLocked.
@@ -535,13 +543,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     }
 
     public TextCleanupService(
-        ILogger<TextCleanupService> log, AppPaths? paths = null, ILibraryVocabularySource? vocabularySource = null)
+        ILogger<TextCleanupService> log,
+        AppPaths? paths = null,
+        ILibraryVocabularySource? vocabularySource = null,
+        Diagnostics.PerfFlags? perfFlags = null)
         : this(
             log,
             paths,
             new FoundryLocalSdkHost(),
             paths is null ? null : FoundryLocalStorage.For(paths),
-            vocabularySource)
+            vocabularySource,
+            perfFlags)
     {
     }
 
@@ -549,15 +561,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// The admission point every request is handed over through (<see cref="ILibraryVocabularySource.TryHandOff"/>).
     /// Null only where no library vocabulary can reach the service (tests, tools): then there is no permission to check.
     /// </param>
+    /// <param name="perfFlags">The startup snapshot of the performance flags; <see cref="Diagnostics.PerfFlags.None"/> when null.</param>
     internal TextCleanupService(
         ILogger<TextCleanupService> log,
         AppPaths? paths,
         IFoundryLocalHost foundryHost,
         FoundryLocalStorage? foundryStorage,
-        ILibraryVocabularySource? vocabularySource = null)
+        ILibraryVocabularySource? vocabularySource = null,
+        Diagnostics.PerfFlags? perfFlags = null)
     {
         var resolvedPaths = paths ?? new AppPaths();
         _log = log;
+        _perfFlags = perfFlags ?? Diagnostics.PerfFlags.None;
         _foundrySdkLog = new FoundrySdkLogger(log, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         _foundryDemotionsPath = Path.Combine(resolvedPaths.RootDir, "foundry-local-demotions.json");
         _foundryHost = foundryHost;
@@ -678,7 +693,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         catch (Exception ex)
         {
             LogProviderFailure(LogLevel.Warning, options.Provider, ex, "AI cleanup connection test failed.");
-            return CleanupTestResult.Failed(recipient, DescribeFailureReason(ex, options.Provider));
+            return CleanupTestResult.Failed(recipient, DescribeFailureReason(ex, options));
         }
     }
 
@@ -1063,6 +1078,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private async Task<CleanupResult> CleanCoreAsync(
         string text, CleanupVocabulary? vocabulary, CancellationToken cancellationToken, string? writingStyleOverride)
     {
+        // Timed from entry, so the service gate and the prompt and agent selection below count toward the log's numbers.
+        var operationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         if (string.IsNullOrWhiteSpace(text))
         {
             return CleanupResult.Skip(text);
@@ -1137,7 +1154,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         // handed over through this admission: under the scope the dictation's vocabulary was cut by, or no library
         // scope for the admission-free overload, whose requests carry no library vocabulary (WithoutUnadmittedGlossary).
         var admission = new CleanupAdmission(
-            CleanupRequestKind.Dictation, vocabulary?.Scope ?? AiVocabularyScope.None, _vocabularySource);
+            CleanupRequestKind.Dictation, vocabulary?.Scope ?? AiVocabularyScope.None, _vocabularySource)
+        {
+            Timings = new CleanupPhaseTimings(
+                _perfFlags.IsOn(Diagnostics.PerfFlags.CleanupPhaseTelemetry),
+                System.Diagnostics.Stopwatch.GetElapsedTime(operationStarted)),
+        };
         using var entered = admission.Enter();
 
         // Capable frontier models should see the complete dictation so they can make coherent sentence
@@ -1816,6 +1838,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeout);
 
+        // Numbers only, around the model call, whatever the attempt's outcome (see LogAttemptShape).
+        var admission = CleanupAdmission.Current;
+        var phasesBefore = admission?.Timings?.Read() ?? default;
+        var requestsBefore = admission?.HandedOver ?? 0;
+        var attemptStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        UsageDetails? attemptUsage = null;
+
         try
         {
             // The system prompt is baked into the agent at creation, so we only send the delimited
@@ -1825,6 +1854,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
 
+            attemptUsage = result.Usage;
             if (result.Usage is { } usage)
             {
                 UsageObserver?.Invoke(usage);
@@ -1863,14 +1893,131 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         catch (OperationCanceledException ex)
         {
             LogProviderFailure(LogLevel.Debug, options.Provider, ex, "AI cleanup timed out for a segment.");
-            return new ChunkAttempt(chunk, DescribeFailureReason(ex, options.Provider), true, false);
+            return new ChunkAttempt(chunk, DescribeFailureReason(ex, options), true, false);
         }
         catch (Exception ex)
         {
             LogProviderFailure(LogLevel.Debug, options.Provider, ex, "AI cleanup failed for a segment; using raw text.");
-            return new ChunkAttempt(chunk, DescribeFailureReason(ex, options.Provider), false, IsModelNotLoaded(ex));
+            return new ChunkAttempt(chunk, DescribeFailureReason(ex, options), false, IsModelNotLoaded(ex));
+        }
+        finally
+        {
+            LogAttemptShape(options, admission, phasesBefore, requestsBefore, attemptStarted, attemptUsage);
         }
     }
+
+    // One Debug line per attempt, numbers only: never the text, the prompt, a host or a token. Missing usage logs as unset,
+    // never 0, and each phase says how many times it ran and how many of those were cut short, so a phase that never ran is
+    // not a measured zero. The send-path numbers (headers, last body bytes read) exist only under
+    // PerfFlags.CleanupPhaseTelemetry. It runs in the attempt's finally, over a result, a failure or a cancellation, so
+    // nothing in it may escape: a logger that fails at IsEnabled, while formatting or while writing is ignored, and the
+    // failure is reported nowhere, least of all through the logger that just failed.
+    private void LogAttemptShape(
+        CleanupOptions options,
+        CleanupAdmission? admission,
+        CleanupPhaseTimings.Snapshot before,
+        int requestsBefore,
+        long attemptStarted,
+        UsageDetails? usage)
+    {
+        try
+        {
+            WriteAttemptShape(options, admission, before, requestsBefore, attemptStarted, usage);
+        }
+        catch (Exception)
+        {
+            // Diagnostics never replace what the attempt produced.
+        }
+    }
+
+    private void WriteAttemptShape(
+        CleanupOptions options,
+        CleanupAdmission? admission,
+        CleanupPhaseTimings.Snapshot before,
+        int requestsBefore,
+        long attemptStarted,
+        UsageDetails? usage)
+    {
+        // Caching off asks for the mode that does not use the prompt cache, so a cache read says this deployment does not
+        // honor it. Numbers only.
+        if (options.Provider == CleanupProvider.AzureFoundry && !options.PromptCaching &&
+            usage?.CachedInputTokenCount is long cachedTokens && cachedTokens > 0)
+        {
+            _log.LogWarning(
+                "Microsoft Foundry reported {CachedTokens} cached input tokens with prompt caching off; this deployment " +
+                "may not honor the setting.",
+                cachedTokens);
+        }
+
+        if (!_log.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var timings = admission?.Timings;
+        var phases = timings is null ? default : timings.Read().Since(before);
+        var requests = (admission?.HandedOver ?? 0) - requestsBefore;
+        var attemptMs = System.Diagnostics.Stopwatch.GetElapsedTime(attemptStarted).TotalMilliseconds;
+        var selectionMs = timings?.Selection.TotalMilliseconds ?? 0;
+        if (timings is { CapturePhases: true })
+        {
+            _log.LogDebug(
+                "AI cleanup attempt: {Requests} request(s) in {AttemptMs:F0} ms, after {SelectionMs:F1} ms of selection; " +
+                "Azure CLI gate {GateMs:F0} ms over {GateWaits} wait(s), {GateUnadmitted} ended before admission; Azure CLI " +
+                "token {TokenMs:F0} ms over {TokenCalls} call(s), {TokenUnfinished} unfinished; shared token wait " +
+                "{SharedMs:F0} ms over {SharedWaits} wait(s), {SharedUnreceived} without the token; headers {HeadersMs:F0} ms " +
+                "over {Responses} response(s); last body bytes read at {BodyMs:F0} ms over {Bodies} body(ies), " +
+                "{EmptyBodies} empty, {UnfinishedBodies} unfinished; tokens in {InputTokens}, cached {CachedTokens}, out " +
+                "{OutputTokens}, reasoning {ReasoningTokens}.",
+                requests,
+                attemptMs,
+                selectionMs,
+                TimeSpan.FromTicks(phases.GateTicks).TotalMilliseconds,
+                phases.GateWaits,
+                phases.GateUnadmitted,
+                TimeSpan.FromTicks(phases.TokenTicks).TotalMilliseconds,
+                phases.TokenCalls,
+                phases.TokenUnfinished,
+                TimeSpan.FromTicks(phases.SharedTicks).TotalMilliseconds,
+                phases.SharedWaits,
+                phases.SharedUnreceived,
+                TimeSpan.FromTicks(phases.HeadersTicks).TotalMilliseconds,
+                phases.Responses,
+                TimeSpan.FromTicks(phases.BodyTicks).TotalMilliseconds,
+                phases.Bodies,
+                phases.EmptyBodies,
+                phases.UnfinishedBodies,
+                CountOrUnset(usage?.InputTokenCount),
+                CountOrUnset(usage?.CachedInputTokenCount),
+                CountOrUnset(usage?.OutputTokenCount),
+                CountOrUnset(usage?.ReasoningTokenCount));
+            return;
+        }
+
+        _log.LogDebug(
+            "AI cleanup attempt: {Requests} request(s) in {AttemptMs:F0} ms, after {SelectionMs:F1} ms of selection; " +
+            "Azure CLI gate {GateMs:F0} ms over {GateWaits} wait(s), {GateUnadmitted} ended before admission; Azure CLI " +
+            "token {TokenMs:F0} ms over {TokenCalls} call(s), {TokenUnfinished} unfinished; shared token wait {SharedMs:F0} " +
+            "ms over {SharedWaits} wait(s), {SharedUnreceived} without the token; tokens in {InputTokens}, cached " +
+            "{CachedTokens}, out {OutputTokens}, reasoning {ReasoningTokens}.",
+            requests,
+            attemptMs,
+            selectionMs,
+            TimeSpan.FromTicks(phases.GateTicks).TotalMilliseconds,
+            phases.GateWaits,
+            phases.GateUnadmitted,
+            TimeSpan.FromTicks(phases.TokenTicks).TotalMilliseconds,
+            phases.TokenCalls,
+            phases.TokenUnfinished,
+            TimeSpan.FromTicks(phases.SharedTicks).TotalMilliseconds,
+            phases.SharedWaits,
+            phases.SharedUnreceived,
+            CountOrUnset(usage?.InputTokenCount),
+            CountOrUnset(usage?.CachedInputTokenCount),
+            CountOrUnset(usage?.OutputTokenCount),
+            CountOrUnset(usage?.ReasoningTokenCount));
+    }
+    private static object CountOrUnset(long? count) => count is { } value ? value : "unset";
 
     private readonly record struct ChunkAttempt(
         string Text, CleanupReason? Error, bool Stalled, bool Evicted, bool Refused = false);
@@ -1960,6 +2107,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// </summary>
     internal static string DescribeFailure(Exception ex, CleanupProvider provider) =>
         DescribeFailureReason(ex, provider).Display;
+
+    /// <summary>
+    /// <see cref="DescribeFailureReason(Exception, CleanupProvider)"/> for the configuration that failed: with Microsoft
+    /// Foundry's prompt cache turned off, a refusal of that option is named as the cause (<see cref="PromptCachePolicy"/>).
+    /// </summary>
+    internal static CleanupReason DescribeFailureReason(Exception ex, CleanupOptions options) =>
+        options.Provider == CleanupProvider.AzureFoundry && !options.PromptCaching &&
+        PromptCachePolicy.DescribeRejection(ex, DescribeServerMessage(ex)) is { } rejection
+            ? rejection
+            : DescribeFailureReason(ex, options.Provider);
 
     /// <summary>
     /// The failure in both forms. The diagnostic form is the same fixed sentence without the
@@ -3027,18 +3184,20 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } probeFailure)
             {
+                var chatFailure = new StrongBox<AgentProbeFailure?>();
                 if (await TryDemoteFoundryGpuAsync(options, probeFailure, ct).ConfigureAwait(false) is { } demotion)
                 {
                     agent = demotion.Agent;
                     options = demotion.Options;
                 }
-                else if (await TryAzureChatCompletionsAsync(options, probeFailure, ct).ConfigureAwait(false)
+                else if (await TryAzureChatCompletionsAsync(options, probeFailure, chatFailure, ct).ConfigureAwait(false)
                     is { } viaChat)
                 {
                     agent = viaChat;
                 }
                 else
                 {
+                    probeFailure = ReportedFailure(options, probeFailure, chatFailure.Value);
                     lock (_gate)
                     {
                         if (_operations.IsClosed || !_options.Enabled || _options != options)
@@ -3208,14 +3367,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         var client = CreateAzureOpenAIClient(options);
 #pragma warning disable OPENAI001
-        return instructions => CreateAzureResponsesAgent(client.GetResponsesClient(), options.AzureDeployment!, instructions);
+        return instructions => CreateAzureResponsesAgent(
+            client.GetResponsesClient(), options.AzureDeployment!, instructions, options.PromptCaching);
 #pragma warning restore OPENAI001
     }
 
     private Func<string, AIAgent> BuildAzureChatCompletionsTestAgentFactory(CleanupOptions options)
     {
         var client = CreateAzureOpenAIClient(options);
-        return instructions => CreateAzureChatCompletionsAgent(client.GetChatClient(options.AzureDeployment!), instructions);
+        return instructions => CreateAzureChatCompletionsAgent(
+            client.GetChatClient(options.AzureDeployment!), instructions, options.PromptCaching);
     }
 
     private OpenAIClient CreateAzureOpenAIClient(CleanupOptions options)
@@ -3260,7 +3421,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private async Task<TestFallbackResult> TryTestAzureChatCompletionsAsync(
         CleanupOptions options, AgentProbeFailure failure, CancellationToken ct)
     {
-        if (options.Provider != CleanupProvider.AzureFoundry || !IsSurfaceRejection(failure.Exception))
+        if (options.Provider != CleanupProvider.AzureFoundry || !IsSurfaceRejection(failure.Exception) ||
+            RefusedTheCacheOptions(options, failure))
         {
             return TestFallbackResult.NotTried;
         }
@@ -3273,7 +3435,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return TestFallbackResult.Failed(new AgentProbeFailure(DescribeFailureReason(ex, options.Provider), ex));
+            return TestFallbackResult.Failed(new AgentProbeFailure(DescribeFailureReason(ex, options), ex));
         }
     }
 
@@ -3311,7 +3473,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * itself is never out of date about what it serves.
      */
     private async Task<AIAgent?> TryAzureChatCompletionsAsync(
-        CleanupOptions options, AgentProbeFailure failure, CancellationToken ct)
+        CleanupOptions options, AgentProbeFailure failure, StrongBox<AgentProbeFailure?> fallbackFailure, CancellationToken ct)
     {
         if (options.Provider != CleanupProvider.AzureFoundry ||
             string.IsNullOrWhiteSpace(options.AzureEndpoint) ||
@@ -3322,8 +3484,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         // Only for the refusal that means "wrong surface". A timeout, a 500 or an auth failure says
         // nothing about which API the deployment speaks, and retrying those here would turn one slow
-        // failure into two.
-        if (!IsSurfaceRejection(failure.Exception))
+        // failure into two. Nor for a refusal of the prompt cache options: that is the model, whichever surface asks.
+        if (!IsSurfaceRejection(failure.Exception) || RefusedTheCacheOptions(options, failure))
         {
             return null;
         }
@@ -3344,16 +3506,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                         options.AzureTenantId,
                         options.AzureSubscriptionId,
                         options.AzureClientId,
-                        options.AzureClientSecret)),
+                        options.AzureClientSecret),
+                        CachesCliTokens),
                     configure: ConfigureClient);
 
             var deployment = openAiClient.GetChatClient(options.AzureDeployment!);
             // Carries the same wrapper as the Responses path; on this surface it keeps "store" unset,
             // never true (WithStoredOutputDisabled explains why the field is not sent here).
-            _pendingFactory = i => CreateAzureChatCompletionsAgent(deployment, i);
+            _pendingFactory = i => CreateAzureChatCompletionsAgent(deployment, i, options.PromptCaching);
 
             if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } stillFailing)
             {
+                fallbackFailure.Value = stillFailing;
                 // Deployment names are the user's resource names; the log gets the failure's shape.
                 _log.LogDebug(
                     "Chat Completions fallback also failed: {Failure}",
@@ -3404,6 +3568,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         return false;
     }
 
+    // With Microsoft Foundry's prompt cache off: the deployment named that option as its reason for refusing.
+    private static bool RefusedTheCacheOptions(CleanupOptions options, AgentProbeFailure failure) =>
+        options.Provider == CleanupProvider.AzureFoundry && !options.PromptCaching &&
+        PromptCachePolicy.IsRejection(failure.Exception);
+
+    // Whichever surface named the prompt cache options as its refusal is the one reported: a deployment that serves only
+    // Chat Completions refuses Responses as a surface, and then the option on Chat Completions.
+    private static AgentProbeFailure ReportedFailure(CleanupOptions options, AgentProbeFailure primary, AgentProbeFailure? fallback) =>
+        fallback is not null && !RefusedTheCacheOptions(options, primary) && RefusedTheCacheOptions(options, fallback)
+            ? fallback
+            : primary;
+
     private sealed record FoundryDemotionResult(CleanupOptions Options, AIAgent Agent);
 
     private sealed record FoundryExecutionProviderFailure(
@@ -3411,7 +3587,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         IReadOnlyList<string> AvailableProviders);
 
     private static IChatClient DisableStoredOutput(IChatClient client) =>
-        new StoredOutputDisabledChatClient(client);
+        new StoredOutputDisabledChatClient(client, promptCaching: true);
+
+    // Microsoft Foundry's request policy for one configuration: store=false as always, and, with prompt caching off, the
+    // prompt cache options on every request (PromptCachePolicy). Bound when the agent is built, so a probe, a retry, a
+    // dictation and a one-off completion of the same configuration all carry the same answer.
+    private static Func<IChatClient, IChatClient> AzureRequestPolicy(bool promptCaching) =>
+        client => new StoredOutputDisabledChatClient(client, promptCaching);
 
     /*
      * Every OpenAI client this service builds sends through the vocabulary hand-off transport: the custom endpoint,
@@ -3443,19 +3625,27 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// builds it: every call goes through the stored-output wrapper, which on this surface keeps
     /// "store" unset and never true.
     /// </summary>
-    internal static AIAgent CreateAzureChatCompletionsAgent(OpenAI.Chat.ChatClient deployment, string instructions) =>
-        deployment.AsAIAgent(instructions: instructions, name: AgentName, clientFactory: DisableStoredOutput);
+    internal static AIAgent CreateAzureChatCompletionsAgent(
+        OpenAI.Chat.ChatClient deployment, string instructions, bool promptCaching = true) =>
+        deployment.AsAIAgent(instructions: instructions, name: AgentName, clientFactory: AzureRequestPolicy(promptCaching));
 
 #pragma warning disable OPENAI001
     /// <summary>
     /// The Azure Responses agent, exactly as <see cref="InitAzureAsync"/> builds it: every call carries
     /// the stored-output control.
     /// </summary>
-    internal static AIAgent CreateAzureResponsesAgent(ResponsesClient responses, string deployment, string instructions) =>
-        responses.AsAIAgent(model: deployment, instructions: instructions, name: AgentName, clientFactory: DisableStoredOutput);
+    internal static AIAgent CreateAzureResponsesAgent(
+        ResponsesClient responses, string deployment, string instructions, bool promptCaching = true) =>
+        responses.AsAIAgent(
+            model: deployment, instructions: instructions, name: AgentName, clientFactory: AzureRequestPolicy(promptCaching));
 #pragma warning restore OPENAI001
 
-    internal static ChatOptions WithStoredOutputDisabled(ChatOptions? options)
+    /// <param name="options">The run's options, left as they are: the clone carries the policy.</param>
+    /// <param name="promptCaching">
+    /// False for a configuration with Microsoft Foundry's prompt cache turned off: every options object this hands a client,
+    /// on either surface and in every fail-closed branch, also carries the prompt cache options (<see cref="PromptCachePolicy"/>).
+    /// </param>
+    internal static ChatOptions WithStoredOutputDisabled(ChatOptions? options, bool promptCaching = true)
     {
         var clone = options?.Clone() ?? new ChatOptions();
         var innerFactory = clone.RawRepresentationFactory;
@@ -3483,7 +3673,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 var chatOptions = raw as OpenAI.Chat.ChatCompletionOptions ?? new OpenAI.Chat.ChatCompletionOptions();
                 chatOptions.StoredOutputEnabled = null;
-                return chatOptions;
+                return WithCachePolicy(chatOptions, promptCaching);
             }
 
             // Responses defaults to store=true on Azure, so this surface is always told false.
@@ -3491,7 +3681,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 var responses = raw as CreateResponseOptions ?? new CreateResponseOptions();
                 responses.StoredOutputEnabled = false;
-                return responses;
+                return WithCachePolicy(responses, promptCaching);
             }
 
             // A client that names neither surface: keep the flag on whichever options type it was
@@ -3499,13 +3689,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (raw is CreateResponseOptions responseOptions)
             {
                 responseOptions.StoredOutputEnabled = false;
-                return responseOptions;
+                return WithCachePolicy(responseOptions, promptCaching);
             }
 
             if (raw is OpenAI.Chat.ChatCompletionOptions otherChatOptions)
             {
                 otherChatOptions.StoredOutputEnabled = false;
-                return otherChatOptions;
+                return WithCachePolicy(otherChatOptions, promptCaching);
             }
 
             // Fail CLOSED. Passing an unrecognised object through would let Azure fall back to its
@@ -3514,10 +3704,33 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // future package version starts supplying one, and a privacy control must not lapse on a
             // dependency bump. The same holds above: an unrecognised object on a known surface is
             // replaced by that surface's own options with the flag off.
-            return new CreateResponseOptions { StoredOutputEnabled = false };
+            return WithCachePolicy(new CreateResponseOptions { StoredOutputEnabled = false }, promptCaching);
 #pragma warning restore OPENAI001
         };
         return clone;
+    }
+
+#pragma warning disable OPENAI001
+    // Caching off: the options object the surface keeps also carries the prompt cache options (PromptCachePolicy).
+    private static CreateResponseOptions WithCachePolicy(CreateResponseOptions options, bool promptCaching)
+    {
+        if (!promptCaching)
+        {
+            PromptCachePolicy.TurnOff(options);
+        }
+
+        return options;
+    }
+#pragma warning restore OPENAI001
+
+    private static OpenAI.Chat.ChatCompletionOptions WithCachePolicy(OpenAI.Chat.ChatCompletionOptions options, bool promptCaching)
+    {
+        if (!promptCaching)
+        {
+            PromptCachePolicy.TurnOff(options);
+        }
+
+        return options;
     }
 
     // Whether the calling client is backed by the given OpenAI client type, which is how the
@@ -3534,19 +3747,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    private sealed class StoredOutputDisabledChatClient(IChatClient inner) : IChatClient
+    private sealed class StoredOutputDisabledChatClient(IChatClient inner, bool promptCaching) : IChatClient
     {
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default) =>
-            inner.GetResponseAsync(messages, WithStoredOutputDisabled(options), cancellationToken);
+            inner.GetResponseAsync(messages, WithStoredOutputDisabled(options, promptCaching), cancellationToken);
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default) =>
-            inner.GetStreamingResponseAsync(messages, WithStoredOutputDisabled(options), cancellationToken);
+            inner.GetStreamingResponseAsync(messages, WithStoredOutputDisabled(options, promptCaching), cancellationToken);
 
         public object? GetService(Type serviceType, object? serviceKey = null) =>
             inner.GetService(serviceType, serviceKey);
@@ -3653,7 +3866,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            return new AgentProbeFailure(DescribeFailureReason(ex, options.Provider), ex);
+            return new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
         }
     }
 
@@ -4312,11 +4525,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     options.AzureTenantId,
                     options.AzureSubscriptionId,
                     options.AzureClientId,
-                    options.AzureClientSecret)),
+                    options.AzureClientSecret),
+                    CachesCliTokens),
                 networkTimeout,
                 DisableRetries,
                 ConfigureClient);
-        _pendingFactory = i => CreateAzureResponsesAgent(responses, options.AzureDeployment!, i);
+        _pendingFactory = i => CreateAzureResponsesAgent(responses, options.AzureDeployment!, i, options.PromptCaching);
 #pragma warning restore OPENAI001
         var agent = _pendingFactory(instructions);
 

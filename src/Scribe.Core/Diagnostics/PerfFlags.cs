@@ -4,7 +4,9 @@ namespace Scribe.Core.Diagnostics;
 /// The performance changes that ship switched off, each turned on by name through the <c>SCRIBE_PERF_FLAGS</c>
 /// environment variable, read once at startup: names separated by commas, semicolons or white space, compared without
 /// regard to case. Off is the old path, so a process without the variable runs exactly what the release before ran; a
-/// flag's default flips only in a later release, once its field evidence is in.
+/// flag's default flips only in a later release, once its field evidence is in. The one exception is a change the
+/// maintainer approved as the new default: it ships on, and its flag, named for the old behaviour (<see cref="ForcedIdleGc"/>),
+/// brings the old path back for one release, for comparison.
 /// </summary>
 /// <remarks>
 /// An environment variable, not a setting or an AppContext switch, because it reaches both installs the same way (the
@@ -21,7 +23,6 @@ public sealed class PerfFlags
     // known name that nothing in src reads.
     private static readonly string[] KnownNames =
     [
-        AggressiveIdleGc,
         AsyncDeviceList,
         BatchCleanupSelectionCounts,
         BoundedDiagnosticsReads,
@@ -37,12 +38,12 @@ public sealed class PerfFlags
         DeduplicateOverlayMeter,
         DeferSettingsPageData,
         DirectGlossaryProjection,
+        ForcedIdleGc,
         HookPriorityAboveNormal,
         HookRecoveryObservations,
         IncrementalWordPackRows,
         InputTimings,
         LeanFooterRefresh,
-        LeanHostDefaults,
         MatcherPrefilter,
         MatcherSpans,
         PillBeforeTray,
@@ -59,12 +60,11 @@ public sealed class PerfFlags
         WarmManagedAudioPath,
     ];
 
-    // The flags, one constant per name (0.5.1). What each changes, and the old path it keeps when off, is on the
-    // implementation that reads it.
-    public const string AggressiveIdleGc = nameof(AggressiveIdleGc);
     public const string AsyncDeviceList = nameof(AsyncDeviceList);
     public const string BatchCleanupSelectionCounts = nameof(BatchCleanupSelectionCounts);
     public const string BoundedDiagnosticsReads = nameof(BoundedDiagnosticsReads);
+    // The flags, one constant per name (0.5.1). What each changes, and the old path it keeps when off (or, for a flag named
+    // for the old behaviour, brings back when on), is on the implementation that reads it.
     public const string BoundedUsageTokenLookup = nameof(BoundedUsageTokenLookup);
     public const string CachedRowSearchText = nameof(CachedRowSearchText);
     public const string CacheWordPackPreview = nameof(CacheWordPackPreview);
@@ -77,12 +77,12 @@ public sealed class PerfFlags
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
     public const string DirectGlossaryProjection = nameof(DirectGlossaryProjection);
+    public const string ForcedIdleGc = nameof(ForcedIdleGc);
     public const string HookPriorityAboveNormal = nameof(HookPriorityAboveNormal);
     public const string HookRecoveryObservations = nameof(HookRecoveryObservations);
     public const string IncrementalWordPackRows = nameof(IncrementalWordPackRows);
     public const string InputTimings = nameof(InputTimings);
     public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
-    public const string LeanHostDefaults = nameof(LeanHostDefaults);
     public const string MatcherPrefilter = nameof(MatcherPrefilter);
     public const string MatcherSpans = nameof(MatcherSpans);
     public const string PillBeforeTray = nameof(PillBeforeTray);

@@ -279,7 +279,10 @@ public static class SessionBanner
             Cleanup.CleanupProvider.FoundryLocal => $"model={settings.AiCleanupModel}",
             Cleanup.CleanupProvider.AzureFoundry =>
                 $"deployment={Presence(settings.AiCleanupAzureDeployment)} " +
-                $"endpoint={Presence(settings.AiCleanupAzureEndpoint)} auth={settings.AiCleanupAzureAuthMode}",
+                $"endpoint={Presence(settings.AiCleanupAzureEndpoint)} auth={settings.AiCleanupAzureAuthMode} " +
+                // A saved key wins over either sign-in (TextCleanupService uses it whenever it is not blank), so auth= alone
+                // does not say how a dictation authenticates.
+                $"apiKey={Presence(settings.AiCleanupAzureApiKey)} promptCache={(settings.AiCleanupPromptCaching ? "on" : "off")}",
             /*
              * Copilot needs its own arm rather than falling into the custom-endpoint one.
              *

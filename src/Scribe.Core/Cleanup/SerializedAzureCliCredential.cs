@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Azure.Core;
 
 namespace Scribe.Core.Cleanup;
@@ -44,17 +45,52 @@ internal sealed class SerializedAzureCliCredential : TokenCredential
         TokenRequestContext requestContext,
         CancellationToken cancellationToken)
     {
-        if (_testGate is null)
+        // Numbers only, for the cleanup's log line: how long this request waited for the one Azure CLI gate (Settings'
+        // sign-in and account listing hold it too), recorded when the wait ended, by admission or before it, then how long
+        // the CLI took, recorded when the call ended, with a token or not. Nothing about the wait or the call changes.
+        var timings = CleanupAdmission.Current?.Timings;
+        var requested = Stopwatch.GetTimestamp();
+        var admitted = false;
+
+        async ValueTask<AccessToken> AcquireAsync(CancellationToken token)
         {
-            return await AzureCliProcessCoordinator.RunAsync(
-                token => _inner.GetTokenAsync(requestContext, token),
-                cancellationToken).ConfigureAwait(false);
+            admitted = true;
+            var called = Stopwatch.GetTimestamp();
+            timings?.AddGateWait(Stopwatch.GetElapsedTime(requested, called), admitted: true);
+            var finished = false;
+            try
+            {
+                var accessToken = await _inner.GetTokenAsync(requestContext, token).ConfigureAwait(false);
+                finished = true;
+                return accessToken;
+            }
+            finally
+            {
+                timings?.AddTokenCall(Stopwatch.GetElapsedTime(called), finished);
+            }
         }
 
-        await _testGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await _inner.GetTokenAsync(requestContext, cancellationToken).ConfigureAwait(false);
+            return _testGate is null
+                ? await AzureCliProcessCoordinator.RunAsync(AcquireAsync, cancellationToken).ConfigureAwait(false)
+                : await RunOnTestGateAsync(AcquireAsync, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!admitted)
+        {
+            // The wait ended before admission (its cancellation): the time went to the queue, and no call began.
+            timings?.AddGateWait(Stopwatch.GetElapsedTime(requested), admitted: false);
+            throw;
+        }
+    }
+
+    private async ValueTask<AccessToken> RunOnTestGateAsync(
+        Func<CancellationToken, ValueTask<AccessToken>> acquire, CancellationToken cancellationToken)
+    {
+        await _testGate!.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await acquire(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

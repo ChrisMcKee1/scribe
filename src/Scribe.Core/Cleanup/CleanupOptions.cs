@@ -44,6 +44,10 @@ public enum CleanupPromptStyle
 /// Carries everything both providers need so the service can (re)build its chat client whenever
 /// the user changes the toggle, the provider, the local model, or the Azure deployment.
 /// </summary>
+/// <param name="PromptCaching">
+/// <c>AppSettings.AiCleanupPromptCaching</c>: false makes every Microsoft Foundry request ask not to use the prompt cache
+/// (<see cref="PromptCachePolicy"/>). Not a prompt field, so a change reconnects and probes again.
+/// </param>
 public sealed record CleanupOptions(
     bool Enabled,
     CleanupProvider Provider,
@@ -64,7 +68,8 @@ public sealed record CleanupOptions(
     Settings.AzureAuthMode AzureAuthMode = Settings.AzureAuthMode.AzureCli,
     string? AzureClientId = null,
     string? AzureClientSecret = null,
-    string? CopilotModel = null)
+    string? CopilotModel = null,
+    bool PromptCaching = true)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

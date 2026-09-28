@@ -499,11 +499,34 @@ internal sealed class BenchmarkRunner
         return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
     }
 
-    private static BenchTokenUsage AddUsage(BenchTokenUsage? current, UsageDetails usage) => new(
+    internal static BenchTokenUsage AddUsage(BenchTokenUsage? current, UsageDetails usage) => new(
         Add(current?.InputTokens, usage.InputTokenCount),
         Add(current?.OutputTokens, usage.OutputTokenCount),
         Add(current?.ReasoningTokens, usage.ReasoningTokenCount),
-        Add(current?.TotalTokens, usage.TotalTokenCount));
+        Add(current?.TotalTokens, usage.TotalTokenCount),
+        Add(current?.CachedInputTokens, usage.CachedInputTokenCount),
+        Add(current?.CacheWriteTokens, CacheWriteCount(usage)));
+
+    // Microsoft.Extensions.AI 10.9 has no typed cache-write count; take one only if the adapter passed it through among its
+    // additional counts, under any spelling of "cache write". Absent stays null, never 0.
+    internal static long? CacheWriteCount(UsageDetails usage)
+    {
+        if (usage.AdditionalCounts is not { } counts)
+        {
+            return null;
+        }
+
+        foreach (var (key, value) in counts)
+        {
+            if (key.Contains("cache_write", StringComparison.OrdinalIgnoreCase)
+                || key.Contains("CacheWrite", StringComparison.OrdinalIgnoreCase))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
 
     private static long? Add(long? left, long? right) =>
         left is null && right is null ? null : (left ?? 0) + (right ?? 0);

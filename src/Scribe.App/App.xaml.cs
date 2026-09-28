@@ -349,7 +349,8 @@ public partial class App : Application
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<LastTranscriptStore>(),
             services.GetRequiredService<ISettingsRepository>(),
-            services.GetRequiredService<ILogger<DictationController>>());
+            services.GetRequiredService<ILogger<DictationController>>(),
+            services.GetRequiredService<PerfFlags>());
         StartupStages?.Mark("controller");
 
         // Before anything that takes input exists (the tray, and at Start the hotkey): the persisted settings load, and the

@@ -1593,6 +1593,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CustomModelBox.Text = _settings.AiCleanupCustomModel ?? string.Empty;
         CopilotModelCombo.Text = _settings.AiCleanupCopilotModel ?? string.Empty;
         CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
+        AiPromptCachingCheck.IsChecked = _settings.AiCleanupPromptCaching;
 
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
@@ -2493,6 +2494,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupCustomModel = CustomModelBox?.Text;
         draft.AiCleanupCustomApiKey = CustomApiKeyBox?.Password;
         draft.AiCleanupCopilotModel = CopilotModelCombo?.Text;
+        draft.AiCleanupPromptCaching = AiPromptCachingCheck?.IsChecked != false;
 
         var writingStyle = NormalizePrompt(AiWritingStyleBox?.Text);
         draft.AiCleanupWritingStyle =
@@ -2541,7 +2543,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             draft.AiCleanupAzureAuthMode,
             draft.AiCleanupAzureClientId,
             draft.AiCleanupAzureClientSecret,
-            draft.AiCleanupCopilotModel));
+            draft.AiCleanupCopilotModel,
+            draft.AiCleanupPromptCaching));
     }
 
     // --- Filterable model dropdowns --------------------------------------------------------
@@ -2923,6 +2926,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     private void AzureDeploymentBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        CancelCleanupConnectionTest();
+        InvalidateAzureApiKeyVerification("Changed since the last test. Choose Test connection.");
+        ApplyAzureSettingsAccess();
+    }
+
+    // A change to what every Microsoft Foundry request carries: an earlier test no longer vouches for it.
+    private void AiPromptCachingCheck_Toggled(object sender, RoutedEventArgs e)
     {
         if (_loadingUi)
         {
@@ -5145,6 +5161,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // is stored as null rather than rejected on save.
             _settings.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
             _settings.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
+            _settings.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
 
             // Persist the writing style only when it differs from the default; storing blank for the
             // default keeps users tracking future improvements to the built-in guidance.

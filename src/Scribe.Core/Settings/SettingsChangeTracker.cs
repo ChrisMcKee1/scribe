@@ -147,6 +147,7 @@ public static class SettingsChangeTracker
             !Same(baseline.AiCleanupCustomModel, draft.AiCleanupCustomModel) ||
             !Same(baseline.AiCleanupCustomApiKey, draft.AiCleanupCustomApiKey) ||
             !Same(baseline.AiCleanupCopilotModel, draft.AiCleanupCopilotModel) ||
+            baseline.AiCleanupPromptCaching != draft.AiCleanupPromptCaching ||
             !Same(baseline.AiCleanupWritingStyle, draft.AiCleanupWritingStyle) ||
             baseline.AiCleanupPromptStyle != draft.AiCleanupPromptStyle ||
             !Same(baseline.AiCleanupFrontierPrompt, draft.AiCleanupFrontierPrompt) ||

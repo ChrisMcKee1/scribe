@@ -96,6 +96,8 @@ public sealed class CleanupDisclosureTests
         var texts = new List<string>
         {
             CleanupDisclosure.WhatCleanupSends, CleanupDisclosure.WhatCleanupNeverSends, CleanupDisclosure.SuggestionConsentTitle,
+            CleanupDisclosure.WhatTheServiceMayCache, CleanupDisclosure.PromptCachingTitle, CleanupDisclosure.PromptCachingTradeOff,
+            CleanupDisclosure.CustomServiceCaching, CleanupDisclosure.CopilotCaching, PromptCachePolicy.Rejected.Display,
         };
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SuggestionConsentFor));
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SummaryFor));
@@ -116,6 +118,14 @@ public sealed class CleanupDisclosureTests
 
         Assert.Contains("{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}", xaml, StringComparison.Ordinal);
         Assert.Contains("{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}", xaml, StringComparison.Ordinal);
+        Assert.Contains("{x:Static cleanup:CleanupDisclosure.WhatTheServiceMayCache}", xaml, StringComparison.Ordinal);
+        Assert.Contains("{x:Static cleanup:CleanupDisclosure.PromptCachingTradeOff}", xaml, StringComparison.Ordinal);
+        Assert.Contains("{x:Static cleanup:CleanupDisclosure.CustomServiceCaching}", xaml, StringComparison.Ordinal);
+        Assert.Contains("{x:Static cleanup:CleanupDisclosure.CopilotCaching}", xaml, StringComparison.Ordinal);
+
+        // The switch's title is a literal, so Find a setting's label test can read it, and it is the name every text uses.
+        Assert.Contains(
+            $"x:Name=\"AiPromptCachingTitle\" Text=\"{CleanupDisclosure.PromptCachingTitle}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("AI cleanup still receives your vocabulary when this is off.", xaml, StringComparison.Ordinal);
         Assert.Contains("CleanupDisclosure.SuggestionConsentTitle", code, StringComparison.Ordinal);
         Assert.Contains("CleanupDisclosure.SuggestionConsentFor(recipient.Provider)", code, StringComparison.Ordinal);
@@ -261,6 +271,104 @@ public sealed class CleanupDisclosureTests
             "For Microsoft Foundry, Scribe asks the service not to store its responses, but Microsoft's abuse " +
             "monitoring can still keep a sample of prompts and responses it flags for review",
             policy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_prompt_cache_is_disclosed_with_what_microsoft_documents_and_what_the_setting_asks_for()
+    {
+        // The facts, from https://learn.microsoft.com/azure/foundry/openai/how-to/prompt-caching (updated 2026-08-12): a
+        // cached prefix "remains eligible for reuse for at least 30 minutes" on GPT-5.6 and later; extended retention keeps
+        // prefixes "up to a maximum of 24 hours"; the FAQ "Can I disable prompt caching?": "On Standard pay-as-you-go
+        // deployments with GPT-5.6 models and later model families, set prompt_cache_options.mode to explicit and don't add
+        // any explicit breakpoints. The request doesn't use prompt caching or incur cache-write charges. Earlier models and
+        // PTU-M deployments don't support this option; prompt caching remains enabled by default."; models before GPT-5.6
+        // "return a 400 error"; caches are not shared "between Azure subscriptions". What Scribe does is ask, for new
+        // requests: it clears nothing, and enforces nothing on the service's side (PLAT-R-04).
+        Assert.Equal(
+            "On: Microsoft Foundry may reuse parts of recent requests to respond faster, and may keep temporary data derived " +
+            "from them, including your dictation, the instructions and your vocabulary, for at least 30 minutes (up to 24 " +
+            "hours on some models). Off: Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests. " +
+            "AI cleanup can be slower, and Scribe can't clear what the cache already holds. Off works on GPT-5.6 and later " +
+            "models on Standard deployments; earlier models and provisioned deployments can't turn caching off, so AI " +
+            "cleanup stops and Scribe types what it hears until you turn this back on.",
+            CleanupDisclosure.PromptCachingTradeOff);
+
+        var card = CleanupDisclosure.WhatTheServiceMayCache;
+        Assert.Contains("does not turn off its separate prompt cache", card, StringComparison.Ordinal);
+        Assert.Contains("the dictation, the instructions and your vocabulary, for at least 30 minutes (up to 24 hours on some models)", card, StringComparison.Ordinal);
+        Assert.Contains(
+            $"Turning off \"{CleanupDisclosure.PromptCachingTitle}\" asks Microsoft Foundry not to use its prompt cache for new cleanup requests.",
+            card,
+            StringComparison.Ordinal);
+        Assert.Contains("GPT-5.6 and later models on Standard deployments", card, StringComparison.Ordinal);
+        Assert.Contains("earlier models and provisioned deployments can't turn caching off", card, StringComparison.Ordinal);
+        Assert.Contains("Scribe can't clear what the cache already holds", card, StringComparison.Ordinal);
+        Assert.Contains("Another AI service and GitHub Copilot follow their own caching policy", card, StringComparison.Ordinal);
+
+        // The status a refusal shows says this deployment can't, and names the setting to turn back on and what can. The
+        // consequence (Scribe types what it hears) is each surface's to add, as for every cleanup reason.
+        var rejected = PromptCachePolicy.Rejected.Display;
+        Assert.StartsWith("This deployment can't turn caching off.", rejected, StringComparison.Ordinal);
+        Assert.Contains($"\"{CleanupDisclosure.PromptCachingTitle}\" back on", rejected, StringComparison.Ordinal);
+        Assert.Contains("a GPT-5.6 or later model on a Standard deployment", rejected, StringComparison.Ordinal);
+
+        var policy = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md")));
+        foreach (var fact in new[]
+                 {
+                     "Asking Microsoft Foundry not to store responses does not turn off its separate prompt cache.",
+                     $"With \"{CleanupDisclosure.PromptCachingTitle}\" on, which is the default,",
+                     "including the dictation, the cleanup instructions and your vocabulary",
+                     "newer models keep a cached prefix for at least 30 minutes and possibly longer",
+                     "some models keep cached data for up to 24 hours",
+                     "prompt caches are not shared between Azure subscriptions",
+                     "Scribe cannot clear what the cache already holds.",
+                     "When you turn the setting off, Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests",
+                     "asks for the documented mode that does not use prompt caching",
+                     "GPT-5.6 and later models on Standard deployments",
+                     "earlier models and provisioned (PTU-M) deployments don't support it, so they can't turn caching off",
+                     "(https://learn.microsoft.com/azure/foundry/openai/how-to/prompt-caching)",
+                     "When a deployment refuses the option, AI cleanup does not run and Scribe types what it heard",
+                     "Scribe does not send the request again without the option",
+                     "Another AI service and GitHub Copilot follow their own caching policy",
+                     $"Turn off \"{CleanupDisclosure.PromptCachingTitle}\" so that Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests",
+                     "earlier models and provisioned deployments can't turn caching off",
+                 })
+        {
+            Assert.Contains(fact, policy, StringComparison.Ordinal);
+        }
+
+        var readme = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "README.md")));
+        Assert.Contains(
+            $"Turning off {CleanupDisclosure.PromptCachingTitle} asks Microsoft Foundry not to use its prompt cache for new cleanup requests",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains($"Turning off {CleanupDisclosure.PromptCachingTitle} asks it not to use that cache for new cleanup requests", readme, StringComparison.Ordinal);
+        Assert.Contains("earlier models and provisioned deployments can't turn caching off", readme, StringComparison.Ordinal);
+        Assert.Contains("Scribe can't clear what the cache already holds", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void No_text_claims_turning_caching_off_keeps_nothing_or_that_unsupported_deployments_always_cache()
+    {
+        // The option asks, for new requests, where it is supported; it clears nothing and the service decides what an
+        // unsupported deployment does ("prompt caching remains enabled by default" is not "every request is cached").
+        var texts = new List<string>
+        {
+            CleanupDisclosure.WhatTheServiceMayCache,
+            CleanupDisclosure.PromptCachingTradeOff,
+            PromptCachePolicy.Rejected.Display,
+            File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md")),
+            File.ReadAllText(Path.Combine(RepositoryRoot(), "README.md")),
+            File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml")),
+        };
+
+        foreach (var text in texts.Select(Flatten))
+        {
+            foreach (var claim in new[] { "always cache", "none of that is kept", "stops that on", "neither reads nor writes" })
+            {
+                Assert.DoesNotContain(claim, text, StringComparison.OrdinalIgnoreCase);
+            }
+        }
     }
 
     [Fact]

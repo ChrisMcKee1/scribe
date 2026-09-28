@@ -288,7 +288,11 @@ internal sealed class GatedRetryPolicy(int maxRetries) : ClientRetryPolicy(maxRe
 /// </summary>
 internal sealed class VocabularyCleanupHarness : IAsyncDisposable
 {
-    public VocabularyCleanupHarness(ILibraryVocabularySource? source, CanaryNetwork? network = null)
+    public VocabularyCleanupHarness(
+        ILibraryVocabularySource? source,
+        CanaryNetwork? network = null,
+        Scribe.Core.Diagnostics.PerfFlags? perfFlags = null,
+        Microsoft.Extensions.Logging.ILogger<TextCleanupService>? serviceLog = null)
     {
         Temp = new TempDirectory();
         State = new FakeFoundryState();
@@ -297,7 +301,7 @@ internal sealed class VocabularyCleanupHarness : IAsyncDisposable
         Runtime = new FakeFoundryRuntime(State, Catalog);
         Host = new FakeFoundryHost(() => Runtime);
         Network = network ?? new CanaryNetwork();
-        Service = new TextCleanupService(Log, new AppPaths(Temp.Combine("data")), Host, null, source)
+        Service = new TextCleanupService(serviceLog ?? Log, new AppPaths(Temp.Combine("data")), Host, null, source, perfFlags)
         {
             InnerHttpHandlerForTesting = Network,
 

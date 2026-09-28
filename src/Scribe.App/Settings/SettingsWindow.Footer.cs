@@ -236,6 +236,7 @@ public partial class SettingsWindow
         draft.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
         draft.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
         draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
+        draft.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
         draft.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
         var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
         draft.AiCleanupWritingStyle = writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle ? string.Empty : writingStyle;

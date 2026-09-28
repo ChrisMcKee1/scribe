@@ -192,6 +192,7 @@ public partial class SettingsWindow
         draft.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
         draft.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
         draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
+        draft.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
         draft.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
         var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
         draft.AiCleanupWritingStyle = writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
@@ -342,7 +343,8 @@ UpdateTryDictationPage();
         AzureAuthMode: _committedSettings.AiCleanupAzureAuthMode,
         AzureClientId: _committedSettings.AiCleanupAzureClientId,
         AzureClientSecret: _committedSettings.AiCleanupAzureClientSecret,
-        CopilotModel: _committedSettings.AiCleanupCopilotModel);
+        CopilotModel: _committedSettings.AiCleanupCopilotModel,
+        PromptCaching: _committedSettings.AiCleanupPromptCaching);
 
     private static string TryFormatDuration(TimeSpan elapsed) =>
         elapsed.TotalMilliseconds < 1 ? "<1 ms" : $"{elapsed.TotalMilliseconds:N0} ms";

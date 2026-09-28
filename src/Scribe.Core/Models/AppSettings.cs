@@ -250,6 +250,24 @@ public sealed class AppSettings
     public string? AiCleanupCopilotModel { get; set; }
 
     /// <summary>
+    /// Whether Microsoft Foundry may use its prompt cache for AI cleanup ("Let Microsoft Foundry cache what Scribe sends").
+    /// On keeps the request Scribe has always sent, so the service's own caching applies. Off asks Microsoft Foundry not to
+    /// use its prompt cache for new cleanup requests: every Microsoft Foundry request, the connection test included, asks
+    /// for the mode that does not use it (<see cref="Cleanup.PromptCachePolicy"/>), which clears nothing the cache already
+    /// holds; a deployment that refuses it leaves AI cleanup unavailable with that cause,
+    /// and Scribe types what it hears rather than send the request without it. Another AI service and GitHub Copilot are
+    /// unchanged: their own caching policy applies.
+    /// </summary>
+    /// <remarks>
+    /// On for every install, new or upgraded, so the default is the property initializer and not <see cref="CreateDefault"/>,
+    /// as for <see cref="AddSpaceAfterDictation"/>: a document written before the setting existed reads as on. An older
+    /// build ignores the key and leaves it out of a document it saves, which this version then reads as on again, so a
+    /// person who turned caching off and then saved settings in an older build finds it on. A whole-document setting (Save
+    /// applies it, Cancel discards it), and a plain value type, so the memberwise <see cref="Clone"/> copies it.
+    /// </remarks>
+    public bool AiCleanupPromptCaching { get; set; } = true;
+
+    /// <summary>
     /// Optional API key for the custom endpoint (local servers don't need one). DPAPI-encrypted at
     /// rest, same as the Azure key.
     /// </summary>
