@@ -29,6 +29,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     private bool _rulesLoaded;
     private bool _snippetsLoaded;
     private long _reloads;
+    private long _regexRuns;
 
     // The library selection of the settings dictation runs on, as the last Reload(ids) named it. Null until an owner
     // names one. Read and written under _gate.
@@ -59,6 +60,13 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     /// decides every match. Off (the default) runs every rule's regex.
     /// </summary>
     internal bool UseMatcherPrefilter { get; }
+
+    /// <summary>
+    /// Test seam: how many dictionary rules' regular expressions this post-processor's passes have run, the work
+    /// <see cref="PerfFlags.MatcherPrefilter"/> exists to cut. Each call adds its passes' count once, so a pass does no
+    /// extra work per rule.
+    /// </summary>
+    internal long RegexRuns => Interlocked.Read(ref _regexRuns);
 
     /// <summary>
     /// When true (the default), a source identical to the text is not normalized a second time, and
@@ -121,7 +129,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         var replacements = new List<TextReplacement>();
         var output = ApplySinglePass(
             dictionaryInput,
-            Candidates(rules, dictionaryInput, UseMatcherPrefilter),
+            Candidates(rules, dictionaryInput, UseMatcherPrefilter, out var regexRuns),
             replacements);
 
         // The source pass below scans with this same rule snapshot. Matching is a pure function of
@@ -138,46 +146,59 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             var canonical = ApplySinglePass(
                 application.Replacement,
-                Candidates(rules, application.Replacement, UseMatcherPrefilter));
+                Candidates(rules, application.Replacement, UseMatcherPrefilter, out var snippetRuns));
+            regexRuns += snippetRuns;
             return application with { Length = canonical.Length, Replacement = canonical };
         });
         AddLocatedReplacements(output, canonicalSnippets, replacements, replaceOverlaps: true);
 
         if (source is not null)
         {
+            var sourceRuns = 0;
             IReadOnlyList<TextReplacement> glossaryApplications =
-                sourceTraces is not null ? sourceTraces : ScanSource(source, rules, UseMatcherPrefilter);
+                sourceTraces is not null ? sourceTraces : ScanSource(source, rules, UseMatcherPrefilter, out sourceRuns);
+            regexRuns += sourceRuns;
             // ponytail: ordered text search covers cleanup canonicalization; add token alignment only
             // if models start reordering repeated glossary terms enough to make this misleading.
             AddLocatedReplacements(output, glossaryApplications, replacements, replaceOverlaps: false);
         }
 
+        Interlocked.Add(ref _regexRuns, regexRuns);
         return new TextPostProcessingResult(
             output,
             replacements.OrderBy(replacement => replacement.Start).ToList());
     }
 
-    private static List<TextReplacement> ScanSource(string source, CompiledRule[] rules, bool prefilter)
+    private static List<TextReplacement> ScanSource(string source, CompiledRule[] rules, bool prefilter, out int regexRuns)
     {
         var glossaryApplications = new List<TextReplacement>();
         _ = ApplySinglePass(
             source,
-            Candidates(rules, source, prefilter),
+            Candidates(rules, source, prefilter, out regexRuns),
             glossaryApplications);
         return glossaryApplications;
     }
 
     // Null when nothing matched, so a pass over rules that do not match allocates nothing. With the prefilter, whether an
     // ordinal search may rule an ASCII spoken form out of this text is judged once, here (OrdinalPrefilter).
-    internal static List<ReplacementCandidate>? Candidates(CompiledRule[] rules, string text, bool prefilter = false)
+    internal static List<ReplacementCandidate>? Candidates(CompiledRule[] rules, string text, bool prefilter = false) =>
+        Candidates(rules, text, prefilter, out _);
+
+    // regexRuns: how many of the rules ran their regular expression over the text; a rule the prefilter ruled out ran none.
+    internal static List<ReplacementCandidate>? Candidates(CompiledRule[] rules, string text, bool prefilter, out int regexRuns)
     {
         var skipUnfound = prefilter && OrdinalPrefilter.IsSound(text);
         List<ReplacementCandidate>? candidates = null;
+        var runs = 0;
         for (var order = 0; order < rules.Length; order++)
         {
-            rules[order].AddCandidates(text, order, skipUnfound, ref candidates);
+            if (rules[order].AddCandidates(text, order, skipUnfound, ref candidates))
+            {
+                runs++;
+            }
         }
 
+        regexRuns = runs;
         return candidates;
     }
 
@@ -438,7 +459,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
         var normalized = NormalizeWhitespace(text);
         List<ReplacementCandidate>? candidates = null;
-        rule.AddCandidates(normalized, 0, skipUnfound: false, ref candidates);
+        _ = rule.AddCandidates(normalized, 0, skipUnfound: false, ref candidates);
         return ApplySinglePass(normalized, candidates);
     }
 
@@ -637,12 +658,12 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         // The replacement is inserted as given, so user text can never trigger $-substitution.
         // skipUnfound: the caller found the text sound for OrdinalPrefilter and MatcherPrefilter is on. An ASCII spoken form
         // an ordinal ignore-case search does not find then has no regex match (OrdinalPrefilter's remarks), so its regex is not
-        // run; one the search finds runs its regex, which decides its matches as always.
-        public void AddCandidates(string text, int order, bool skipUnfound, ref List<ReplacementCandidate>? candidates)
+        // run; one the search finds runs its regex, which decides its matches as always. Returns whether the regex ran.
+        public bool AddCandidates(string text, int order, bool skipUnfound, ref List<ReplacementCandidate>? candidates)
         {
             if (skipUnfound && _asciiPattern && !OrdinalPrefilter.MayMatch(text, _pattern))
             {
-                return;
+                return false;
             }
 
             List<int>? canonicalStarts = null;
@@ -667,6 +688,8 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                     _pattern,
                     original));
             }
+
+            return true;
         }
 
         // Ascending start offsets of every existing occurrence of the replacement. Case-insensitive

@@ -148,8 +148,8 @@ public sealed partial class UsageAnalyzerTests
         ];
         int Built(string flags, params string[] texts)
         {
-            _ = UsageAnalyzer.ExtractTermsForTesting(UsageEquivalenceCorpus.History(texts), terms, int.MaxValue, null, PerfFlags.Parse(flags), out var built);
-            return built;
+            _ = UsageAnalyzer.ExtractTermsForTesting(UsageEquivalenceCorpus.History(texts), terms, int.MaxValue, null, PerfFlags.Parse(flags), out var work);
+            return work.PhraseRegexesBuilt;
         }
 
         // Five phrases: "next js", "visual studio", "dev ops", "kube ctl" and the non-ASCII "caf\u00e9 au lait", which the search

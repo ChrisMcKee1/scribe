@@ -517,6 +517,12 @@ The language and matching flags (0.5.1), each off by default, the old path kept 
   builds it only when it first has to run (the phrase regexes use the matcher's options for that reason).
   `UsageEquivalenceCorpus` runs the old path against all four combinations.
 
+An output oracle passes with a skip gone as well as with it, so each of these flags also has a test of the work it saves,
+counted through a test seam and worked out by hand: the rule regexes each pass runs
+(`TextPostProcessor.RegexRuns`, `The_post_processor_runs_only_the_rule_regexes_the_prefilter_cannot_rule_out`), and the
+form lookups, owners reached and phrase regexes run (`UsageAnalyzer.UsageWork`, `UsageAnalyzerTests.Work.cs`). Switching
+an optimization off in the code fails its work test.
+
 The changes proven by an oracle need no flag: the phrase regexes built without `Compiled`
 (`UsageAnalyzerTests.Cheap_path_matches_legacy_terms_for_seeded_histories`,
 `UsageReportTests.Cheap_path_preserves_snapshot_and_scope`), the dictionary cleanup counting an ASCII term the same search

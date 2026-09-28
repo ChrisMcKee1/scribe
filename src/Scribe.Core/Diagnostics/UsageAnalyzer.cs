@@ -84,7 +84,24 @@ public static partial class UsageAnalyzer
         TimeZoneInfo? timeZone = null,
         int maxApps = 8,
         int maxTerms = 16,
-        PerfFlags? perfFlags = null)
+        PerfFlags? perfFlags = null) =>
+        Compute(entries, knownTerms, sinceUtc, nowUtc, mayShare, timeZone, maxApps, maxTerms, perfFlags, out _);
+
+    /// <summary>
+    /// Test seam: <see cref="Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, Func{DictionaryEntry, bool}, TimeZoneInfo, int, int, PerfFlags)"/>
+    /// with the work its term counting did, so a test can hold each counting change to the work it avoids.
+    /// </summary>
+    internal static Snapshot Compute(
+        IEnumerable<HistoryEntry> entries,
+        IEnumerable<DictionaryEntry> knownTerms,
+        DateTimeOffset sinceUtc,
+        DateTimeOffset nowUtc,
+        Func<DictionaryEntry, bool>? mayShare,
+        TimeZoneInfo? timeZone,
+        int maxApps,
+        int maxTerms,
+        PerfFlags? perfFlags,
+        out UsageWork work)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(knownTerms);
@@ -122,7 +139,7 @@ public static partial class UsageAnalyzer
             AverageWords: selected.Count == 0 ? 0 : words / (double)selected.Count,
             TopApps: apps,
             Trend: trend,
-            Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare, UsageCounting.From(perfFlags), out _),
+            Terms: ExtractTerms(selected, knownTerms, maxTerms, mayShare, UsageCounting.From(perfFlags), out work),
             Granularity: granularity,
             LongestDictation: TimeSpan.FromMilliseconds(selected.Count == 0 ? 0 : selected.Max(entry => Math.Max(0, entry.AudioMilliseconds))));
     }
@@ -200,10 +217,25 @@ public static partial class UsageAnalyzer
                 : new(flags.IsOn(PerfFlags.SparseUsageAggregation), flags.IsOn(PerfFlags.UsageTermIndex));
     }
 
+    /// <summary>What one term count did: the work each of 0.5.1's usage counting changes exists to cut, for its tests.</summary>
+    /// <param name="PhraseRegexesBuilt">Phrase regexes built: every phrase's, unless <see cref="PerfFlags.UsageTermIndex"/> is on.</param>
+    /// <param name="PhraseRegexRuns">
+    /// Phrase regexes run over a dictation: every phrase for every dictation, unless <see cref="PerfFlags.UsageTermIndex"/>
+    /// is on.
+    /// </param>
+    /// <param name="DenseFormProbes">
+    /// Form counts the dense aggregation looked up: every form of every known term for every dictation, unless
+    /// <see cref="PerfFlags.SparseUsageAggregation"/> is on.
+    /// </param>
+    /// <param name="OwnerVisits">
+    /// Terms <see cref="PerfFlags.SparseUsageAggregation"/> reached through the forms a dictation holds: each such form's
+    /// owners, per dictation.
+    /// </param>
+    internal readonly record struct UsageWork(int PhraseRegexesBuilt, long PhraseRegexRuns, long DenseFormProbes, long OwnerVisits);
+
     /// <summary>
     /// The term list <see cref="Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, Func{DictionaryEntry, bool}, TimeZoneInfo, int, int, PerfFlags)"/>
-    /// returns for entries already in its period, with how many of the phrase regexes it built (all of them unless
-    /// <see cref="PerfFlags.UsageTermIndex"/> is on).
+    /// returns for entries already in its period, with the work it did (<see cref="UsageWork"/>).
     /// </summary>
     internal static IReadOnlyList<TermUsage> ExtractTermsForTesting(
         IReadOnlyList<HistoryEntry> entries,
@@ -211,8 +243,8 @@ public static partial class UsageAnalyzer
         int maxTerms,
         Func<DictionaryEntry, bool>? mayShare,
         PerfFlags? perfFlags,
-        out int phraseRegexesBuilt) =>
-        ExtractTerms(entries, knownTerms, maxTerms, mayShare, UsageCounting.From(perfFlags), out phraseRegexesBuilt);
+        out UsageWork work) =>
+        ExtractTerms(entries, knownTerms, maxTerms, mayShare, UsageCounting.From(perfFlags), out work);
 
     private static IReadOnlyList<TermUsage> ExtractTerms(
         IReadOnlyList<HistoryEntry> entries,
@@ -220,7 +252,7 @@ public static partial class UsageAnalyzer
         int maxTerms,
         Func<DictionaryEntry, bool>? mayShare,
         UsageCounting counting,
-        out int phraseRegexesBuilt)
+        out UsageWork work)
     {
         var known = knownTerms
             .Where(entry => entry.Enabled && !string.IsNullOrWhiteSpace(entry.Replacement))
@@ -279,6 +311,15 @@ public static partial class UsageAnalyzer
         // Each form's owners: a form belongs to every term that lists it, each term listing it once (its forms are distinct).
         var sparse = counting.SparseAggregation ? new SparseTermCounts(known.ConvertAll(term => term.Forms)) : null;
 
+        // The work counts (UsageWork) are plain sums; a dictation the dense loop aggregates adds all its probes at once.
+        long phraseRegexRuns = 0;
+        long denseFormProbes = 0;
+        var formsPerDictation = 0;
+        foreach (var term in known)
+        {
+            formsPerDictation += term.Forms.Count;
+        }
+
         foreach (var entry in entries)
         {
             formCounts.Clear();
@@ -319,6 +360,7 @@ public static partial class UsageAnalyzer
                     continue;
                 }
 
+                phraseRegexRuns++;
                 var count = matcher.Pattern.Count(text);
                 if (count > 0)
                 {
@@ -332,6 +374,7 @@ public static partial class UsageAnalyzer
                 continue;
             }
 
+            denseFormProbes += formsPerDictation;
             for (var i = 0; i < known.Count; i++)
             {
                 // Max across forms, not the sum: pattern and replacement describe the same
@@ -350,7 +393,7 @@ public static partial class UsageAnalyzer
             }
         }
 
-        phraseRegexesBuilt = 0;
+        var phraseRegexesBuilt = 0;
         foreach (var matcher in phraseMatchers)
         {
             if (matcher.IsBuilt)
@@ -358,6 +401,8 @@ public static partial class UsageAnalyzer
                 phraseRegexesBuilt++;
             }
         }
+
+        work = new UsageWork(phraseRegexesBuilt, phraseRegexRuns, denseFormProbes, sparse?.OwnerVisits ?? 0);
 
         var results = new List<TermUsage>();
         for (var i = 0; i < known.Count; i++)
@@ -501,6 +546,9 @@ public static partial class UsageAnalyzer
             _dictationMax = new int[formsByTerm.Count];
         }
 
+        /// <summary>Terms reached so far, each counted once per form of a dictation that reached it (<see cref="UsageWork.OwnerVisits"/>).</summary>
+        public long OwnerVisits { get; private set; }
+
         public void Add(Dictionary<string, int> formCounts, int[] termDictations, int[] termOccurrences)
         {
             foreach (var (form, count) in formCounts)
@@ -510,6 +558,7 @@ public static partial class UsageAnalyzer
                     continue;
                 }
 
+                OwnerVisits += owners.Count;
                 foreach (var i in owners)
                 {
                     if (_dictationMax[i] == 0)

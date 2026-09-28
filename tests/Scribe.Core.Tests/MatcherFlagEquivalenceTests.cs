@@ -5,6 +5,7 @@ using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
+using Xunit.Abstractions;
 using static Scribe.Core.Tests.TextPostProcessorReferencePipelineTests;
 
 namespace Scribe.Core.Tests;
@@ -14,9 +15,11 @@ namespace Scribe.Core.Tests;
 /// against the same processor with it off deciding every result: the same text and the same replacement records, in order.
 /// The fuzz corpus: Astra's adversarial rules and texts under three cultures, with and without snippets, and sources absent,
 /// equal to the text and cleaned; every shipped word pack at its own size and at about 10,000 rules; U+212A texts and
-/// non-ASCII spoken forms (which always run their regex); and rules reused across vocabulary generations.
+/// non-ASCII spoken forms (which always run their regex); and rules reused across vocabulary generations. The work it
+/// saves is counted too, since every output test here passes with the skip gone: the rule regexes each pass runs
+/// (<see cref="TextPostProcessor.RegexRuns"/>, review finding LANG-IR-01).
 /// </summary>
-public sealed class MatcherFlagEquivalenceTests
+public sealed class MatcherFlagEquivalenceTests(ITestOutputHelper output)
 {
     private static readonly PerfFlags Prefilter = PerfFlags.Parse(PerfFlags.MatcherPrefilter);
 
@@ -206,18 +209,90 @@ public sealed class MatcherFlagEquivalenceTests
     [Fact]
     public void A_rule_the_search_rules_out_never_runs_its_regex_and_one_it_finds_always_does()
     {
-        // The skip is observable only as work not done, so the candidates a pass collects are compared directly: in a sound
-        // text only the rules whose spoken form occurs contribute, and in a text holding U+212A every rule is judged by its
-        // regex, which here finds "\u212Aube" for the rule "kube".
+        // The pass says how many rules ran their regex, so the skip is seen as work not done: a regex that ran and found
+        // nothing leaves the same candidates as one that never ran (review finding LANG-IR-01). In a sound text only the
+        // rules whose spoken form occurs run, with the non-ASCII rule, which always does; in a text holding U+212A every rule
+        // runs, and here the regex finds "\u212Aube" for the rule "kube".
         DictionaryEntry[] entries = [DictionaryEntry.New("kube", "Kube"), DictionaryEntry.New("helm", "Helm"), DictionaryEntry.New("caf\u00e9", "Caf\u00e9")];
         var rules = Processor([], [], [], PerfFlags.None).Compile(entries, []).Rules;
 
         Assert.Equal(
-            TextPostProcessor.Candidates(rules, "kube and helm")!.Select(c => c.Pattern),
-            TextPostProcessor.Candidates(rules, "kube and helm", prefilter: true)!.Select(c => c.Pattern));
-        Assert.Null(TextPostProcessor.Candidates(rules, "nothing here", prefilter: true));
-        Assert.Equal(["kube"], TextPostProcessor.Candidates(rules, "\u212Aube", prefilter: true)!.Select(c => c.Pattern));
-        Assert.Equal(["caf\u00e9"], TextPostProcessor.Candidates(rules, "CAF\u00c9", prefilter: true)!.Select(c => c.Pattern));
+            TextPostProcessor.Candidates(rules, "kube and helm", prefilter: false, out var foundOff)!.Select(c => c.Pattern),
+            TextPostProcessor.Candidates(rules, "kube and helm", prefilter: true, out var foundOn)!.Select(c => c.Pattern));
+        Assert.Equal((3, 3), (foundOff, foundOn));
+        Assert.Null(TextPostProcessor.Candidates(rules, "nothing here", prefilter: false, out var absentOff));
+        Assert.Null(TextPostProcessor.Candidates(rules, "nothing here", prefilter: true, out var absentOn));
+        Assert.Equal((3, 1), (absentOff, absentOn));
+        Assert.Equal(["kube"], TextPostProcessor.Candidates(rules, "\u212Aube", prefilter: true, out var unsound)!.Select(c => c.Pattern));
+        Assert.Equal(3, unsound);
+        Assert.Equal(["caf\u00e9"], TextPostProcessor.Candidates(rules, "CAF\u00c9", prefilter: true, out var nonAscii)!.Select(c => c.Pattern));
+        Assert.Equal(1, nonAscii);
+    }
+
+    [Fact]
+    public void The_post_processor_runs_only_the_rule_regexes_the_prefilter_cannot_rule_out()
+    {
+        // The output oracles above pass with the skip gone (review finding LANG-IR-01), so this counts the work itself, as the
+        // post-processor's own passes run it (RegexRuns): the dictation's pass, a snippet template's pass and a cleaned
+        // source's scan, over the processor's own rules, so the flag's wiring is counted too. Off, every rule runs on every
+        // pass; on, only the rules the search finds and the non-ASCII one, and every rule in a text that is not sound.
+        DictionaryEntry[] dictionary =
+        [
+            DictionaryEntry.New("kube", "Kube"), DictionaryEntry.New("helm", "Helm"), DictionaryEntry.New("argo cd", "Argo CD"),
+            DictionaryEntry.New("istio", "Istio"), DictionaryEntry.New("caf\u00e9", "Caf\u00e9"),
+        ];
+        Snippet[] snippets = [new(1, "brb", "be right back with helm")];
+        var off = Processor(dictionary, [], snippets, PerfFlags.None);
+        var on = Processor(dictionary, [], snippets, Prefilter);
+
+        (long Off, long On) Runs(string text, string? source)
+        {
+            var (offBefore, onBefore) = (off.RegexRuns, on.RegexRuns);
+            Same(off.ProcessDetailed(text, source), on.ProcessDetailed(text, source), text, source);
+            return (off.RegexRuns - offBefore, on.RegexRuns - onBefore);
+        }
+
+        // One pass: "kube" is found and "caf\u00e9" is not ASCII; the other three are ruled out.
+        Assert.Equal((5L, 2L), Runs("we deploy kube tonight", null));
+
+        // A source equal to the text reuses the dictation's pass, so it scans nothing more.
+        Assert.Equal((5L, 2L), Runs("we deploy kube tonight", "we deploy kube tonight"));
+
+        // A cleaned source unlike the text gets a scan of its own, with its own search: "kube", "helm" and "caf\u00e9" run there.
+        Assert.Equal((10L, 5L), Runs("we deploy kube tonight", "we deploy kube and helm tonight"));
+
+        // The snippet's template is the dictation's text and has a pass of its own: "helm" and "caf\u00e9" run in each.
+        Assert.Equal((10L, 4L), Runs("brb", null));
+
+        // U+212A: the text is not sound, so every rule runs, as with the flag off.
+        Assert.Equal((5L, 5L), Runs("the \u212Aube cluster", null));
+    }
+
+    [Fact]
+    public void Over_every_shipped_word_pack_the_prefilter_runs_a_small_share_of_the_rule_regexes()
+    {
+        // The corpus the skip is for: every shipped row under a small dictionary, and dictations of prose with a few of their
+        // terms. Off, every compiled rule runs on every dictation; on, only the rules the search finds and the non-ASCII
+        // ones, a small share. (The other passes are counted by the test above.)
+        var shipped = BuiltInDictionaryLibraries.All.SelectMany(pack => pack.Entries).ToList();
+        DictionaryEntry[] dictionary = [DictionaryEntry.New("york", "New York"), DictionaryEntry.New("azure", "AZURE"), DictionaryEntry.New("comma", ",")];
+        var off = Processor(dictionary, shipped, [], PerfFlags.None);
+        var on = Processor(dictionary, shipped, [], Prefilter);
+        var offRules = off.Compile(dictionary, shipped);
+        var onRules = on.Compile(dictionary, shipped);
+        var random = new Random(51_509);
+        string[] prose = ["so", "i", "pushed", "the", "changes", "and", "then", "we", "ran", "tests", "before", "lunch"];
+        const int dictations = 40;
+        for (var i = 0; i < dictations; i++)
+        {
+            var text = string.Join(" ", Enumerable.Range(0, random.Next(8, 30))
+                .Select(_ => random.Next(6) == 0 ? shipped[random.Next(shipped.Count)].Pattern : prose[random.Next(prose.Length)]));
+            Same(off.ProcessDetailed(text, null, offRules), on.ProcessDetailed(text, null, onRules), text, null);
+        }
+
+        output.WriteLine($"{dictations} dictations over {offRules.Count} compiled rules: {off.RegexRuns} rule regexes ran without the prefilter, {on.RegexRuns} with it.");
+        Assert.Equal(dictations * (long)offRules.Count, off.RegexRuns);
+        Assert.True(on.RegexRuns * 10 < off.RegexRuns, $"With the prefilter {on.RegexRuns} rule regexes ran, against {off.RegexRuns} without it.");
     }
 
     private static int CompareAll(
