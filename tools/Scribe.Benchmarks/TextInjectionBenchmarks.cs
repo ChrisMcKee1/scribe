@@ -1,5 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
+using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.TextInjection;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
@@ -9,7 +10,9 @@ namespace Scribe.Benchmarks;
 [MemoryDiagnoser]
 public class TextInjectionBenchmarks
 {
+    private const nint Window = 0x4242;
     private readonly Consumer _consumer = new();
+    private readonly TextInjector _injector = new(NullLogger<TextInjector>.Instance, new QuietPlatform(), new QuietClipboard());
     private string _text = string.Empty;
 
     [Params(TextInjectionScenario.LocalPlain, TextInjectionScenario.RemotePlain, TextInjectionScenario.LocalLineBreaks)]
@@ -45,23 +48,13 @@ public class TextInjectionBenchmarks
         return batches;
     }
 
+    // The shipping typing loop, TypeUnicode: every batch written into one buffer made after the first focus check and
+    // handed to SendInput as a span, through a platform that answers without allocating. perf-051 measured its exact
+    // array per batch here (DirectArrayBuilder); after the reconciliation BuildUnicodeChunk is a test-only wrapper, so the
+    // arm runs the loop itself. Its allocation is everything typing allocates; OldListBuilder's is everything 0.5.0's did.
     [Benchmark]
     [BenchmarkCategory("TextInjection")]
-    public int DirectArrayBuilder()
-    {
-        var pace = Pace();
-        int batches = 0;
-        for (int start = 0; start < _text.Length;)
-        {
-            int count = TextInjector.ChunkLength(_text, start, pace.BatchUnits, pace.PreferWordBoundary);
-            var inputs = TextInjector.BuildUnicodeChunk(_text, start, count, shiftEnter: true);
-            _consumer.Consume(inputs);
-            batches++;
-            start += count;
-        }
-
-        return batches;
-    }
+    public int ReusedBufferTyping() => _injector.TypeUnicode(_text, Window, shiftEnter: true, default, Pace()).Sent;
 
     private TypingPace Pace() =>
         Scenario == TextInjectionScenario.RemotePlain ? TypingPace.RemoteSession : TypingPace.Local;
@@ -152,6 +145,54 @@ public class TextInjectionBenchmarks
     {
         var text = string.Concat(Enumerable.Repeat(unit, (length / unit.Length) + 1));
         return text[..length];
+    }
+
+    // Answers every call without allocating, so ReusedBufferTyping measures only the injector.
+    private sealed class QuietPlatform : IInjectionPlatform
+    {
+        public nint GetForegroundWindow() => Window;
+
+        public uint SendInput(ReadOnlySpan<INPUT> inputs) => (uint)inputs.Length;
+
+        public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow) => false;
+
+        public void Sleep(int milliseconds)
+        {
+        }
+
+        public KeyScanCode ScanCodeOf(ushort virtualKey) => default;
+    }
+
+    // Typing never reaches the clipboard; every call refuses.
+    private sealed class QuietClipboard : IClipboardNative
+    {
+        public uint SequenceNumber => 0;
+
+        public int FormatCount => 0;
+
+        public bool IsFormatAvailable(uint format) => false;
+
+        public uint RegisterFormat(string name) => 0;
+
+        public bool TryOpen() => false;
+
+        public void Close()
+        {
+        }
+
+        public bool Empty() => false;
+
+        public bool TryReadText([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? text)
+        {
+            text = null;
+            return false;
+        }
+
+        public bool SetText(string text) => false;
+
+        public bool SetData(uint format, ReadOnlySpan<byte> data) => false;
+
+        public bool TryReadData(uint format, Span<byte> destination) => false;
     }
 }
 

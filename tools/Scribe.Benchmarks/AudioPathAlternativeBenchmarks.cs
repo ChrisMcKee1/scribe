@@ -57,11 +57,15 @@ public class AudioPathAlternativeBenchmarks
         return OldReadAll(_readAllSource, _pool);
     }
 
+    // The shipping read at 16 kHz: requests capped by RequestLimit (4,096 samples at a multiple of 16 kHz), the scratch
+    // grown by doubling as before. Same source and non-pooling pool as OldReadAllGrowth, so the two arms differ only in
+    // the request bound. perf-051 measured its estimated first rent here, which was dropped when it was reconciled with
+    // perf/memory-optimizer: after that merge this arm's call bound the requests to the capture length instead.
     [Benchmark]
-    public float[] EstimatedCapacityReadAll()
+    public float[] BoundedRequestReadAll()
     {
         _readAllSource.Reset();
-        return AudioCaptureService.ReadAll(_readAllSource, _pool, _samples16k.Length);
+        return AudioCaptureService.ReadAll(_readAllSource, _pool, AudioCaptureService.RequestLimit(_readAllSource.WaveFormat));
     }
 
     [Benchmark]
