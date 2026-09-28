@@ -525,8 +525,12 @@ the letter-digit shape's one digit where it had a run
 (`DictionarySuggestionMinerSpanTests.Every_token_of_up_to_six_characters_is_judged_as_the_previous_pattern_judged_it`), the
 case relations' staged buckets (`SpokenFormFoldTests.Case_relations_equal_the_reference_builder_for_every_code_unit`), the
 adoption plan folding the shipped values only when a custom library needs its upgrade markers
-(`LibraryAdoptionLazyShippedTests.Lazy_and_eager_plans_match_for_seeded_catalogs_and_all_reasons`), and `Regex.Count`
-(`Word_count_matches_legacy_regex_for_seeded_unicode`, `Evidence_count_matches_legacy_regex_for_seeded_unicode`).
+(`LibraryAdoptionLazyShippedTests.Lazy_and_eager_plans_match_for_seeded_catalogs_and_all_reasons`), `Regex.Count`
+(`Word_count_matches_legacy_regex_for_seeded_unicode`, `Evidence_count_matches_legacy_regex_for_seeded_unicode`), and two
+of the memory work's word pack changes: the kept previews, each read against a fresh composition of its inputs over seeded
+draft sequences (`LibraryPreviewMemoOracleTests.Every_kept_preview_reads_as_a_fresh_composition_of_its_inputs_over_seeded_draft_sequences`),
+and the status index's first holder inline, every status held to 0.5.0's composition, copied
+(`LibraryCompositionStatusOracleTests.Every_status_and_answer_is_what_10c9a0b_s_composition_gives_for_seeded_catalogs`).
 
 ## Project structure
 
