@@ -31,9 +31,9 @@ namespace Scribe.Core.Libraries;
 /// </para>
 /// <para>
 /// Immutable and safe to share. Built in one pass over the rows; the statuses' indexes and the glossary inclusion are
-/// computed on first use, once. Every collection a composition exposes or hands out is read-only, and
-/// <see cref="Coverage"/> and <see cref="OverlapReport"/> build a new result at every call, so no caller can change what
-/// another reads.
+/// computed on first use, once. Every collection a composition exposes or hands out is read-only through any interface,
+/// ICollection.SyncRoot included (<see cref="SharedReadOnlyCollection{T}"/>), and <see cref="Coverage"/> and
+/// <see cref="OverlapReport"/> build a new result at every call, so no caller can change what another reads.
 /// </para>
 /// </remarks>
 public sealed class LibraryComposition
@@ -139,17 +139,17 @@ public sealed class LibraryComposition
             }
         }
 
-        Rules = rules.AsReadOnly();
-        LibraryEntries = rules.Select(composed => composed.Entry).ToList().AsReadOnly();
-        AiLibraryEntries = rules
+        // Every collection below is read-only for callers through every interface, SyncRoot included: a composition is
+        // shared (Preview keeps them), so a caller that could change one would change what every later caller reads.
+        Rules = Shared(rules);
+        LibraryEntries = Shared(rules.Select(composed => composed.Entry).ToList());
+        AiLibraryEntries = Shared(rules
             .Where(composed => _sourceOfRule[composed.Entry].AiPermitted)
             .Select(composed => composed.Entry)
-            .ToList()
-            .AsReadOnly();
+            .ToList());
         AnyLegacyMarkerActive = _sources.Any(source => source.Participates && source.MarkerActive.Any(active => active));
 
-        // Read-only for callers, like every collection a composition hands out: a composition is shared (Preview keeps
-        // them), so a caller that could change it would change what every later caller reads.
+        // A ReadOnlySet's SyncRoot is the set wrapper itself, never the HashSet it wraps.
         AiExcludedLibraryIds = new ReadOnlySet<string>(_sources
             .Where(source => source.Participates && !source.AiPermitted)
             .Select(source => source.Id)
@@ -157,14 +157,13 @@ public sealed class LibraryComposition
 
         _glossary = new(ComputeGlossary);
         _rowsByKey = new(IndexRowsByKey);
-        _enabledLibraries = new(() => _sources
+        _enabledLibraries = new(() => Shared(_sources
             .Where(source => source.Participates)
             .Select(source => new DictionaryLibrary(
                 source.Id, source.Content.Name, source.Content.Category, source.Content.Description, source.BuiltIn,
-                Array.AsReadOnly(source.Entries!))
+                Shared(source.Entries!))
             { FileName = source.BuiltIn ? null : source.FileName })
-            .ToList()
-            .AsReadOnly());
+            .ToList()));
     }
 
     /// <summary>Whether this is a draft's preview (the result after Save) rather than the committed result.</summary>
@@ -489,7 +488,7 @@ public sealed class LibraryComposition
             : TermMarker.None;
 
         return new TermStatus(
-            marker, winner, winningId, winning, same.AsReadOnly(), different.AsReadOnly(), libraryRow.Review,
+            marker, winner, winningId, winning, Shared(same), Shared(different), libraryRow.Review,
             source.MarkerActive[row], glossary);
     }
 
@@ -569,7 +568,7 @@ public sealed class LibraryComposition
             }
         }
 
-        return keys.AsReadOnly();
+        return Shared(keys);
     }
 
     // The library that supplies a rule of this composition; internal for the vocabulary's origins.
@@ -589,6 +588,11 @@ public sealed class LibraryComposition
     }
 
     private static readonly IReadOnlySet<LibraryTermKey> EmptyKeys = new HashSet<LibraryTermKey>();
+
+    // How every collection a composition hands out is wrapped: read-only through every interface, SyncRoot included.
+    private static ReadOnlyCollection<T> Shared<T>(List<T> list) => new SharedReadOnlyCollection<T>(list);
+
+    private static ReadOnlyCollection<T> Shared<T>(T[] array) => new SharedReadOnlyCollection<T>(array);
 
     private static Dictionary<string, IReadOnlySet<LibraryTermKey>> MarkersByLibrary(LibraryLocalState state) =>
         state.LegacyMarkers

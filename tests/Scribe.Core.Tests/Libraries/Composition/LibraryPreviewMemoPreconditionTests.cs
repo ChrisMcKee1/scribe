@@ -226,7 +226,7 @@ public sealed class LibraryPreviewMemoPreconditionTests
         var made = CompositionMethods()
             .SelectMany(method => Instructions(method)
                 .Where(i => i.Code == OpCodes.Newobj)
-                .Select(i => (Method: method, Constructor: (ConstructorInfo)method.Module.ResolveMethod(i.Token)!)))
+                .Select(i => (Method: method, Constructor: (ConstructorInfo)ResolveMethod(method, i.Token))))
             .Where(made => made.Constructor.DeclaringType!.IsGenericType &&
                            made.Constructor.DeclaringType.GetGenericTypeDefinition() == typeof(Lazy<>))
             .ToList();
@@ -450,6 +450,14 @@ public sealed class LibraryPreviewMemoPreconditionTests
             .Where(i => i.Code.OperandType == OperandType.InlineField)
             .Select(i => Resolve(method, i.Token))
             .OfType<FieldInfo>()];
+
+    // A method or constructor a method's IL names, resolved in that method's generic context (a generic helper names
+    // members of types built over its own type parameters).
+    private static MethodBase ResolveMethod(MethodBase method, int token) =>
+        method.Module.ResolveMethod(
+            token,
+            method.DeclaringType is { IsGenericType: true } type ? type.GetGenericArguments() : null,
+            method.IsGenericMethod ? method.GetGenericArguments() : null)!;
 
     private static FieldInfo? Resolve(MethodBase method, int token)
     {

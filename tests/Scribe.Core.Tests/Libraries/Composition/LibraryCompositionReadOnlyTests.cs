@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Reflection;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
@@ -9,10 +10,12 @@ using static Scribe.Core.Tests.Libraries.Composition.LibraryPreviewMemoPrecondit
 namespace Scribe.Core.Tests.Libraries.Composition;
 
 /// <summary>
-/// Every collection a composition exposes or hands out is read-only (review round 1, item 1): Preview keeps compositions
-/// and returns the same one to every caller with equal inputs, so a caller able to change one would change what every
-/// later caller reads. A caller that casts one to a mutable interface and changes it gets NotSupportedException. Coverage
-/// and OverlapReport build a new result at every call, which stays the caller's own.
+/// Every collection a composition exposes or hands out is read-only (review rounds 1 and 2, item 1): Preview keeps
+/// compositions and returns the same one to every caller with equal inputs, so a caller able to change one would change
+/// what every later caller reads. A caller that casts one to a mutable interface and changes it gets
+/// NotSupportedException, through any interface, including ICollection.SyncRoot, which leads back to the collection itself
+/// and never to the storage behind it. Coverage and OverlapReport build a new result at every call, which stays the
+/// caller's own.
 /// </summary>
 public sealed class LibraryCompositionReadOnlyTests
 {
@@ -137,8 +140,111 @@ public sealed class LibraryCompositionReadOnlyTests
                 Assert.True((bool)collection.GetProperty(nameof(ICollection<int>.IsReadOnly))!.GetValue(value)!, property.Name);
                 var clear = Assert.Throws<TargetInvocationException>(() => collection.GetMethod(nameof(ICollection<int>.Clear))!.Invoke(value, null));
                 Assert.IsType<NotSupportedException>(clear.InnerException);
+                var root = Assert.IsAssignableFrom<System.Collections.ICollection>(value).SyncRoot;
+                Assert.True(ReferenceEquals(value, root), $"{property.Name}'s SyncRoot is a {root.GetType().Name}.");
+                if (property.PropertyType.GetGenericTypeDefinition() == typeof(IReadOnlyList<>))
+                {
+                    // Still a ReadOnlyCollection at run time, the IList a binding sees.
+                    Assert.True(IsReadOnlyCollection(value.GetType()), $"{property.Name} is a {value.GetType().Name}.");
+                }
             }
         }
+    }
+
+    // The reviewer's first case: a library's entries are the composition's own entry array, which the rules point at. A
+    // plain ReadOnlyCollection handed that array out through SyncRoot, and replacing an entry made a later preview with
+    // equal inputs, the same kept object, report the row as another library's and out of the glossary.
+    [Fact]
+    public void A_library_s_entries_cannot_be_reached_through_SyncRoot_and_a_kept_preview_keeps_its_winners()
+    {
+        var (catalog, draft, dictionary, budget) = OverlappingInputs();
+        var fresh = Read(Fresh(draft, catalog, dictionary, budget));
+        var preview = LibraryComposition.Preview(draft, catalog, dictionary, budget);
+        var general = preview.EnabledLibraries[0];
+        Assert.Equal("general", general.Id);
+        Assert.Equal("git hub", general.Entries[0].Pattern);
+
+        var root = ((System.Collections.ICollection)general.Entries).SyncRoot;
+        Assert.Same(general.Entries, root);
+        Assert.Throws<InvalidCastException>(() => (DictionaryEntry[])((System.Collections.ICollection)general.Entries).SyncRoot);
+        Assert.Throws<NotSupportedException>(() => ((System.Collections.IList)root)[0] = DictionaryEntry.New("word", "Other entry"));
+
+        var again = LibraryComposition.Preview(draft, catalog, dictionary, budget);
+        Assert.Same(preview, again);
+        var status = again.StatusOf("general", Key("git hub"));
+        Assert.Equal(TermWinner.ThisRow, status.Winner);
+        Assert.Equal(GlossaryInclusion.Included, status.Glossary);
+        Assert.Equal(fresh, Read(again));
+    }
+
+    // The reviewer's second case: clearing AiLibraryEntries through SyncRoot before the first status made the glossary
+    // count no library entry, so an included row read NotEligible.
+    [Fact]
+    public void The_AI_entries_cannot_be_cleared_through_SyncRoot_before_the_first_status()
+    {
+        var (catalog, draft, dictionary, budget) = OverlappingInputs();
+        var fresh = Read(Fresh(draft, catalog, dictionary, budget));
+        var preview = LibraryComposition.Preview(draft, catalog, dictionary, budget);
+
+        var root = ((System.Collections.ICollection)preview.AiLibraryEntries).SyncRoot;
+        Assert.Same(preview.AiLibraryEntries, root);
+        Assert.False(root is List<DictionaryEntry>, "AiLibraryEntries' SyncRoot is its list.");
+        Assert.Throws<NotSupportedException>(((System.Collections.IList)root).Clear);
+
+        var again = LibraryComposition.Preview(draft, catalog, dictionary, budget);
+        Assert.Same(preview, again);
+        Assert.NotEmpty(again.AiLibraryEntries);
+        Assert.Equal(GlossaryInclusion.Included, again.StatusOf("general", Key("git hub")).Glossary);
+        Assert.Equal(fresh, Read(again));
+    }
+
+    // Apart from SyncRoot, the wrapper is a ReadOnlyCollection like any other, over a list and over an array.
+    [Fact]
+    public void The_shared_wrapper_is_a_ReadOnlyCollection_but_for_its_SyncRoot()
+    {
+        List<string> list = ["a", "b", "c"];
+        string[] array = ["x", "y"];
+        foreach (var (shared, plain) in new (ReadOnlyCollection<string>, ReadOnlyCollection<string>)[]
+                 {
+                     (new SharedReadOnlyCollection<string>(list), list.AsReadOnly()),
+                     (new SharedReadOnlyCollection<string>(array), Array.AsReadOnly(array)),
+                 })
+        {
+            Assert.Equal(plain, shared);
+            Assert.Equal(plain.Count, ((System.Collections.ICollection)shared).Count);
+            Assert.False(((System.Collections.ICollection)shared).IsSynchronized);
+            Assert.Same(shared, ((System.Collections.ICollection)shared).SyncRoot);
+            Assert.NotSame(plain, ((System.Collections.ICollection)plain).SyncRoot);
+
+            var fromShared = new object[plain.Count + 1];
+            var fromPlain = new object[plain.Count + 1];
+            ((System.Collections.ICollection)shared).CopyTo(fromShared, 1);
+            ((System.Collections.ICollection)plain).CopyTo(fromPlain, 1);
+            Assert.Equal(fromPlain, fromShared);
+            var typed = new string[plain.Count];
+            ((System.Collections.ICollection)shared).CopyTo(typed, 0);
+            Assert.Equal(plain, typed);
+
+            var untyped = (System.Collections.IList)shared;
+            Assert.True(untyped.IsReadOnly);
+            Assert.True(untyped.IsFixedSize);
+            Assert.Equal(plain[1], untyped[1]);
+            Assert.Equal(1, untyped.IndexOf(plain[1]));
+            Assert.Throws<NotSupportedException>(() => untyped.Add("z"));
+        }
+    }
+
+    private static bool IsReadOnlyCollection(Type type)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(ReadOnlyCollection<>))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     [Fact]
@@ -231,6 +337,19 @@ public sealed class LibraryCompositionReadOnlyTests
         {
             Assert.Throws<NotSupportedException>(() => nonGeneric[0] = sample);
             Assert.Throws<NotSupportedException>(nonGeneric.Clear);
+        }
+
+        // ICollection.SyncRoot, the route that needs no reflection: it must lead back to the collection itself, never to
+        // the list, array or set behind it. (An empty array, which some results are, is its own root and holds nothing.)
+        if (exposed is System.Collections.ICollection untyped)
+        {
+            var root = untyped.SyncRoot;
+            Assert.True(ReferenceEquals(exposed, root), $"A {exposed.GetType().Name}'s SyncRoot is a {root.GetType().Name}.");
+            if (root is System.Collections.IList rootList && before.Count > 0)
+            {
+                Assert.Throws<NotSupportedException>(() => rootList[0] = sample);
+                Assert.Throws<NotSupportedException>(rootList.Clear);
+            }
         }
 
         Assert.Equal(before, exposed.ToList());
