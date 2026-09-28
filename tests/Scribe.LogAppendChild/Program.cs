@@ -5,6 +5,15 @@ using Scribe.Overlay.Logging;
 // A child process for AppendOnlyLogTests (DATA-O-02). Arguments:
 //   <app|overlay> <append-only|old> <logs directory> <yyyy-MM-dd> <tag> <count> <start event name>
 // Prints "ready" once it holds the start event, waits for it, then writes <count> numbered lines through the real writer.
+//
+// And the fixtures of BoundedChildProcessTests (DATA-IMPL-A-06), headless too:
+//   fixture hold-stdout   prints "ready", then keeps both streams open doing nothing, for at most a minute
+//   fixture flood-stderr  writes 4 MB to standard error, far past a pipe's buffer, then "done" to standard output
+if (args is ["fixture", var fixture])
+{
+    return Fixture.Run(fixture);
+}
+
 if (args.Length != 7)
 {
     Console.Error.WriteLine("usage: <app|overlay> <append-only|old> <directory> <yyyy-MM-dd> <tag> <count> <event>");
@@ -54,4 +63,36 @@ internal static class ChildLine
     // overwritten line can never pass for a whole one. AppendOnlyLogTests builds the same lines to compare.
     internal static string Format(string tag, int i) =>
         $"{tag} {i:D6} " + new string((char)('a' + (i % 26)), 40 + (i * 37 % 120)) + (i % 7 == 0 ? " \u00e9\u4e2d\U0001F600" : string.Empty);
+}
+
+internal static class Fixture
+{
+    // What flood-stderr writes, in characters: a pipe's buffer is a few kilobytes.
+    internal const int FloodChars = 4 * 1024 * 1024;
+
+    internal static int Run(string name)
+    {
+        switch (name)
+        {
+            case "hold-stdout":
+                Console.WriteLine("ready");
+                Console.Out.Flush();
+                Thread.Sleep(TimeSpan.FromMinutes(1));
+                return 0;
+            case "flood-stderr":
+                var chunk = new string('e', 4096);
+                for (var written = 0; written < FloodChars; written += chunk.Length)
+                {
+                    Console.Error.Write(chunk);
+                }
+
+                Console.Error.Flush();
+                Console.WriteLine("done");
+                Console.Out.Flush();
+                return 0;
+            default:
+                Console.Error.WriteLine("fixtures: hold-stdout, flood-stderr");
+                return 2;
+        }
+    }
 }

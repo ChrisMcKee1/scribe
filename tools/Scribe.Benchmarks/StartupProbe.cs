@@ -33,6 +33,9 @@ internal static class StartupProbe
     private const string ParentArgument = "--startup-probe";
     private const string ChildArgument = "--startup-child";
 
+    // A probe child measures one startup; one that is still running after this is stuck.
+    private static readonly TimeSpan ChildDeadline = TimeSpan.FromSeconds(60);
+
     public static bool IsRequested(string[] args) =>
         args.Any(arg => arg is ParentArgument or ChildArgument);
 
@@ -274,10 +277,7 @@ internal static class StartupProbe
     {
         var info = new ProcessStartInfo(Environment.ProcessPath!)
         {
-            UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
             WorkingDirectory = work,
         };
         foreach (var argument in new[] { ChildArgument, scenario, variant, data })
@@ -295,21 +295,26 @@ internal static class StartupProbe
             }
         }
 
-        using var child = Process.Start(info) ?? throw new InvalidOperationException("The probe child did not start.");
-        if (affinity > 0)
+        // Both streams drain while the child runs, and the deadline is real: a child stuck in its startup is ended at 60 s
+        // (its own process tree only) instead of holding the bench lane (DATA-IMPL-A-06).
+        var run = BoundedChildProcess.Run(
+            info,
+            ChildDeadline,
+            started: affinity > 0 ? child => child.ProcessorAffinity = (IntPtr)((1L << affinity) - 1) : null);
+        if (run.TimedOut)
         {
-            child.ProcessorAffinity = (IntPtr)((1L << affinity) - 1);
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"The probe child ({scenario} {variant}) did not finish within {ChildDeadline.TotalSeconds:F0} s and was ended (exit observed: {run.Exited})."));
         }
 
-        var output = child.StandardOutput.ReadToEnd();
-        var errors = child.StandardError.ReadToEnd();
-        if (!child.WaitForExit(TimeSpan.FromSeconds(60)) || child.ExitCode != 0)
+        if (run.ExitCode != 0)
         {
-            throw new InvalidOperationException($"The probe child failed ({scenario} {variant}): {errors}");
+            throw new InvalidOperationException($"The probe child failed ({scenario} {variant}, exit {run.ExitCode}): {run.Errors}");
         }
 
         var metrics = new List<(string, double)>();
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var line in run.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var equals = line.IndexOf('=');
             if (equals > 0 && double.TryParse(line[(equals + 1)..], NumberStyles.Float, CultureInfo.InvariantCulture, out var value))

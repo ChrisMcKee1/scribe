@@ -808,7 +808,7 @@ public sealed class AppendOnlyLogTests : IDisposable
     }
 
     // tests\Scribe.LogAppendChild, built beside the tests by their project reference, in the same configuration.
-    private static string ChildExecutable()
+    internal static string ChildExecutable()
     {
         var baseDirectory = AppContext.BaseDirectory;
         var separator = Path.DirectorySeparatorChar;

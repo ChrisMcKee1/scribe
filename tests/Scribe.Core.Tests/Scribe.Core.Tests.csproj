@@ -35,6 +35,7 @@
   <ItemGroup>
     <!-- The overlay's writer of the shared log (it has no Scribe.Core reference, so it is compiled here from its source). -->
     <Compile Include="..\..\src\Scribe.Overlay\Logging\OverlayLog.cs" Link="Linked\OverlayLog.cs" />
+    <Compile Include="..\..\tools\Scribe.Benchmarks\BoundedChildProcess.cs" Link="Linked\BoundedChildProcess.cs" />
   </ItemGroup>
 
 </Project>
