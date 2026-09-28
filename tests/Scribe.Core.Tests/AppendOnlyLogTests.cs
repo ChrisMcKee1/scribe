@@ -1080,7 +1080,12 @@ public sealed class AppendOnlyLogTests : IDisposable
 
         // Refused before anything of a helper exists: no process, no exit watch, no pipe, no replay.
         var refused = client.IndexOf("return LaunchOutcome.Refused;", StringComparison.Ordinal);
-        foreach (var later in new[] { "Process.Start(psi)", "_process = process;", "new NamedPipeClientStream(", "writer.WriteLine(_desired.ReplayLine);" })
+        Assert.True(refused >= 0);
+        foreach (var later in new[]
+                 {
+                     "Process.Start(psi)", "_process = process;", "HelperExitWatch.Attach(process, _log);",
+                     "new NamedPipeClientStream(", "writer.WriteLine(_desired.ReplayLine);",
+                 })
         {
             Assert.True(client.IndexOf(later, StringComparison.Ordinal) > refused, later);
         }
