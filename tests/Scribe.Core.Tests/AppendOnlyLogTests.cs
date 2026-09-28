@@ -300,6 +300,7 @@ public sealed class AppendOnlyLogTests : IDisposable
         Assert.Equal(written, lines.Count(line => line.StartsWith("app ", StringComparison.Ordinal)));
         Assert.Equal(lines.Length, written + helperLines.Count);
     }
+
     [Fact]
     public void A_mode_set_for_a_tool_says_what_it_was_given()
     {
