@@ -645,9 +645,20 @@ public sealed class ScribeDatabase : IDisposable
     // content deleted before it was on, earlier copies of a page still in the WAL until a checkpoint
     // truncates it, or copies of the file made elsewhere.
     private static void Configure(SqliteConnection connection, bool autoCheckpoint = true) =>
-        Execute(connection, string.Create(
+        Execute(connection, autoCheckpoint ? ConfigureBatchWithAutoCheckpoint : ConfigureBatchWithoutAutoCheckpoint);
+
+    // DATA-A-10: every open runs one of these two batches, so each is built once instead of once per open. The text is
+    // ConfigureBatch's, the interpolation every open used to make; ScribeDatabaseConfigureTextTests holds both to it.
+    private static readonly string ConfigureBatchWithAutoCheckpoint = ConfigureBatch(autoCheckpoint: true);
+    private static readonly string ConfigureBatchWithoutAutoCheckpoint = ConfigureBatch(autoCheckpoint: false);
+
+    internal static string ConfiguredBatch(bool autoCheckpoint) =>
+        autoCheckpoint ? ConfigureBatchWithAutoCheckpoint : ConfigureBatchWithoutAutoCheckpoint;
+
+    private static string ConfigureBatch(bool autoCheckpoint) =>
+        string.Create(
             CultureInfo.InvariantCulture,
-            $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; PRAGMA wal_autocheckpoint={(autoCheckpoint ? WalAutoCheckpointPages : 0)};"));
+            $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; PRAGMA wal_autocheckpoint={(autoCheckpoint ? WalAutoCheckpointPages : 0)};");
 
     // sqlite.org: auto_vacuum can change from NONE only while a database is new (before its first
     // page is written, which journal_mode=WAL already does) or through a full VACUUM. A brand-new
