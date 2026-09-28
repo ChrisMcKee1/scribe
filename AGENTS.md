@@ -1804,6 +1804,15 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   `LibraryVocabularyRealSourceTests` runs W-V's publisher, dictation pass and admission point over the library service
   itself: a hold-back and a restoration at the same generation, a dictation that keeps its own generation across a Save,
   a one-off completion under a narrowed scope or a stale recipient, and store=false on the Responses surface.
+- **Previews are kept per draft.** `LibraryComposition.Preview` keeps the two most recent previews of each draft in a
+  `ConditionalWeakTable` released with the draft, and returns one for the same committed catalog object, budget and enabled
+  dictionary entries (equal, in order); the overload that takes a precedence rule composes every time.
+  `LibraryPreviewMemoPreconditionTests` pins what this stands on (nothing a draft or catalog reaches can change after
+  construction; a composition's lazies are safe to compute concurrently): a new field on any of those types must keep it
+  passing. `LibraryCompositionBenchmarks.Preview` measures a fresh composition; `LibraryPreviewMemoBenchmarks` measures
+  kept previews (the Hit arms) and a first one (MissNewDraftPreview). Everything a composition exposes is handed out
+  through `SharedReadOnlyCollection<T>` or `ReadOnlySet<T>`, so a kept preview cannot be changed by a caller;
+  `LibraryCompositionReadOnlyTests` pins it.
 - **Formats.** A managed file this version writes carries `# scribe-format: 2` and 0.4.3's raw metadata lines; one without
   the marker is read exactly as 0.4.3 read it. An export is UTF-8 with a byte order mark, quoted metadata and the
   reversible formula guard (`# formula-guard: 1`); an import decodes strictly with an ANSI fallback. Every write is encoded
