@@ -74,7 +74,7 @@ internal static class InjectionNativeMethods
     }
 
     [DllImport("user32.dll", SetLastError = true)]
-    internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+    internal static extern unsafe uint SendInput(uint nInputs, INPUT* pInputs, int cbSize);
 
     [DllImport("user32.dll")]
     internal static extern nint GetForegroundWindow();

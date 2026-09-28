@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -89,7 +88,12 @@ internal sealed class OverlayIpcServer : IDisposable
     // reference to Scribe.Core; OverlayPipeProtocolTests keeps this switch and that list equal.
     private void Dispatch(string line)
     {
-        var trimmed = line.AsSpan().Trim();
+        if (TryDispatchMeter(line))
+        {
+            return;
+        }
+
+        var trimmed = line.Trim();
         if (trimmed.Length == 0)
         {
             return;
@@ -97,70 +101,83 @@ internal sealed class OverlayIpcServer : IDisposable
 
         var sp = trimmed.IndexOf(' ');
         var cmd = sp < 0 ? trimmed : trimmed[..sp];
-        var arg = sp < 0 ? ReadOnlySpan<char>.Empty : trimmed[(sp + 1)..];
+        var arg = sp < 0 ? string.Empty : trimmed[(sp + 1)..];
 
-        if (cmd.Equals("RECORDING", StringComparison.OrdinalIgnoreCase))
+        switch (cmd.ToUpperInvariant())
         {
-            _window.ShowRecording();
+            case "RECORDING":
+                _window.ShowRecording();
+                break;
+            case "WARNING":
+                _window.ShowRecordingWarning(arg);
+                break;
+            case "PROCESSING":
+                _window.ShowProcessing(arg.Trim() == "1");
+                break;
+            case "TYPED":
+                _window.ShowOutcome(OverlayState.Typed, null);
+                break;
+            case "TYPEDWITHOUTCLEANUP":
+                _window.ShowOutcome(OverlayState.TypedWithoutCleanup, arg);
+                break;
+            case "NOTHINGTYPED":
+                _window.ShowOutcome(OverlayState.NothingTyped, arg);
+                break;
+            case "PARTLYTYPED":
+                _window.ShowOutcome(OverlayState.PartlyTyped, arg);
+                break;
+            case "HIDE":
+                _window.Hide();
+                break;
+            case "METER":
+                DispatchMeter(arg);
+                break;
+            case "POSITION":
+                if (Enum.TryParse<OverlayAnchor>(arg.Trim(), ignoreCase: true, out var anchor))
+                {
+                    _window.SetAnchor(anchor);
+                }
+                else
+                {
+                    OverlayLog.Warn($"OverlayIpcServer POSITION with unknown anchor '{arg}'");
+                }
+                break;
+            case "WARMUP":
+                break; // the window is already constructed and warm
+            case "EXIT":
+                OverlayLog.Write("OverlayIpcServer EXIT received");
+                _onDisconnected();
+                break;
+            default:
+                OverlayLog.Warn($"OverlayIpcServer unknown command '{cmd}'");
+                break;
         }
-        else if (cmd.Equals("WARNING", StringComparison.OrdinalIgnoreCase))
+    }
+
+    // METER arrives up to 40 times a second while recording, so it is read on the line's own characters, without the two
+    // substrings Dispatch cuts from other lines. It takes exactly the lines the switch reads as METER: trimmed as
+    // string.Trim trims, a verb equal to "METER" ignoring case is one ToUpperInvariant makes "METER" (no character outside
+    // ASCII upper-cases to M, E, T or R), and the level is parsed the same way. So no line reaches the switch's METER case,
+    // which is kept so that the switch still names every verb.
+    private bool TryDispatchMeter(string line)
+    {
+        var trimmed = line.AsSpan().Trim();
+        var sp = trimmed.IndexOf(' ');
+        var cmd = sp < 0 ? trimmed : trimmed[..sp];
+        if (!cmd.Equals("METER", StringComparison.OrdinalIgnoreCase))
         {
-            _window.ShowRecordingWarning(arg.ToString());
+            return false;
         }
-        else if (cmd.Equals("PROCESSING", StringComparison.OrdinalIgnoreCase))
+
+        DispatchMeter(sp < 0 ? ReadOnlySpan<char>.Empty : trimmed[(sp + 1)..]);
+        return true;
+    }
+
+    private void DispatchMeter(ReadOnlySpan<char> arg)
+    {
+        if (int.TryParse(arg.Trim(), out var v))
         {
-            _window.ShowProcessing(arg.Trim().Equals("1", StringComparison.Ordinal));
-        }
-        else if (cmd.Equals("TYPED", StringComparison.OrdinalIgnoreCase))
-        {
-            _window.ShowOutcome(OverlayState.Typed, null);
-        }
-        else if (cmd.Equals("TYPEDWITHOUTCLEANUP", StringComparison.OrdinalIgnoreCase))
-        {
-            _window.ShowOutcome(OverlayState.TypedWithoutCleanup, arg.ToString());
-        }
-        else if (cmd.Equals("NOTHINGTYPED", StringComparison.OrdinalIgnoreCase))
-        {
-            _window.ShowOutcome(OverlayState.NothingTyped, arg.ToString());
-        }
-        else if (cmd.Equals("PARTLYTYPED", StringComparison.OrdinalIgnoreCase))
-        {
-            _window.ShowOutcome(OverlayState.PartlyTyped, arg.ToString());
-        }
-        else if (cmd.Equals("HIDE", StringComparison.OrdinalIgnoreCase))
-        {
-            _window.Hide();
-        }
-        else if (cmd.Equals("METER", StringComparison.OrdinalIgnoreCase))
-        {
-            if (int.TryParse(arg.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
-            {
-                _window.SetMeter(v / 1000.0);
-            }
-        }
-        else if (cmd.Equals("POSITION", StringComparison.OrdinalIgnoreCase))
-        {
-            if (Enum.TryParse<OverlayAnchor>(arg.Trim(), ignoreCase: true, out var anchor))
-            {
-                _window.SetAnchor(anchor);
-            }
-            else
-            {
-                OverlayLog.Warn($"OverlayIpcServer POSITION with unknown anchor '{arg.ToString()}'");
-            }
-        }
-        else if (cmd.Equals("WARMUP", StringComparison.OrdinalIgnoreCase))
-        {
-            return; // the window is already constructed and warm
-        }
-        else if (cmd.Equals("EXIT", StringComparison.OrdinalIgnoreCase))
-        {
-            OverlayLog.Write("OverlayIpcServer EXIT received");
-            _onDisconnected();
-        }
-        else
-        {
-            OverlayLog.Warn($"OverlayIpcServer unknown command '{cmd.ToString()}'");
+            _window.SetMeter(v / 1000.0);
         }
     }
 

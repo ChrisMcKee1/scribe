@@ -24,6 +24,11 @@ internal sealed class CaptureRecording
     /// <summary>True when the capture outgrew its reservation and moved to a larger array.</summary>
     public bool Grew { get; private set; }
 
+    // The array this recording started with, once it has outgrown it. Growing zeroes it, and it is kept here rather than
+    // dropped so that the pool can keep it for the next capture instead of reserving a fresh one; only the first array
+    // is kept (a larger one grown into and outgrown again is garbage), so what the pool keeps stays reservation-sized.
+    private byte[]? _reservation;
+
     public ReadOnlySpan<byte> Written => Buffer.AsSpan(0, Length);
 
     public void Write(ReadOnlySpan<byte> data)
@@ -58,6 +63,16 @@ internal sealed class CaptureRecording
         return buffer;
     }
 
+    /// <summary>
+    /// Takes away the array this recording started with, already zeroed, when it outgrew it; null when it never grew.
+    /// </summary>
+    internal byte[]? TakeReservation()
+    {
+        var reservation = _reservation;
+        _reservation = null;
+        return reservation;
+    }
+
     // Same growth rule as MemoryStream, which this replaces: at least double, capped at the largest
     // array the runtime allows, so a long dictation still costs a logarithmic number of copies.
     private void Grow(int required)
@@ -68,8 +83,13 @@ internal sealed class CaptureRecording
         var expanded = new byte[capacity];
         Buffer.AsSpan(0, Length).CopyTo(expanded);
 
-        // The outgrown array holds the start of this dictation and is about to become garbage.
+        // The outgrown array holds the start of this dictation, so it is zeroed before it is let go.
         Array.Clear(Buffer, 0, Length);
+        if (!Grew && Buffer.Length > 0)
+        {
+            _reservation = Buffer;
+        }
+
         Buffer = expanded;
         Grew = true;
     }
@@ -81,8 +101,9 @@ internal sealed class CaptureRecording
 /// on every press.
 /// <para>
 /// At most one buffer is retained, and it never holds audio: a recording is zeroed when it comes
-/// back, before it can be kept. A recording that outgrew its reservation is dropped rather than
-/// kept, so what stays resident is bounded by the reservation clamp in
+/// back, before it can be kept. A recording that outgrew its reservation gives back the reservation
+/// it started with, zeroed when it was outgrown, and the larger array it grew into is dropped, so
+/// what stays resident is bounded by the reservation clamp in
 /// <see cref="AudioCaptureService.ReservationBytes"/>. Retaining is not returning memory to the OS;
 /// <see cref="ReleaseRetained"/> lets an idle-time release give it back to the garbage collector.
 /// </para>
@@ -153,9 +174,10 @@ internal sealed class CaptureBufferPool
 
     /// <summary>
     /// Takes the buffer back from the recording and zeroes it, and when <paramref name="retain"/> is
-    /// set and the recording never outgrew its reservation, keeps it for the next capture. Only call
-    /// once nothing can still write to the recording; a write that arrives anyway lands in a fresh
-    /// array of its own, never in the kept one.
+    /// set, keeps a buffer for the next capture: the recording's own when it never outgrew its
+    /// reservation, otherwise the reservation it started with (zeroed when it was outgrown), never the
+    /// larger array it grew into. Only call once nothing can still write to the recording; a write that
+    /// arrives anyway lands in a fresh array of its own, never in the kept one.
     /// </summary>
     public void Return(CaptureRecording recording, bool retain)
     {
@@ -163,15 +185,17 @@ internal sealed class CaptureBufferPool
 
         var grew = recording.Grew;
         var buffer = recording.Detach();
+        var reservation = recording.TakeReservation();
         _afterWipe?.Invoke();
-        if (!retain || grew)
+        var keep = grew ? reservation : buffer;
+        if (!retain || keep is null)
         {
             return;
         }
 
         lock (_gate)
         {
-            _retained ??= buffer;
+            _retained ??= keep;
         }
     }
 

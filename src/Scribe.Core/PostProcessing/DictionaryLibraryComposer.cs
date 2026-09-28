@@ -33,7 +33,7 @@ public static class DictionaryLibraryComposer
     public static IReadOnlyList<DictionaryEntry> ComposeLibraries(IEnumerable<DictionaryLibrary> libraries)
     {
         ArgumentNullException.ThrowIfNull(libraries);
-        return Deduplicate(LibraryPrecedence.Order(libraries).SelectMany(l => l.EnabledEntries));
+        return Deduplicate(LibraryPrecedence.Order(libraries).SelectMany(l => l.EnabledEntries), capacity: 0);
     }
 
     /// <summary>
@@ -47,13 +47,21 @@ public static class DictionaryLibraryComposer
     {
         ArgumentNullException.ThrowIfNull(baseEntries);
         ArgumentNullException.ThrowIfNull(libraryEntries);
-        return Deduplicate(baseEntries.Concat(libraryEntries));
+
+        // Every entry kept is one of the inputs, so when both know their counts the set and the list are sized once rather
+        // than grown from empty; the counts are read without enumerating either input.
+        var capacity = baseEntries.TryGetNonEnumeratedCount(out var first) &&
+                       libraryEntries.TryGetNonEnumeratedCount(out var second) &&
+                       first <= int.MaxValue - second
+            ? first + second
+            : 0;
+        return Deduplicate(baseEntries.Concat(libraryEntries), capacity);
     }
 
-    private static List<DictionaryEntry> Deduplicate(IEnumerable<DictionaryEntry> entries)
+    private static List<DictionaryEntry> Deduplicate(IEnumerable<DictionaryEntry> entries, int capacity)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<DictionaryEntry>();
+        var seen = new HashSet<string>(capacity, StringComparer.OrdinalIgnoreCase);
+        var result = new List<DictionaryEntry>(capacity);
         foreach (var entry in entries)
         {
             if (entry is null)

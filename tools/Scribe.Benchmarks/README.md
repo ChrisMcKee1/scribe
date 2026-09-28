@@ -23,7 +23,7 @@ dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak --cycles 300 -
 | --- | --- |
 | `HotPathBenchmarks` | cleanup chunking, `AudioCaptureService.ReadAll`, a 100-rule dictionary pass, history audio serialization |
 | `ProcessDetailedBenchmarks` | `TextPostProcessor.ProcessDetailed` for short and long text, a 20-rule and an every-library (about 1,500 rule) dictionary, a source identical to the text or a raw transcript behind cleaned text, and snippets on or off. The `FullRescan` baseline arm is the original algorithm, which normalizes and scans the source a second time even when it is the text itself; `ProcessDetailed` is what ships and reuses that work when the source is identical. Both return identical results (pinned by `PostProcessorSourcePassTests`). |
-| `CaptureAssemblyBenchmarks` | allocations of assembling a capture from synthetic 48 kHz stereo float packets and converting it to 16 kHz mono. `FreshReservation` is the former shape (a new 30-second `MemoryStream` per capture); `ReusedBuffer` is the shipping `CaptureBufferPool` path. At 40 s both arms outgrow the reservation, and the pool deliberately drops a grown buffer rather than keep it. |
+| `CaptureAssemblyBenchmarks` | allocations of assembling a capture from synthetic 48 kHz stereo float packets and converting it to 16 kHz mono. `FreshReservation` is the former shape (a new 30-second `MemoryStream` per capture); `ReusedBuffer` is the shipping `CaptureBufferPool` path. At 40 s both arms outgrow the reservation; the pool drops the grown buffer but keeps the zeroed reservation it started with, so the next capture reuses it. |
 
 ## Which architecture actually ran
 

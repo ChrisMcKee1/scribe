@@ -223,7 +223,10 @@ public sealed class CleanupPromptRebuildTests
             [DictionaryEntry.New("contoso", "Contoso")],
             AiVocabularyScope.None));
         Assert.Equal(CleanupOutcome.Cleaned, (await sameTextNewAdmission.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
-        Assert.Equal(buildsBeforeDictation + 2, fake.Agents.Count);
+
+        // A new admission whose glossary text is unchanged carries the same prompt, and admitted agents are shared by
+        // prompt text, as in 0.5.0, so it reuses the agent instead of building another.
+        Assert.Equal(buildsBeforeDictation + 1, fake.Agents.Count);
     }
 
     /// <summary>How far the initialization a prompt change supersedes gets before it stops.</summary>

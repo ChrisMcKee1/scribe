@@ -5,6 +5,9 @@ namespace Scribe.Core.TextInjection;
 /// <summary>The real Win32 focus, input and timing calls behind <see cref="IInjectionPlatform"/>.</summary>
 internal sealed class Win32InjectionPlatform : IInjectionPlatform
 {
+    /// <summary>SendInput's cbSize: the marshaled size of one INPUT, which Windows checks against its own.</summary>
+    internal static readonly int InputSize = Marshal.SizeOf<InjectionNativeMethods.INPUT>();
+
     public static Win32InjectionPlatform Instance { get; } = new();
 
     private Win32InjectionPlatform()
@@ -13,8 +16,13 @@ internal sealed class Win32InjectionPlatform : IInjectionPlatform
 
     public nint GetForegroundWindow() => InjectionNativeMethods.GetForegroundWindow();
 
-    public uint SendInput(InjectionNativeMethods.INPUT[] inputs) =>
-        InjectionNativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<InjectionNativeMethods.INPUT>());
+    public unsafe uint SendInput(ReadOnlySpan<InjectionNativeMethods.INPUT> inputs)
+    {
+        fixed (InjectionNativeMethods.INPUT* first = inputs)
+        {
+            return InjectionNativeMethods.SendInput((uint)inputs.Length, first, InputSize);
+        }
+    }
 
     public void Sleep(int milliseconds) => Thread.Sleep(milliseconds);
 

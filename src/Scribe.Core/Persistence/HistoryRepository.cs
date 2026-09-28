@@ -217,7 +217,6 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             return [];
         }
 
-        var textQuery = query.Trim();
         using var connection = _database.Open();
         using var command = CreateHistoryReadCommand(connection, ", text LIKE $query ESCAPE '\\' AS text_match");
         command.CommandText +=
@@ -225,18 +224,43 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
              FROM history
             WHERE text LIKE $query ESCAPE '\'
                 OR target_app IS NOT NULL
-            ORDER BY timestamp_utc DESC, id DESC
+            ORDER BY timestamp_utc DESC, id DESC;
             """;
-        command.Parameters.AddWithValue("$query", $"%{EscapeLike(textQuery)}%");
+        command.Parameters.AddWithValue("$query", $"%{EscapeLike(query.Trim())}%");
 
         var results = new List<HistoryEntry>();
         using var reader = command.ExecuteReader();
         while (reader.Read() && results.Count < limit)
         {
-            if (reader.GetInt64(10) != 0 ||
-                AppMatches(reader.IsDBNull(6) ? null : reader.GetString(6), query))
+            // Each read that can throw runs for every row and in ReadHistoryEntry's order, so a row that cannot be read fails
+            // the search where it always did. The transcript and the model id, whose reads cannot throw once they are known
+            // not to be NULL, are read only for a row that matches.
+            var id = reader.GetInt64(0);
+            var timestampUtc = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+            if (reader.IsDBNull(2))
             {
-                results.Add(ReadHistoryEntry(reader));
+                _ = reader.GetString(2);
+            }
+
+            var audioMilliseconds = reader.GetInt32(3);
+            var decodeMilliseconds = reader.GetInt32(4);
+            int? cleanupMilliseconds = reader.IsDBNull(5) ? null : reader.GetInt32(5);
+            var targetApp = reader.IsDBNull(6) ? null : reader.GetString(6);
+            long? audioBlobId = reader.IsDBNull(7) ? null : reader.GetInt64(7);
+            var aiRating = reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9);
+            if (reader.GetInt64(10) != 0 || FriendlyAppMatches(targetApp, query))
+            {
+                results.Add(new HistoryEntry(
+                    id,
+                    timestampUtc,
+                    reader.GetString(2),
+                    audioMilliseconds,
+                    decodeMilliseconds,
+                    cleanupMilliseconds,
+                    targetApp,
+                    audioBlobId,
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    aiRating));
             }
         }
 
@@ -285,14 +309,14 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9));
 
+    private static bool FriendlyAppMatches(string? targetApp, string query) =>
+        !string.IsNullOrWhiteSpace(targetApp) &&
+        AppDisplayName.For(targetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+
     private static string EscapeLike(string query) =>
         query.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal);
-
-    private static bool AppMatches(string? targetApp, string query) =>
-        !string.IsNullOrWhiteSpace(targetApp) &&
-        AppDisplayName.For(targetApp).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static HistoryEntry? GetById(SqliteConnection connection, SqliteTransaction transaction, long id)
     {

@@ -11,8 +11,9 @@ namespace Scribe.Benchmarks;
 /// the shape the service had before its working buffer was reused: a fresh 30-second
 /// <see cref="MemoryStream"/> reservation per capture (11,520,000 bytes at 48 kHz stereo float, on
 /// the large object heap). The other arm is the shipping path through <see cref="CaptureBufferPool"/>.
-/// Both arms share the metering, analysis and resampling code. At 40 s both outgrow the reservation,
-/// and the pool deliberately drops a grown buffer instead of keeping it, so the two arms converge.
+/// Both arms share the metering, analysis and resampling code. At 40 s both outgrow the reservation:
+/// the pool drops the grown buffer but keeps the zeroed reservation it started with, so only the
+/// fresh-reservation arm reserves again for the next capture.
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Audio")]

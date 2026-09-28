@@ -463,7 +463,7 @@ public sealed class TextInjector : ITextInjector
         return ((int)sent, inputs.Length);
     }
 
-    private (int Sent, int Total, int Batches) TypeUnicode(
+    internal (int Sent, int Total, int Batches) TypeUnicode(
         string text, nint expectedForegroundWindow, bool shiftEnter, InjectionKeys keys, TypingPace pace)
     {
         int total = CountKeyEvents(text, 0, text.Length, shiftEnter);
@@ -481,6 +481,7 @@ public sealed class TextInjector : ITextInjector
         // (TypingPace), for the remote session's input stack.
         int sent = 0;
         int batches = 0;
+        INPUT[]? buffer = null;
         try
         {
             for (int start = 0; start < text.Length;)
@@ -491,15 +492,21 @@ public sealed class TextInjector : ITextInjector
                 }
 
                 int count = ChunkLength(text, start, pace.BatchUnits, pace.PreferWordBoundary);
-                var inputs = BuildUnicodeChunk(text, start, count, shiftEnter, keys);
 
-                int delivered = SendWithRetry(inputs);
+                // One buffer for every batch of this insertion, each written over the last: SendInput has copied a batch
+                // into the input stream by the time it returns, and a batch is at most BatchUnits code units (ChunkLength),
+                // so it never needs more than MaxEventsPerBatch events. It is made where the first batch was always built,
+                // after that batch's focus check, so a focus that moved before any text was typed never makes one.
+                buffer ??= new INPUT[Math.Min(total, MaxEventsPerBatch(pace.BatchUnits, shiftEnter))];
+                int events = WriteUnicodeChunk(buffer, text, start, count, shiftEnter, keys);
+
+                int delivered = SendWithRetry(buffer.AsSpan(0, events));
                 sent += delivered;
                 batches++;
 
                 // The target stopped accepting input mid-stream even after retries; stop and let the caller
                 // report the partial send (the text.inject span is marked errored when sent != total).
-                if (delivered < inputs.Length)
+                if (delivered < events)
                 {
                     // A truncated chunk can leave Shift logically down (the chord's release is its last
                     // event), which would turn anything the user types next into a shortcut. Same reason
@@ -525,7 +532,7 @@ public sealed class TextInjector : ITextInjector
         {
             // Unreachable: the filter always returns false so the exception keeps propagating. The
             // filter exists purely to run the Shift key-up first. Without it, a throw between the
-            // chord's key-down and key-up (SendWithRetry, or an allocation failure building a chunk)
+            // chord's key-down and key-up (SendWithRetry, or a fault writing a chunk)
             // would leave Shift latched down for the user's next real keystroke, turning it into a
             // shortcut. A filter is used rather than catch/rethrow so the original stack is untouched.
             throw;
@@ -573,11 +580,10 @@ public sealed class TextInjector : ITextInjector
 
     // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally because
     // each surrogate half is sent as its own KEYEVENTF_UNICODE event. Line breaks are the exception:
-    // see BuildLineBreak.
-    internal static INPUT[] BuildUnicodeChunk(
-        string text, int start, int count, bool shiftEnter = true, InjectionKeys keys = default)
+    // see WriteLineBreak. Returns how many events it wrote, at the start of destination.
+    internal static int WriteUnicodeChunk(
+        Span<INPUT> destination, string text, int start, int count, bool shiftEnter, InjectionKeys keys)
     {
-        var inputs = new INPUT[CountKeyEvents(text, start, count, shiftEnter)];
         int written = 0;
         int end = start + count;
         for (int i = start; i < end; i++)
@@ -585,18 +591,7 @@ public sealed class TextInjector : ITextInjector
             char ch = text[i];
             if (ch is '\r' or '\n')
             {
-                if (shiftEnter)
-                {
-                    inputs[written++] = KeyDown(VK_SHIFT, keys.Shift);
-                    inputs[written++] = KeyDown(VK_RETURN, keys.Return);
-                    inputs[written++] = KeyUp(VK_RETURN, keys.Return);
-                    inputs[written++] = KeyUp(VK_SHIFT, keys.Shift);
-                }
-                else
-                {
-                    inputs[written++] = KeyDown(VK_RETURN, keys.Return);
-                    inputs[written++] = KeyUp(VK_RETURN, keys.Return);
-                }
+                written += WriteLineBreak(destination[written..], shiftEnter, keys);
 
                 // CRLF is one line break, not two. ChunkLength guarantees the pair is never split
                 // across batches, so the lookahead never runs past the end of this chunk.
@@ -608,11 +603,23 @@ public sealed class TextInjector : ITextInjector
                 continue;
             }
 
-            inputs[written++] = UnicodeKey(ch, keyUp: false);
-            inputs[written++] = UnicodeKey(ch, keyUp: true);
+            destination[written++] = UnicodeKey(ch, keyUp: false);
+            destination[written++] = UnicodeKey(ch, keyUp: true);
         }
 
-        return inputs;
+        return written;
+    }
+
+    // The most events a batch of batchUnits code units can make: two per unit, or four for a lone CR or LF sent as
+    // Shift+Enter (a CRLF pair makes one line break from two units).
+    internal static int MaxEventsPerBatch(int batchUnits, bool shiftEnter) => batchUnits * (shiftEnter ? 4 : 2);
+
+    // The events WriteUnicodeChunk writes for one batch, in an array of exactly that length.
+    internal static INPUT[] BuildUnicodeChunk(
+        string text, int start, int count, bool shiftEnter = true, InjectionKeys keys = default)
+    {
+        var events = new INPUT[MaxEventsPerBatch(count, shiftEnter)];
+        return events[..WriteUnicodeChunk(events, text, start, count, shiftEnter, keys)];
     }
 
     // A line break has to be a real Return keypress. Sent as KEYEVENTF_UNICODE the bare LF control
@@ -627,22 +634,30 @@ public sealed class TextInjector : ITextInjector
     // RichEdit it is indistinguishable from Enter, so the shifted form is safe or strictly better
     // nearly everywhere. Word treats it as a line break rather than a paragraph mark, which is the
     // one visible difference and still renders as the new line the speaker asked for.
-    internal static IEnumerable<INPUT> BuildLineBreak(bool shiftEnter, InjectionKeys keys = default)
+    private static int WriteLineBreak(Span<INPUT> destination, bool shiftEnter, InjectionKeys keys)
     {
         if (!shiftEnter)
         {
-            return [KeyDown(VK_RETURN, keys.Return), KeyUp(VK_RETURN, keys.Return)];
+            destination[0] = KeyDown(VK_RETURN, keys.Return);
+            destination[1] = KeyUp(VK_RETURN, keys.Return);
+            return 2;
         }
 
         // Physical chord order: hold shift, tap Return, release shift. Unicode events are unaffected
         // by modifier state, and shift is released before the next character, so nothing leaks.
-        return
-        [
-            KeyDown(VK_SHIFT, keys.Shift),
-            KeyDown(VK_RETURN, keys.Return),
-            KeyUp(VK_RETURN, keys.Return),
-            KeyUp(VK_SHIFT, keys.Shift),
-        ];
+        destination[0] = KeyDown(VK_SHIFT, keys.Shift);
+        destination[1] = KeyDown(VK_RETURN, keys.Return);
+        destination[2] = KeyUp(VK_RETURN, keys.Return);
+        destination[3] = KeyUp(VK_SHIFT, keys.Shift);
+        return 4;
+    }
+
+    // The events WriteLineBreak writes for one line break.
+    internal static IEnumerable<INPUT> BuildLineBreak(bool shiftEnter, InjectionKeys keys = default)
+    {
+        var events = new INPUT[shiftEnter ? 4 : 2];
+        WriteLineBreak(events, shiftEnter, keys);
+        return events;
     }
 
     // Keeps a CRLF pair inside a single batch: split across two SendInput calls the CR and the LF
@@ -725,13 +740,13 @@ public sealed class TextInjector : ITextInjector
 
     // Sends a batch, resending only the unsent remainder when SendInput reports a short count (the
     // input stream was momentarily blocked by other input). Returns how many events were delivered.
-    private int SendWithRetry(INPUT[] inputs)
+    private int SendWithRetry(ReadOnlySpan<INPUT> inputs)
     {
         int offset = 0;
         int attempts = 0;
         while (offset < inputs.Length)
         {
-            var slice = offset == 0 ? inputs : inputs[offset..];
+            var slice = inputs[offset..];
             uint sent = _platform.SendInput(slice);
             offset += (int)sent;
 

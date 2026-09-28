@@ -15,14 +15,20 @@ namespace Scribe.Overlay.Logging;
 /// </summary>
 public static class OverlayLog
 {
-    private const int WriteAttempts = 12;
     private const int MaxExceptionFrames = 32;
     private const int MaxExceptionFrameChars = 512;
 
     private static readonly object Gate = new();
-    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static string? _path;
     private static DateOnly _pathDate;
+
+    // A StreamWriter given only a stream encodes as UTF-8 without a byte order mark and throws on text that is not well
+    // formed; it buffers 1,024 characters and encodes a line that fits them in one piece when it is disposed. Such a line is
+    // written the same way here without the writer's and the stream's buffers; a longer one keeps the writer, which writes
+    // it in pieces.
+    private static readonly UTF8Encoding LineEncoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly byte[] NewLineBytes = LineEncoding.GetBytes(Environment.NewLine);
+    private const int WriterBufferChars = 1024;
 
     private static string Path
     {
@@ -194,19 +200,30 @@ public static class OverlayLog
 
     private static void AppendLine(string line)
     {
-        var text = line + Environment.NewLine;
         var path = Path;
 
         // Both the WPF host and this process append to the same file; tolerate brief lock contention.
-        for (var attempt = 0; attempt < WriteAttempts; attempt++)
+        for (var attempt = 0; attempt < 12; attempt++)
         {
             try
             {
                 lock (Gate)
                 {
-                    using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                    using var writer = new StreamWriter(stream, Utf8NoBom);
-                    writer.Write(text);
+                    if (line.Length + Environment.NewLine.Length <= WriterBufferChars)
+                    {
+                        using var stream = new FileStream(
+                            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
+                        var bytes = new byte[LineEncoding.GetByteCount(line) + NewLineBytes.Length];
+                        NewLineBytes.CopyTo(bytes, LineEncoding.GetBytes(line, 0, line.Length, bytes, 0));
+                        stream.Write(bytes, 0, bytes.Length);
+                    }
+                    else
+                    {
+                        using var stream = new FileStream(
+                            path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                        using var writer = new StreamWriter(stream);
+                        writer.WriteLine(line);
+                    }
                 }
 
                 return;

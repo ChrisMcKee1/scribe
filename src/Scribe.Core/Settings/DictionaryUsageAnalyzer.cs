@@ -78,7 +78,7 @@ public static partial class DictionaryUsageAnalyzer
         ArgumentNullException.ThrowIfNull(enabledLibraries);
 
         var usable = transcripts.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
-        var words = usable.Sum(t => WordLike.Matches(t).Count);
+        var words = usable.Sum(t => WordLike.Count(t));
 
         // Id 0 means the row exists only in the settings grid and has never been saved, so it cannot
         // possibly have shaped the history being searched. Judging it would let the scan offer to

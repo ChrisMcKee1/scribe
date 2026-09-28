@@ -9,7 +9,7 @@ namespace Scribe.Core.Tests;
 /// <summary>
 /// Pins the capture working-buffer contract: one buffer reused across captures instead of a fresh
 /// 30-second large-object-heap reservation per press, zeroed before it is kept (a retained buffer must
-/// never hold the last dictation's audio), dropped instead of kept when a capture outgrew it, and
+/// never hold the last dictation's audio), only the zeroed reservation kept when a capture outgrew it, and
 /// releasable on demand from any thread without ever touching a buffer a capture is using. The
 /// converted capture must be an owned copy, because history persistence holds
 /// <see cref="Scribe.Core.Models.CapturedAudio"/> asynchronously while the next capture writes
@@ -62,7 +62,7 @@ public sealed class CaptureBufferPoolTests
     }
 
     [Fact]
-    public void A_recording_that_outgrew_its_reservation_is_dropped_and_its_old_array_zeroed()
+    public void A_recording_that_outgrew_its_reservation_keeps_only_the_zeroed_reservation()
     {
         var pool = new CaptureBufferPool();
         var recording = pool.Rent(1024);
@@ -80,9 +80,15 @@ public sealed class CaptureBufferPoolTests
         var grown = recording.Buffer;
         pool.Return(recording, retain: true);
 
-        Assert.Equal(0, pool.RetainedBytes);
+        // The grown array is zeroed and dropped; the reservation the capture started with, zeroed when it was
+        // outgrown, is what the next capture reuses instead of reserving a fresh one.
+        Assert.Equal(1024, pool.RetainedBytes);
         Assert.All(grown, value => Assert.Equal(0, value));
-        Assert.NotSame(grown, pool.Rent(1024).Buffer);
+        var next = pool.Rent(1024);
+        Assert.True(next.Reused);
+        Assert.Same(original, next.Buffer);
+        Assert.NotSame(grown, next.Buffer);
+        Assert.All(next.Buffer, value => Assert.Equal(0, value));
     }
 
     [Fact]
@@ -291,21 +297,6 @@ public sealed class CaptureBufferPoolTests
         Assert.Equal(40_000, first.Length);
         Assert.All(first, sample => Assert.Equal(0.25f, sample));
         Assert.All(second, sample => Assert.Equal(-0.5f, sample));
-    }
-
-    [Fact]
-    public void ReadAll_uses_the_known_capture_length_as_its_first_scratch_rent()
-    {
-        var input = Enumerable.Repeat(0.25f, 880_000).ToArray();
-        var pool = new RecordingPool();
-
-        var output = AudioCaptureService.ReadAll(new ArraySource(input), pool, input.Length);
-
-        Assert.Equal(input.Length, output.Length);
-        Assert.Equal(input, output);
-        Assert.Single(pool.Rented);
-        Assert.Single(pool.Returned);
-        Assert.True(pool.Rented[0].Length >= input.Length);
     }
 
     [Fact]

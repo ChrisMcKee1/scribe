@@ -17,6 +17,11 @@ namespace Scribe.Benchmarks;
 /// indexes and the glossary inclusion, computed once); ComposeVocabulary is what dictation's vocabulary costs;
 /// EncodeState is the libraries.state row a commit writes.
 /// </para>
+/// <para>
+/// Preview composes through the overload that takes a precedence rule, which keeps nothing, so every operation measures a
+/// fresh preview, as at 10c9a0b; the public Preview keeps the latest previews of each draft, and
+/// <see cref="LibraryPreviewMemoBenchmarks"/> measures those.
+/// </para>
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Libraries")]
@@ -84,7 +89,8 @@ public class LibraryCompositionBenchmarks
     public LibraryComposition Committed() => LibraryComposition.Committed(_catalog, _dictionary, _budget);
 
     [Benchmark]
-    public LibraryComposition Preview() => LibraryComposition.Preview(_draft, _catalog, _dictionary, _budget);
+    public LibraryComposition Preview() =>
+        LibraryComposition.Preview(_draft, _catalog, _dictionary, _budget, LibraryDecisions.Precedence);
 
     [Benchmark]
     public TermStatus FirstStatus() => LibraryComposition.Committed(_catalog, _dictionary, _budget).StatusOf(_probe.LibraryId, _probe.Key);

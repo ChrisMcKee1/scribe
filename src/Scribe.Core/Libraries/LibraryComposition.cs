@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
@@ -29,13 +31,18 @@ namespace Scribe.Core.Libraries;
 /// </para>
 /// <para>
 /// Immutable and safe to share. Built in one pass over the rows; the statuses' indexes and the glossary inclusion are
-/// computed on first use, once.
+/// computed on first use, once. Every collection a composition exposes or hands out is read-only through any interface,
+/// ICollection.SyncRoot included (<see cref="SharedReadOnlyCollection{T}"/>), and <see cref="Coverage"/> and
+/// <see cref="OverlapReport"/> build a new result at every call, so no caller can change what another reads.
 /// </para>
 /// </remarks>
 public sealed class LibraryComposition
 {
     private static readonly TermStatus UnknownRow = new(
         TermMarker.None, TermWinner.None, null, null, [], [], null, false, GlossaryInclusion.NotApplied);
+
+    // The previews kept for each draft (see Preview), released with the draft.
+    private static readonly ConditionalWeakTable<LibraryDraft, PreviewMemo> PreviewMemos = new();
 
     private readonly Source[] _sources;
     private readonly Dictionary<string, Source> _byId = new(StringComparer.OrdinalIgnoreCase);
@@ -45,8 +52,9 @@ public sealed class LibraryComposition
     private readonly Dictionary<DictionaryEntry, Source> _sourceOfRule = new(ReferenceEqualityComparer.Instance);
     private readonly GlossaryBudget _budget;
     private readonly Lazy<Dictionary<DictionaryEntry, GlossaryInclusion>> _glossary;
-    private readonly Lazy<Dictionary<LibraryTermKey, List<(Source Source, int Row)>>> _rowsByKey;
+    private readonly Lazy<Dictionary<LibraryTermKey, Holders>> _rowsByKey;
     private readonly Lazy<IReadOnlyList<DictionaryLibrary>> _enabledLibraries;
+    private readonly int _candidateRows;
 
     private LibraryComposition(
         bool isPreview,
@@ -69,6 +77,7 @@ public sealed class LibraryComposition
         }
 
         _dictionary = [.. dictionary.Where(entry => entry is { Enabled: true })];
+        _dictionaryByKey.EnsureCapacity(_dictionary.Count);
         foreach (var entry in _dictionary)
         {
             var key = LibraryTermKey.From(entry.Pattern);
@@ -83,7 +92,27 @@ public sealed class LibraryComposition
             MarkActiveLegacyRows();
         }
 
-        var rules = new List<ComposedRule>();
+        var ruleCapacity = 0;
+        foreach (var source in _sources)
+        {
+            if (!source.Participates)
+            {
+                continue;
+            }
+
+            for (var row = 0; row < source.Keys.Length; row++)
+            {
+                if (source.Content.Rows[row].Values.Enabled && !source.Keys[row].IsEmpty)
+                {
+                    ruleCapacity++;
+                }
+            }
+        }
+
+        _ruleByKey.EnsureCapacity(ruleCapacity);
+        _sourceOfRule.EnsureCapacity(ruleCapacity);
+        _candidateRows = ruleCapacity;
+        var rules = new List<ComposedRule>(ruleCapacity);
         for (var tier = 0; tier < 3; tier++)
         {
             foreach (var source in _sources.Where(source => source.Participates))
@@ -98,7 +127,7 @@ public sealed class LibraryComposition
                     }
 
                     var composed = new ComposedRule(
-                        source.Entries[row],
+                        source.Entries![row],
                         source.Id,
                         key,
                         LibraryTiers.IsAuthored(source.Content.Rows[row]) ? RuleTier.Authored : RuleTier.Shipped,
@@ -110,29 +139,31 @@ public sealed class LibraryComposition
             }
         }
 
-        Rules = rules.AsReadOnly();
-        LibraryEntries = rules.Select(composed => composed.Entry).ToList().AsReadOnly();
-        AiLibraryEntries = rules
+        // Every collection below is read-only for callers through every interface, SyncRoot included: a composition is
+        // shared (Preview keeps them), so a caller that could change one would change what every later caller reads.
+        Rules = Shared(rules);
+        LibraryEntries = Shared(rules.Select(composed => composed.Entry).ToList());
+        AiLibraryEntries = Shared(rules
             .Where(composed => _sourceOfRule[composed.Entry].AiPermitted)
             .Select(composed => composed.Entry)
-            .ToList()
-            .AsReadOnly();
+            .ToList());
         AnyLegacyMarkerActive = _sources.Any(source => source.Participates && source.MarkerActive.Any(active => active));
-        AiExcludedLibraryIds = _sources
+
+        // A ReadOnlySet's SyncRoot is the set wrapper itself, never the HashSet it wraps.
+        AiExcludedLibraryIds = new ReadOnlySet<string>(_sources
             .Where(source => source.Participates && !source.AiPermitted)
             .Select(source => source.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(StringComparer.OrdinalIgnoreCase));
 
         _glossary = new(ComputeGlossary);
         _rowsByKey = new(IndexRowsByKey);
-        _enabledLibraries = new(() => _sources
+        _enabledLibraries = new(() => Shared(_sources
             .Where(source => source.Participates)
             .Select(source => new DictionaryLibrary(
                 source.Id, source.Content.Name, source.Content.Category, source.Content.Description, source.BuiltIn,
-                Array.AsReadOnly(source.Entries))
+                Shared(source.Entries!))
             { FileName = source.BuiltIn ? null : source.FileName })
-            .ToList()
-            .AsReadOnly());
+            .ToList()));
     }
 
     /// <summary>Whether this is a draft's preview (the result after Save) rather than the committed result.</summary>
@@ -192,6 +223,7 @@ public sealed class LibraryComposition
     /// <param name="dictionary">The personal dictionary in the order dictation reads it; only enabled entries count.</param>
     /// <param name="budget">The glossary budget dictation uses.</param>
     /// <remarks>
+    /// <para>
     /// AI permission is what the Save would commit. A library whose <see cref="DraftLibrary.WritesContent"/> the workspace
     /// set, because its Save writes that library's content (a file, an edits document written or removed, a library brought
     /// in), is composed from the draft and judged by the draft's choices alone, since that Save records the hash of every
@@ -202,11 +234,24 @@ public sealed class LibraryComposition
     /// the file's rows (review finding A4); one the committed catalog does not hold supplies nothing. The preview never
     /// infers a write from the rows: a write no row shows (a reset of intents for terms no longer shipped) is the
     /// workspace's to report (round 3, review finding A6), and rows the Save does not write never reach it (round 4).
+    /// </para>
+    /// <para>
+    /// The two most recent previews of each draft are kept with it and released with it (the workspace hands out a new
+    /// draft at every revision). A call with the same committed catalog object, the same budget and the same enabled
+    /// dictionary entries (equal values, in the same order) as one of them returns that preview itself, statuses already
+    /// computed included, so a dictionary winner's <see cref="TermStatus.WinningEntry"/> is then the equal entry the first
+    /// call passed. Both a draft and a catalog are immutable, and a composition is safe to share.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="committed"/> is not the catalog the draft was built from.</exception>
     public static LibraryComposition Preview(
-        LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget) =>
-        Preview(draft, committed, dictionary, budget, LibraryDecisions.Precedence);
+        LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+    {
+        ValidatePreview(draft, committed, dictionary);
+        var memo = PreviewMemos.GetValue(draft, static _ => new PreviewMemo());
+        return memo.Find(committed, dictionary, budget)
+            ?? memo.Keep(committed, Preview(draft, committed, dictionary, budget, LibraryDecisions.Precedence));
+    }
 
     // Each decision-1 alternative behind the one policy point, so a veto is a change to LibraryDecisions alone.
     internal static LibraryComposition Committed(
@@ -243,6 +288,7 @@ public sealed class LibraryComposition
         return new LibraryComposition(isPreview: false, catalog.Generation, sources, dictionary, budget, rule);
     }
 
+    // Composes every time: only the public overload keeps previews, for the one rule dictation uses.
     internal static LibraryComposition Preview(
         LibraryDraft draft,
         LibraryCatalog committed,
@@ -250,16 +296,7 @@ public sealed class LibraryComposition
         GlossaryBudget budget,
         LibraryPrecedenceRule rule)
     {
-        ArgumentNullException.ThrowIfNull(draft);
-        ArgumentNullException.ThrowIfNull(committed);
-        ArgumentNullException.ThrowIfNull(dictionary);
-        if (committed.Generation != draft.BaseGeneration)
-        {
-            throw new ArgumentException(
-                "The committed catalog must be the one the draft was built from, the generation the draft names as its base.",
-                nameof(committed));
-        }
-
+        ValidatePreview(draft, committed, dictionary);
         var state = draft.LocalState;
         var markers = MarkersByLibrary(state);
         Dictionary<string, List<TermValues>>? shipped = null;
@@ -307,6 +344,48 @@ public sealed class LibraryComposition
         return new LibraryComposition(isPreview: true, draft.Revision, sources, dictionary, budget, rule);
     }
 
+    // Both overloads throw these, in this order, before anything is composed or kept.
+    private static void ValidatePreview(LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(committed);
+        ArgumentNullException.ThrowIfNull(dictionary);
+        if (committed.Generation != draft.BaseGeneration)
+        {
+            throw new ArgumentException(
+                "The committed catalog must be the one the draft was built from, the generation the draft names as its base.",
+                nameof(committed));
+        }
+    }
+
+    // Whether the constructor would build this composition's personal part from these entries and this budget: the same
+    // budget, and the enabled entries it kept, equal and in the same order, enumerated as the constructor enumerates them.
+    private bool Composes(IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+    {
+        if (_budget != budget)
+        {
+            return false;
+        }
+
+        var kept = 0;
+        foreach (var entry in dictionary)
+        {
+            if (entry is not { Enabled: true })
+            {
+                continue;
+            }
+
+            if (kept == _dictionary.Count || !entry.Equals(_dictionary[kept]))
+            {
+                return false;
+            }
+
+            kept++;
+        }
+
+        return kept == _dictionary.Count;
+    }
+
     // The built-ins as the Save leaves them: the draft's content where it writes it, the committed content otherwise.
     private static IEnumerable<LibraryContent> EffectiveBuiltIns(LibraryDraft draft, LibraryCatalog committed) =>
         draft.Libraries
@@ -338,7 +417,7 @@ public sealed class LibraryComposition
             _ruleByKey.TryGetValue(competing, out rule);
         }
 
-        var thisRow = rule is not null && ReferenceEquals(rule.Entry, source.Entries[row]);
+        var thisRow = rule is not null && source.Entries is { } entries && ReferenceEquals(rule.Entry, entries[row]);
         TermWinner winner;
         string? winningId = null;
         DictionaryEntry? winning = null;
@@ -359,13 +438,36 @@ public sealed class LibraryComposition
         var different = new List<string>();
         if (!competing.IsEmpty && _rowsByKey.Value.TryGetValue(competing, out var holders))
         {
-            var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { source.Id };
-            foreach (var (other, otherRow) in holders)
+            HashSet<string>? listed = null;
+            Tally(holders.First);
+            if (holders.Rest is { } rest)
             {
-                if (listed.Add(other.Id))
+                foreach (var holder in rest)
                 {
-                    (LibraryTiers.SameResult(other.Content.Rows[otherRow].Values, values) ? same : different).Add(other.Id);
+                    Tally(holder);
                 }
+            }
+
+            // Made only once a second library holds the form, and seeded with this library as it always was, so this
+            // library's own rows stay out of both lists.
+            void Tally((Source Source, int Row) holder)
+            {
+                var other = holder.Source;
+                if (string.Equals(other.Id, source.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (listed is null)
+                {
+                    listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { source.Id, other.Id };
+                }
+                else if (!listed.Add(other.Id))
+                {
+                    return;
+                }
+
+                (LibraryTiers.SameResult(other.Content.Rows[holder.Row].Values, values) ? same : different).Add(other.Id);
             }
         }
 
@@ -386,7 +488,7 @@ public sealed class LibraryComposition
             : TermMarker.None;
 
         return new TermStatus(
-            marker, winner, winningId, winning, same.AsReadOnly(), different.AsReadOnly(), libraryRow.Review,
+            marker, winner, winningId, winning, Shared(same), Shared(different), libraryRow.Review,
             source.MarkerActive[row], glossary);
     }
 
@@ -396,7 +498,7 @@ public sealed class LibraryComposition
     /// </summary>
     public IReadOnlyDictionary<string, LibraryCoverage> Coverage()
     {
-        var covering = new Dictionary<string, LibraryCoverage>(StringComparer.OrdinalIgnoreCase);
+        var covering = new Dictionary<string, LibraryCoverage>(Rules.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var composed in Rules)
         {
             var source = _sourceOfRule[composed.Entry];
@@ -416,14 +518,25 @@ public sealed class LibraryComposition
     public DictionaryOverlapReport OverlapReport(IReadOnlyList<DictionaryEntry> personal)
     {
         ArgumentNullException.ThrowIfNull(personal);
-        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return DictionaryLibraryOverlapAnalyzer.Analyze(personal, LibraryEntries, RuleLibraryNames());
+    }
+
+    // The name of the library that supplies each rule's spoken form, for the Save prompt: internal so its sizing is tested.
+    internal Dictionary<string, string> RuleLibraryNames()
+    {
+        var names = new Dictionary<string, string>(Rules.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var composed in Rules)
         {
             names.TryAdd(composed.Key.Value, _sourceOfRule[composed.Entry].Content.Name);
         }
 
-        return DictionaryLibraryOverlapAnalyzer.Analyze(personal, LibraryEntries, names);
+        return names;
     }
+
+    // Test seam: the room each map the constructor sizes was given, read without growing any of them (EnsureCapacity(0)
+    // returns the current capacity), so each sizing is checked on its own.
+    internal (int PersonalByKey, int RuleByKey, int SourceOfRule) MapCapacities() =>
+        (_dictionaryByKey.EnsureCapacity(0), _ruleByKey.EnsureCapacity(0), _sourceOfRule.EnsureCapacity(0));
 
     /// <summary>
     /// The identities (<see cref="LibraryRow.Key"/>) of the rows of <paramref name="libraryId"/> the Show filter keeps, in
@@ -455,7 +568,7 @@ public sealed class LibraryComposition
             }
         }
 
-        return keys.AsReadOnly();
+        return Shared(keys);
     }
 
     // The library that supplies a rule of this composition; internal for the vocabulary's origins.
@@ -475,6 +588,11 @@ public sealed class LibraryComposition
     }
 
     private static readonly IReadOnlySet<LibraryTermKey> EmptyKeys = new HashSet<LibraryTermKey>();
+
+    // How every collection a composition hands out is wrapped: read-only through every interface, SyncRoot included.
+    private static ReadOnlyCollection<T> Shared<T>(List<T> list) => new SharedReadOnlyCollection<T>(list);
+
+    private static ReadOnlyCollection<T> Shared<T>(T[] array) => new SharedReadOnlyCollection<T>(array);
 
     private static Dictionary<string, IReadOnlySet<LibraryTermKey>> MarkersByLibrary(LibraryLocalState state) =>
         state.LegacyMarkers
@@ -531,21 +649,28 @@ public sealed class LibraryComposition
     }
 
     // Enabled rows of the libraries in use by spoken form, in precedence and saved order, for the statuses' comparisons.
-    private Dictionary<LibraryTermKey, List<(Source Source, int Row)>> IndexRowsByKey()
+    private Dictionary<LibraryTermKey, Holders> IndexRowsByKey()
     {
-        var rows = new Dictionary<LibraryTermKey, List<(Source Source, int Row)>>();
+        var rows = new Dictionary<LibraryTermKey, Holders>(_candidateRows);
         foreach (var source in _sources.Where(source => source.Participates))
         {
             for (var row = 0; row < source.Keys.Length; row++)
             {
                 if (source.Content.Rows[row].Values.Enabled && !source.Keys[row].IsEmpty)
                 {
-                    if (!rows.TryGetValue(source.Keys[row], out var list))
+                    var key = source.Keys[row];
+                    if (!rows.TryGetValue(key, out var holders))
                     {
-                        rows[source.Keys[row]] = list = [];
+                        rows.Add(key, new Holders((source, row), null));
                     }
-
-                    list.Add((source, row));
+                    else if (holders.Rest is { } rest)
+                    {
+                        rest.Add((source, row));
+                    }
+                    else
+                    {
+                        rows[key] = holders with { Rest = [(source, row)] };
+                    }
                 }
             }
         }
@@ -557,12 +682,15 @@ public sealed class LibraryComposition
     // dictation builds (CleanupPrompt.ComposeVocabulary of the dictionary and AiLibraryEntries), with each entry's line
     // taken from the real renderer and the renderer's selection repeated around it: lines in order, each key once, the
     // term budget, and a stop before the first line that would pass the character budget.
-    private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary()
+    private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary() => ComputeGlossary(out _);
+
+    // lineKeysCapacity: the room the set of line keys ended with, for the capacity test (GlossaryCapacities).
+    private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary(out int lineKeysCapacity)
     {
-        var inclusion = new Dictionary<DictionaryEntry, GlossaryInclusion>(ReferenceEqualityComparer.Instance);
+        var inclusion = new Dictionary<DictionaryEntry, GlossaryInclusion>(AiLibraryEntries.Count, ReferenceEqualityComparer.Instance);
         var vocabulary = CleanupPrompt.ComposeVocabulary(_dictionary, AiLibraryEntries);
         var lines = GlossaryLines(vocabulary);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(vocabulary.Count, StringComparer.OrdinalIgnoreCase);
         long chars = 0;
         var count = 0;
         var stopped = _budget.MaxTerms <= 0;
@@ -592,7 +720,16 @@ public sealed class LibraryComposition
             }
         }
 
+        lineKeysCapacity = seen.EnsureCapacity(0);
         return inclusion;
+    }
+
+    // Test seam: the room the glossary inclusion map and its set of line keys end with, computed as the first status
+    // computes them and read without growing either (EnsureCapacity(0) returns the current capacity).
+    internal (int Inclusion, int LineKeys) GlossaryCapacities()
+    {
+        var inclusion = ComputeGlossary(out var lineKeys);
+        return (inclusion.EnsureCapacity(0), lineKeys);
     }
 
     // The line the renderer gives each entry on its own, or null when it gives none, from the renderer itself, a hundred
@@ -628,7 +765,13 @@ public sealed class LibraryComposition
                 continue;
             }
 
-            var rendered = RenderedLines(CleanupPrompt.BuildGlossary([.. chunk.Select(index => entries[index])], chunk.Count));
+            var batch = new DictionaryEntry[chunk.Count];
+            for (var k = 0; k < batch.Length; k++)
+            {
+                batch[k] = entries[chunk[k]];
+            }
+
+            var rendered = RenderedLines(CleanupPrompt.BuildGlossary(batch, chunk.Count));
             for (var k = 0; k < chunk.Count; k++)
             {
                 lines[chunk[k]] = rendered.Length == chunk.Count ? rendered[k] : GlossaryLine(entries[chunk[k]]);
@@ -652,20 +795,100 @@ public sealed class LibraryComposition
         return rendered.Length == 0 ? null : rendered[0];
     }
 
-    // A rendered glossary is one header line and then one line per term.
-    private static string[] RenderedLines(string glossary) =>
-        glossary.Length == 0 ? [] : glossary[(glossary.IndexOf('\n') + 1)..].Split('\n');
+    // A rendered glossary is one header line and then one line per term. Split on '\n' alone, empty lines included, as
+    // string.Split('\n') split it (not EnumerateLines, which also breaks at '\r' and the other line separators).
+    internal static string[] RenderedLines(string glossary)
+    {
+        if (glossary.Length == 0)
+        {
+            return [];
+        }
+
+        var body = glossary.AsSpan(glossary.IndexOf('\n') + 1);
+        var lines = new string[body.Count('\n') + 1];
+        var index = 0;
+        foreach (var range in body.Split('\n'))
+        {
+            lines[index++] = body[range].ToString();
+        }
+
+        return lines;
+    }
 
     // The key the glossary de-duplicates lines by: the written form, and the spoken form when the line shows one. The
     // renderer drops double quotes from both, so the first " (transcribed as " always separates them.
     internal static string GlossaryKey(string line)
     {
         const string separator = " (transcribed as \"";
-        var body = line.StartsWith("- ", StringComparison.Ordinal) ? line[2..] : line;
+        var body = line.StartsWith("- ", StringComparison.Ordinal) ? line.AsSpan(2) : line.AsSpan();
         var at = body.IndexOf(separator, StringComparison.Ordinal);
-        return at >= 0 && body.EndsWith("\")", StringComparison.Ordinal)
-            ? body[..at] + "|" + body[(at + separator.Length)..^2]
-            : body;
+        if (at >= 0 && body.EndsWith("\")", StringComparison.Ordinal))
+        {
+            return string.Concat(body[..at], "|", body[(at + separator.Length)..^2]);
+        }
+
+        return body.Length == line.Length ? line : body.ToString();
+    }
+
+    /// <summary>
+    /// The enabled rows of one spoken form, in precedence and saved order: the first inline, since most forms have one row,
+    /// and any others after it.
+    /// </summary>
+    private readonly record struct Holders((Source Source, int Row) First, List<(Source Source, int Row)>? Rest);
+
+    /// <summary>
+    /// The two most recent previews of one draft, the most recent first, each with the committed catalog it was composed
+    /// against. The Settings window composes one at every Word packs refresh (the grid's dictionary order, the saved budget)
+    /// and one at every Your words refresh (the dictionary sorted, the budget on screen), both against the draft of the
+    /// current revision, so two slots serve both pages.
+    /// </summary>
+    private sealed class PreviewMemo
+    {
+        private readonly Lock _gate = new();
+        private (LibraryCatalog Committed, LibraryComposition Composition)? _recent;
+        private (LibraryCatalog Committed, LibraryComposition Composition)? _older;
+
+        public LibraryComposition? Find(LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+        {
+            lock (_gate)
+            {
+                return FindLocked(committed, dictionary, budget);
+            }
+        }
+
+        // The caller composes outside the lock; if another thread kept a preview of the same inputs meanwhile, that one is
+        // returned instead, so equal inputs always get one preview.
+        public LibraryComposition Keep(LibraryCatalog committed, LibraryComposition composed)
+        {
+            lock (_gate)
+            {
+                if (FindLocked(committed, composed._dictionary, composed._budget) is { } kept)
+                {
+                    return kept;
+                }
+
+                _older = _recent;
+                _recent = (committed, composed);
+                return composed;
+            }
+        }
+
+        private LibraryComposition? FindLocked(
+            LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+        {
+            if (_recent is { } recent && ReferenceEquals(recent.Committed, committed) && recent.Composition.Composes(dictionary, budget))
+            {
+                return recent.Composition;
+            }
+
+            if (_older is { } older && ReferenceEquals(older.Committed, committed) && older.Composition.Composes(dictionary, budget))
+            {
+                (_recent, _older) = (older, _recent);
+                return older.Composition;
+            }
+
+            return null;
+        }
     }
 
     /// <summary>One library as the composition sees it.</summary>
@@ -681,12 +904,16 @@ public sealed class LibraryComposition
             Participates = participates;
             AiPermitted = aiPermitted;
             MarkedKeys = markedKeys;
-            Entries = new DictionaryEntry[content.Rows.Count];
+            Entries = participates ? new DictionaryEntry[content.Rows.Count] : null;
             Keys = new LibraryTermKey[content.Rows.Count];
             MarkerActive = new bool[content.Rows.Count];
             for (var row = 0; row < content.Rows.Count; row++)
             {
-                Entries[row] = content.Rows[row].Values.ToEntry();
+                if (Entries is not null)
+                {
+                    Entries[row] = content.Rows[row].Values.ToEntry();
+                }
+
                 Keys[row] = LibraryTiers.CompetingKey(content.Rows[row]);
             }
         }
@@ -707,8 +934,11 @@ public sealed class LibraryComposition
 
         public IReadOnlySet<LibraryTermKey> MarkedKeys { get; }
 
-        /// <summary>Each row's values as an entry, one object per row, which the rules hold by reference.</summary>
-        public DictionaryEntry[] Entries { get; }
+        /// <summary>
+        /// Each row's values as an entry, one object per row, which the rules hold by reference; null for a library that does
+        /// not take part, since rules come only from libraries that do.
+        /// </summary>
+        public DictionaryEntry[]? Entries { get; }
 
         /// <summary>Each row's competing spoken form.</summary>
         public LibraryTermKey[] Keys { get; }
@@ -722,7 +952,7 @@ public sealed class LibraryComposition
             var rows = Volatile.Read(ref _rowsByIdentity);
             if (rows is null)
             {
-                rows = [];
+                rows = new Dictionary<LibraryTermKey, int>(Content.Rows.Count);
                 for (var row = 0; row < Content.Rows.Count; row++)
                 {
                     rows.TryAdd(Content.Rows[row].Key, row);
