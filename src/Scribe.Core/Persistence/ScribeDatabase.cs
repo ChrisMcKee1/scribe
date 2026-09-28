@@ -37,7 +37,9 @@ public sealed class ScribeDatabase : IDisposable
     private static readonly string[] SalvageTables =
         { "settings", "dictionary", "snippets", "audio_blobs", "history", "cleanup_failures" };
 
-    private static int s_providerInitialized;
+    // The provider's one-time initialization, process-wide. A second caller (the data layer's warm-up on a worker, DATA-O-01,
+    // and the real database's first use) waits until the first call has returned rather than racing on without it.
+    private static readonly RunOnce s_providerInitialization = new();
 
     private readonly string _connectionString;
     private readonly bool _isMemory;
@@ -515,10 +517,7 @@ public sealed class ScribeDatabase : IDisposable
 
             // Microsoft.Data.Sqlite auto-initializes SQLitePCLRaw, but doing it explicitly once is
             // idempotent and removes any ambiguity about which bundle provides the native library.
-            if (Interlocked.Exchange(ref s_providerInitialized, 1) == 0)
-            {
-                SQLitePCL.Batteries_V2.Init();
-            }
+            s_providerInitialization.Run(SQLitePCL.Batteries_V2.Init);
 
             if (!_isMemory)
             {

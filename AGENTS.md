@@ -1962,6 +1962,16 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   data was created by a newer version of Scribe. Please install the latest version." (from `StartAsync`,
   or from `AbandonStartup` if `NewerDatabaseSchemaException` surfaces anywhere else), and a data folder
   that cannot be created shows its own notice. Both then shut down cleanly.
+- **The data layer can be warmed on a worker** (DATA-O-01, `PerfFlags.DataLayerWarmUp`, off by default).
+  Right after reading the flags, `StartAsync` starts `DataLayerWarmUp` and never awaits it: the same
+  repository code runs once against a throwaway in-memory database (`ScribeDatabase.CreateInMemory`), so
+  the banner's settings load, the database's first use on the UI thread, finds SQLite, Microsoft.Data.Sqlite
+  and the settings serializer compiled. It touches no file or path, starts nothing that outlives it (no
+  `HistoryRepository`), logs nothing and swallows every failure, so it can never reach `AbandonStartup`
+  or change what the real database decides (its integrity check, `LastLoadFailed`, the newer-schema
+  refusal). The one thing the two share is the SQLite provider's initialization, which `RunOnce` runs
+  once per process: a second caller waits until it has returned, and a failed one is not retried, as
+  before.
 
 ## Microphone choice and the Windows default (read before touching capture devices)
 

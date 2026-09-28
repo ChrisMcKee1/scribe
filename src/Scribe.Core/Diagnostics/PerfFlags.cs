@@ -33,6 +33,7 @@ public sealed class PerfFlags
         CleanupPhaseTelemetry,
         CliAccessTokenCache,
         CoalesceDictionaryStatus,
+        DataLayerWarmUp,
         DeduplicateOverlayMeter,
         DeferSettingsPageData,
         ForcedIdleGc,
@@ -65,6 +66,7 @@ public sealed class PerfFlags
     public const string CleanupPhaseTelemetry = nameof(CleanupPhaseTelemetry);
     public const string CliAccessTokenCache = nameof(CliAccessTokenCache);
     public const string CoalesceDictionaryStatus = nameof(CoalesceDictionaryStatus);
+    public const string DataLayerWarmUp = nameof(DataLayerWarmUp);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
     public const string ForcedIdleGc = nameof(ForcedIdleGc);

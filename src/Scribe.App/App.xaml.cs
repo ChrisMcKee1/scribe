@@ -174,6 +174,14 @@ public partial class App : Application
         // container is handed this same instance below, so every consumer sees one answer (PerfFlags).
         var perfFlags = PerfFlags.FromEnvironment();
 
+        // DATA-O-01: compile the database's and the settings serializer's first use on a worker, against a throwaway
+        // in-memory database, while the host is built; the banner's settings load below is then warm. Never awaited, and
+        // it never faults.
+        if (perfFlags.IsOn(PerfFlags.DataLayerWarmUp))
+        {
+            _ = DataLayerWarmUp.Start();
+        }
+
         // Tray app: never exit just because a window closed; quit happens explicitly from the tray.
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
