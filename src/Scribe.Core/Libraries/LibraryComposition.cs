@@ -678,7 +678,10 @@ public sealed class LibraryComposition
     // dictation builds (CleanupPrompt.ComposeVocabulary of the dictionary and AiLibraryEntries), with each entry's line
     // taken from the real renderer and the renderer's selection repeated around it: lines in order, each key once, the
     // term budget, and a stop before the first line that would pass the character budget.
-    private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary()
+    private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary() => ComputeGlossary(out _);
+
+    // lineKeysCapacity: the room the set of line keys ended with, for the capacity test (GlossaryCapacities).
+    private Dictionary<DictionaryEntry, GlossaryInclusion> ComputeGlossary(out int lineKeysCapacity)
     {
         var inclusion = new Dictionary<DictionaryEntry, GlossaryInclusion>(AiLibraryEntries.Count, ReferenceEqualityComparer.Instance);
         var vocabulary = CleanupPrompt.ComposeVocabulary(_dictionary, AiLibraryEntries);
@@ -713,7 +716,16 @@ public sealed class LibraryComposition
             }
         }
 
+        lineKeysCapacity = seen.EnsureCapacity(0);
         return inclusion;
+    }
+
+    // Test seam: the room the glossary inclusion map and its set of line keys end with, computed as the first status
+    // computes them and read without growing either (EnsureCapacity(0) returns the current capacity).
+    internal (int Inclusion, int LineKeys) GlossaryCapacities()
+    {
+        var inclusion = ComputeGlossary(out var lineKeys);
+        return (inclusion.EnsureCapacity(0), lineKeys);
     }
 
     // The line the renderer gives each entry on its own, or null when it gives none, from the renderer itself, a hundred

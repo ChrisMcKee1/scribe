@@ -1,3 +1,4 @@
+using System.Reflection;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
@@ -105,6 +106,149 @@ public sealed class LibraryCompositionGlossaryLineTests(ITestOutputHelper output
         // chunks, the key set and the inclusion map grew from empty. Measured on x64: 1,507,144 bytes before and 1,113,912
         // after; the bound sits halfway. The renderer itself (CleanupPrompt) is unchanged and is most of what remains.
         Assert.True(bytes <= 1_310_000, $"The first status allocated {bytes} bytes; the bound is 1,310,000.");
+    }
+
+    // Review round 1, item 2: the first-status bound above measures the renderer, the keys and the maps together, so the
+    // substring key alone stayed under it. Each part LB4 changed is measured or checked on its own from here on.
+    [Fact]
+    public void A_glossary_key_allocates_only_the_key_itself()
+    {
+        var lines = KeyCorpus();
+        var keys = new string[lines.Length];
+        object SpanKeys()
+        {
+            for (var i = 0; i < lines.Length; i++)
+            {
+                keys[i] = LibraryComposition.GlossaryKey(lines[i]);
+            }
+
+            return keys;
+        }
+
+        object SubstringKeys()
+        {
+            for (var i = 0; i < lines.Length; i++)
+            {
+                keys[i] = ReferenceGlossaryKey(lines[i]);
+            }
+
+            return keys;
+        }
+
+        Assert.Equal(lines.Select(ReferenceGlossaryKey), lines.Select(LibraryComposition.GlossaryKey));
+        var bytes = Measure(SpanKeys);
+        var substring = Measure(SubstringKeys);
+        output.WriteLine($"GlossaryKey over {lines.Length} lines: {bytes} bytes (the substring version: {substring})");
+
+        // A line with a spoken form takes one string, its key; one without takes its body; one with no prefix takes nothing.
+        // The substring version also copied each body and both halves of a spoken line. Measured on x64 over this corpus:
+        // 76,000 bytes, and 252,000 for the substring version; the bound sits halfway.
+        Assert.True(bytes <= 164_000, $"Keying {lines.Length} lines allocated {bytes} bytes; the bound is 164,000.");
+    }
+
+    [Fact]
+    public void Rendered_lines_allocate_only_the_lines_and_their_array()
+    {
+        var glossary = "Vocabulary:\n" + string.Join("\n", KeyCorpus().Take(1_000));
+
+        Assert.Equal(ReferenceRenderedLines(glossary), LibraryComposition.RenderedLines(glossary));
+        var bytes = Measure(() => LibraryComposition.RenderedLines(glossary));
+        var substring = Measure(() => ReferenceRenderedLines(glossary));
+        output.WriteLine($"RenderedLines over 1,000 lines: {bytes} bytes (the substring version: {substring})");
+
+        // The lines and the array that holds them; the substring version first copied the whole text after the header.
+        // Measured on x64: 112,024 bytes, and 192,048 for the substring version; the bound sits halfway.
+        Assert.True(bytes <= 152_000, $"Splitting 1,000 lines allocated {bytes} bytes; the bound is 152,000.");
+    }
+
+    // The room each map of the glossary inclusion ends with, read without growing it: exactly what a collection sized for
+    // its count gets, never what growth from empty reaches, which for these counts is more.
+    [Fact]
+    public void The_inclusion_map_and_the_set_of_line_keys_have_exactly_the_room_their_counts_need()
+    {
+        var rows = Enumerable.Range(0, 1_000)
+            .Select(i => Custom(FormattableString.Invariant($"term {i:D4}"), FormattableString.Invariant($"Term{i:D4}")))
+            .ToArray();
+        var catalog = Catalog(
+            State(enabled: ["team"], ai: [("team", true)], accepted: [("team", H1)]), Committed(CustomLibrary("team", rows), H1));
+        IReadOnlyList<DictionaryEntry> dictionary =
+        [
+            .. Enumerable.Range(0, 50)
+                .Select(i => DictionaryEntry.New(FormattableString.Invariant($"personal {i:D2}"), FormattableString.Invariant($"Personal{i:D2}"))),
+        ];
+        var composition = LibraryComposition.Committed(catalog, dictionary, new GlossaryBudget(80));
+        var vocabulary = CleanupPrompt.ComposeVocabulary(dictionary, composition.AiLibraryEntries).Count;
+        Assert.Equal(1_000, composition.AiLibraryEntries.Count);
+        Assert.Equal(1_050, vocabulary);
+        Assert.NotEqual(new Dictionary<int, int>(1_000).EnsureCapacity(0), Grown(new Dictionary<int, int>(), 1_000));
+        Assert.NotEqual(new HashSet<int>(1_050).EnsureCapacity(0), Grown(new HashSet<int>(), 1_050));
+
+        var (inclusion, lineKeys) = composition.GlossaryCapacities();
+
+        Assert.True(new Dictionary<int, int>(1_000).EnsureCapacity(0) == inclusion, $"The inclusion map has room for {inclusion}.");
+        Assert.True(new HashSet<int>(1_050).EnsureCapacity(0) == lineKeys, $"The set of line keys has room for {lineKeys}.");
+    }
+
+    [Fact]
+    public void Each_batch_the_renderer_gets_is_an_array_filled_by_index()
+    {
+        var glossaryLines = typeof(LibraryComposition).GetMethod(
+            nameof(LibraryComposition.GlossaryLines), BindingFlags.Static | BindingFlags.NonPublic)!;
+        var callees = MouseButtonRound7Tests.Callees(glossaryLines).ToList();
+
+        Assert.Contains(callees, callee => callee.DeclaringType == typeof(CleanupPrompt) && callee.Name == nameof(CleanupPrompt.BuildGlossary));
+        Assert.DoesNotContain(callees, callee => callee.DeclaringType == typeof(Enumerable));
+    }
+
+    // Lines as the renderer writes them: with a spoken form (the key joins two slices into one string), without one (one
+    // slice), and a few with no "- " prefix (the line itself is the key, no string at all).
+    private static string[] KeyCorpus() =>
+    [
+        .. Enumerable.Range(0, 1_000).Select(i => FormattableString.Invariant($"- Term{i:D4} (transcribed as \"term {i:D4}\")")),
+        .. Enumerable.Range(0, 300).Select(i => FormattableString.Invariant($"- Word{i:D4}")),
+        .. Enumerable.Range(0, 100).Select(i => FormattableString.Invariant($"Plain{i:D4}")),
+    ];
+
+    private static int Grown(Dictionary<int, int> map, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            map.Add(i, i);
+        }
+
+        return map.EnsureCapacity(0);
+    }
+
+    private static int Grown(HashSet<int> set, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            set.Add(i);
+        }
+
+        return set.EnsureCapacity(0);
+    }
+
+    // The smallest of three measured runs after a warm-up: the first calls JIT the path and load its types, and the
+    // smallest run is the one no runtime bookkeeping landed in.
+    private static long Measure(Func<object> run)
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            GC.KeepAlive(run());
+        }
+
+        var smallest = long.MaxValue;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = run();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            GC.KeepAlive(result);
+            smallest = Math.Min(smallest, bytes);
+        }
+
+        return smallest;
     }
 
     // 10c9a0b's LibraryComposition.RenderedLines.
