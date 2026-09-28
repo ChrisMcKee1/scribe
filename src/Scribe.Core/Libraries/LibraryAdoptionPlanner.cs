@@ -15,17 +15,35 @@ internal static class LibraryAdoptionPlanner
     /// <param name="context">What the service knows about this start.</param>
     /// <param name="defaultAiPermission">Decision 2 (<see cref="LibraryDecisions.DefaultAiPermission"/>).</param>
     public static LibraryAdoption? Plan(
-        LibraryCatalog catalog, LibraryStateContext context, Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission)
+        LibraryCatalog catalog, LibraryStateContext context, Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission) =>
+        Plan(catalog, context, defaultAiPermission, LibraryTiers.ShippedValues);
+
+    /// <summary>
+    /// <see cref="Plan(LibraryCatalog, LibraryStateContext, Func{LibraryOrigin, bool, bool?, bool})"/> with the function that
+    /// folds the built-ins' shipped values, which the tests count. It runs at most once, and only when a custom library needs
+    /// its upgrade markers: the fold behind it is the first use of <see cref="PostProcessing.SpokenFormFold"/> in a process
+    /// (30 to 37 ms cold), and a start that records no custom library's markers never needs it. The plan is the same either
+    /// way, since the values are a pure function of the built-ins
+    /// (LibraryAdoptionLazyShippedTests.Lazy_and_eager_plans_match_for_seeded_catalogs_and_all_reasons).
+    /// </summary>
+    internal static LibraryAdoption? Plan(
+        LibraryCatalog catalog,
+        LibraryStateContext context,
+        Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission,
+        Func<IEnumerable<LibraryContent>, Dictionary<string, List<TermValues>>> shippedValues)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(defaultAiPermission);
+        ArgumentNullException.ThrowIfNull(shippedValues);
         var state = catalog.LocalState;
         if (context.RunningOnDefaults || state.Health == LocalStateHealth.Newer)
         {
             return null;
         }
 
-        var shipped = LibraryTiers.ShippedValues(catalog.Libraries.Where(l => l.Content.BuiltIn).Select(l => l.Content));
+        // The built-ins as the catalog lists them now, so the values folded later are those an eager fold would have seen.
+        var builtIns = catalog.Libraries.Where(l => l.Content.BuiltIn).Select(l => l.Content).ToList();
+        var shipped = new Lazy<Dictionary<string, List<TermValues>>>(() => shippedValues(builtIns), LazyThreadSafetyMode.None);
 
         // An absent row reads as a first start only when nothing says a row was lost; a state that says otherwise is
         // treated as lost here too, so a caller that skipped ReadLocalState cannot re-grant anything.
@@ -43,11 +61,11 @@ internal static class LibraryAdoptionPlanner
     // stands for on (ReadLocalState already read an unhealthy state that way), markers as at the upgrade and the content
     // that is there now accepted, which is safe because nothing is permitted.
     private static LibraryAdoption StateLost(
-        LibraryCatalog catalog, LibraryLocalState state, IReadOnlyDictionary<string, List<TermValues>> shipped)
+        LibraryCatalog catalog, LibraryLocalState state, Lazy<Dictionary<string, List<TermValues>>> shipped)
     {
         var markers = catalog.Libraries
             .Where(library => !library.Content.BuiltIn)
-            .SelectMany(library => LibraryTiers.UpgradeMarkers(library.Content, shipped))
+            .SelectMany(library => LibraryTiers.UpgradeMarkers(library.Content, shipped.Value))
             .ToList();
         var accepted = catalog.Libraries
             .Where(library => library.ContentHash is not null)
@@ -72,7 +90,7 @@ internal static class LibraryAdoptionPlanner
     private static LibraryAdoption FirstStart(
         LibraryCatalog catalog,
         LibraryLocalState state,
-        IReadOnlyDictionary<string, List<TermValues>> shipped,
+        Lazy<Dictionary<string, List<TermValues>>> shipped,
         Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission)
     {
         var permissions = new List<KeyValuePair<string, bool>>();
@@ -93,7 +111,7 @@ internal static class LibraryAdoptionPlanner
             if (!library.Content.BuiltIn)
             {
                 permissions.Add(new(id, defaultAiPermission(LibraryOrigin.Existing, false, null)));
-                markers.AddRange(LibraryTiers.UpgradeMarkers(library.Content, shipped));
+                markers.AddRange(LibraryTiers.UpgradeMarkers(library.Content, shipped.Value));
                 notice.Add(id);
             }
         }
@@ -118,7 +136,7 @@ internal static class LibraryAdoptionPlanner
     private static LibraryAdoption? Update(
         LibraryCatalog catalog,
         LibraryLocalState state,
-        IReadOnlyDictionary<string, List<TermValues>> shipped,
+        Lazy<Dictionary<string, List<TermValues>>> shipped,
         Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission)
     {
         var permissions = new Dictionary<string, bool>(state.AiPermissions, StringComparer.OrdinalIgnoreCase);
@@ -163,7 +181,7 @@ internal static class LibraryAdoptionPlanner
             }
 
             markers.RemoveAll(marker => string.Equals(marker.LibraryId, id, StringComparison.OrdinalIgnoreCase));
-            markers.AddRange(LibraryTiers.UpgradeMarkers(library.Content, shipped));
+            markers.AddRange(LibraryTiers.UpgradeMarkers(library.Content, shipped.Value));
             if (known)
             {
                 reasons |= LibraryAdoptionReasons.ContentReplaced;

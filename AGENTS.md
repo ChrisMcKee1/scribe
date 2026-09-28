@@ -523,8 +523,10 @@ The changes proven by an oracle need no flag: the phrase regexes built without `
 does not find as 0 without building its regex (`DictionaryUsageAnalyzerTests.Term_counts_match_legacy_regex_for_seeded_corpora`),
 the letter-digit shape's one digit where it had a run
 (`DictionarySuggestionMinerSpanTests.Every_token_of_up_to_six_characters_is_judged_as_the_previous_pattern_judged_it`), the
-case relations' staged buckets (`SpokenFormFoldTests.Case_relations_equal_the_reference_builder_for_every_code_unit`), and
-`Regex.Count` (`Word_count_matches_legacy_regex_for_seeded_unicode`, `Evidence_count_matches_legacy_regex_for_seeded_unicode`).
+case relations' staged buckets (`SpokenFormFoldTests.Case_relations_equal_the_reference_builder_for_every_code_unit`), the
+adoption plan folding the shipped values only when a custom library needs its upgrade markers
+(`LibraryAdoptionLazyShippedTests.Lazy_and_eager_plans_match_for_seeded_catalogs_and_all_reasons`), and `Regex.Count`
+(`Word_count_matches_legacy_regex_for_seeded_unicode`, `Evidence_count_matches_legacy_regex_for_seeded_unicode`).
 
 ## Project structure
 
