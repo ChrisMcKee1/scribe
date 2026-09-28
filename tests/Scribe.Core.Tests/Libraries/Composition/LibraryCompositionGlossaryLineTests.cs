@@ -103,9 +103,10 @@ public sealed class LibraryCompositionGlossaryLineTests(ITestOutputHelper output
 
         // The first status of a permitted row renders every line of the vocabulary. At 10c9a0b each 100-line chunk's text was
         // copied without its header before being split, each line with a spoken form took four strings to key, and the
-        // chunks, the key set and the inclusion map grew from empty. Measured on x64: 1,507,144 bytes before and 1,113,912
-        // after; the bound sits halfway. The renderer itself (CleanupPrompt) is unchanged and is most of what remains.
-        Assert.True(bytes <= 1_310_000, $"The first status allocated {bytes} bytes; the bound is 1,310,000.");
+        // chunks, the key set and the inclusion map grew from empty. Measured on x64 on the integrated branch, which includes
+        // TX-7's change to the glossary builder (d1103b2): 788,952 bytes, and 1,182,184 with 4d5d89e's production changes
+        // reverted; the bound sits halfway.
+        Assert.True(bytes <= 985_000, $"The first status allocated {bytes} bytes; the bound is 985,000.");
     }
 
     // Review round 1, item 2: the first-status bound above measures the renderer, the keys and the maps together, so the
