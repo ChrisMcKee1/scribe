@@ -312,7 +312,6 @@ public sealed class PostProcessorSourcePassTests
             new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets)
             {
                 ReuseIdenticalSourceScan = false,
-                UseLoopCandidateScan = false,
             },
             // With no dictionary, the output is exactly the snippet-expanded input the dictionary
             // pass scans; with no rules at all, it is exactly the normalized text.

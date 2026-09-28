@@ -59,14 +59,6 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     /// </summary>
     internal bool ReuseIdenticalSourceScan { get; init; } = true;
 
-    /// <summary>
-    /// When true (the default), each rule adds the matches <see cref="Regex.EnumerateMatches(ReadOnlySpan{char})"/> finds
-    /// to one list per pass (<see cref="Candidates(CompiledRule[], string)"/>). False collects them as release 0.5.0 did,
-    /// a <see cref="Regex.Matches(string)"/> iterator per rule merged with SelectMany, for the differential tests and the
-    /// benchmark baseline arms; the results are identical either way.
-    /// </summary>
-    internal bool UseLoopCandidateScan { get; init; } = true;
-
     public TextPostProcessingResult ProcessDetailed(string text, string? sourceText = null)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -112,14 +104,14 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         var snippetApplications = new List<TextReplacement>();
         var dictionaryInput = ApplySinglePass(
             normalized,
-            SnippetCandidates(snippetRules, normalized),
+            Candidates(snippetRules, normalized),
             snippetApplications,
             TextReplacementKind.Snippet);
 
         var replacements = new List<TextReplacement>();
         var output = ApplySinglePass(
             dictionaryInput,
-            DictionaryCandidates(rules, dictionaryInput),
+            Candidates(rules, dictionaryInput),
             replacements);
 
         // The source pass below scans with this same rule snapshot. Matching is a pure function of
@@ -136,7 +128,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             var canonical = ApplySinglePass(
                 application.Replacement,
-                DictionaryCandidates(rules, application.Replacement));
+                Candidates(rules, application.Replacement));
             return application with { Length = canonical.Length, Replacement = canonical };
         });
         AddLocatedReplacements(output, canonicalSnippets, replacements, replaceOverlaps: true);
@@ -155,30 +147,15 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             replacements.OrderBy(replacement => replacement.Start).ToList());
     }
 
-    private List<TextReplacement> ScanSource(string source, CompiledRule[] rules)
+    private static List<TextReplacement> ScanSource(string source, CompiledRule[] rules)
     {
         var glossaryApplications = new List<TextReplacement>();
         _ = ApplySinglePass(
             source,
-            DictionaryCandidates(rules, source),
+            Candidates(rules, source),
             glossaryApplications);
         return glossaryApplications;
     }
-
-    // The candidates of one pass, collected by this post-processor or, when UseLoopCandidateScan is false, by release 0.5.0.
-    // The 0.5.0 collection is a method of its own: its lambda captures the text, and a closure over a parameter is made at
-    // the start of the method that holds it, whichever branch runs.
-    private List<ReplacementCandidate>? DictionaryCandidates(CompiledRule[] rules, string text) =>
-        UseLoopCandidateScan ? Candidates(rules, text) : Release050Candidates(rules, text);
-
-    private List<ReplacementCandidate>? SnippetCandidates(SnippetRule[] rules, string text) =>
-        UseLoopCandidateScan ? Candidates(rules, text) : Release050Candidates(rules, text);
-
-    private static List<ReplacementCandidate> Release050Candidates(CompiledRule[] rules, string text) =>
-        rules.SelectMany((rule, order) => rule.Find(text, order)).ToList();
-
-    private static List<ReplacementCandidate> Release050Candidates(SnippetRule[] rules, string text) =>
-        rules.SelectMany((rule, order) => rule.Find(text, order)).ToList();
 
     // Null when nothing matched, so a pass over rules that do not match allocates nothing.
     internal static List<ReplacementCandidate>? Candidates(CompiledRule[] rules, string text)
@@ -603,11 +580,6 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                     text.Substring(match.Index, match.Length)));
             }
         }
-
-        // Release 0.5.0's collection, kept for UseLoopCandidateScan = false.
-        public IEnumerable<ReplacementCandidate> Find(string text, int order) =>
-            _regex.Matches(text).Select(match =>
-                new ReplacementCandidate(match.Index, match.Length, _template, order, _phrase, match.Value));
     }
 
     /// <summary>
@@ -669,26 +641,6 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                     order,
                     _pattern,
                     original));
-            }
-        }
-
-        // Release 0.5.0's collection, kept for UseLoopCandidateScan = false.
-        public IEnumerable<ReplacementCandidate> Find(string text, int order)
-        {
-            var canonicalStarts = _replacementContainsPattern ? CollectReplacementStarts(text) : [];
-            foreach (Match match in _regex.Matches(text))
-            {
-                var replacement = canonicalStarts.Count > 0 &&
-                    IsInsideAnyReplacement(canonicalStarts, match.Index, match.Length)
-                    ? match.Value
-                    : _replacement;
-                yield return new ReplacementCandidate(
-                    match.Index,
-                    match.Length,
-                    replacement,
-                    order,
-                    _pattern,
-                    match.Value);
             }
         }
 

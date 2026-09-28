@@ -89,10 +89,7 @@ internal static class RepresentativeWorkload
     public static int SentencesPerLongText => Sentences.Length * 4;
 
     public static TextPostProcessor CreatePostProcessor(
-        WorkloadDictionary dictionary,
-        bool snippets,
-        bool reuseIdenticalSourceScan = true,
-        bool useLoopCandidateScan = true)
+        WorkloadDictionary dictionary, bool snippets, bool reuseIdenticalSourceScan = true)
     {
         var baseEntries = DefaultVocabulary.Entries.Concat(PersonalEntries).ToArray();
         var libraries = dictionary == WorkloadDictionary.Large
@@ -106,7 +103,6 @@ internal static class RepresentativeWorkload
             new LibraryStub(libraries))
         {
             ReuseIdenticalSourceScan = reuseIdenticalSourceScan,
-            UseLoopCandidateScan = useLoopCandidateScan,
         };
         processor.Reload();
         return processor;

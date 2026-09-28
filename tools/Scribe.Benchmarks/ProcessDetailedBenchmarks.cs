@@ -40,7 +40,7 @@ public class ProcessDetailedBenchmarks
     {
         _shipping = RepresentativeWorkload.CreatePostProcessor(Dictionary, Snippets);
         _fullRescan = RepresentativeWorkload.CreatePostProcessor(
-            Dictionary, Snippets, reuseIdenticalSourceScan: false, useLoopCandidateScan: false);
+            Dictionary, Snippets, reuseIdenticalSourceScan: false);
         var raw = RepresentativeWorkload.RawTranscript(Text);
         (_text, _source) = Source == SourceShape.SameAsText
             ? (raw, raw)
@@ -52,48 +52,4 @@ public class ProcessDetailedBenchmarks
 
     [Benchmark]
     public TextPostProcessingResult ProcessDetailed() => _shipping.ProcessDetailed(_text, _source);
-}
-
-/// <summary>
-/// Candidate collection only: both arms keep source trace reuse on, and differ only in the LINQ
-/// candidate pipeline versus the loop pipeline.
-/// </summary>
-[MemoryDiagnoser]
-[BenchmarkCategory("PostProcessing")]
-public class CandidatePipelineBenchmarks
-{
-    private TextPostProcessor _linq = null!;
-    private TextPostProcessor _loop = null!;
-    private string _text = string.Empty;
-    private string? _source;
-
-    [Params(WorkloadTextLength.Short, WorkloadTextLength.Long)]
-    public WorkloadTextLength Text { get; set; }
-
-    [Params(WorkloadDictionary.Small, WorkloadDictionary.Large)]
-    public WorkloadDictionary Dictionary { get; set; }
-
-    [Params(SourceShape.SameAsText, SourceShape.RawTranscript)]
-    public SourceShape Source { get; set; }
-
-    [Params(false, true)]
-    public bool Snippets { get; set; }
-
-    [GlobalSetup]
-    public void Setup()
-    {
-        _linq = RepresentativeWorkload.CreatePostProcessor(
-            Dictionary, Snippets, reuseIdenticalSourceScan: true, useLoopCandidateScan: false);
-        _loop = RepresentativeWorkload.CreatePostProcessor(Dictionary, Snippets);
-        var raw = RepresentativeWorkload.RawTranscript(Text);
-        (_text, _source) = Source == SourceShape.SameAsText
-            ? (raw, raw)
-            : (RepresentativeWorkload.CleanedTranscript(Text), raw);
-    }
-
-    [Benchmark(Baseline = true)]
-    public TextPostProcessingResult LinqCandidates() => _linq.ProcessDetailed(_text, _source);
-
-    [Benchmark]
-    public TextPostProcessingResult LoopCandidates() => _loop.ProcessDetailed(_text, _source);
 }
