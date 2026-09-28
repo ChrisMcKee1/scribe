@@ -35,7 +35,12 @@ public sealed class OverlayLogSingleEncodeTests : IDisposable
         ("lone \uDC00 low", "System.Text.EncoderFallbackException"),
     ];
 
-    public static TheoryData<int> LinesThatFit() => [.. Enumerable.Range(0, Lines.Length)];
+    // A seeded corpus on top of those, which the StreamWriter decides line by line (its bytes and its failure): lines that fit
+    // its buffer, from empty to the whole 1,024 characters with the new line, of ASCII, two-, three- and four-byte characters,
+    // controls and, in a quarter of them, lone surrogates.
+    private static readonly string[] GeneratedLines = GenerateLines(seed: 20260928, count: 256);
+
+    public static TheoryData<int> LinesThatFit() => [.. Enumerable.Range(0, Lines.Length + GeneratedLines.Length)];
 
     [Fact]
     public void OverlayLog_keeps_the_shared_file_the_retries_and_the_swallow()
@@ -81,7 +86,8 @@ public sealed class OverlayLogSingleEncodeTests : IDisposable
     [MemberData(nameof(LinesThatFit))]
     public void A_line_that_fits_is_written_as_the_stream_writer_wrote_it(int index)
     {
-        var (line, failure) = Lines[index];
+        var fixedLine = index < Lines.Length;
+        var (line, failure) = fixedLine ? Lines[index] : (GeneratedLines[index - Lines.Length], null);
         Assert.True(line.Length + Environment.NewLine.Length <= 1024);
         var before = Path.Combine(_folder.FullName, "writer.log");
         var after = Path.Combine(_folder.FullName, "one-piece.log");
@@ -91,9 +97,29 @@ public sealed class OverlayLogSingleEncodeTests : IDisposable
         var writerFailure = Attempt(() => WriteWithStreamWriter(before, line));
         var onePieceFailure = Attempt(() => WriteInOnePiece(after, line));
 
-        Assert.Equal(failure, writerFailure);
-        Assert.Equal(failure, onePieceFailure);
+        if (fixedLine)
+        {
+            Assert.Equal(failure, writerFailure);
+        }
+
+        Assert.Equal(writerFailure, onePieceFailure);
         Assert.Equal(File.ReadAllBytes(before), File.ReadAllBytes(after));
+    }
+
+    [Fact]
+    public void The_generated_lines_reach_the_buffer_s_edge_and_both_outcomes()
+    {
+        var most = 1024 - Environment.NewLine.Length;
+        var failing = GeneratedLines.Count(line => Attempt(() => LineEncoding.GetByteCount(line)) is not null);
+
+        Assert.Contains(GeneratedLines, line => line.Length == 0);
+        Assert.Contains(GeneratedLines, line => line.Length == most);
+        Assert.Contains(GeneratedLines, line => line.Length == most - 1);
+        Assert.All(GeneratedLines, line => Assert.InRange(line.Length, 0, most));
+        Assert.Contains(GeneratedLines, line => line.Any(char.IsHighSurrogate) && Attempt(() => LineEncoding.GetByteCount(line)) is null);
+        Assert.Contains(GeneratedLines, line => line.Any(c => c > 0x7FF && !char.IsSurrogate(c)));
+        Assert.Contains(GeneratedLines, line => line.Contains('\r') || line.Contains('\n'));
+        Assert.InRange(failing, 16, GeneratedLines.Length - 64);
     }
 
     [Theory]
@@ -138,6 +164,53 @@ public sealed class OverlayLogSingleEncodeTests : IDisposable
         {
             return failure.GetType().FullName;
         }
+    }
+
+    // Lines that fit the StreamWriter's 1,024-character buffer with the new line, seeded so every run judges the same ones:
+    // the edges first (empty, one character, the whole buffer and one short of it), then lengths spread over the range.
+    // Characters of every UTF-8 length, controls, and, in every fourth line, lone surrogates, high or low.
+    private static string[] GenerateLines(int seed, int count)
+    {
+        var random = new Random(seed);
+        var most = 1024 - Environment.NewLine.Length;
+        var lines = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            var length = i switch { 0 => 0, 1 => 1, 2 => most, 3 => most - 1, _ => random.Next(0, most + 1) };
+            var loneSurrogates = i % 4 == 0;
+            var builder = new StringBuilder(length);
+            while (builder.Length < length)
+            {
+                switch (random.Next(10))
+                {
+                    case 4:
+                        builder.Append((char)random.Next(0x80, 0x800));
+                        break;
+                    case 5:
+                        builder.Append((char)random.Next(0x800, 0xD800));
+                        break;
+                    case 6:
+                        builder.Append((char)random.Next(0xE000, 0x10000));
+                        break;
+                    case 7 when length - builder.Length >= 2:
+                        builder.Append(char.ConvertFromUtf32(random.Next(0x10000, 0x110000)));
+                        break;
+                    case 8:
+                        builder.Append(random.Next(4) switch { 0 => '\r', 1 => '\n', 2 => '\t', _ => '\0' });
+                        break;
+                    case 9 when loneSurrogates:
+                        builder.Append((char)random.Next(0xD800, 0xE000));
+                        break;
+                    default:
+                        builder.Append((char)random.Next(0x20, 0x7F));
+                        break;
+                }
+            }
+
+            lines[i] = builder.ToString();
+        }
+
+        return lines;
     }
 
     private static string Source() =>
