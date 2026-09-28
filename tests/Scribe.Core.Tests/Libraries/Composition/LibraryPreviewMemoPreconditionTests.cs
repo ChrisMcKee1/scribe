@@ -320,7 +320,7 @@ public sealed class LibraryPreviewMemoPreconditionTests
         var lines = new List<string>();
         foreach (var library in composition.EnabledLibraries)
         {
-            lines.Add($"library {library.Id} {library.Entries.Count} {library.FileName}");
+            lines.Add($"library {library.Id} {library.FileName}: {string.Join(",", library.Entries.Select(Entry))}");
         }
 
         foreach (var id in new[] { "general", "team", "extra", "missing" })

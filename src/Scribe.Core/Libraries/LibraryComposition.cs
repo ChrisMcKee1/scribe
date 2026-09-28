@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
@@ -30,7 +31,9 @@ namespace Scribe.Core.Libraries;
 /// </para>
 /// <para>
 /// Immutable and safe to share. Built in one pass over the rows; the statuses' indexes and the glossary inclusion are
-/// computed on first use, once.
+/// computed on first use, once. Every collection a composition exposes or hands out is read-only, and
+/// <see cref="Coverage"/> and <see cref="OverlapReport"/> build a new result at every call, so no caller can change what
+/// another reads.
 /// </para>
 /// </remarks>
 public sealed class LibraryComposition
@@ -144,10 +147,13 @@ public sealed class LibraryComposition
             .ToList()
             .AsReadOnly();
         AnyLegacyMarkerActive = _sources.Any(source => source.Participates && source.MarkerActive.Any(active => active));
-        AiExcludedLibraryIds = _sources
+
+        // Read-only for callers, like every collection a composition hands out: a composition is shared (Preview keeps
+        // them), so a caller that could change it would change what every later caller reads.
+        AiExcludedLibraryIds = new ReadOnlySet<string>(_sources
             .Where(source => source.Participates && !source.AiPermitted)
             .Select(source => source.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(StringComparer.OrdinalIgnoreCase));
 
         _glossary = new(ComputeGlossary);
         _rowsByKey = new(IndexRowsByKey);
