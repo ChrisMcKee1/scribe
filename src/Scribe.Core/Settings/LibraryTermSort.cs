@@ -64,20 +64,31 @@ public sealed class LibraryTermSort
 
         var bySpoken = order is LibraryTermSortOrder.SpokenAscending or LibraryTermSortOrder.SpokenDescending;
         var descending = order is LibraryTermSortOrder.SpokenDescending or LibraryTermSortOrder.WrittenDescending;
-        var indexed = rows.Select((row, index) => (Row: row, Index: index)).ToList();
-        indexed.Sort((a, b) =>
+
+        // The rows once, in saved order (the workspace's list indexes in O(log n)), and their saved positions sorted. The
+        // position is the last tie-break, so the order is total, and it is the order the sort of (row, position) pairs gave.
+        var saved = rows.ToArray();
+        var positions = new int[saved.Length];
+        for (var i = 0; i < positions.Length; i++)
         {
-            var first = bySpoken ? a.Row.Row.Values.Spoken : a.Row.Row.Values.Written;
-            var second = bySpoken ? b.Row.Row.Values.Spoken : b.Row.Row.Values.Written;
+            positions[i] = i;
+        }
+
+        Array.Sort(positions, (a, b) =>
+        {
+            var rowA = saved[a].Row.Values;
+            var rowB = saved[b].Row.Values;
+            var first = bySpoken ? rowA.Spoken : rowA.Written;
+            var second = bySpoken ? rowB.Spoken : rowB.Written;
             if (first.Length == 0 || second.Length == 0)
             {
                 // Empty values last whatever the direction; between two empty ones, saved order.
-                return first.Length == 0 && second.Length == 0 ? a.Index.CompareTo(b.Index) : first.Length == 0 ? 1 : -1;
+                return first.Length == 0 && second.Length == 0 ? a.CompareTo(b) : first.Length == 0 ? 1 : -1;
             }
 
             var byColumn = _compareInfo.Compare(first, second, Options);
-            var otherFirst = bySpoken ? a.Row.Row.Values.Written : a.Row.Row.Values.Spoken;
-            var otherSecond = bySpoken ? b.Row.Row.Values.Written : b.Row.Row.Values.Spoken;
+            var otherFirst = bySpoken ? rowA.Written : rowA.Spoken;
+            var otherSecond = bySpoken ? rowB.Written : rowB.Spoken;
             if (byColumn == 0)
             {
                 byColumn = _compareInfo.Compare(otherFirst, otherSecond, Options);
@@ -98,8 +109,15 @@ public sealed class LibraryTermSort
                 byColumn = -byColumn;
             }
 
-            return byColumn != 0 ? byColumn : a.Index.CompareTo(b.Index);
+            return byColumn != 0 ? byColumn : a.CompareTo(b);
         });
-        return indexed.Select(item => item.Row).ToList();
+
+        var sorted = new List<DraftTermRow>(positions.Length);
+        foreach (var position in positions)
+        {
+            sorted.Add(saved[position]);
+        }
+
+        return sorted;
     }
 }
