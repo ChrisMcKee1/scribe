@@ -21,8 +21,19 @@ public enum AppendOnlyLaunchDecision
     /// <summary>The helper's informational version is not the app's, or either is unknown.</summary>
     OtherBuild,
 
-    /// <summary>A write the other way was still in progress when the helper was due to start, so both keep today's way.</summary>
+    /// <summary>A write the other way was still in progress when the helper was due to start, so both keep their way.</summary>
     WriteInProgress,
+
+    /// <summary>
+    /// A helper the app ended had not been seen to exit, so this launch keeps the pair's way and a later one tries again.
+    /// </summary>
+    PreviousHelperRunning,
+
+    /// <summary>
+    /// An earlier launch of this session ran the old way, so this one does too: the pair becomes append-only only at the
+    /// session's first launch.
+    /// </summary>
+    StaysOldWay,
 }
 
 /// <summary>
@@ -43,8 +54,16 @@ public enum AppendOnlyLaunchDecision
 /// app's log writer makes announces itself and then reads the mode (<see cref="BeginWrite"/>), and the switch sets the
 /// mode and then waits for the writes of the other way to end: with full fences on both sides, either the switch sees
 /// the write and waits for its close, or the write sees the new mode. The writer never waits and takes no lock; only the
-/// launcher waits, bounded, and when a write of the other way does not end in time both keep today's way, which that
-/// write is part of.
+/// launcher waits, bounded, and when a write of the other way does not end in time the pair keeps the way that write is
+/// part of.
+/// </para>
+/// <para>
+/// A helper the app ended writes too until it has exited, so the way never changes while one may still be running
+/// (<see cref="RetiringHelpers"/>, waited for on the launcher's thread, bounded): that launch keeps the pair's way, and a
+/// later one tries again. And the pair becomes append-only only at a session's first launch, before any helper has run:
+/// once it has run the old way, whether a write held the switch back, a helper could not append, or the app moved the pair
+/// back, it stays so until the app starts again (<see cref="AppendOnlyLaunchDecision.StaysOldWay"/>). While the app
+/// appends only, a helper that does not qualify moves both back to the old way.
 /// </para>
 /// </remarks>
 public sealed class AppendOnlyLogMode
@@ -61,8 +80,11 @@ public sealed class AppendOnlyLogMode
     /// <summary>The only value of <see cref="CapabilityKey"/> that declares the capability.</summary>
     public const string CapabilityValue = "1";
 
-    /// <summary>How long a switch waits for a write of the other way to end before both keep today's way.</summary>
+    /// <summary>How long a switch waits for a write of the other way to end before the pair keeps its way.</summary>
     public static readonly TimeSpan HandoverTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long a launch that would change the pair's way waits for the helpers the app ended to exit.</summary>
+    public static readonly TimeSpan RetirementTimeout = TimeSpan.FromSeconds(2);
 
     private const string OverlayAssemblyFileName = "Scribe.Overlay.dll";
     private const string InformationalVersionAttribute = "System.Reflection.AssemblyInformationalVersionAttribute";
@@ -75,6 +97,9 @@ public sealed class AppendOnlyLogMode
     private readonly int[] _writesInProgress = new int[2];
 
     private int _lastDecision;
+
+    // 1 once a launch has been decided: only the first can make the pair append-only.
+    private int _decided;
 
     /// <param name="requested">Whether <see cref="PerfFlags.AppendOnlyLog"/> is on.</param>
     /// <param name="appVersion">The app's own informational version (<see cref="ReadVersion"/>).</param>
@@ -127,22 +152,50 @@ public sealed class AppendOnlyLogMode
     internal Action? AfterModeRead { get; set; }
 
     /// <summary>
-    /// Decides the pair's mode for a launch of the helper at <paramref name="overlayExecutable"/>, applies it to this app's
-    /// writer once every write of the other way has ended, and returns whether the launch passes
-    /// <see cref="LaunchArgument"/>. Called on the launching thread before the helper starts; waits at most
-    /// <see cref="HandoverTimeout"/>.
+    /// Decides the pair's way for a launch of the helper at <paramref name="overlayExecutable"/>, applies it to this app's
+    /// writer, and returns whether the launch passes <see cref="LaunchArgument"/>. Called on the launching thread before the
+    /// helper starts. The way changes only once every helper in <paramref name="endedHelpers"/> (the ones the app ended,
+    /// none when null) has been seen to exit and every write of the other way has ended, each waited for here, bounded by
+    /// <see cref="RetirementTimeout"/> and <see cref="HandoverTimeout"/>; nothing is waited for when the way stays.
     /// </summary>
-    public bool DecideForLaunch(string overlayExecutable)
+    public bool DecideForLaunch(string? overlayExecutable, RetiringHelpers? endedHelpers = null)
     {
-        var decision = Decide(Requested, AppVersion, ReadHelperPayload(overlayExecutable));
-        var appendOnly = SwitchTo(decision == AppendOnlyLaunchDecision.AppendOnly, HandoverTimeout);
-        if (decision == AppendOnlyLaunchDecision.AppendOnly && !appendOnly)
+        var payload = ReadHelperPayload(overlayExecutable);
+        var wanted = Decide(Requested, AppVersion, payload);
+        var wantAppendOnly = wanted == AppendOnlyLaunchDecision.AppendOnly;
+        var appendOnly = AppendOnly;
+        var first = Interlocked.Exchange(ref _decided, 1) == 0;
+
+        // The ended helpers already gone are released now, whatever this launch decides.
+        var retired = endedHelpers?.WaitForAllToExit(TimeSpan.Zero) ?? true;
+        AppendOnlyLaunchDecision decision;
+        if (wantAppendOnly == appendOnly)
+        {
+            decision = wanted;
+        }
+        else if (wantAppendOnly && !first)
+        {
+            decision = AppendOnlyLaunchDecision.StaysOldWay;
+        }
+        else if (!retired && !endedHelpers!.WaitForAllToExit(RetirementTimeout))
+        {
+            decision = AppendOnlyLaunchDecision.PreviousHelperRunning;
+        }
+        else if (SwitchTo(wantAppendOnly, HandoverTimeout) == wantAppendOnly)
+        {
+            appendOnly = wantAppendOnly;
+            decision = wanted;
+        }
+        else
         {
             decision = AppendOnlyLaunchDecision.WriteInProgress;
         }
 
         Volatile.Write(ref _lastDecision, (int)decision);
-        return appendOnly;
+
+        // A helper appends only while the app does and only if it follows the argument: one that does not qualify but
+        // declares it (another build) is launched while the move back to the old way is held back, and keeps the pair whole.
+        return appendOnly && payload.DeclaresCapability;
     }
 
     /// <summary>
@@ -168,20 +221,20 @@ public sealed class AppendOnlyLogMode
 
     /// <summary>
     /// Makes <paramref name="appendOnly"/> the app writer's way once no write of the other way is in progress, waiting at
-    /// most <paramref name="timeout"/>. Returns the way in effect: when a write of the other way does not end in time, today's
-    /// way, which that write is part of.
+    /// most <paramref name="timeout"/>. Returns the way in effect: when a write of the other way does not end in time, the
+    /// way it had, which that write is part of.
     /// </summary>
     internal bool SwitchTo(bool appendOnly, TimeSpan timeout)
     {
         var target = appendOnly ? 1 : 0;
-        Interlocked.Exchange(ref _mode, target);
-        if (WaitForWritesToEnd(1 - target, timeout))
+        var previous = Interlocked.Exchange(ref _mode, target);
+        if (previous == target || WaitForWritesToEnd(previous, timeout))
         {
             return appendOnly;
         }
 
-        Interlocked.Exchange(ref _mode, 0);
-        return false;
+        Interlocked.Exchange(ref _mode, previous);
+        return previous == 1;
     }
 
     private bool WaitForWritesToEnd(int mode, TimeSpan timeout)

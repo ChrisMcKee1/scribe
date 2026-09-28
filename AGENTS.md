@@ -647,14 +647,22 @@ cause of one.**
   applies it to its own writer before the helper starts. The switch retires the other way first: each
   physical write of the app's writer is counted from before its open until after its close
   (`BeginWrite`, two interlocked operations, no lock, no wait), and the launcher, never the writer, the
-  hook or the UI thread, waits up to 2 s for the writes of the other way to end; if one does not, both
-  keep today's way (`WriteInProgress` in the launch line). The helper follows only the `--append-only-log`
+  hook or the UI thread, waits up to 2 s for the writes of the other way to end; if one does not, the
+  pair keeps its way (`WriteInProgress` in the launch line). A helper the app ended writes until it has
+  exited (a kill only starts its end), so the client keeps each one it ends (`RetiringHelpers`) until its
+  exit is seen, and the mode changes only once every one has been: the launcher waits up to 2 s, and past
+  that the launch keeps the pair's way (`PreviousHelperRunning`) and a later one tries again. The pair
+  becomes append-only only at a session's first launch: once it has run the old way (a write held the
+  switch back, a helper could not append, or the app moved the pair back) it stays so until the app
+  starts again (`StaysOldWay`). While the app appends only, a helper that does not qualify moves both
+  back. The helper follows only the `--append-only-log`
   launch argument, never its environment, and says so in its first line. With the flag off the app has
   no mode at all and both writers open today's way. Append-only, every overlay line, however long, is one
   encoded write; the old way, the overlay writes as UI-3 left it. Unchanged in both modes: the overlay makes its logs folder only when
   its day changes, so a folder deleted mid-day loses its lines until the next day. `AppendOnlyLogTests`
   (two real processes through `tests/Scribe.LogAppendChild`, mixed pairs both ways, the switch while a
-  write of the other way is held open, both directions, capable and legacy helper payloads of one
+  write of the other way is held open, both directions, an ended helper still running with a write in
+  flight, the same payload relaunched after a fallback, capable and legacy helper payloads of one
   version, renamed and replaced day files, faults) and `DailyLogFileAppendOnlyTests` (every
   `DailyLogFileTests` case again, appended only) pin it.
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch

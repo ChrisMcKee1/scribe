@@ -59,6 +59,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     // DATA-O-02: the shared log's append mode for the app and each helper it launches (null: today's way for both).
     private readonly Scribe.Core.Diagnostics.AppendOnlyLogMode? _appendMode;
+
+    // DATA-IMPL-A-01: with that mode requested, the helpers ended here until each is seen to exit; the mode changes only then.
+    private readonly Scribe.Core.Diagnostics.RetiringHelpers _endedHelpers = new();
     private readonly BlockingCollection<Command> _queue = new();
     private readonly Thread _consumer;
 
@@ -844,19 +847,21 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             psi.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
             // One way of appending to the shared log for the pair (DATA-O-02): decided for this helper and applied to the
-            // app's own writer, once its writes the other way have ended, before the helper starts; the helper appends only
-            // when told to here.
+            // app's own writer before the helper starts, once the helpers ended before have exited and the app's writes the
+            // other way have ended; the helper appends only when told to here.
             if (_appendMode is { Requested: true } appendMode)
             {
-                var appendOnly = appendMode.DecideForLaunch(_exePath);
+                var appendOnly = appendMode.DecideForLaunch(_exePath, _endedHelpers);
                 if (appendOnly)
                 {
                     psi.ArgumentList.Add(Scribe.Core.Diagnostics.AppendOnlyLogMode.LaunchArgument);
                 }
 
                 TryLog(
-                    LogLevel.Information, null, "Shared log for this overlay launch: {Mode} ({Decision}).",
-                    appendOnly ? "append-only" : "the old way", appendMode.LastDecision);
+                    appendOnly == appendMode.AppendOnly ? LogLevel.Information : LogLevel.Warning, null,
+                    "Shared log for this overlay launch: helper {Mode}, app {AppMode} ({Decision}).",
+                    appendOnly ? "append-only" : "the old way", appendMode.AppendOnly ? "append-only" : "the old way",
+                    appendMode.LastDecision);
             }
 
             // A close can land after this launch was decided; never spawn a helper only to kill it again.
@@ -1100,7 +1105,16 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         {
             try
             {
-                _process?.Dispose();
+                // DATA-IMPL-A-01: a kill only starts a helper's end, and a write it had in flight can still land, so with the
+                // shared log's append mode requested it is kept until it is seen to exit; otherwise released at once.
+                if (_appendMode is { Requested: true } && _process is { } ended)
+                {
+                    _endedHelpers.Add(ended);
+                }
+                else
+                {
+                    _process?.Dispose();
+                }
             }
             catch
             {
