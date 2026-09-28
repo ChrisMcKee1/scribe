@@ -46,6 +46,17 @@ decision over synthetic levels; it creates no pipe, process or window and is not
 It selects that baseline's original internal typing signature and the flag-off arm. Do not set it
 for the current tree or a shipping build; normal builds measure both current flag states.
 
+## Language probes
+
+The `Lang*` classes measure 0.5.1's language changes. What their tables do not show comes from
+`--lang-probe`, which runs in its own process at the priority it was started with:
+
+```powershell
+# What each matcher case processes: input rows, the rules they compile to, and both texts' lengths.
+# InputRows counts rows, not rules, and each text is cut at a word at or before MaxCharacters.
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --lang-probe matcher-dimensions
+```
+
 ## Which architecture actually ran
 
 BenchmarkDotNet builds a generated project and runs the result in a separate process through

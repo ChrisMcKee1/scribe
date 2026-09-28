@@ -8,10 +8,13 @@ using Scribe.Core.PostProcessing;
 namespace Scribe.Benchmarks;
 
 /// <summary>
-/// The dictionary pass with and without 0.5.1's MatcherPrefilter (combined.md row 6), on the TX-1 and TX-8 code: every
-/// shipped word pack plus a small dictionary (1,554 rules), or renamed copies of them (10,432 rules), for one dictation's
-/// cleaned text and raw source at three lengths. It measures the production post-processor; the setup checks that both
-/// arms give the same text and records.
+/// The dictionary pass with and without 0.5.1's MatcherPrefilter (combined.md row 6), on the TX-1 and TX-8 code, for one
+/// dictation's cleaned text and raw source. <see cref="InputRows"/> counts the vocabulary's rows, not its rules: every
+/// shipped row under a small dictionary (1,554 rows), or renamed copies of the shipped rows (10,432), which the merge compiles
+/// to 1,334 and 8,963 rules, one per spoken form. Each text is cut at the last space at or before
+/// <see cref="MaxCharacters"/>: 126, 409 and 1,865 raw characters, 130, 409 and 1,859 cleaned. The setup prints what its case
+/// compiled and cut (review finding LANG-IR-03), and checks that both arms give the same text and records. It measures the
+/// production post-processor.
 /// </summary>
 [MemoryDiagnoser]
 public class LangMatcherPassBenchmarks
@@ -30,27 +33,27 @@ public class LangMatcherPassBenchmarks
     [ParamsSource(nameof(Arms))]
     public Path Arm { get; set; }
 
-    [ParamsSource(nameof(RuleCounts))]
-    public int Rules { get; set; }
+    [ParamsSource(nameof(RowCounts))]
+    public int InputRows { get; set; }
 
-    [ParamsSource(nameof(CharacterCounts))]
-    public int Characters { get; set; }
+    [ParamsSource(nameof(CharacterLimits))]
+    public int MaxCharacters { get; set; }
 
     public static IEnumerable<Path> Arms => LangBenchmarkSubset.Pick(nameof(Arm), Path.Old, Path.Prefilter);
 
-    public static IEnumerable<int> RuleCounts => LangBenchmarkSubset.Pick(nameof(Rules), 1_554, 10_432);
+    public static IEnumerable<int> RowCounts => LangBenchmarkSubset.Pick(nameof(InputRows), 1_554, 10_432);
 
-    public static IEnumerable<int> CharacterCounts => LangBenchmarkSubset.Pick(nameof(Characters), 130, 412, 1865);
+    public static IEnumerable<int> CharacterLimits => LangBenchmarkSubset.Pick(nameof(MaxCharacters), 130, 412, 1865);
 
     [GlobalSetup]
     public void Setup()
     {
         var shipped = BuiltInDictionaryLibraries.All.SelectMany(pack => pack.Entries).ToList();
         var library = new List<DictionaryEntry>(shipped);
-        for (var copy = 1; library.Count + 5 < Rules; copy++)
+        for (var copy = 1; library.Count + 5 < InputRows; copy++)
         {
             library.AddRange(shipped
-                .Take(Rules - 5 - library.Count)
+                .Take(InputRows - 5 - library.Count)
                 .Select(entry => entry with { Pattern = $"{entry.Pattern} {copy}", Replacement = $"{entry.Replacement} {copy}" }));
         }
 
@@ -66,8 +69,11 @@ public class LangMatcherPassBenchmarks
 
         const string raw = "so i pushed the dot net api changes to github and the azure devops pipeline ran the tests before the blazor front end deployed then we flew to york ";
         const string cleaned = "So I pushed the .NET API changes to GitHub, and the Azure DevOps pipeline ran the tests before the Blazor front end deployed. Then we flew to New York. ";
-        _raw = Repeat(raw, Characters);
-        _cleaned = Repeat(cleaned, Characters);
+        _raw = Repeat(raw, MaxCharacters);
+        _cleaned = Repeat(cleaned, MaxCharacters);
+        Console.WriteLine(
+            $"// {nameof(LangMatcherPassBenchmarks)}: {dictionary.Length + library.Count} input rows compiled to {_rules.Count} rules; " +
+            $"raw text {_raw.Length} and cleaned text {_cleaned.Length} characters (limit {MaxCharacters}).");
 
         var old = new TextPostProcessor(new RepresentativeWorkload.DictionaryStub(dictionary), NullLogger<TextPostProcessor>.Instance);
         var expected = old.ProcessDetailed(_cleaned, _raw, old.Compile(dictionary, library));
@@ -259,7 +265,7 @@ public class LangCaseRelationBenchmarks
 
 /// <summary>
 /// Lets one run take a subset of a parameter's values, so each run in the shared bench lane stays under a minute: an
-/// environment variable named SCRIBE_BENCH_ and the parameter's name in capitals (SCRIBE_BENCH_CHARACTERS) holds the values
+/// environment variable named SCRIBE_BENCH_ and the parameter's name in capitals (SCRIBE_BENCH_MAXCHARACTERS) holds the values
 /// to keep, separated by commas, compared without case. Unset or empty keeps every value, so a plain run measures them all,
 /// and so does a list that names none of them: BenchmarkDotNet reads every class's sources, and two classes have an Arm.
 /// </summary>

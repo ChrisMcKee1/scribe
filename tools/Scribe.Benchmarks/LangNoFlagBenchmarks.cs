@@ -124,9 +124,11 @@ public class LangMinerBenchmarks
 }
 
 /// <summary>
-/// The dictionary pass over every shipped word pack plus a small dictionary (1,554 rules), built without naming a flag:
-/// the workload of <c>LangMatcherPassBenchmarks</c>' Old arm, so this same file runs on the baseline (77b22af) and on the
-/// change, where MatcherPrefilter is off by default, and shows the switched-off path costs what the old one did.
+/// The dictionary pass over every shipped word pack plus a small dictionary (1,554 input rows, which compile to 1,334
+/// rules), built without naming a flag: the workload of <c>LangMatcherPassBenchmarks</c>' Old arm, so this same file runs on
+/// the baseline (77b22af) and on the change, where MatcherPrefilter is off by default, and shows the switched-off path costs
+/// what the old one did. Each text is cut at the last space at or before <see cref="MaxCharacters"/>; the setup prints what
+/// its case compiled and cut.
 /// </summary>
 [MemoryDiagnoser]
 public class LangMatcherFlagOffBenchmarks
@@ -137,7 +139,7 @@ public class LangMatcherFlagOffBenchmarks
     private string _raw = null!;
 
     [Params(130, 1865)]
-    public int Characters { get; set; }
+    public int MaxCharacters { get; set; }
 
     [GlobalSetup]
     public void Setup()
@@ -153,8 +155,11 @@ public class LangMatcherFlagOffBenchmarks
 
         const string raw = "so i pushed the dot net api changes to github and the azure devops pipeline ran the tests before the blazor front end deployed then we flew to york ";
         const string cleaned = "So I pushed the .NET API changes to GitHub, and the Azure DevOps pipeline ran the tests before the Blazor front end deployed. Then we flew to New York. ";
-        _raw = Repeat(raw, Characters);
-        _cleaned = Repeat(cleaned, Characters);
+        _raw = Repeat(raw, MaxCharacters);
+        _cleaned = Repeat(cleaned, MaxCharacters);
+        Console.WriteLine(
+            $"// {nameof(LangMatcherFlagOffBenchmarks)}: {dictionary.Length + library.Count} input rows compiled to {_rules.Count} rules; " +
+            $"raw text {_raw.Length} and cleaned text {_cleaned.Length} characters (limit {MaxCharacters}).");
     }
 
     [Benchmark]

@@ -44,6 +44,11 @@ internal static class Program
             return StartupProbe.Run(args, host);
         }
 
+        if (LangProbe.IsRequested(args))
+        {
+            return LangProbe.Run(args);
+        }
+
         if (!BenchmarkTarget.TryResolve(host.ProcessArchitecture, out var runtimeIdentifier, out var platform))
         {
             Console.Error.WriteLine(

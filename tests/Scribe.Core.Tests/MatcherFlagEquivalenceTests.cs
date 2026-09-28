@@ -14,10 +14,10 @@ namespace Scribe.Core.Tests;
 /// The matcher's prefilter (<see cref="PerfFlags.MatcherPrefilter"/>, combined.md row 6, E.6) on 0.5.1's TX-1 and TX-8 code,
 /// against the same processor with it off deciding every result: the same text and the same replacement records, in order.
 /// The fuzz corpus: Astra's adversarial rules and texts under three cultures, with and without snippets, and sources absent,
-/// equal to the text and cleaned; every shipped word pack at its own size and at about 10,000 rules; U+212A texts and
-/// non-ASCII spoken forms (which always run their regex); and rules reused across vocabulary generations. The work it
-/// saves is counted too, since every output test here passes with the skip gone: the rule regexes each pass runs
-/// (<see cref="TextPostProcessor.RegexRuns"/>, review finding LANG-IR-01).
+/// equal to the text and cleaned; every shipped word pack at its own size (1,334 compiled rules) and with renamed copies
+/// (9,324); U+212A texts and non-ASCII spoken forms (which always run their regex); and rules reused across vocabulary
+/// generations. The work it saves is counted too, since every output test here passes with the skip gone: the rule regexes
+/// each pass runs (<see cref="TextPostProcessor.RegexRuns"/>, review finding LANG-IR-01).
 /// </summary>
 public sealed class MatcherFlagEquivalenceTests(ITestOutputHelper output)
 {
@@ -93,10 +93,10 @@ public sealed class MatcherFlagEquivalenceTests(ITestOutputHelper output)
     [InlineData(7, 300)]
     public void Every_shipped_word_pack_gives_the_old_text_and_records_with_the_prefilter(int copies, int dictations)
     {
-        // Every shipped row as one vocabulary, merged under a small dictionary as dictation merges them; with copies above
-        // one, renamed copies of the shipped rows take the vocabulary to about 10,000 rules. Dictations are made of the rules'
-        // own spoken and written forms in any case, with prose, U+212A and non-ASCII noise, so both the rules the search finds
-        // and the texts it may not judge are exercised.
+        // Every shipped row as one vocabulary, merged under a small dictionary as dictation merges them: 1,552 rows, which
+        // compile to 1,334 rules, one per spoken form. With copies above one, renamed copies of the shipped rows take it to
+        // 10,846 rows and 9,324 rules. Dictations are made of the rules' own spoken and written forms in any case, with prose,
+        // U+212A and non-ASCII noise, so both the rules the search finds and the texts it may not judge are exercised.
         var shipped = BuiltInDictionaryLibraries.All.SelectMany(pack => pack.Entries).ToList();
         var library = new List<DictionaryEntry>(shipped);
         for (var copy = 1; copy < copies; copy++)
