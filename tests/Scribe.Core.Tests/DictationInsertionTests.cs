@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -17,7 +18,8 @@ namespace Scribe.Core.Tests;
 /// step runs through the real <see cref="TextInjector"/> over scripted input and clipboard boundaries, so every
 /// insertion path is covered: typing, the clipboard paste, the paste's typing fallback and a standard edit control.
 /// </summary>
-public sealed class DictationInsertionTests
+[Collection(InsertionFlagMatrixCollection.Name)]
+public class DictationInsertionTests : InsertionFlagTest
 {
     private const nint Target = 0x4242;
 
@@ -96,7 +98,7 @@ public sealed class DictationInsertionTests
     {
         Assert.Same(string.Empty, DictationInsertion.TextToType(string.Empty, addSpaceAfterDictation: true));
 
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         var insertion = rig.Insert(string.Empty, InjectionMethod.UnicodeType);
 
         Assert.False(insertion.SpaceAdded);
@@ -127,7 +129,7 @@ public sealed class DictationInsertionTests
     [Fact]
     public void Typing_gives_the_target_the_space_and_keeps_the_dictation_without_it()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
 
         var insertion = rig.Insert("Send the report today.", InjectionMethod.UnicodeType);
 
@@ -142,7 +144,7 @@ public sealed class DictationInsertionTests
     [Fact]
     public void Back_to_back_dictations_arrive_separated_while_the_tray_keeps_each_as_dictated()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
 
         rig.Insert("First thought.", InjectionMethod.UnicodeType);
         rig.Insert("Second thought.", InjectionMethod.UnicodeType);
@@ -154,7 +156,7 @@ public sealed class DictationInsertionTests
     [Fact]
     public void Pasting_gives_the_target_the_space_and_puts_the_user_s_clipboard_back()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText("what the user had copied");
         string? pasted = null;
         rig.Platform.OnSleep = ms =>
@@ -180,7 +182,7 @@ public sealed class DictationInsertionTests
     public void A_paste_that_falls_back_to_typing_types_the_space_too()
     {
         // An image on the clipboard cannot be saved and put back, so the injector types instead.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedFormats(TextInjectionFakes.CF_DIB);
 
         var insertion = rig.Insert("Keep my screenshot.", InjectionMethod.ClipboardPaste);
@@ -194,7 +196,7 @@ public sealed class DictationInsertionTests
     [Fact]
     public void A_standard_edit_control_is_given_the_space_too()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Platform.StandardEdit = true;
 
         var insertion = rig.Insert("Notepad text.", InjectionMethod.UnicodeType);
@@ -210,7 +212,7 @@ public sealed class DictationInsertionTests
     [InlineData(InjectionMethod.ClipboardPaste)]
     public void Turned_off_the_target_is_given_exactly_the_dictation(InjectionMethod method)
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText("what the user had copied");
         string? pasted = null;
         rig.Platform.OnSleep = ms =>
@@ -244,7 +246,7 @@ public sealed class DictationInsertionTests
         Assert.Equal("we ship on .NET", corrected);
         Assert.Equal("Best regards,\nChris\n", signOff);
 
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         var first = rig.Insert(corrected, InjectionMethod.UnicodeType, shiftEnter: false);
         var second = rig.Insert(signOff, InjectionMethod.UnicodeType, shiftEnter: false);
 
@@ -263,7 +265,7 @@ public sealed class DictationInsertionTests
             DictationInsertion.TextToType(dictated, addSpaceAfterDictation: true), NewlineInjectionMode.SmartFlatten, "pwsh"));
 
         var flattened = InjectionTextFormatter.Apply(dictated, NewlineInjectionMode.SmartFlatten, "pwsh");
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         var insertion = rig.Insert(flattened, InjectionMethod.UnicodeType);
 
         Assert.Equal("Line one. Line two. ", rig.Typed());
@@ -276,7 +278,7 @@ public sealed class DictationInsertionTests
     [Fact]
     public void A_failed_insertion_leaves_the_dictation_copyable_without_the_space()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Platform.Foreground = 0x9999; // focus moved to another window before anything was typed
 
         var insertion = rig.Insert("Focus moved.", InjectionMethod.UnicodeType);
@@ -295,7 +297,7 @@ public sealed class DictationInsertionTests
     public void A_partial_insertion_counts_the_space_as_due_and_keeps_the_whole_dictation_without_it()
     {
         // Windows accepts the first two characters and then nothing more.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Platform.Deliver = (batch, inputs) => batch == 0 ? 4u : 0u;
 
         var insertion = rig.Insert("Only part arrives.", InjectionMethod.UnicodeType, shiftEnter: false);
@@ -309,7 +311,7 @@ public sealed class DictationInsertionTests
     [Fact]
     public void Shutdown_before_insertion_types_nothing_and_keeps_the_dictation()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         using var shutdown = new CancellationTokenSource();
         shutdown.Cancel();
 
@@ -332,7 +334,7 @@ public sealed class DictationInsertionTests
         var history = new HistoryRepository(db);
         using var writer = new HistoryWriter(history, NullLogger<HistoryWriter>.Instance);
         var settings = AppSettings.CreateDefault();
-        var rig = new Rig();
+        var rig = new Rig(Flags);
 
         var text = InjectionTextFormatter.Apply("Ship the fix today.", settings.NewlineHandling, "WINWORD");
         var insertion = rig.Insert(text, settings.InjectionMethod, settings.AddSpaceAfterDictation, settings.ShiftEnterLineBreaks);
@@ -434,7 +436,7 @@ public sealed class DictationInsertionTests
     }
 
     /// <summary>The real injector over scripted input and clipboard boundaries, and the tray's real recovery ring.</summary>
-    private sealed class Rig
+    private sealed class Rig(PerfFlags flags)
     {
         public TextInjectionFakes.Platform Platform { get; } = new() { Foreground = Target };
 
@@ -452,7 +454,7 @@ public sealed class DictationInsertionTests
             bool shiftEnter = true,
             CancellationToken cancellationToken = default)
         {
-            var injector = new TextInjector(NullLogger<TextInjector>.Instance, Platform, Clipboard);
+            var injector = new TextInjector(NullLogger<TextInjector>.Instance, Platform, Clipboard, flags);
             return DictationInsertion.Insert(
                 text,
                 addSpace,

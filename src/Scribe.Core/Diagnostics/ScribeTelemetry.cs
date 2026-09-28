@@ -64,6 +64,25 @@ public static class ScribeTelemetry
     /// <summary>Typing: how many SendInput calls the text took.</summary>
     public const string TagInjectBatches = "scribe.inject.batches";
 
+    /// <summary>Elapsed time inside native input calls, including retries and modifier cleanup.</summary>
+    public const string TagInjectNativeMs = "scribe.inject.native_ms";
+    /// <summary>Elapsed time in waits before retrying short native sends, separate from native-call time.</summary>
+    public const string TagInjectRetrySleepMs = "scribe.inject.retry_sleep_ms";
+    /// <summary>Elapsed time in the waits between constructed typing batches.</summary>
+    public const string TagInjectSettleMs = "scribe.inject.settle_ms";
+    /// <summary>Elapsed time in the fixed pre-paste and post-paste waits, not clipboard-acquisition retries.</summary>
+    public const string TagInjectClipboardSleepMs = "scribe.inject.clipboard_sleep_ms";
+    /// <summary>Number of actual native input calls, not the number of constructed batches.</summary>
+    public const string TagInjectNativeCalls = "scribe.inject.native_calls";
+    /// <summary>Events requested over all attempts, including repeated requests for an unaccepted suffix.</summary>
+    public const string TagInjectRequestedEvents = "scribe.inject.requested_events";
+    /// <summary>Events native input calls reported accepted, including modifier cleanup events.</summary>
+    public const string TagInjectAcceptedEvents = "scribe.inject.accepted_events";
+    /// <summary>Number of retry waits after native input calls returned short counts.</summary>
+    public const string TagInjectRetries = "scribe.inject.retries";
+    /// <summary>Elapsed time of the longest individual native input call.</summary>
+    public const string TagInjectMaxCallMs = "scribe.inject.max_call_ms";
+
     /// <summary>How many line breaks the inserted text held (a CRLF counts once), a count only.</summary>
     public const string TagInjectLineBreaks = "scribe.inject.line_breaks";
 

@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Overlay;
@@ -65,6 +66,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     // The decisions. Only command stamps and preview generations are touched off the consumer thread.
     private readonly OverlayHelperLifetime _lifetime = new();
     private readonly OverlayPreviewGate _preview = new();
+    private readonly OverlayMeterDelivery _meterDelivery;
+    private int _deliveryEpochSeen;
 
     private Process? _process;
     private HelperExitWatch? _exitWatch;
@@ -104,10 +107,12 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     /// <param name="audio">Source of the live input level shown while recording.</param>
     /// <param name="log">Optional logger.</param>
-    public OverlayProcessClient(IAudioCaptureService audio, ILogger<OverlayProcessClient>? log = null)
+    public OverlayProcessClient(
+        IAudioCaptureService audio, ILogger<OverlayProcessClient>? log = null, PerfFlags? perfFlags = null)
     {
         _audio = audio ?? throw new ArgumentNullException(nameof(audio));
         _log = log;
+        _meterDelivery = new OverlayMeterDelivery((perfFlags ?? PerfFlags.None).IsOn(PerfFlags.DeduplicateOverlayMeter));
         _consumer = new Thread(Consume) { IsBackground = true, Name = "ScribeOverlayIpc" };
         _consumer.Start();
     }
@@ -486,6 +491,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         // Judged again at the write: a launch can block for seconds while the engine asks for something newer, and the
         // launch's replay already gave the new helper that; the newer state's own command is queued behind this one.
+        // Preview steps can write their own METER value, so the next real level must not be compared with an older one.
+        _meterDelivery.Reset();
         if (IsSuperseded(item))
         {
             TryLog(LogLevel.Debug, null, "Overlay command {Command} skipped: a newer state replaced it.", item.Verb);
@@ -512,7 +519,19 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         var helper = ObserveHelper(nowMs);
         if (Prepare(_lifetime.OnMeter(nowMs, _desired.Demand, helper), helper, nowMs))
         {
-            WriteWithTimeout(OverlayPipeProtocol.MeterLine(Volatile.Read(ref _latestMeter)));
+            var epoch = Volatile.Read(ref _meterEpoch);
+            if (epoch != _deliveryEpochSeen)
+            {
+                _deliveryEpochSeen = epoch;
+                _meterDelivery.Reset();
+            }
+
+            var level = Volatile.Read(ref _latestMeter);
+            if (_meterDelivery.ShouldSend(level, nowMs))
+            {
+                WriteWithTimeout(OverlayPipeProtocol.MeterLine(level));
+                _meterDelivery.Sent(level, nowMs);
+            }
         }
     }
 
@@ -610,6 +629,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private void WriteWithTimeout(string text)
     {
+        if (!text.StartsWith(OverlayPipeProtocol.Meter + " ", StringComparison.Ordinal))
+        {
+            _meterDelivery.Reset();
+        }
+
         var write = _writer!.WriteLineAsync(text);
         if (!write.Wait(WriteTimeoutMs))
         {
@@ -843,6 +867,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
             var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
             _writer = writer;
+            _meterDelivery.Reset();
 
             // A fresh process starts at the built-in default anchor; replay the applied position so
             // relaunches (crash recovery, lazy launch) come up where the user chose and in the latest
@@ -1010,6 +1035,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private void KillProcess(bool graceful)
     {
+        _meterDelivery.Reset();
         try
         {
             _writer?.Dispose();

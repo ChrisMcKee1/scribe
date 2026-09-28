@@ -32,7 +32,6 @@ public sealed class PerfFlags
         CompositionIndex,
         DeduplicateOverlayMeter,
         DirectGlossaryProjection,
-        ExactInputArray,
         HookPriorityAboveNormal,
         HookRecoveryObservations,
         InputTimings,
@@ -40,7 +39,6 @@ public sealed class PerfFlags
         MatcherPrefilter,
         MatcherSpans,
         PreciseLocalTypingSettle,
-        ReuseInjectionWorker,
         ServiceLocalHookProbe,
         SnapshotInjectionLayout,
         SparseUsageAggregation,
@@ -62,7 +60,6 @@ public sealed class PerfFlags
     public const string CompositionIndex = nameof(CompositionIndex);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DirectGlossaryProjection = nameof(DirectGlossaryProjection);
-    public const string ExactInputArray = nameof(ExactInputArray);
     public const string HookPriorityAboveNormal = nameof(HookPriorityAboveNormal);
     public const string HookRecoveryObservations = nameof(HookRecoveryObservations);
     public const string InputTimings = nameof(InputTimings);
@@ -70,7 +67,6 @@ public sealed class PerfFlags
     public const string MatcherPrefilter = nameof(MatcherPrefilter);
     public const string MatcherSpans = nameof(MatcherSpans);
     public const string PreciseLocalTypingSettle = nameof(PreciseLocalTypingSettle);
-    public const string ReuseInjectionWorker = nameof(ReuseInjectionWorker);
     public const string ServiceLocalHookProbe = nameof(ServiceLocalHookProbe);
     public const string SnapshotInjectionLayout = nameof(SnapshotInjectionLayout);
     public const string SparseUsageAggregation = nameof(SparseUsageAggregation);

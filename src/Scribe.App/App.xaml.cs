@@ -387,7 +387,8 @@ public partial class App : Application
 
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
-            services.GetRequiredService<ILogger<OverlayProcessClient>>());
+            services.GetRequiredService<ILogger<OverlayProcessClient>>(),
+            services.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>());
 
         // State changes are raised on whichever thread made them and can arrive out of order; the relay posts each to this
         // thread without making the raising thread wait, and shows only the newest (see PresentationRelay).

@@ -13,6 +13,17 @@ public sealed class PerfFlagsTests
     private static readonly string[] Sample = ["Alpha", "Beta", "Gamma"];
 
     [Theory]
+    [InlineData("ExactInputArray")]
+    [InlineData("ReuseInjectionWorker")]
+    public void Retired_input_experiments_are_not_registered(string name)
+    {
+        var flags = PerfFlags.Parse(name);
+        Assert.DoesNotContain(name, PerfFlags.Known);
+        Assert.False(flags.IsOn(name));
+        Assert.Equal(1, flags.UnknownCount);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]

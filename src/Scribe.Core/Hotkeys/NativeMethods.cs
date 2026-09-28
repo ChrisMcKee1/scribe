@@ -352,6 +352,16 @@ internal static partial class NativeMethods
     internal static bool SendMarkedKeyEvent(ushort virtualKey, bool keyUp) =>
         SendInput(1, [MarkedKeyEvent(virtualKey, keyUp)], Marshal.SizeOf<INPUT>()) == 1;
 
+    internal static bool SendWatchdogProbe(HookProbeIdentity identity) =>
+        SendInput(1, [BuildWatchdogProbe(identity)], Marshal.SizeOf<INPUT>()) == 1;
+
+    internal static INPUT BuildWatchdogProbe(HookProbeIdentity identity)
+    {
+        var input = BuildMarkedKeyEvent(VK_PROBE, keyUp: true, KeyScanCode.None);
+        input.U.ki.dwExtraInfo = identity.Marker;
+        return input;
+    }
+
     /// <summary>The event <see cref="SendMarkedKeyEvent"/> sends, with its scan code from the foreground window's layout.</summary>
     internal static INPUT MarkedKeyEvent(ushort virtualKey, bool keyUp) =>
         BuildMarkedKeyEvent(virtualKey, keyUp, MarkedKeyScanCode(virtualKey, KeyScanCodes.ForForegroundLayout));

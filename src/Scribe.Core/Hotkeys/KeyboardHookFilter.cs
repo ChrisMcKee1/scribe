@@ -71,11 +71,19 @@ internal static class KeyboardHookFilter
         bool throughCurrentRegistration,
         in KeyEventIdentity identity,
         bool isDown,
-        nuint extraInfo)
+        nuint extraInfo,
+        HookProbeIdentity probe = default)
     {
         if (IsScribesOwn(extraInfo))
         {
-            return new KeyboardHookRoute(Swallow: IsProbe(identity.VirtualKey, !isDown, extraInfo), TrackPass: false, Echo: false, RepairAt: 0);
+            return new KeyboardHookRoute(
+                Swallow: !probe.IsLocal && IsProbe(identity.VirtualKey, !isDown, extraInfo),
+                TrackPass: false, Echo: false, RepairAt: 0);
+        }
+
+        if (probe.IsLocal && probe.IsOwn(identity.VirtualKey, !isDown, extraInfo))
+        {
+            return new KeyboardHookRoute(Swallow: true, TrackPass: false, Echo: false, RepairAt: 0);
         }
 
         // Only a replaced registration can be handed an echo: it sits further down the chain than the current one, inside

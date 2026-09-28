@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Models;
 using Scribe.Core.TextInjection;
+using Scribe.Core.Diagnostics;
 
 namespace Scribe.InjectionLab;
 
@@ -59,6 +60,9 @@ internal static class Program
         var runs = ArgInt(args, "--runs", 5);
         var rich = args.Contains("--richedit", StringComparer.OrdinalIgnoreCase);
         var custom = args.Contains("--custom", StringComparer.OrdinalIgnoreCase);
+        var strict = args.Contains("--strict-validation", StringComparer.OrdinalIgnoreCase);
+        var targetProcess = ArgValue(args, "--target-process");
+        var perfFlags = PerfFlags.FromEnvironment();
         var methods = ParseMethods(args, custom);
         if (methods.Length == 0)
         {
@@ -66,12 +70,20 @@ internal static class Program
             return 3;
         }
 
-        using var target = new TargetWindow(rich, custom);
+        using var target = new TargetWindow(rich, custom, strict);
 
         Console.WriteLine("Scribe injection lab");
+        Console.WriteLine($"  performance    : {perfFlags.Describe()}");
         Console.WriteLine($"  target control : {target.ControlClass}");
         Console.WriteLine($"  runs per case  : {runs}");
         Console.WriteLine($"  methods        : {string.Join(", ", methods.Select(m => $"{m.Label} (expects {m.ExpectedPath})"))}");
+        Console.WriteLine(strict
+            ? "  validation     : strict; producer and target consumption timed separately"
+            : "  validation     : legacy; not sufficient to approve faster typing");
+        if (targetProcess is not null)
+        {
+            Console.WriteLine("  target process : pacing simulation only, not a measurement of that application's input");
+        }
         Console.WriteLine();
         if (!target.IsCustomTarget)
         {
@@ -84,19 +96,19 @@ internal static class Program
         Console.WriteLine("focus, sends real keystrokes and borrows the clipboard. Do not type until the run finishes.");
         Console.WriteLine();
 
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance);
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, perfFlags);
         var rows = new List<Row>();
 
         target.Focus();
 
         foreach (var method in methods)
         {
-            foreach (var c in Cases)
+            foreach (var c in strict ? StrictCases() : Cases)
             {
                 var samples = new List<Sample>(runs);
                 for (var i = 0; i < runs; i++)
                 {
-                    samples.Add(RunOnce(target, injector, method, c));
+                    samples.Add(RunOnce(target, injector, method, c, strict, targetProcess));
                 }
 
                 var row = Summarize(method, c, samples);
@@ -111,11 +123,18 @@ internal static class Program
         }
 
         Console.WriteLine();
-        Report(rows);
+        Report(rows, perfFlags);
         return ExitCode(rows);
     }
 
-    private static Sample RunOnce(TargetWindow target, TextInjector injector, MethodArm arm, Case c)
+    private static IEnumerable<Case> StrictCases() => Cases.Concat(
+    [
+        new Case("terminal-breaks", "w0001 w0002\r\n"),
+        new Case("ordered", string.Join(' ', Enumerable.Range(1, 100).Select(i => $"w{i:D4}")) + " \U0001F600\r\n\r\n"),
+    ]);
+
+    private static Sample RunOnce(
+        TargetWindow target, TextInjector injector, MethodArm arm, Case c, bool strict, string? targetProcess)
     {
         target.Clear();
         if (!target.EnsureForeground(TimeSpan.FromSeconds(3)))
@@ -138,7 +157,14 @@ internal static class Program
         }
 
         var stopwatch = Stopwatch.StartNew();
-        var work = Task.Run(() => injector.Inject(c.Text, arm.Method, target.Handle, arm.ShiftEnter));
+        var started = Stopwatch.GetTimestamp();
+        long producerEnded = 0;
+        var work = Task.Run(() =>
+        {
+            var delivered = injector.Inject(c.Text, arm.Method, target.Handle, arm.ShiftEnter, targetProcess);
+            producerEnded = Stopwatch.GetTimestamp();
+            return delivered;
+        });
 
         // The target renders keystrokes and serves its paste only while this thread pumps, so pump for
         // as long as the injection takes rather than stopping at a timeout and then blocking on it.
@@ -148,11 +174,12 @@ internal static class Program
             () => Console.WriteLine($"  {arm.Label} / {c.Id}: still injecting after 30 s; still pumping"));
         var result = work.GetAwaiter().GetResult();
         stopwatch.Stop();
+        var consumed = !strict || target.PumpUntilText(c.Text, TimeSpan.FromSeconds(2));
 
         // Let the last batch's WM_CHARs drain before reading back.
         target.Pump(TimeSpan.FromMilliseconds(120));
         var observed = new Observed(
-            Normalize(target.ReadText()),
+            InjectionLabValidation.Normalize(target.ReadText(), strict),
             target.IsCustomTarget,
             target.Pastes,
             target.PasteFailures,
@@ -161,7 +188,20 @@ internal static class Program
             before,
             pasting ? target.ReadClipboard() : default);
 
-        return Classify(arm, c, result, observed, stopwatch.Elapsed.TotalMilliseconds);
+        var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+        var consumptionConfirmed = !strict;
+        if (strict)
+        {
+            var producerMs = Stopwatch.GetElapsedTime(started, producerEnded).TotalMilliseconds;
+            double? consumedMs = consumed && target.LastConsumptionTimestamp >= started
+                ? Stopwatch.GetElapsedTime(started, target.LastConsumptionTimestamp).TotalMilliseconds
+                : null;
+            var completedMs = InjectionLabValidation.CompletedMilliseconds(producerMs, consumedMs);
+            Console.WriteLine($"  {arm.Label} / {c.Id}: producer {producerMs:F2} ms; target consumed {FormatMs(consumedMs)} ms");
+            consumptionConfirmed = completedMs is not null;
+            elapsedMs = completedMs ?? producerMs;
+        }
+        return Classify(arm, c, result, observed, elapsedMs, strict, consumptionConfirmed);
     }
 
     // What the target and the clipboard showed after a run, independently of what the injector reported.
@@ -175,7 +215,8 @@ internal static class Program
         TargetWindow.ClipboardView ClipboardBefore,
         TargetWindow.ClipboardView ClipboardAfter);
 
-    private static Sample Classify(MethodArm arm, Case c, InjectionResult result, Observed seen, double ms)
+    private static Sample Classify(
+        MethodArm arm, Case c, InjectionResult result, Observed seen, double ms, bool strict, bool consumptionConfirmed)
     {
         // Scribe's claims that another application took the clipboard, or that its text could not be
         // read, are checked against what the lab itself saw before they are excused as environment: a
@@ -234,12 +275,19 @@ internal static class Program
             }
         }
 
-        var expected = Normalize(c.Text);
+        if (strict && seen.CustomTarget && arm.ExpectedPath == TypingPath &&
+            !InjectionLabValidation.EnterCountsMatch(c.Text, arm.ShiftEnter, seen.PlainEnters, seen.ShiftEnters))
+        {
+            return Sample.Failed(ms, result.Method, "line-break key modifiers or counts did not match the arm",
+                seen.PlainEnters, seen.ShiftEnters);
+        }
+
+        var expected = InjectionLabValidation.Normalize(c.Text, strict);
         if (!string.Equals(seen.Text, expected, StringComparison.Ordinal))
         {
             // What a paste delivered may be the operator's own clipboard content, so only its shape is shown.
             var note = arm.ExpectedPath == ClipboardPath
-                ? DescribeShape(expected, seen.Text, seen.ClipboardBefore)
+                ? DescribeShape(expected, seen.Text, seen.ClipboardBefore, strict)
                 : Describe(expected, seen.Text);
             return Sample.Failed(ms, result.Method, note, seen.PlainEnters, seen.ShiftEnters);
         }
@@ -272,6 +320,10 @@ internal static class Program
             }
         }
 
+        if (!consumptionConfirmed)
+        {
+            return Sample.Failed(ms, result.Method, "target consumption was not confirmed", seen.PlainEnters, seen.ShiftEnters);
+        }
         return Sample.Passed(ms, result.Method, seen.PlainEnters, seen.ShiftEnters);
     }
 
@@ -331,8 +383,9 @@ internal static class Program
             samples.Select(s => s.Note).FirstOrDefault(n => n is not null));
     }
 
-    private static void Report(IReadOnlyList<Row> rows)
+    private static void Report(IReadOnlyList<Row> rows, PerfFlags perfFlags)
     {
+        Console.WriteLine($"Performance configuration: {perfFlags.Describe()}");
         Console.WriteLine("=== Per case ===");
         Console.WriteLine(
             $"{"Method",-22} {"Case",-12} {"Chars",6} {"Median",9} {"Pass",9} {"NotMeas",8} {"Wrong",6} {"Path",-16} {"Enter p/s",10}");
@@ -417,10 +470,6 @@ internal static class Program
         return AllArms.Where(a => wanted.Contains(a.Label, StringComparer.OrdinalIgnoreCase)).ToArray();
     }
 
-    // EDIT hands back CRLF regardless of what was typed, so compare on a single canonical form.
-    private static string Normalize(string text) =>
-        text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
-
     private static string Describe(string expected, string actual)
     {
         if (actual.Length == 0)
@@ -435,14 +484,14 @@ internal static class Program
     }
 
     // The paste arm's mismatch, described without echoing any of what arrived.
-    private static string DescribeShape(string expected, string actual, TargetWindow.ClipboardView before)
+    private static string DescribeShape(string expected, string actual, TargetWindow.ClipboardView before, bool strict)
     {
         if (actual.Length == 0)
         {
             return "control was empty after injection";
         }
 
-        if (before.Text is { } previous && string.Equals(actual, Normalize(previous), StringComparison.Ordinal))
+        if (before.Text is { } previous && string.Equals(actual, InjectionLabValidation.Normalize(previous, strict), StringComparison.Ordinal))
         {
             return "the target pasted the clipboard's previous content: the restore ran before the target read the dictation";
         }

@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Diagnostics;
+using Scribe.Core.TextInjection;
 
 namespace Scribe.InjectionLab;
 
@@ -44,6 +46,10 @@ internal sealed class TargetWindow : IDisposable
     private int _shiftEnters;
     private int _pastes;
     private int _pasteFailures;
+    private readonly bool _strict;
+    private long _lastConsumptionTimestamp;
+
+    public long LastConsumptionTimestamp => _lastConsumptionTimestamp;
 
     public IntPtr Handle => _host;
 
@@ -74,8 +80,9 @@ internal sealed class TargetWindow : IDisposable
             $"ClipboardView {{ Readable = {Readable}, Empty = {Empty}, HasText = {Text is not null} }}";
     }
 
-    public TargetWindow(bool richEdit, bool custom = false)
+    public TargetWindow(bool richEdit, bool custom = false, bool strict = false)
     {
+        _strict = strict;
         if (richEdit && !custom)
         {
             // RichEdit lives in a separate DLL that must be loaded before the class exists.
@@ -141,6 +148,7 @@ internal sealed class TargetWindow : IDisposable
                     lock (_captured)
                     {
                         _captured.Append(ch);
+                        _lastConsumptionTimestamp = Stopwatch.GetTimestamp();
                     }
                 }
 
@@ -151,6 +159,7 @@ internal sealed class TargetWindow : IDisposable
                 lock (_captured)
                 {
                     _captured.Append('\n');
+                    _lastConsumptionTimestamp = Stopwatch.GetTimestamp();
                     if (shifted)
                     {
                         _shiftEnters++;
@@ -184,6 +193,7 @@ internal sealed class TargetWindow : IDisposable
             }
 
             _captured.Append(view.Text);
+            _lastConsumptionTimestamp = Stopwatch.GetTimestamp();
             _pastes++;
         }
     }
@@ -317,6 +327,7 @@ internal sealed class TargetWindow : IDisposable
             _shiftEnters = 0;
             _pastes = 0;
             _pasteFailures = 0;
+            _lastConsumptionTimestamp = 0;
         }
 
         if (_edit != IntPtr.Zero)
@@ -359,7 +370,7 @@ internal sealed class TargetWindow : IDisposable
         while (DateTime.UtcNow < until)
         {
             DrainQueue();
-            Thread.Sleep(1);
+            WaitForMessages();
         }
     }
 
@@ -382,10 +393,42 @@ internal sealed class TargetWindow : IDisposable
                 onSlow();
             }
 
-            Thread.Sleep(1);
+            WaitForMessages();
         }
 
         DrainQueue();
+    }
+
+    public bool PumpUntilText(string expected, TimeSpan timeout)
+    {
+        var started = Stopwatch.GetTimestamp();
+        do
+        {
+            DrainQueue();
+            if (InjectionLabValidation.Matches(expected, ReadText(), strict: true))
+            {
+                if (!IsCustomTarget)
+                {
+                    _lastConsumptionTimestamp = Stopwatch.GetTimestamp();
+                }
+                return true;
+            }
+            WaitForMessages();
+        }
+        while (Stopwatch.GetElapsedTime(started) < timeout);
+        return false;
+    }
+
+    private void WaitForMessages()
+    {
+        if (_strict)
+        {
+            _ = MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, 10, 0x04FF, 0x0004);
+        }
+        else
+        {
+            Thread.Sleep(1);
+        }
     }
 
     private static void DrainQueue()
@@ -533,4 +576,7 @@ internal sealed class TargetWindow : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern UIntPtr GlobalSize(IntPtr hMem);
+
+    [DllImport("user32.dll")]
+    private static extern uint MsgWaitForMultipleObjectsEx(uint count, IntPtr handles, uint milliseconds, uint wakeMask, uint flags);
 }

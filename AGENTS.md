@@ -381,6 +381,43 @@ equivalent exhaustively (or by a fuzz corpus with the old code deciding every re
 $env:SCRIBE_PERF_FLAGS = "FlagOne,FlagTwo"; $env:SCRIBE_DATA_DIR = "C:\scratch\data"; dotnet run --project src/Scribe.App
 ```
 
+The input experiments use that same snapshot, never per-call environment reads:
+
+- `InputTimings` measures each native send, retry sleep and inter-batch settle separately. The child span starts inside
+  the fresh STA worker; the numeric completion line also reports caller and worker time. Clipboard acquisition retries
+  and other preflight work stay in `OtherWorkerMs`, not native-send time. Attempt counts include cleanup sends and count
+  repeated requests separately from accepted events. No text, key values or clipboard content is recorded.
+- `HookRecoveryObservations` records only the current registration's removal outcome after the existing bounded join:
+  `PresentAtRemoval`, `InvalidOrAbsent`, `OtherFailure` or `Incomplete`. The observation belongs to that installation,
+  and a late teardown cannot revise an already reported incomplete result. A GC-pause interval is context, not a cause.
+  No measurement, logging or allocation is added to either hook callback.
+- `ServiceLocalHookProbe` gives independent services separate watchdog identities, created before hooks exist. The
+  ordinary dictation and repair marker is unchanged; current and retired registrations of a service share its probe.
+  With it on, the probe passes another Scribe service's hook and stops only at its own service's registration. If a
+  remote client is between those services, the probe can reach it until its owning service moves ahead of that client.
+  Off retains the legacy shared probe, including its known interference between two legacy services. Mixed-mode models
+  and callback allocation tests must stay green; this does not authorize launching a second app or hook on a used desktop.
+- `HookPriorityAboveNormal` requests AboveNormal only for the hook thread before it starts. Off leaves Windows' default,
+  and a refused change is logged by shape. The injector, consumer and process priorities are unchanged.
+- `DeduplicateOverlayMeter` runs only after the existing helper-health and lifetime decisions. It resets on a recording,
+  state/preview write, writer or helper replacement. An equal level becomes due again after 250 ms and is written on the
+  next meter delivery opportunity, so a broken silent pipe is not hidden indefinitely. `PillLevelMeter` is unchanged.
+- `SnapshotInjectionLayout` reads the foreground layout once for an insertion's four mapped keys, never across insertions.
+  IN1's one independently owned buffer per insertion and IN2's bounded clipboard copies remain the baseline.
+- `PreciseLocalTypingSettle` uses a private per-insertion timer for local inter-batch waits only. Remote, retry and
+  clipboard waits still use the old Sleep path. Creation or waiting failure logs a shape and falls back for that insertion.
+  Timer disposal cannot fail an already delivered insertion. Neither a precise timer nor a successful SendInput count is
+  proof that the target consumed the text.
+
+The fresh STA thread per insertion stays required. The retired `ExactInputArray` and `ReuseInjectionWorker` names are
+not registered: IN1 already supplies the buffer optimization, and worker reuse was dropped. A stale environment value
+containing either name is counted as unknown and enables neither experiment.
+
+InjectionLab's `--strict-validation` is a tool option, not a product flag. It keeps terminal newlines, checks the typed
+Enter modifiers, and reports producer return and observed target consumption separately. Its `--target-process` option
+simulates a pacing choice, not that target's implementation. Build this tool during headless work, never run it on a
+desktop in use. The strict classifier tests have no window or clipboard; real-target validation remains a separate gate.
+
 ## Project structure
 
 ```
@@ -949,9 +986,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   tests `Start_sees_keys_first_again_once_moved_ahead_of_a_hook_that_keeps_them` and
   `Start_decides_each_key_once_while_a_replaced_registration_is_kept` measure the chain order and the echo on real hooks.
 - **The watchdog's probe stops at Scribe's hook.** The keyboard callback counts every event, the probe included, and then
-  swallows exactly Scribe's own marker-tagged key-up of `VK_PROBE` (`KeyboardHookFilter.IsProbe`), through whichever
-  registration it reaches first: passed on, a Remote Desktop client behind Scribe's hook would forward a key-up of an
-  unassigned key with scan code 0 into the remote session every watchdog period. Text Scribe types and every other
+  with `ServiceLocalHookProbe` off swallows exactly Scribe's own marker-tagged key-up of `VK_PROBE`
+  (`KeyboardHookFilter.IsProbe`), through whichever Scribe registration it reaches first. With the flag on, it passes
+  other Scribe services and stops only at the first registration of its owning service. If a Remote Desktop client is
+  between two services, the probe can reach that client until its owning service moves ahead of it. Passed on, a remote
+  client can forward that unassigned key-up with scan code 0; the flag does not remove the existing move-ahead gap.
+  Text Scribe types and every other
   marked event pass as before. Scribe's own keyboard input is its marker whole or exactly its low half
   (`KeyboardHookFilter.IsScribesOwn`): Windows keeps only the low 32 bits of a mouse event's extra information (above),
   while for a keyboard event it hands the hook the whole value, measured on both CI runners by
@@ -1330,17 +1370,24 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   their scan codes with the keypad); an 0xE1 key (Pause) keeps none. `KEYEVENTF_SCANCODE` is never set, so Windows still
   takes the key from wVk and a local app gets the same keys as before. The watchdog's probe keeps no scan code.
 - **Typing into a remote client is paced for the remote session** (`TypingPace`): at most 16 code units per SendInput
-  call (`TextInjector.RemoteChunkChars`), 20 ms apart (`RemoteSettleMs`), with no word-boundary backoff, against 50 units
-  5 ms apart for every other target, which is unchanged. The user's 0.4.3 log showed 184 characters (368 events) typed
+  call (`TextInjector.RemoteChunkChars`), requesting a 20 ms wait between batches (`RemoteSettleMs`), with no word-boundary
+  backoff, against 50 units and a requested 5 ms wait locally. The precise-local-settle experiment changes only how
+  that local wait runs. The user's 0.4.3 log showed 184 characters (368 events) typed
   into msrdc in 99 ms, in four calls of up to 100 events, and the remote input stack wedged about a second later; nothing
-  documents a rate a remote session can take, so the remote pace stays far below that burst. The extra time is the
-  settles, measured over the same text: 220 ms for 184 characters (15 ms locally) and 940 ms for 766 (75 ms); the events
-  are the same. `ChunkLength` never splits a CRLF pair or, for every target, a surrogate pair: a local batch ends one
+  documents a rate a remote session can take, so the remote pace stays far below that burst. The deterministic tests sum
+  requested waits: 220 ms for 184 characters (15 ms locally) and 940 ms for 766 (75 ms). These are not measured completion
+  times: Windows timer resolution, scheduling, native sends and target processing add time. The events are the same.
+  `ChunkLength` never splits a CRLF pair or, for every target, a surrogate pair: a local batch ends one
   unit earlier only where a 50-unit cut would have fallen inside a pair, which it used to (`TypingPaceTests`).
 - **The log says what it was, shapes only.** The recording-start line carries `remote=True|False`, and the `text.inject`
   trace carries `inject.remote`, `inject.paste_bypassed`, `inject.batch_units` and `inject.batches` (typing), and the counts
   `inject.line_breaks`, `inject.surrogate_pairs` and `inject.control_chars` (`InjectedTextShape`), all allowlisted in
-  `TraceTagPolicy`. Never the text, never a window title.
+  `TraceTagPolicy`. With `InputTimings` on, the span also records `inject.native_ms`, `inject.retry_sleep_ms`,
+  `inject.settle_ms`, `inject.clipboard_sleep_ms`, `inject.native_calls`, `inject.requested_events`,
+  `inject.accepted_events`, `inject.retries` and `inject.max_call_ms`. The separate timing line uses the same snapshot
+  returned to the caller and marks `NoInsertion=True` when no worker started, so empty input and pre-worker focus loss
+  are distinguishable from a worker that attempted insertion.
+  Never the text, never a window title.
 - **A remote client is always typed into, never pasted into, whatever the insertion setting** (review round 2, item 6).
   The Remote Desktop clipboard uses delayed rendering ([MS-RDPECLIP]: "The data associated with the Clipboard Format is
   sent only if a paste operation is executed"), so the remote app's paste reads the local clipboard over the connection,

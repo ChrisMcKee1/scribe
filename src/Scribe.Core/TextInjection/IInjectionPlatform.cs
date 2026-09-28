@@ -31,4 +31,8 @@ internal interface IInjectionPlatform
     /// (<see cref="KeyScanCodes.ForForegroundLayout"/>), for the VK-based events Scribe injects.
     /// </summary>
     KeyScanCode ScanCodeOf(ushort virtualKey);
+
+    InjectionKeys SnapshotKeys() => InjectionKeys.From(this);
+
+    IPreciseTypingWait CreatePreciseWait() => throw new PlatformNotSupportedException();
 }

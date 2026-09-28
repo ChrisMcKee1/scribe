@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.TextInjection;
 
@@ -32,6 +33,10 @@ public sealed class HotkeyService : IHotkeyService
     private readonly TimeProvider _time;
     private readonly Func<int> _keyRepeatWindowMs;
     private readonly Action<long>? _scheduleReconcilePass;
+    private readonly PerfFlags _perfFlags;
+    private readonly bool _observeRecovery;
+    private readonly HookProbeIdentity _probeIdentity;
+    private TimeSpan _gcPauseBaseline;
     private readonly object _sync = new();
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
@@ -95,13 +100,13 @@ public sealed class HotkeyService : IHotkeyService
     private long _keyboardMovesDeferredReported;
     private long _keyboardMovesDroppedReported;
 
-    public HotkeyService(ILogger<HotkeyService> logger)
-        : this(logger, HotkeyBinding.DefaultDictation)
+    public HotkeyService(ILogger<HotkeyService> logger, PerfFlags? perfFlags = null)
+        : this(logger, HotkeyBinding.DefaultDictation, perfFlags)
     {
     }
 
-    public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding)
-        : this(logger, binding, NativeMethods.ThreadDesktopReceivesInput)
+    public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding, PerfFlags? perfFlags = null)
+        : this(logger, binding, NativeMethods.ThreadDesktopReceivesInput, perfFlags)
     {
     }
 
@@ -109,8 +114,9 @@ public sealed class HotkeyService : IHotkeyService
     /// Asked on the hook thread when a desktop-switch notice arrives: whether that thread's desktop is receiving input, or
     /// null when that cannot be told (see <see cref="HotkeyEngine.OnDesktopSwitchNotice"/>). Tests replace the real query.
     /// </param>
-    internal HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding, Func<bool?> desktopReceivesInput)
-        : this(logger, CreateRouter(binding), desktopReceivesInput)
+    internal HotkeyService(
+        ILogger<HotkeyService> logger, HotkeyBinding binding, Func<bool?> desktopReceivesInput, PerfFlags? perfFlags = null)
+        : this(logger, CreateRouter(binding), desktopReceivesInput, perfFlags: perfFlags)
     {
     }
 
@@ -150,7 +156,8 @@ public sealed class HotkeyService : IHotkeyService
         Func<nint, string?>? processNameOfWindow = null,
         TimeProvider? time = null,
         Func<int>? keyRepeatWindowMs = null,
-        Action<long>? scheduleReconcilePass = null)
+        Action<long>? scheduleReconcilePass = null,
+        PerfFlags? perfFlags = null)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
@@ -159,6 +166,10 @@ public sealed class HotkeyService : IHotkeyService
         _time = time ?? TimeProvider.System;
         _keyRepeatWindowMs = keyRepeatWindowMs ?? KeyRepeatTiming.ReadUncertaintyWindowMs;
         _scheduleReconcilePass = scheduleReconcilePass;
+        _perfFlags = perfFlags ?? PerfFlags.None;
+        _observeRecovery = _perfFlags.IsOn(PerfFlags.HookRecoveryObservations);
+        _probeIdentity = HookProbeIdentity.Create(_perfFlags);
+        _gcPauseBaseline = _observeRecovery ? GC.GetTotalPauseDuration() : TimeSpan.Zero;
         _router = router;
         _reconciler = CreateReconciler(
             _router,
@@ -245,6 +256,21 @@ public sealed class HotkeyService : IHotkeyService
     /// (after <see cref="MaintainMouseHookNow"/> has been answered), never while it is busy.
     /// </summary>
     internal HotkeyEngine? CurrentEngineForTests => _router.CurrentEngine;
+
+    internal HookProbeIdentity WatchdogIdentityForTests => _probeIdentity;
+    internal long CallbackCountForTests => Interlocked.Read(ref _hookCallbackCount);
+    internal bool WatchdogProbeArmedForTests => _livenessProbe.IsArmed;
+
+    internal void ProbeKeyboardHookNowForTests()
+    {
+        lock (_sync)
+        {
+            if (IsRunning)
+            {
+                ProbeKeyboardHookLocked();
+            }
+        }
+    }
 
     /// <summary>
     /// The reconcile signal the current installation's hook callbacks raise (each installation has its own), or null while
@@ -928,9 +954,19 @@ public sealed class HotkeyService : IHotkeyService
                     return;
                 }
 
-                ProbeKeyboardHookLocked();
-                MaintainKeyboardHookLocked();
-                MaintainMouseHookLocked();
+                try
+                {
+                    ProbeKeyboardHookLocked();
+                    MaintainKeyboardHookLocked();
+                    MaintainMouseHookLocked();
+                }
+                finally
+                {
+                    if (_observeRecovery)
+                    {
+                        _gcPauseBaseline = GC.GetTotalPauseDuration();
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -1074,7 +1110,9 @@ public sealed class HotkeyService : IHotkeyService
         // Arm the next check only when the probe actually left the building; a rejected
         // SendInput (UIPI, desktop switch mid-tick) must not read as a dead hook.
         _livenessProbe.Arm(
-            NativeMethods.SendMarkedKeyEvent(NativeMethods.VK_PROBE, keyUp: true));
+            _probeIdentity.IsLocal
+                ? NativeMethods.SendWatchdogProbe(_probeIdentity)
+                : NativeMethods.SendMarkedKeyEvent(NativeMethods.VK_PROBE, keyUp: true));
     }
 
     // Upkeep for the mouse hook, each period: first report what the hook thread did with it since the last period, then
@@ -1187,6 +1225,10 @@ public sealed class HotkeyService : IHotkeyService
         var previous = _installation;
         previous?.RequestQuit();
         previous?.Join(JoinTimeout);
+        if (_observeRecovery && previous is not null)
+        {
+            ReportRecoveryObservation(previous.RemovalObservation);
+        }
 
         // A new engine rather than the old one on a new thread: if the join timed out, the old
         // hook thread may still be running, and two threads must never share key state. Beginning
@@ -1220,6 +1262,22 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
+    private void ReportRecoveryObservation(HookRemovalSnapshot observation)
+    {
+        try
+        {
+            var pauseMs = Math.Max(0, (GC.GetTotalPauseDuration() - _gcPauseBaseline).TotalMilliseconds);
+            _logger.LogInformation(
+                "Keyboard recovery observation: registration {Outcome}, Win32 error {Error}; " +
+                "GC pause since the previous watchdog sample {PauseMs} ms. This observation does not identify the cause.",
+                observation.Outcome, observation.Error, pauseMs);
+        }
+        catch (Exception)
+        {
+            // Recovery cannot depend on optional diagnostics.
+        }
+    }
+
     // Named from the virtual-key codes, as Settings names them: a stored name can be an alias such as "Next".
     private static string DescribeBinding(HotkeyBinding binding) => HotkeyText.Describe(binding);
 
@@ -1246,6 +1304,9 @@ public sealed class HotkeyService : IHotkeyService
         private readonly HotkeyService _service;
         private readonly HotkeyEngine _engine;
         private readonly bool _replacesRegistration;
+        private readonly HookRecoveryObservation? _removalObservation;
+
+        public HookRemovalSnapshot RemovalObservation => _removalObservation?.Snapshot ?? HookRemovalSnapshot.Incomplete;
 
         // Where this installation's clock for the kept registrations' grace starts, on the service's TimeProvider (the
         // system's in production, a test's own in the tests).
@@ -1346,6 +1407,7 @@ public sealed class HotkeyService : IHotkeyService
             _service = service;
             _engine = engine;
             _replacesRegistration = replacesRegistration;
+            _removalObservation = service._observeRecovery ? new HookRecoveryObservation() : null;
             _clockOrigin = service._time.GetTimestamp();
 
             // Read here, off the hook thread (it asks Windows for the keyboard repeat settings), and published to the engine,
@@ -1378,6 +1440,7 @@ public sealed class HotkeyService : IHotkeyService
                 IsBackground = true,
             };
             _thread.SetApartmentState(ApartmentState.STA);
+            HookThreadPriority.Apply(service._perfFlags, priority => _thread.Priority = priority, service._logger);
         }
 
         public Exception? InstallError => _installError;
@@ -1811,7 +1874,12 @@ public sealed class HotkeyService : IHotkeyService
             {
                 if (registration.Handle != 0)
                 {
-                    NativeMethods.UnhookWindowsHookEx(registration.Handle);
+                    var removed = NativeMethods.UnhookWindowsHookEx(registration.Handle);
+                    if (_removalObservation is not null && ReferenceEquals(registration, _current))
+                    {
+                        var error = removed ? 0 : Marshal.GetLastWin32Error();
+                        _removalObservation.Complete(removed, error);
+                    }
                     registration.Handle = 0;
                 }
             }
@@ -2178,7 +2246,7 @@ public sealed class HotkeyService : IHotkeyService
             var identity = KeyboardHookFilter.Identity(lParam);
             var extraInfo = (nuint)Marshal.ReadIntPtr(lParam, KeyboardHookFilter.ExtraInfoOffset);
             var route = KeyboardHookFilter.Route(
-                _engine, _passOn, ReferenceEquals(registration, _current), identity, isDown, extraInfo);
+                _engine, _passOn, ReferenceEquals(registration, _current), identity, isDown, extraInfo, _service._probeIdentity);
             if (route.RepairAt != 0)
             {
                 // The view this release was judged in: the repair judges that one or none (review round 10, A12).

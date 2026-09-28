@@ -13,14 +13,15 @@ namespace Scribe.Core.Tests;
 /// and the restore of the user's clipboard are separate outcomes, and a delivered paste must never be
 /// followed by typing the same text again, whatever happened to the restore.
 /// </summary>
-public sealed class TextInjectorClipboardPasteTests
+[Collection(InsertionFlagMatrixCollection.Name)]
+public class TextInjectorClipboardPasteTests : InsertionFlagTest
 {
     private const string Previous = "PREVIOUS-CLIPBOARD-7f3a";
     private const string Dictation = "DICTATED-TEXT-c41e";
     private const string Newer = "NEWER-COPY-9d2b";
     private const nint Target = 0x4242;
 
-    private sealed class Rig
+    private sealed class Rig(PerfFlags flags)
     {
         public TextInjectionFakes.Clipboard Clipboard { get; } = new();
 
@@ -29,7 +30,7 @@ public sealed class TextInjectorClipboardPasteTests
         public TextInjectionFakes.CapturingLogger<TextInjector> Log { get; init; } = new();
 
         public InjectionResult Paste(string text = Dictation) =>
-            new TextInjector(Log, Platform, Clipboard).Inject(text, InjectionMethod.ClipboardPaste, Target);
+            new TextInjector(Log, Platform, Clipboard, flags).Inject(text, InjectionMethod.ClipboardPaste, Target);
     }
 
     private static int TypedEventsFor(string text) => TextInjector.CountKeyEvents(text, 0, text.Length);
@@ -37,7 +38,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_delivered_paste_whose_restore_fails_is_never_typed_a_second_time()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
 
         // The borrow opens on the first attempt; every later open fails, so only the restore is hit.
@@ -60,7 +61,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_delivered_paste_puts_the_previous_clipboard_back_after_the_target_read_it()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         string? pasted = null;
         rig.Platform.OnSleep = ms =>
@@ -89,7 +90,7 @@ public sealed class TextInjectorClipboardPasteTests
     public void The_clipboard_is_never_held_across_a_wait_or_a_keystroke(
         bool closeMovesSequence, bool synthesizedReadMovesSequence)
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.CloseMovesSequence = closeMovesSequence;
         rig.Clipboard.SynthesizedReadMovesSequence = synthesizedReadMovesSequence;
         rig.Clipboard.SeedText(Previous);
@@ -129,7 +130,7 @@ public sealed class TextInjectorClipboardPasteTests
     [InlineData(true)]
     public void A_copy_made_during_the_settle_is_neither_pasted_nor_overwritten(bool closeMovesSequence)
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.CloseMovesSequence = closeMovesSequence;
         rig.Clipboard.SeedText(Previous);
         rig.Platform.OnSleep = ms =>
@@ -159,7 +160,7 @@ public sealed class TextInjectorClipboardPasteTests
     {
         // The copy lands between the borrow's CloseClipboard and the next sequence number read, the one
         // instant a number read after the release could be mistaken for Scribe's own.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.CloseMovesSequence = closeMovesSequence;
         rig.Clipboard.SeedText(Previous);
         rig.Clipboard.AfterClose = close =>
@@ -184,7 +185,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_receipt_that_cannot_be_written_puts_the_previous_text_back_and_types_instead()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         uint receiptFormat = rig.Clipboard.RegisterFormat(ClipboardBorrower.ReceiptFormatName);
         rig.Clipboard.SetDataSucceeds = format => format != receiptFormat;
@@ -213,7 +214,7 @@ public sealed class TextInjectorClipboardPasteTests
     {
         // With no receipt nothing held could tell Scribe's item from a copy that lands right after the
         // release, so a borrow that fails to write its receipt must neither paste nor restore over it.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         uint receiptFormat = rig.Clipboard.RegisterFormat(ClipboardBorrower.ReceiptFormatName);
         rig.Clipboard.SetDataSucceeds = format => format != receiptFormat;
@@ -240,7 +241,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_copy_made_after_the_paste_is_left_alone_and_nothing_is_retyped()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         rig.Platform.OnSleep = ms =>
         {
@@ -266,7 +267,7 @@ public sealed class TextInjectorClipboardPasteTests
     {
         // The original defect end to end: the restore used to decide before its open retry loop, so a
         // copy made while it retried was overwritten with the stale snapshot.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.CloseMovesSequence = closeMovesSequence;
         rig.Clipboard.SeedText(Previous);
         int restoreFirstAttempt = 0;
@@ -303,7 +304,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_restore_that_throws_after_a_delivered_paste_is_reported_as_failed_and_never_retyped()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         rig.Clipboard.SetTextSucceeds = text =>
             text == Previous ? throw new InvalidOperationException("EXCEPTION-DETAIL-51c0") : true;
@@ -325,7 +326,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_log_sink_fault_while_reporting_a_failed_restore_does_not_fail_the_delivered_paste()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Log.ThrowOn = message => message.StartsWith("Restoring the clipboard failed", StringComparison.Ordinal);
         rig.Clipboard.SeedText(Previous);
         rig.Clipboard.SetTextSucceeds = text =>
@@ -343,7 +344,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void An_incomplete_chord_releases_the_keys_restores_the_clipboard_and_types_instead()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         rig.Platform.Deliver = (index, inputs) => index == 0 ? 1u : (uint)inputs.Length;
 
@@ -364,7 +365,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_clipboard_that_stays_busy_is_left_untouched_and_the_text_is_typed()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         uint sequence = rig.Clipboard.Sequence;
         rig.Clipboard.OpenAttemptSucceeds = _ => false;
@@ -385,7 +386,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void Focus_moving_during_the_settle_restores_the_clipboard_and_sends_nothing()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         rig.Platform.OnSleep = ms =>
         {
@@ -409,7 +410,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void Non_text_clipboard_content_is_preserved_by_typing_instead()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedFormats(TextInjectionFakes.CF_DIB);
 
         var result = rig.Paste();
@@ -423,7 +424,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_failed_write_is_rolled_back_and_the_text_is_typed()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         rig.Clipboard.SetTextSucceeds = text => text != Dictation;
 
@@ -439,7 +440,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void A_write_that_cannot_be_reconfirmed_is_not_pasted()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SynthesizedReadMovesSequence = true;
         rig.Clipboard.SeedText(Previous);
 
@@ -468,7 +469,7 @@ public sealed class TextInjectorClipboardPasteTests
     {
         // The window was right after the settle, but Confirm then spent a retry waiting for the
         // clipboard, and the user switched windows meanwhile: Ctrl+V would have landed in the wrong one.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.CloseMovesSequence = true;
         rig.Clipboard.SynthesizedReadMovesSequence = true;
         rig.Clipboard.SeedText(Previous);
@@ -504,7 +505,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void The_standard_edit_fast_path_never_touches_the_clipboard()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedText(Previous);
         rig.Platform.StandardEdit = true;
 
@@ -539,7 +540,7 @@ public sealed class TextInjectorClipboardPasteTests
     [Fact]
     public void Each_paste_attempt_writes_one_clipboard_line_of_enum_names()
     {
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.SeedFormats(TextInjectionFakes.CF_DIB);
 
         rig.Paste();
@@ -560,7 +561,7 @@ public sealed class TextInjectorClipboardPasteTests
     {
         // A release that moves the number leaves Confirm nothing held to compare with, so it has to open
         // the clipboard and prove the write by receipt before the paste.
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Clipboard.CloseMovesSequence = closeMovesSequence;
         rig.Clipboard.SeedText(Previous);
 
@@ -595,7 +596,7 @@ public sealed class TextInjectorClipboardPasteTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        var rig = new Rig();
+        var rig = new Rig(Flags);
         rig.Log.ThrowOn = _ => true;
         rig.Clipboard.SeedText(Previous);
         rig.Platform.Deliver = (index, inputs) => index == 0 ? 3u : (uint)inputs.Length;
@@ -655,7 +656,7 @@ public sealed class TextInjectorClipboardPasteTests
 
         foreach (var arrange in arrangements)
         {
-            var rig = new Rig();
+            var rig = new Rig(Flags);
             arrange(rig);
             rig.Paste(text);
         }
@@ -663,7 +664,8 @@ public sealed class TextInjectorClipboardPasteTests
         var typist = new TextInjector(
             new TextInjectionFakes.CapturingLogger<TextInjector>(),
             new TextInjectionFakes.Platform(),
-            new TextInjectionFakes.Clipboard());
+            new TextInjectionFakes.Clipboard(),
+            Flags);
         typist.Inject(text, InjectionMethod.UnicodeType, 0);
 
         List<KeyValuePair<string, object?>> seen;
@@ -746,7 +748,7 @@ public sealed class TextInjectorClipboardPasteTests
 
         foreach (var arrange in scenarios)
         {
-            var rig = new Rig { Log = log };
+            var rig = new Rig(Flags) { Log = log };
             rig.Clipboard.SeedText(Previous);
             arrange(rig);
             rig.Paste();

@@ -12,7 +12,8 @@ namespace Scribe.Core.Tests;
 /// a Shift, Return, Ctrl or V with no scan code reached the remote session as scan code 0. KEYEVENTF_SCANCODE is never
 /// set, so Windows still takes the virtual key from wVk and local apps get exactly the keys they got before.
 /// </summary>
-public class InjectedScanCodeTests
+[Collection(InsertionFlagMatrixCollection.Name)]
+public class InjectedScanCodeTests : InsertionFlagTest
 {
     private const uint VkShift = 0x10;
     private const uint VkControl = 0x11;
@@ -82,7 +83,7 @@ public class InjectedScanCodeTests
     public void A_typed_line_break_carries_the_scan_codes_of_shift_and_return()
     {
         var platform = new TextInjectionFakes.Platform { Foreground = Target };
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard());
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard(), Flags);
 
         var result = injector.Inject("a\nb", InjectionMethod.UnicodeType, Target, shiftEnterLineBreaks: true);
 
@@ -120,7 +121,7 @@ public class InjectedScanCodeTests
         var clipboard = new TextInjectionFakes.Clipboard();
         clipboard.SeedText("before");
         var platform = new TextInjectionFakes.Platform { Foreground = Target };
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard);
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard, Flags);
 
         var result = injector.Inject("pasted", InjectionMethod.ClipboardPaste, Target);
 
@@ -151,7 +152,7 @@ public class InjectedScanCodeTests
             // and the one-event release that follows is delivered.
             Deliver = (index, inputs) => inputs.Length == 1 ? 1u : index == 0 ? 3u : 0u,
         };
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard());
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard(), Flags);
 
         injector.Inject("a\nb", InjectionMethod.UnicodeType, Target, shiftEnterLineBreaks: true);
 
@@ -163,7 +164,7 @@ public class InjectedScanCodeTests
     public void The_scan_codes_are_asked_of_the_target_s_layout_once_per_insertion()
     {
         var platform = new TextInjectionFakes.Platform { Foreground = Target };
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard());
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard(), Flags);
 
         injector.Inject(new string('x', 120) + "\n" + new string('y', 120), InjectionMethod.UnicodeType, Target);
 

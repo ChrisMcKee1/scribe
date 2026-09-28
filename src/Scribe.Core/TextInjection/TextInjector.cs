@@ -37,17 +37,27 @@ public sealed class TextInjector : ITextInjector
     private readonly ILogger _logger;
     private readonly IInjectionPlatform _platform;
     private readonly ClipboardBorrower _clipboard;
+    private readonly bool _measureInput;
+    private readonly bool _snapshotLayout;
+    private readonly bool _preciseLocalSettle;
+    private readonly TimeProvider _time;
 
-    public TextInjector(ILogger<TextInjector> logger)
-        : this(logger, Win32InjectionPlatform.Instance, Win32Clipboard.Instance)
+    public TextInjector(ILogger<TextInjector> logger, PerfFlags? perfFlags = null)
+        : this(logger, Win32InjectionPlatform.Instance, Win32Clipboard.Instance, perfFlags)
     {
     }
 
-    internal TextInjector(ILogger<TextInjector> logger, IInjectionPlatform platform, IClipboardNative clipboard)
+    internal TextInjector(
+        ILogger<TextInjector> logger, IInjectionPlatform platform, IClipboardNative clipboard,
+        PerfFlags? perfFlags = null, TimeProvider? time = null)
     {
         _logger = new NonThrowingLogger(logger);
         _platform = platform;
         _clipboard = new ClipboardBorrower(clipboard, platform.Sleep);
+        _measureInput = (perfFlags ?? PerfFlags.None).IsOn(PerfFlags.InputTimings);
+        _snapshotLayout = (perfFlags ?? PerfFlags.None).IsOn(PerfFlags.SnapshotInjectionLayout);
+        _preciseLocalSettle = (perfFlags ?? PerfFlags.None).IsOn(PerfFlags.PreciseLocalTypingSettle);
+        _time = time ?? TimeProvider.System;
     }
 
     public InjectionResult Inject(
@@ -56,6 +66,37 @@ public sealed class TextInjector : ITextInjector
         nint expectedForegroundWindow = 0,
         bool shiftEnterLineBreaks = true,
         string? targetProcessName = null)
+    {
+        if (!_measureInput)
+        {
+            return InjectCore(text, method, expectedForegroundWindow, shiftEnterLineBreaks, targetProcessName, null);
+        }
+
+        var timing = new InjectionTimingMeasurement(_time);
+        InjectionTimings? measured = null;
+        try
+        {
+            var result = InjectCore(text, method, expectedForegroundWindow, shiftEnterLineBreaks, targetProcessName, timing);
+            measured = timing.Snapshot();
+            return result with { Timings = measured };
+        }
+        finally
+        {
+            measured ??= timing.Snapshot();
+            _logger.LogDebug(
+                "Input timing: no insertion {NoInsertion}; caller {CallerMs} ms; worker {WorkerMs} ms; native {NativeMs} ms; " +
+                "retry sleep {RetryMs} ms; settle {SettleMs} ms; clipboard sleep {ClipboardMs} ms; other worker {OtherMs} ms; " +
+                "{Calls} native calls, {Requested} requested events, {Accepted} accepted events, {Retries} retries; longest call {MaxMs} ms.",
+                !timing.WorkerStarted, measured.CallerMs, measured.WorkerMs, measured.NativeSendMs,
+                measured.RetrySleepMs, measured.SettleMs,
+                measured.ClipboardSleepMs, measured.OtherWorkerMs, measured.NativeCalls, measured.RequestedEvents,
+                measured.AcceptedEvents, measured.Retries, measured.MaxNativeCallMs);
+        }
+    }
+
+    private InjectionResult InjectCore(
+        string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks,
+        string? targetProcessName, InjectionTimingMeasurement? timing)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -74,16 +115,19 @@ public sealed class TextInjector : ITextInjector
 
         return RunOnStaThread(() =>
         {
+            timing?.StartWorker();
             var activity = TryStartActivity(parent, text.Length);
             ReportTarget(activity, text, pace, method);
             try
             {
-                return InjectOnStaThread(activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks, pace);
+                return InjectOnStaThread(activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks, pace, timing);
             }
             finally
             {
                 // Listeners run synchronously when the span stops, after the text may already have
                 // reached the target, so a faulting one must not turn that into a failed injection.
+                timing?.StopWorker();
+                ReportTimings(activity, timing);
                 TryStop(activity);
             }
         });
@@ -91,7 +135,7 @@ public sealed class TextInjector : ITextInjector
 
     private InjectionResult InjectOnStaThread(
         Activity? activity, string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks,
-        TypingPace pace)
+        TypingPace pace, InjectionTimingMeasurement? timing)
     {
         if (!IsExpectedForeground(expectedForegroundWindow))
         {
@@ -105,7 +149,7 @@ public sealed class TextInjector : ITextInjector
         }
 
         // Read once, from the layout of the window about to receive the keys (see InjectionKeys).
-        var keys = InjectionKeys.From(_platform);
+        var keys = _snapshotLayout ? _platform.SnapshotKeys() : InjectionKeys.From(_platform);
 
         // A Remote Desktop or virtual machine client is typed into, whatever the insertion setting (review round 2, item 6):
         // its clipboard redirection uses delayed rendering ([MS-RDPECLIP]: "The data associated with the Clipboard Format is
@@ -115,10 +159,10 @@ public sealed class TextInjector : ITextInjector
         // real. Typing touches no clipboard. The trace says the paste was bypassed (ReportTarget).
         if (method == InjectionMethod.UnicodeType || pace.PacedForRemoteSession)
         {
-            return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace);
+            return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace, timing);
         }
 
-        var paste = PasteViaClipboard(text, expectedForegroundWindow, keys);
+        var paste = PasteViaClipboard(text, expectedForegroundWindow, keys, timing);
         ReportClipboard(activity, paste);
         LogClipboard(paste);
 
@@ -141,11 +185,36 @@ public sealed class TextInjector : ITextInjector
         }
 
         // No paste can have fired, so typing cannot duplicate anything.
-        return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: true, keys, pace) with
+        return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: true, keys, pace, timing) with
         {
             Paste = paste.Delivery,
             ClipboardRestore = paste.Restore,
         };
+    }
+
+    private static void ReportTimings(Activity? activity, InjectionTimingMeasurement? timing)
+    {
+        if (activity is null || timing is null)
+        {
+            return;
+        }
+
+        try
+        {
+            activity.SetTag(ScribeTelemetry.TagInjectNativeMs, timing.NativeSendMs);
+            activity.SetTag(ScribeTelemetry.TagInjectRetrySleepMs, timing.RetrySleepMs);
+            activity.SetTag(ScribeTelemetry.TagInjectSettleMs, timing.SettleMs);
+            activity.SetTag(ScribeTelemetry.TagInjectClipboardSleepMs, timing.ClipboardSleepMs);
+            activity.SetTag(ScribeTelemetry.TagInjectNativeCalls, timing.NativeCalls);
+            activity.SetTag(ScribeTelemetry.TagInjectRequestedEvents, timing.RequestedEvents);
+            activity.SetTag(ScribeTelemetry.TagInjectAcceptedEvents, timing.AcceptedEvents);
+            activity.SetTag(ScribeTelemetry.TagInjectRetries, timing.Retries);
+            activity.SetTag(ScribeTelemetry.TagInjectMaxCallMs, timing.MaxNativeCallMs);
+        }
+        catch (Exception)
+        {
+            // Optional diagnostics cannot change delivery.
+        }
     }
 
     // Telemetry is optional and injection is not, so neither end of the span may throw into it.
@@ -205,9 +274,9 @@ public sealed class TextInjector : ITextInjector
 
     private InjectionResult TypeAndReport(
         Activity? activity, string text, nint expectedForegroundWindow, bool shiftEnterLineBreaks, bool fallback,
-        InjectionKeys keys, TypingPace pace)
+        InjectionKeys keys, TypingPace pace, InjectionTimingMeasurement? timing)
     {
-        var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks, keys, pace);
+        var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks, keys, pace, timing);
         ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback);
         ReportPace(activity, pace, typed.Batches);
         return new InjectionResult(
@@ -279,7 +348,8 @@ public sealed class TextInjector : ITextInjector
         bool ConfirmOpened,
         bool CloseMovedSequence);
 
-    private ClipboardPasteReport PasteViaClipboard(string text, nint expectedForegroundWindow, InjectionKeys keys)
+    private ClipboardPasteReport PasteViaClipboard(
+        string text, nint expectedForegroundWindow, InjectionKeys keys, InjectionTimingMeasurement? timing)
     {
         // An image, copied files or other non-text content can't be saved and restored (text-only by
         // design), so the borrow refuses it and the caller types instead; slower, but the user's
@@ -306,7 +376,7 @@ public sealed class TextInjector : ITextInjector
 
         // The clipboard is closed during this wait and stays closed through the paste: the target has
         // to open it to read, so holding it here would break every paste.
-        _platform.Sleep(ClipboardSettleDelayMs);
+        Sleep(ClipboardSettleDelayMs, timing, InjectionWait.Clipboard);
         if (!IsExpectedForeground(expectedForegroundWindow))
         {
             return Report(PasteDelivery.FocusChanged, RestoreClipboard(lease));
@@ -330,13 +400,13 @@ public sealed class TextInjector : ITextInjector
             return Report(PasteDelivery.FocusChanged, RestoreClipboard(lease));
         }
 
-        var ctrlV = SendCtrlV(keys);
+        var ctrlV = SendCtrlV(keys, timing);
 
         // A short send can leave Ctrl (or V) logically held down; release both before anything
         // else so a typing fallback can't turn the dictation into accidental keyboard shortcuts.
         if (ctrlV.Sent < ctrlV.Total)
         {
-            ReleaseCtrlV(keys);
+            ReleaseCtrlV(keys, timing);
         }
 
         // The paste fires on the V-down (the chord's second event). Fewer than two inserted means
@@ -347,7 +417,7 @@ public sealed class TextInjector : ITextInjector
             return Report(PasteDelivery.ChordIncomplete, RestoreClipboard(lease), ctrlV.Sent, ctrlV.Total);
         }
 
-        _platform.Sleep(PasteSettleDelayMs);
+        Sleep(PasteSettleDelayMs, timing, InjectionWait.Clipboard);
         return Report(PasteDelivery.ChordInserted, RestoreClipboard(lease), ctrlV.Sent, ctrlV.Total);
     }
 
@@ -428,10 +498,10 @@ public sealed class TextInjector : ITextInjector
 
     // Best-effort key-up pair after a partial Ctrl+V send. Sending an up for a key that was never
     // down is harmless; leaving Ctrl held down is not.
-    private void ReleaseCtrlV(InjectionKeys keys)
+    private void ReleaseCtrlV(InjectionKeys keys, InjectionTimingMeasurement? timing)
     {
         var inputs = BuildCtrlVReleaseInputs(keys);
-        var sent = SendWithRetry(inputs);
+        var sent = SendWithRetry(inputs, timing);
         if (sent != inputs.Length)
         {
             _logger.LogWarning("Releasing a partial Ctrl+V delivered {Sent}/{Total} key-up events.", sent, inputs.Length);
@@ -450,11 +520,11 @@ public sealed class TextInjector : ITextInjector
         KeyUp(VK_CONTROL, keys.Control),
     ];
 
-    private (int Sent, int Total) SendCtrlV(InjectionKeys keys)
+    private (int Sent, int Total) SendCtrlV(InjectionKeys keys, InjectionTimingMeasurement? timing)
     {
         var inputs = BuildCtrlVInputs(keys);
 
-        uint sent = _platform.SendInput(inputs);
+        uint sent = SendInput(inputs, timing);
         if (sent != inputs.Length)
         {
             _logger.LogWarning("SendInput delivered {Sent}/{Total} Ctrl+V events.", sent, inputs.Length);
@@ -464,7 +534,8 @@ public sealed class TextInjector : ITextInjector
     }
 
     internal (int Sent, int Total, int Batches) TypeUnicode(
-        string text, nint expectedForegroundWindow, bool shiftEnter, InjectionKeys keys, TypingPace pace)
+        string text, nint expectedForegroundWindow, bool shiftEnter, InjectionKeys keys, TypingPace pace,
+        InjectionTimingMeasurement? timing = null)
     {
         int total = CountKeyEvents(text, 0, text.Length, shiftEnter);
         if (total == 0)
@@ -482,6 +553,8 @@ public sealed class TextInjector : ITextInjector
         int sent = 0;
         int batches = 0;
         INPUT[]? buffer = null;
+        IPreciseTypingWait? preciseWait = null;
+        var usePreciseWait = _preciseLocalSettle && !pace.PacedForRemoteSession;
         try
         {
             for (int start = 0; start < text.Length;)
@@ -500,7 +573,7 @@ public sealed class TextInjector : ITextInjector
                 buffer ??= new INPUT[Math.Min(total, MaxEventsPerBatch(pace.BatchUnits, shiftEnter))];
                 int events = WriteUnicodeChunk(buffer, text, start, count, shiftEnter, keys);
 
-                int delivered = SendWithRetry(buffer.AsSpan(0, events));
+                int delivered = SendWithRetry(buffer.AsSpan(0, events), timing);
                 sent += delivered;
                 batches++;
 
@@ -513,7 +586,7 @@ public sealed class TextInjector : ITextInjector
                     // ReleaseCtrlV exists; a key-up for a key that was never down is harmless.
                     if (shiftEnter)
                     {
-                        ReleaseShift(keys);
+                        ReleaseShift(keys, timing);
                     }
 
                     break;
@@ -524,11 +597,41 @@ public sealed class TextInjector : ITextInjector
                 // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
                 if (start < text.Length)
                 {
-                    _platform.Sleep(pace.SettleMs);
+                    if (usePreciseWait)
+                    {
+                        var started = timing?.Timestamp() ?? 0;
+                        try
+                        {
+                            try
+                            {
+                                preciseWait ??= _platform.CreatePreciseWait();
+                                if (preciseWait.TryWait(pace.SettleMs))
+                                {
+                                    continue;
+                                }
+                                _logger.LogWarning("Precise typing settle failed; using the existing sleep for this insertion.");
+                            }
+                            catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
+                            {
+                                _logger.LogWarning("Precise typing settle unavailable ({Failure}); using the existing sleep.",
+                                    FailureShape.Describe(ex));
+                            }
+                            usePreciseWait = false;
+                            _platform.Sleep(pace.SettleMs);
+                        }
+                        finally
+                        {
+                            timing?.EndWait(started, InjectionWait.Settle);
+                        }
+                    }
+                    else
+                    {
+                        Sleep(pace.SettleMs, timing, InjectionWait.Settle);
+                    }
                 }
             }
         }
-        catch when (ReleaseShiftOnFault(shiftEnter, keys))
+        catch when (ReleaseShiftOnFault(shiftEnter, keys, timing))
         {
             // Unreachable: the filter always returns false so the exception keeps propagating. The
             // filter exists purely to run the Shift key-up first. Without it, a throw between the
@@ -536,6 +639,17 @@ public sealed class TextInjector : ITextInjector
             // would leave Shift latched down for the user's next real keystroke, turning it into a
             // shortcut. A filter is used rather than catch/rethrow so the original stack is untouched.
             throw;
+        }
+        finally
+        {
+            try
+            {
+                preciseWait?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Releasing the precise typing timer failed ({Failure}).", FailureShape.Describe(ex));
+            }
         }
 
         if (sent != total)
@@ -547,10 +661,10 @@ public sealed class TextInjector : ITextInjector
     }
 
     // Best-effort key-up after a partial chunk that may have ended mid-chord.
-    private void ReleaseShift(InjectionKeys keys)
+    private void ReleaseShift(InjectionKeys keys, InjectionTimingMeasurement? timing)
     {
         INPUT[] inputs = [KeyUp(VK_SHIFT, keys.Shift)];
-        if (SendWithRetry(inputs) != inputs.Length)
+        if (SendWithRetry(inputs, timing) != inputs.Length)
         {
             _logger.LogWarning("Releasing Shift after a partial Unicode chunk did not deliver.");
         }
@@ -561,13 +675,13 @@ public sealed class TextInjector : ITextInjector
     /// Swallowing a failure here is deliberate. This runs while another exception is already in
     /// flight, and throwing from a filter would replace the real fault with a misleading one.
     /// </summary>
-    private bool ReleaseShiftOnFault(bool shiftEnter, InjectionKeys keys)
+    private bool ReleaseShiftOnFault(bool shiftEnter, InjectionKeys keys, InjectionTimingMeasurement? timing)
     {
         if (shiftEnter)
         {
             try
             {
-                ReleaseShift(keys);
+                ReleaseShift(keys, timing);
             }
             catch
             {
@@ -740,14 +854,14 @@ public sealed class TextInjector : ITextInjector
 
     // Sends a batch, resending only the unsent remainder when SendInput reports a short count (the
     // input stream was momentarily blocked by other input). Returns how many events were delivered.
-    private int SendWithRetry(ReadOnlySpan<INPUT> inputs)
+    private int SendWithRetry(ReadOnlySpan<INPUT> inputs, InjectionTimingMeasurement? timing)
     {
         int offset = 0;
         int attempts = 0;
         while (offset < inputs.Length)
         {
             var slice = inputs[offset..];
-            uint sent = _platform.SendInput(slice);
+            uint sent = SendInput(slice, timing);
             offset += (int)sent;
 
             if (sent == (uint)slice.Length)
@@ -762,10 +876,50 @@ public sealed class TextInjector : ITextInjector
                 break;
             }
 
-            _platform.Sleep(ChunkRetryDelayMs);
+            Sleep(ChunkRetryDelayMs, timing, InjectionWait.Retry);
         }
 
         return offset;
+    }
+
+    private uint SendInput(ReadOnlySpan<INPUT> inputs, InjectionTimingMeasurement? timing)
+    {
+        if (timing is null)
+        {
+            return _platform.SendInput(inputs);
+        }
+
+        timing.BeginSend(inputs.Length);
+        var started = timing.Timestamp();
+        try
+        {
+            var sent = _platform.SendInput(inputs);
+            timing.Accepted(sent);
+            return sent;
+        }
+        finally
+        {
+            timing.EndSend(started);
+        }
+    }
+
+    private void Sleep(int milliseconds, InjectionTimingMeasurement? timing, InjectionWait kind)
+    {
+        if (timing is null)
+        {
+            _platform.Sleep(milliseconds);
+            return;
+        }
+
+        var started = timing.Timestamp();
+        try
+        {
+            _platform.Sleep(milliseconds);
+        }
+        finally
+        {
+            timing.EndWait(started, kind);
+        }
     }
 
     // A VK-based key event carries the scan code the target's layout gives its key, and KEYEVENTF_EXTENDEDKEY for an

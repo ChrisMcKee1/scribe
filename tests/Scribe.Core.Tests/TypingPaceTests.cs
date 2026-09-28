@@ -12,7 +12,8 @@ namespace Scribe.Core.Tests;
 /// in four SendInput calls of up to 100 events. Remote targets get small batches with a longer settle; every other target
 /// keeps today's pacing exactly. No batch ever splits a CRLF pair or a surrogate pair.
 /// </summary>
-public class TypingPaceTests
+[Collection(InsertionFlagMatrixCollection.Name)]
+public class TypingPaceTests : InsertionFlagTest
 {
     private static readonly nint Target = 0x4242;
 
@@ -152,7 +153,7 @@ public class TypingPaceTests
         // asked.
         var clipboard = new TextInjectionFakes.Clipboard { OpenAttemptSucceeds = _ => false };
         var platform = new TextInjectionFakes.Platform { Foreground = Target };
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard);
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard, Flags);
 
         var result = injector.Inject(Text184, InjectionMethod.ClipboardPaste, Target, targetProcessName: "msrdc");
 
@@ -165,10 +166,10 @@ public class TypingPaceTests
         Assert.DoesNotContain(5, platform.Sleeps);
     }
 
-    private static TextInjectionFakes.Platform Type(string text, string? target, bool shiftEnter = false)
+    private TextInjectionFakes.Platform Type(string text, string? target, bool shiftEnter = false)
     {
         var platform = new TextInjectionFakes.Platform { Foreground = Target };
-        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard());
+        var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard(), Flags);
         var result = injector.Inject(text, InjectionMethod.UnicodeType, Target, shiftEnter, target);
         Assert.True(result.Succeeded, result.Error);
         return platform;

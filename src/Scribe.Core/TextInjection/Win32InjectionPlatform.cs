@@ -26,7 +26,19 @@ internal sealed class Win32InjectionPlatform : IInjectionPlatform
 
     public void Sleep(int milliseconds) => Thread.Sleep(milliseconds);
 
+    public IPreciseTypingWait CreatePreciseWait() => new PreciseTypingWait();
+
     public KeyScanCode ScanCodeOf(ushort virtualKey) => KeyScanCodes.ForForegroundLayout(virtualKey);
+
+    public InjectionKeys SnapshotKeys()
+    {
+        var layout = KeyScanCodes.ForegroundLayout();
+        return new InjectionKeys(
+            KeyScanCodes.ForLayout(InjectionNativeMethods.VK_SHIFT, layout),
+            KeyScanCodes.ForLayout(InjectionNativeMethods.VK_RETURN, layout),
+            KeyScanCodes.ForLayout(InjectionNativeMethods.VK_CONTROL, layout),
+            KeyScanCodes.ForLayout(InjectionNativeMethods.VK_V, layout));
+    }
 
     public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)
     {

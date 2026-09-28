@@ -48,4 +48,7 @@ public sealed record InjectionResult(bool Succeeded, string Method, int Sent, in
     /// "recover" would insert it twice.
     /// </summary>
     public ClipboardRestoreOutcome ClipboardRestore { get; init; }
+
+    /// <summary>Optional numeric measurements; absent unless InputTimings is enabled.</summary>
+    public InjectionTimings? Timings { get; init; }
 }

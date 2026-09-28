@@ -25,6 +25,19 @@ dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak --cycles 300 -
 | `ProcessDetailedBenchmarks` | `TextPostProcessor.ProcessDetailed` for short and long text, a 20-rule and an every-library (about 1,500 rule) dictionary, a source identical to the text or a raw transcript behind cleaned text, and snippets on or off. The `FullRescan` baseline arm is the original algorithm, which normalizes and scans the source a second time even when it is the text itself; `ProcessDetailed` is what ships and reuses that work when the source is identical. Both return identical results (pinned by `PostProcessorSourcePassTests`). |
 | `CaptureAssemblyBenchmarks` | allocations of assembling a capture from synthetic 48 kHz stereo float packets and converting it to 16 kHz mono. `FreshReservation` is the former shape (a new 30-second `MemoryStream` per capture); `ReusedBuffer` is the shipping `CaptureBufferPool` path. At 40 s both arms outgrow the reservation; the pool drops the grown buffer but keeps the zeroed reservation it started with, so the next capture reuses it. |
 
+## Input experiments
+
+`InputTimingsBenchmarks` compares the production typing loop with and without numeric timing, on top
+of IN1's per-insertion buffer. Its native boundary accepts synthetic events without sending them,
+and its clipboard interface throws if reached. It measures neither a real target nor the fresh STA
+worker or final log formatting. `OverlayMeterDeliveryBenchmarks` measures the pure duplicate/resend
+decision over synthetic levels; it creates no pipe, process or window and is not an IPC latency result.
+
+`PERF_BASELINE_BUILD` is a benchmark-driver-only compile definition used when copying
+`InputTimingsBenchmarks.cs` into the isolated `77b22af` baseline for before/after measurements.
+It selects that baseline's original internal typing signature and the flag-off arm. Do not set it
+for the current tree or a shipping build; normal builds measure both current flag states.
+
 ## Which architecture actually ran
 
 BenchmarkDotNet builds a generated project and runs the result in a separate process through

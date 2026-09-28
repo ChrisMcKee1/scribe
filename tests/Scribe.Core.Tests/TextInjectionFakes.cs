@@ -391,6 +391,19 @@ internal static class TextInjectionFakes
             OnSleep?.Invoke(milliseconds);
         }
 
+        public IPreciseTypingWait CreatePreciseWait() => new RecordedWait(this);
+
+        private sealed class RecordedWait(Platform platform) : IPreciseTypingWait
+        {
+            public bool TryWait(int milliseconds)
+            {
+                platform.Sleep(milliseconds);
+                return true;
+            }
+
+            public void Dispose() { }
+        }
+
         /// <summary>
         /// The scan codes a US layout gives the keys text insertion sends, so a test can tell a real scan code from none.
         /// Replace it to script another layout.

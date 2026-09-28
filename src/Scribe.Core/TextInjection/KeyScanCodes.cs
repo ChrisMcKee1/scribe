@@ -75,12 +75,20 @@ internal static partial class KeyScanCodes
     /// </summary>
     public static KeyScanCode ForForegroundLayout(uint virtualKey)
     {
+        return ForLayout(virtualKey, ForegroundLayout());
+    }
+
+    internal static nint ForegroundLayout()
+    {
         var foreground = InjectionNativeMethods.GetForegroundWindow();
         var thread = foreground == 0 ? 0 : InjectionNativeMethods.GetWindowThreadProcessId(foreground, out _);
 
         // GetKeyboardLayout: "The identifier of the thread to query, or 0 for the current thread."
-        return Decode(virtualKey, MapVirtualKeyExW(virtualKey, MapVkToVscEx, GetKeyboardLayout(thread)));
+        return GetKeyboardLayout(thread);
     }
+
+    internal static KeyScanCode ForLayout(uint virtualKey, nint layout) =>
+        Decode(virtualKey, MapVirtualKeyExW(virtualKey, MapVkToVscEx, layout));
 
     /// <summary>
     /// KEYBDINPUT flags for a VK-based event with this scan code: KEYEVENTF_EXTENDEDKEY for an extended key, and never

@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
+using Scribe.Core.Models;
 using Scribe.Core.TextInjection;
 using Xunit;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
@@ -11,7 +13,8 @@ namespace Scribe.Core.Tests;
 /// joined the two lines with no separator; these tests pin the real Return keypress instead. They
 /// also pin the <b>shifted</b> Return, because a bare Enter is "send" in every major chat app.
 /// </summary>
-public class TextInjectorUnicodeChunkTests
+[Collection(InsertionFlagMatrixCollection.Name)]
+public class TextInjectorUnicodeChunkTests : InsertionFlagTest
 {
     // Replays a built batch the way the target app would see it: printable characters come back as
     // themselves, a Return keypress comes back as "\n", and a shifted Return as "\u21B5" so a test
@@ -61,7 +64,7 @@ public class TextInjectorUnicodeChunkTests
         return text.ToString();
     }
 
-    private static string TypeAll(string text, int chunkChars, bool shiftEnter = false)
+    private string TypeAll(string text, int chunkChars, bool shiftEnter = false)
     {
         var typed = new StringBuilder();
         for (int start = 0; start < text.Length;)
@@ -72,6 +75,12 @@ public class TextInjectorUnicodeChunkTests
             start += count;
         }
 
+        var platform = new TextInjectionFakes.Platform();
+        var result = new TextInjector(
+            NullLogger<TextInjector>.Instance, platform, new TextInjectionFakes.Clipboard(), Flags)
+            .Inject(text, InjectionMethod.UnicodeType, shiftEnterLineBreaks: shiftEnter);
+        Assert.True(result.Succeeded);
+        Assert.Equal(typed.ToString(), string.Concat(platform.Batches.Select(Replay)));
         return typed.ToString();
     }
 
