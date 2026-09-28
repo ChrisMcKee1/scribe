@@ -858,12 +858,13 @@ more than "not digital silence" (a -60 dBFS bar). `CaptureSignalAnalyzer` now re
 shape of every capture (peak/RMS in dBFS, clipping, DC offset, and **per-channel levels taken before
 the downmix**) so the next report of this arrives answerable. Statistics only, never audio.
 
-One and two channels of 32-bit float or 16-bit PCM, nearly every capture, run loops of their own (AUDIO-O-06): every
-accumulator in a local, no delegate and no modulo per sample, the samples visited in the same order with the same
-float and double operations, so every statistic is bit-identical to the general loop's. That is the whole
-justification for having no flag: `CaptureSignalAnalyzerDifferentialTests` keeps the 0.5.0 loop as the oracle and
-compares every field by bit pattern and `Describe()`. SIMD, a reordered or parallel reduction, or pooling would change
-the sums and needs a decision (and probably a flag) of its own; a native Arm64 run of that test is a completion gate.
+Every channel count runs the one loop 0.5.0 shipped. 0.5.1 tried loops of their own for one and two channels
+(AUDIO-O-06, about 1 ms per stop at a 9.5 s dictation), with every statistic bit-identical to the general loop's on x64,
+and backed them out: on the windows-11-arm runner the RMS differed from the general loop's in its last bits
+(`CaptureSignalAnalyzerDifferentialTests`), most likely because the Arm64 JIT fuses a multiply and add in one loop shape
+and not the other. That test keeps the 0.5.0 loop as the oracle, compares every field by bit pattern and `Describe()`,
+and must pass on both architectures before any faster loop returns; SIMD, a reordered or parallel reduction, or pooling
+would change the sums and needs a decision (and probably a flag) of its own.
 
 ## Transcription engine (one gate, cancellation, chunk seams)
 

@@ -6,12 +6,13 @@ using Scribe.Core.Audio;
 namespace Scribe.Benchmarks;
 
 /// <summary>
-/// AUDIO-O-06: the capture signal analyzer every stop runs before the conversion, on the shipping code
+/// The capture signal analyzer every stop runs before the conversion, on the shipping code
 /// (<see cref="CaptureSignalAnalyzer.Analyze"/>) against the single loop 0.5.0 shipped for every channel count, kept
 /// here verbatim (<c>Original</c>, the baseline). One and two channels, 32-bit float at 48 kHz, for the median dictation
 /// (9.5 s) and a long one (55 s). The setup refuses to run unless both give the same report, bit for bit, on this input;
-/// <c>CaptureSignalAnalyzerDifferentialTests</c> is the full proof. Built on the baseline, where the shipping analyzer is
-/// still the original, both arms measure the same code.
+/// <c>CaptureSignalAnalyzerDifferentialTests</c> is the full proof, on x64 and on Arm64. The shipping analyzer is the
+/// original loop again (AUDIO-O-06's faster loops were backed out when their RMS differed on Arm64), so both arms now
+/// measure the same code; keep this class as the harness for the next attempt.
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Audio")]
