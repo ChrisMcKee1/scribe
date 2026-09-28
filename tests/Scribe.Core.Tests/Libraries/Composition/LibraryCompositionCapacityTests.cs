@@ -1,5 +1,8 @@
+using System.Collections.ObjectModel;
+using System.Reflection;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
+using Scribe.Core.Settings;
 using Xunit.Abstractions;
 using static Scribe.Core.Tests.Libraries.Composition.Lib;
 
@@ -8,7 +11,7 @@ namespace Scribe.Core.Tests.Libraries.Composition;
 /// <summary>
 /// The composition sizes its rule maps and lists once, from the rows that can supply a rule, instead of growing them from
 /// empty on every composition (ledger LB1). What it composes is pinned by the composition, glossary and golden tests; these
-/// pin the allocation and the order a presized map must keep.
+/// pin the allocation, the room each sized collection has, and the order a presized map must keep.
 /// </summary>
 [Collection(AllocationMeasurementCollection.Name)]
 public sealed class LibraryCompositionCapacityTests(ITestOutputHelper output)
@@ -61,6 +64,62 @@ public sealed class LibraryCompositionCapacityTests(ITestOutputHelper output)
         // A map of 1,000 coverages (56-byte entries) grown from empty allocates 3,631 slots; sized once, 1,103. Measured on
         // x64: 218,448 bytes before and 66,352 after; the bound sits halfway.
         Assert.True(bytes <= 142_000, $"Coverage of {Rows} rules allocated {bytes} bytes; the bound is 142,000.");
+    }
+
+    // Review round 1, item 2: the allocation bounds above measure several sizings together, so one map growing from empty
+    // again stayed under them. Each collection the composition sizes is checked on its own here, by the room it has after
+    // it is filled (EnsureCapacity(0) and List<T>.Capacity read it without growing anything): exactly what a collection
+    // sized for its count gets, never what growth from empty reaches, which for these counts is always more.
+    [Fact]
+    public void Every_collection_the_composition_sizes_has_exactly_the_room_its_count_needs()
+    {
+        const int Personal = 100;
+        var catalog = ThousandRuleCatalog();
+        IReadOnlyList<DictionaryEntry> dictionary =
+        [
+            .. Enumerable.Range(0, Personal)
+                .Select(i => DictionaryEntry.New(FormattableString.Invariant($"personal {i:D3}"), FormattableString.Invariant($"Personal{i:D3}"))),
+        ];
+        var composition = LibraryComposition.Committed(catalog, dictionary, new GlossaryBudget(80));
+        Assert.Equal(Rows, composition.Rules.Count);
+        Assert.NotEqual(SizedFor(Personal), GrownTo(Personal));
+        Assert.NotEqual(SizedFor(Rows), GrownTo(Rows));
+        Assert.NotEqual(Rows, new List<int>(Enumerable.Range(0, Rows).Where(_ => true)).Capacity);
+
+        var (personalByKey, ruleByKey, sourceOfRule) = composition.MapCapacities();
+        Assert.True(SizedFor(Personal) == personalByKey, $"The personal dictionary's map has room for {personalByKey}.");
+        Assert.True(SizedFor(Rows) == ruleByKey, $"The rule map has room for {ruleByKey}.");
+        Assert.True(SizedFor(Rows) == sourceOfRule, $"The map of each rule's library has room for {sourceOfRule}.");
+
+        var ruleList = Assert.IsType<List<ComposedRule>>(
+            typeof(ReadOnlyCollection<ComposedRule>).GetProperty("Items", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(composition.Rules));
+        Assert.True(Rows == ruleList.Capacity, $"The rule list has room for {ruleList.Capacity}.");
+
+        var coverage = Assert.IsType<Dictionary<string, LibraryCoverage>>(composition.Coverage()).EnsureCapacity(0);
+        Assert.True(SizedFor(Rows) == coverage, $"Coverage's map has room for {coverage}.");
+        var names = composition.RuleLibraryNames().EnsureCapacity(0);
+        Assert.True(SizedFor(Rows) == names, $"The Save prompt's map of library names has room for {names}.");
+
+        var vocabulary = LibraryComposer.Instance.ComposeVocabulary(catalog);
+        Assert.Equal(Rows, vocabulary.Entries.Count);
+        Assert.True(LibraryVocabularyOrigins.TryGet(vocabulary, out var origins));
+        var byOrigin = Assert.IsType<Dictionary<DictionaryEntry, string>>(origins).EnsureCapacity(0);
+        Assert.True(SizedFor(Rows) == byOrigin, $"The vocabulary's map of origins has room for {byOrigin}.");
+    }
+
+    // The room a map sized for count entries gets, and the room one grown from empty reaches once it holds them.
+    private static int SizedFor(int count) => new Dictionary<int, int>(count).EnsureCapacity(0);
+
+    private static int GrownTo(int count)
+    {
+        var map = new Dictionary<int, int>();
+        for (var i = 0; i < count; i++)
+        {
+            map.Add(i, i);
+        }
+
+        return map.EnsureCapacity(0);
     }
 
     private static LibraryCatalog ThousandRuleCatalog()

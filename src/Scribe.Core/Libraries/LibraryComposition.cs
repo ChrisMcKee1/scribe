@@ -519,14 +519,25 @@ public sealed class LibraryComposition
     public DictionaryOverlapReport OverlapReport(IReadOnlyList<DictionaryEntry> personal)
     {
         ArgumentNullException.ThrowIfNull(personal);
+        return DictionaryLibraryOverlapAnalyzer.Analyze(personal, LibraryEntries, RuleLibraryNames());
+    }
+
+    // The name of the library that supplies each rule's spoken form, for the Save prompt: internal so its sizing is tested.
+    internal Dictionary<string, string> RuleLibraryNames()
+    {
         var names = new Dictionary<string, string>(Rules.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var composed in Rules)
         {
             names.TryAdd(composed.Key.Value, _sourceOfRule[composed.Entry].Content.Name);
         }
 
-        return DictionaryLibraryOverlapAnalyzer.Analyze(personal, LibraryEntries, names);
+        return names;
     }
+
+    // Test seam: the room each map the constructor sizes was given, read without growing any of them (EnsureCapacity(0)
+    // returns the current capacity), so each sizing is checked on its own.
+    internal (int PersonalByKey, int RuleByKey, int SourceOfRule) MapCapacities() =>
+        (_dictionaryByKey.EnsureCapacity(0), _ruleByKey.EnsureCapacity(0), _sourceOfRule.EnsureCapacity(0));
 
     /// <summary>
     /// The identities (<see cref="LibraryRow.Key"/>) of the rows of <paramref name="libraryId"/> the Show filter keeps, in
