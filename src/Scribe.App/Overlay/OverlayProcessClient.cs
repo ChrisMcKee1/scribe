@@ -844,7 +844,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             psi.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
             // One way of appending to the shared log for the pair (DATA-O-02): decided for this helper and applied to the
-            // app's own writer before it starts; the helper appends only when told to here.
+            // app's own writer, once its writes the other way have ended, before the helper starts; the helper appends only
+            // when told to here.
             if (_appendMode is { Requested: true } appendMode)
             {
                 var appendOnly = appendMode.DecideForLaunch(_exePath);
@@ -854,8 +855,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                 }
 
                 TryLog(
-                    LogLevel.Information, null, "Shared log for this overlay launch: {Mode}.",
-                    appendOnly ? "append-only" : "the old way (the overlay is another build or its version is unreadable)");
+                    LogLevel.Information, null, "Shared log for this overlay launch: {Mode} ({Decision}).",
+                    appendOnly ? "append-only" : "the old way", appendMode.LastDecision);
             }
 
             // A close can land after this launch was decided; never spawn a helper only to kill it again.

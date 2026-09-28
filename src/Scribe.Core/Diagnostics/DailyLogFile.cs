@@ -98,8 +98,9 @@ public sealed class DailyLogFile : ILogRecordSink
     /// <param name="retryDelay">Pause between attempts on a sharing collision. Tests pass zero.</param>
     /// <param name="clock">Local time source that decides the day. Defaults to <see cref="DateTime.Now"/>.</param>
     /// <param name="appendMode">
-    /// How each batch is appended (<see cref="PerfFlags.AppendOnlyLog"/>), read before every write; null is today's
-    /// <see cref="FileMode.Append"/> stream.
+    /// How each batch is appended (<see cref="PerfFlags.AppendOnlyLog"/>): each physical write asks it which way to open
+    /// and is counted until it closes (<see cref="AppendOnlyLogMode.BeginWrite"/>); null is today's
+    /// <see cref="FileMode.Append"/> stream, uncounted.
     /// </param>
     public static DailyLogFile Open(
         string preferredDirectory,
@@ -115,6 +116,12 @@ public sealed class DailyLogFile : ILogRecordSink
         file.OpenFirstUsable(preferredDirectory ?? string.Empty, fallbackDirectory, file.Today());
         return file;
     }
+
+    /// <summary>
+    /// Test seam: runs after a physical write's stream is open and before it writes, so a test can hold a write there
+    /// while the append mode switches (DATA-IMPL-A-01). Unset in the app.
+    /// </summary>
+    internal Action? BetweenOpenAndWrite { get; set; }
 
     /// <summary>Where entries are going, safe to read from any thread.</summary>
     public LogFileStatus Status
@@ -421,10 +428,14 @@ public sealed class DailyLogFile : ILogRecordSink
                 // but FileStream writes at its own tracked offset, so it would overwrite whatever the
                 // overlay appended in between. Unbuffered, so the whole batch is a single write. The same
                 // happens inside one open, between the open and the write, unless the handle may only
-                // append (DATA-O-02), which is the mode the app and its overlay share when it is on.
-                using var stream = _appendMode?.AppendOnly == true
+                // append (DATA-O-02), which is the mode the app and its overlay share when it is on. The
+                // write is counted from before its open until after its close, so a switch of that mode
+                // waits for it before a helper starts (AppendOnlyLogMode.BeginWrite).
+                using var write = _appendMode?.BeginWrite() ?? default;
+                using var stream = write.AppendOnly
                     ? AppendOnlyFile.Open(path)
                     : new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 0);
+                BetweenOpenAndWrite?.Invoke();
                 stream.Write(bytes);
                 return;
             }

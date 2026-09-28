@@ -22,4 +22,10 @@
     <Compile Include="..\..\src\Scribe.Core\Diagnostics\AppendOnlyFile.cs" Link="Linked\AppendOnlyFile.cs" />
   </ItemGroup>
 
+  <!-- It compiles the overlay's writer, so it follows the launch argument as the overlay does and declares it the same way:
+       AppendOnlyLogTests uses its assembly as a capable helper's payload, beside Scribe.Core's, which declares nothing. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="Scribe.SharedLogAppendOnly" Value="1" />
+  </ItemGroup>
+
 </Project>

@@ -220,9 +220,11 @@ public partial class App : Application
         // Held in a static so Settings can report whether logging is ACTUALLY working rather
         // than displaying the folder it was asked to use. A packaged build was found writing
         // nothing for an entire session while the About page confidently showed a path.
-        // The append mode is shared with the overlay client, which decides it for each helper it launches (DATA-O-02).
-        var logAppendMode = new AppendOnlyLogMode(
-            perfFlags.IsOn(PerfFlags.AppendOnlyLog), AppendOnlyLogMode.ReadVersion(typeof(App).Assembly.Location));
+        // The append mode is shared with the overlay client, which decides it for each helper it launches (DATA-O-02). With
+        // the flag off there is none, and both writers open today's way.
+        var logAppendMode = perfFlags.IsOn(PerfFlags.AppendOnlyLog)
+            ? new AppendOnlyLogMode(requested: true, AppendOnlyLogMode.ReadVersion(typeof(App).Assembly.Location))
+            : null;
         var logSink = new FileLoggerProvider(paths.LogsDir, appendMode: logAppendMode);
         LogSink = logSink;
 

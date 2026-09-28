@@ -33,19 +33,21 @@ public sealed class AppendOnlyLogTests : IDisposable
     // ---- The decision -----------------------------------------------------------------------------------------------
 
     [Theory]
-    [InlineData(true, "0.5.1+77b22af", "0.5.1+77b22af", true)]
-    [InlineData(false, "0.5.1+77b22af", "0.5.1+77b22af", false)]
-    [InlineData(true, "0.5.1+77b22af", "0.5.1+f88db0a", false)]
-    [InlineData(true, "0.5.1+77b22af", "0.5.0+77b22af", false)]
-    [InlineData(true, "0.5.1+abc", "0.5.1+ABC", false)]
-    [InlineData(true, "0.5.1+77b22af", null, false)]
-    [InlineData(true, null, "0.5.1+77b22af", false)]
-    [InlineData(true, null, null, false)]
-    [InlineData(true, "", "", false)]
-    [InlineData(true, " ", " ", false)]
-    public void The_pair_appends_only_when_asked_and_the_helper_is_this_build(
-        bool requested, string? appVersion, string? overlayVersion, bool appendOnly) =>
-        Assert.Equal(appendOnly, AppendOnlyLogMode.Decide(requested, appVersion, overlayVersion));
+    [InlineData(true, "0.5.1+77b22af", "0.5.1+77b22af", true, AppendOnlyLaunchDecision.AppendOnly)]
+    [InlineData(false, "0.5.1+77b22af", "0.5.1+77b22af", true, AppendOnlyLaunchDecision.NotRequested)]
+    [InlineData(true, "0.5.1+77b22af", "0.5.1+77b22af", false, AppendOnlyLaunchDecision.HelperNotCapable)]
+    [InlineData(true, "0.5.1+77b22af", "0.5.1+f88db0a", true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, "0.5.1+77b22af", "0.5.0+77b22af", true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, "0.5.1+abc", "0.5.1+ABC", true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, "0.5.1+77b22af", null, true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, null, "0.5.1+77b22af", true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, null, null, true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, "", "", true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, " ", " ", true, AppendOnlyLaunchDecision.OtherBuild)]
+    [InlineData(true, null, null, false, AppendOnlyLaunchDecision.HelperNotCapable)]
+    public void The_pair_appends_only_when_asked_for_a_helper_of_this_build_that_declares_it_follows_the_argument(
+        bool requested, string? appVersion, string? helperVersion, bool capable, AppendOnlyLaunchDecision decision) =>
+        Assert.Equal(decision, AppendOnlyLogMode.Decide(requested, appVersion, new HelperPayload(helperVersion, capable)));
 
     [Fact]
     public void A_build_s_version_is_its_informational_version()
@@ -58,27 +60,61 @@ public sealed class AppendOnlyLogTests : IDisposable
     }
 
     [Fact]
-    public void The_helper_s_version_is_read_from_its_assembly_beside_the_executable_and_is_null_when_it_cannot_be()
+    public void The_helper_s_payload_is_read_from_its_assembly_beside_the_executable_and_is_nothing_when_it_cannot_be()
     {
-        var exe = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "same");
+        var legacy = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "legacy");
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
         var notAnAssembly = Path.Combine(_folder.FullName, "not-an-assembly.dll");
         File.WriteAllText(notAnAssembly, "not a PE image");
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
 
-        Assert.Equal(AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location), AppendOnlyLogMode.ReadOverlayVersion(exe));
-        Assert.Null(AppendOnlyLogMode.ReadOverlayVersion(Path.Combine(_folder.FullName, "missing", "Scribe.Overlay.exe")));
-        Assert.Null(AppendOnlyLogMode.ReadOverlayVersion(null));
-        Assert.Null(AppendOnlyLogMode.ReadOverlayVersion(" "));
-        Assert.Null(AppendOnlyLogMode.ReadOverlayVersion("Scribe.Overlay.exe"));
+        Assert.Equal(new HelperPayload(appVersion, DeclaresCapability: false), AppendOnlyLogMode.ReadHelperPayload(legacy));
+        Assert.Equal(new HelperPayload(appVersion, DeclaresCapability: true), AppendOnlyLogMode.ReadHelperPayload(capable));
+        Assert.Equal(appVersion, AppendOnlyLogMode.ReadOverlayVersion(legacy));
+        Assert.Equal(HelperPayload.Unreadable, AppendOnlyLogMode.ReadHelperPayload(Path.Combine(_folder.FullName, "missing", "Scribe.Overlay.exe")));
+        Assert.Equal(HelperPayload.Unreadable, AppendOnlyLogMode.ReadHelperPayload(null));
+        Assert.Equal(HelperPayload.Unreadable, AppendOnlyLogMode.ReadHelperPayload(" "));
+        Assert.Equal(HelperPayload.Unreadable, AppendOnlyLogMode.ReadHelperPayload("Scribe.Overlay.exe"));
         Assert.Null(AppendOnlyLogMode.ReadVersion(Path.Combine(_folder.FullName, "missing.dll")));
         Assert.Null(AppendOnlyLogMode.ReadVersion(notAnAssembly));
         Assert.Null(AppendOnlyLogMode.ReadVersion(null));
+    }
+
+    public static TheoryData<string, string?, string?, string?, AppendOnlyLaunchDecision> SyntheticHelpers() => new()
+    {
+        // name, informational version (null: the app's), capability key, capability value, decision
+        { "capable", null, AppendOnlyLogMode.CapabilityKey, "1", AppendOnlyLaunchDecision.AppendOnly },
+        { "capable-other-version", "0.0.1+ffffff", AppendOnlyLogMode.CapabilityKey, "1", AppendOnlyLaunchDecision.OtherBuild },
+        { "capable-no-version", "", AppendOnlyLogMode.CapabilityKey, "1", AppendOnlyLaunchDecision.OtherBuild },
+        { "declares-zero", null, AppendOnlyLogMode.CapabilityKey, "0", AppendOnlyLaunchDecision.HelperNotCapable },
+        { "declares-two", null, AppendOnlyLogMode.CapabilityKey, "2", AppendOnlyLaunchDecision.HelperNotCapable },
+        { "other-case-key", null, "scribe.sharedlogappendonly", "1", AppendOnlyLaunchDecision.HelperNotCapable },
+        { "other-key", null, "Scribe.SomethingElse", "1", AppendOnlyLaunchDecision.HelperNotCapable },
+        { "no-metadata", null, null, null, AppendOnlyLaunchDecision.HelperNotCapable },
+    };
+
+    [Theory]
+    [MemberData(nameof(SyntheticHelpers))]
+    public void Only_the_exact_capability_entry_with_the_app_s_version_turns_the_pair_append_only(
+        string name, string? version, string? key, string? value, AppendOnlyLaunchDecision decision)
+    {
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var helper = SyntheticHelper(name, version is null ? appVersion : version.Length == 0 ? null : version, key, value);
+        var mode = new AppendOnlyLogMode(requested: true, appVersion);
+
+        Assert.Equal(decision == AppendOnlyLaunchDecision.AppendOnly, mode.DecideForLaunch(helper));
+        Assert.Equal(decision, mode.LastDecision);
+        Assert.Equal(decision == AppendOnlyLaunchDecision.AppendOnly, mode.AppendOnly);
     }
 
     [Fact]
     public void Every_launch_decides_for_the_helper_it_starts_and_the_app_s_writer_follows_before_it_starts()
     {
         var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
-        var thisBuild = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "this-build");
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
+
+        // A build of the same informational version that does not declare the capability: a stale output from before it.
+        var legacySameVersion = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "legacy-same-version");
         var anotherBuild = HelperBuiltFrom(typeof(ILogger).Assembly.Location, "another-build");
         var unreadable = Path.Combine(_folder.FullName, "unreadable", "Scribe.Overlay.exe");
         var mode = new AppendOnlyLogMode(requested: true, appVersion);
@@ -86,29 +122,172 @@ public sealed class AppendOnlyLogTests : IDisposable
         // Until the first launch nothing else writes the file, so the app's writer starts the old way.
         Assert.True(mode.Requested);
         Assert.False(mode.AppendOnly);
+        Assert.Equal(AppendOnlyLaunchDecision.None, mode.LastDecision);
 
-        Assert.True(mode.DecideForLaunch(thisBuild));
+        Assert.True(mode.DecideForLaunch(capable));
         Assert.True(mode.AppendOnly);
 
-        // A relaunch decides again, for whatever helper it starts.
-        Assert.True(mode.DecideForLaunch(thisBuild));
+        // A relaunch decides again, for whatever helper output it starts.
+        Assert.True(mode.DecideForLaunch(capable));
         Assert.True(mode.AppendOnly);
+        Assert.False(mode.DecideForLaunch(legacySameVersion));
+        Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, mode.LastDecision);
+        Assert.False(mode.AppendOnly);
+        Assert.True(mode.DecideForLaunch(capable));
         Assert.False(mode.DecideForLaunch(anotherBuild));
         Assert.False(mode.AppendOnly);
         Assert.False(mode.DecideForLaunch(unreadable));
         Assert.False(mode.AppendOnly);
-        Assert.True(mode.DecideForLaunch(thisBuild));
+        Assert.True(mode.DecideForLaunch(capable));
         Assert.True(mode.AppendOnly);
 
         var off = new AppendOnlyLogMode(requested: false, appVersion);
-        Assert.False(off.DecideForLaunch(thisBuild));
+        Assert.False(off.DecideForLaunch(capable));
+        Assert.Equal(AppendOnlyLaunchDecision.NotRequested, off.LastDecision);
         Assert.False(off.AppendOnly);
 
         var noVersion = new AppendOnlyLogMode(requested: true, appVersion: null);
-        Assert.False(noVersion.DecideForLaunch(thisBuild));
+        Assert.False(noVersion.DecideForLaunch(capable));
+        Assert.Equal(AppendOnlyLaunchDecision.OtherBuild, noVersion.LastDecision);
         Assert.False(noVersion.AppendOnly);
     }
 
+    [Fact]
+    public void The_overlay_build_declares_the_capability_with_the_argument_and_the_app_reads_it_from_the_helper_it_starts()
+    {
+        var overlay = Source("src", "Scribe.Overlay", "Scribe.Overlay.csproj");
+        Assert.Contains(
+            $"<AssemblyMetadata Include=\"{AppendOnlyLogMode.CapabilityKey}\" Value=\"{AppendOnlyLogMode.CapabilityValue}\" />",
+            overlay,
+            StringComparison.Ordinal);
+        Assert.Contains("AppendOnlyFile.LaunchArgument", Source("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"), StringComparison.Ordinal);
+    }
+
+    // ---- The switch retires the writes of the other way (DATA-IMPL-A-01) ---------------------------------------------
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task A_switch_waits_for_a_write_of_the_other_way_held_between_its_open_and_its_write(bool from, bool to)
+    {
+        var mode = AppendOnlyLogMode.Fixed(from);
+        var file = OpenFile(mode);
+        file.Write([Record("existing")]);
+        using var opened = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        file.BetweenOpenAndWrite = () =>
+        {
+            file.BetweenOpenAndWrite = null;
+            opened.Set();
+            release.Wait(TimeSpan.FromSeconds(30));
+        };
+
+        var held = Task.Run(() => file.Write([Record("held app line")]));
+        Assert.True(opened.Wait(TimeSpan.FromSeconds(30)));
+        var switching = Task.Run(() => mode.SwitchTo(to, TimeSpan.FromSeconds(30)));
+
+        // The helper cannot start while the app's write the other way is open: the switch has not returned.
+        Assert.NotSame(switching, await Task.WhenAny(switching, Task.Delay(300)));
+        release.Set();
+        Assert.Equal(to, await switching.WaitAsync(TimeSpan.FromSeconds(30)));
+        await held.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(to, mode.AppendOnly);
+
+        // Only now does the helper start and append its first line the way the switch decided; the app goes on the same way.
+        OverlayLog.AppendLineForTests(DayPath, "helper line", appendOnly: to);
+        file.Write([Record("app line after")]);
+
+        Assert.Equal(["existing", "held app line", "helper line", "app line after"], File.ReadAllLines(DayPath));
+    }
+
+    [Fact]
+    public async Task A_write_the_old_way_that_does_not_end_in_time_keeps_the_pair_on_today_s_way()
+    {
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var mode = new AppendOnlyLogMode(requested: true, appVersion);
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
+        var file = OpenFile(mode);
+        using var opened = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        file.BetweenOpenAndWrite = () =>
+        {
+            file.BetweenOpenAndWrite = null;
+            opened.Set();
+            release.Wait(TimeSpan.FromSeconds(30));
+        };
+
+        var held = Task.Run(() => file.Write([Record("held app line")]));
+        Assert.True(opened.Wait(TimeSpan.FromSeconds(30)));
+
+        // Bounded: the launcher gives up after the handover timeout and both keep today's way.
+        Assert.False(mode.SwitchTo(true, TimeSpan.FromMilliseconds(100)));
+        Assert.False(mode.AppendOnly);
+        Assert.False(await Task.Run(() => mode.DecideForLaunch(capable)).WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(AppendOnlyLaunchDecision.WriteInProgress, mode.LastDecision);
+        Assert.False(mode.AppendOnly);
+
+        release.Set();
+        await held.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(mode.DecideForLaunch(capable));
+        Assert.True(mode.AppendOnly);
+    }
+
+    [Fact]
+    public void A_write_that_read_the_mode_just_before_a_switch_takes_the_new_way_when_it_announces_itself()
+    {
+        var mode = AppendOnlyLogMode.Fixed(false);
+        var switched = false;
+        mode.AfterModeRead = () =>
+        {
+            mode.AfterModeRead = null;
+
+            // The switch lands after the write read "today's way" and before it announced itself: it sees no write in
+            // progress and returns at once, so a helper could start now.
+            var switching = new Thread(() => switched = mode.SwitchTo(true, TimeSpan.FromSeconds(30)));
+            switching.Start();
+            Assert.True(switching.Join(TimeSpan.FromSeconds(30)));
+        };
+
+        using var write = mode.BeginWrite();
+
+        Assert.True(switched);
+        Assert.True(mode.AppendOnly);
+        Assert.True(write.AppendOnly);
+    }
+
+    [Fact]
+    public async Task Every_line_survives_switches_back_and_forth_while_the_app_writes_all_the_while()
+    {
+        var mode = AppendOnlyLogMode.Fixed(false);
+        var file = OpenFile(mode, retryDelay: TimeSpan.FromMilliseconds(1));
+        using var stop = new CancellationTokenSource();
+        var written = 0;
+        var app = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                file.Write([Record($"app {written:D6}")]);
+                written++;
+            }
+        });
+
+        var helperLines = new List<string>();
+        for (var round = 0; round < 100; round++)
+        {
+            Assert.True(mode.SwitchTo(true, TimeSpan.FromSeconds(10)));
+            var line = $"helper {round:D3}";
+            OverlayLog.AppendLineForTests(DayPath, line, appendOnly: true);
+            helperLines.Add(line);
+            Assert.False(mode.SwitchTo(false, TimeSpan.FromSeconds(10)));
+        }
+
+        stop.Cancel();
+        await app.WaitAsync(TimeSpan.FromSeconds(30));
+        var lines = File.ReadAllLines(DayPath);
+        Assert.All(helperLines, line => Assert.Single(lines, candidate => candidate == line));
+        Assert.Equal(written, lines.Count(line => line.StartsWith("app ", StringComparison.Ordinal)));
+        Assert.Equal(lines.Length, written + helperLines.Count);
+    }
     [Fact]
     public void A_mode_set_for_a_tool_says_what_it_was_given()
     {
@@ -500,6 +679,36 @@ public sealed class AppendOnlyLogTests : IDisposable
         DailyLogFile.Open(
             LogsDir, null, long.MaxValue, retryDelay: retryDelay ?? TimeSpan.Zero, clock: () => Noon,
             appendMode: appendOnly ? AppendOnlyLogMode.Fixed(true) : null);
+
+    private DailyLogFile OpenFile(AppendOnlyLogMode mode, TimeSpan? retryDelay = null) =>
+        DailyLogFile.Open(
+            LogsDir, null, long.MaxValue, retryDelay: retryDelay ?? TimeSpan.Zero, clock: () => Noon, appendMode: mode);
+
+    // A payload that declares the capability and carries this build's informational version: the child writer compiles the
+    // overlay's writer and declares it as the overlay does.
+    private static string CapableHelperAssembly() => Path.ChangeExtension(ChildExecutable(), ".dll");
+
+    // An assembly named as the helper's, with the given informational version and one metadata entry, made on the spot.
+    private string SyntheticHelper(string name, string? informationalVersion, string? key, string? value)
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_folder.FullName, name));
+        var builder = new System.Reflection.Emit.PersistedAssemblyBuilder(new AssemblyName("Scribe.Overlay"), typeof(object).Assembly);
+        if (informationalVersion is not null)
+        {
+            builder.SetCustomAttribute(new System.Reflection.Emit.CustomAttributeBuilder(
+                typeof(AssemblyInformationalVersionAttribute).GetConstructor([typeof(string)])!, [informationalVersion]));
+        }
+
+        if (key is not null)
+        {
+            builder.SetCustomAttribute(new System.Reflection.Emit.CustomAttributeBuilder(
+                typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!, [key, value]));
+        }
+
+        builder.DefineDynamicModule("Scribe.Overlay");
+        builder.Save(Path.Combine(folder.FullName, "Scribe.Overlay.dll"));
+        return Path.Combine(folder.FullName, "Scribe.Overlay.exe");
+    }
 
     private static LogRecord Record(string text) => new(Noon, LogLevel.Information, text);
 

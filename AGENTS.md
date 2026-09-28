@@ -641,15 +641,22 @@ cause of one.**
   and without FILE_WRITE_DATA (`AppendOnlyFile.Open`, which the overlay compiles in) always appends.
   Everything else stays: one open, one write and one close per batch or line, `FileShare.ReadWrite`,
   retry and swallow. The app decides the mode for each helper it launches
-  (`AppendOnlyLogMode.DecideForLaunch`: on only when the flag is on and the helper's `Scribe.Overlay.dll`
-  carries the app's informational version) and applies it to its own writer before the helper starts;
-  the helper follows only the `--append-only-log` launch argument, never its environment, and says so
-  in its first line. In that mode every overlay line, however long, is one encoded write; off, the
-  overlay writes as UI-3 left it. Unchanged in both modes: the overlay makes its logs folder only when
+  (`AppendOnlyLogMode.DecideForLaunch`: on only when the flag is on and the helper's own
+  `Scribe.Overlay.dll` both declares that it follows the argument, with the `Scribe.SharedLogAppendOnly`
+  assembly metadata entry the overlay build carries, and carries the app's informational version) and
+  applies it to its own writer before the helper starts. The switch retires the other way first: each
+  physical write of the app's writer is counted from before its open until after its close
+  (`BeginWrite`, two interlocked operations, no lock, no wait), and the launcher, never the writer, the
+  hook or the UI thread, waits up to 2 s for the writes of the other way to end; if one does not, both
+  keep today's way (`WriteInProgress` in the launch line). The helper follows only the `--append-only-log`
+  launch argument, never its environment, and says so in its first line. With the flag off the app has
+  no mode at all and both writers open today's way. Append-only, every overlay line, however long, is one
+  encoded write; the old way, the overlay writes as UI-3 left it. Unchanged in both modes: the overlay makes its logs folder only when
   its day changes, so a folder deleted mid-day loses its lines until the next day. `AppendOnlyLogTests`
-  (two real processes through `tests/Scribe.LogAppendChild`, mixed pairs both ways, renamed and
-  replaced day files, faults) and `DailyLogFileAppendOnlyTests` (every `DailyLogFileTests` case again,
-  appended only) pin it.
+  (two real processes through `tests/Scribe.LogAppendChild`, mixed pairs both ways, the switch while a
+  write of the other way is held open, both directions, capable and legacy helper payloads of one
+  version, renamed and replaced day files, faults) and `DailyLogFileAppendOnlyTests` (every
+  `DailyLogFileTests` case again, appended only) pin it.
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch
   that kills a process). Route diagnostics in catch blocks through non‑throwing helpers
   (`TryLog`). When in doubt, log *more* lifecycle/state detail, not less.

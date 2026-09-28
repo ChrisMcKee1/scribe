@@ -61,9 +61,12 @@
   </ItemGroup>
 
   <!-- The shared daily log's append-only open (DATA-O-02), which the app's DailyLogFile uses too, so both writers open the
-       file the same way when the app passes the launch argument. Tested in Scribe.Core (AppendOnlyLogTests). -->
+       file the same way when the app passes the launch argument. Tested in Scribe.Core (AppendOnlyLogTests). The metadata
+       entry declares, in this helper's own payload, that it follows that argument: the app passes it only to a build that
+       says so (AppendOnlyLogMode.CapabilityKey), since a build from before the argument ignores it. -->
   <ItemGroup>
     <Compile Include="..\Scribe.Core\Diagnostics\AppendOnlyFile.cs" Link="Shared\AppendOnlyFile.cs" />
+    <AssemblyMetadata Include="Scribe.SharedLogAppendOnly" Value="1" />
   </ItemGroup>
 
 </Project>
