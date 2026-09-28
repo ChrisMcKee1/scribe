@@ -89,7 +89,9 @@ public static partial class UsageAnalyzer
 
     /// <summary>
     /// Test seam: <see cref="Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, Func{DictionaryEntry, bool}, TimeZoneInfo, int, int, PerfFlags)"/>
-    /// with the work its term counting did, so a test can hold each counting change to the work it avoids.
+    /// with the work its term counting did, so a test can hold each counting change to the work it avoids. The Usage page
+    /// never calls it: its report calls the ordinary overload, which forwards here and discards the work, so the tests of
+    /// that route observe it through <see cref="ObserveWork"/> instead (review finding LANG-IR-01).
     /// </summary>
     internal static Snapshot Compute(
         IEnumerable<HistoryEntry> entries,
@@ -232,6 +234,24 @@ public static partial class UsageAnalyzer
     /// owners, per dictation.
     /// </param>
     internal readonly record struct UsageWork(int PhraseRegexesBuilt, long PhraseRegexRuns, long DenseFormProbes, long OwnerVisits);
+
+    // ObserveWork's observer, set by a test for its own flow only: an AsyncLocal, so tests that run in parallel never see
+    // each other's counts. Production never sets it.
+    private static readonly AsyncLocal<Action<UsageWork>?> WorkObserver = new();
+
+    /// <summary>
+    /// Test seam: until the returned scope is disposed, every term count on this flow hands <paramref name="observer"/> the
+    /// work it did, whichever route reached it. A test drives the route production takes (the Usage page's
+    /// <see cref="UsageReport"/>, then the ordinary <c>Compute</c>) and observes what the counting did there, so a hop that
+    /// drops the flags fails the test even though the report it gives is the same (review finding LANG-IR-01).
+    /// </summary>
+    internal static IDisposable ObserveWork(Action<UsageWork> observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        var previous = WorkObserver.Value;
+        WorkObserver.Value = observer;
+        return new WorkObservation(previous);
+    }
 
     /// <summary>
     /// The term list <see cref="Compute(IEnumerable{HistoryEntry}, IEnumerable{DictionaryEntry}, DateTimeOffset, DateTimeOffset, Func{DictionaryEntry, bool}, TimeZoneInfo, int, int, PerfFlags)"/>
@@ -403,6 +423,7 @@ public static partial class UsageAnalyzer
         }
 
         work = new UsageWork(phraseRegexesBuilt, phraseRegexRuns, denseFormProbes, sparse?.OwnerVisits ?? 0);
+        WorkObserver.Value?.Invoke(work);
 
         var results = new List<TermUsage>();
         for (var i = 0; i < known.Count; i++)
@@ -579,6 +600,12 @@ public static partial class UsageAnalyzer
 
             _touched.Clear();
         }
+    }
+
+    // ObserveWork's scope: puts back the observer the flow had before.
+    private sealed class WorkObservation(Action<UsageWork>? previous) : IDisposable
+    {
+        public void Dispose() => WorkObserver.Value = previous;
     }
 
     [GeneratedRegex(@"[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*")]

@@ -43,6 +43,17 @@ public sealed class HistoryUsageSourceTests
     }
 
     [Fact]
+    public void The_usage_page_hands_its_report_the_process_flags()
+    {
+        // The last hop of the Usage page's counting flags (review finding LANG-IR-01, round 2): the report's flags argument
+        // is optional, so a call that dropped it would still compile, give the same numbers and count every dictation the
+        // 0.5.0 way. UsageAnalyzerTests' route test covers every hop from UsageReport.Build down; BusyAnimationSourceTests
+        // covers the flags reaching the window.
+        var loads = Body(Read("SettingsWindow.Usage.cs"), "private async void RunUsageLoads(");
+        Assert.Matches(new Regex(@"UsageReport\.Build\([^;]*,\s*_perfFlags\);"), loads);
+    }
+
+    [Fact]
     public void Rating_or_reloading_keeps_the_selected_dictation_selected()
     {
         // Selecting a dictation and pressing Useful collapsed its details: replacing the record cleared the selection.
