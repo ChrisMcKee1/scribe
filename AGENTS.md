@@ -666,8 +666,11 @@ cause of one.**
   end of the cooldown then running, at most 60 s later. The helper follows only the `--append-only-log`
   launch argument, never its environment, and says so in its first line. With the flag off the app has
   no mode at all and both writers open today's way. Append-only, every overlay line, however long, is one
-  encoded write; the old way, the overlay writes as UI-3 left it. Unchanged in both modes: the overlay makes its logs folder only when
-  its day changes, so a folder deleted mid-day loses its lines until the next day. `AppendOnlyLogTests`
+  encoded write; the old way, the overlay writes as before (a line of up to 1,024 characters with one strict
+  UTF-8 encode into an unbuffered stream, a longer one through a `StreamWriter`; `OverlayLogSingleEncodeTests`
+  has that path decided by the `StreamWriter` over fixed lines and a seeded corpus). Unchanged in both modes: the
+  overlay makes its logs folder only when its day changes, so a folder deleted mid-day loses its lines until the
+  next day. `AppendOnlyLogTests`
   (two real processes through `tests/Scribe.LogAppendChild`, mixed pairs both ways, the switch while a
   write of the other way is held open, both directions, an ended helper still running with a write in
   flight, the same payload relaunched after a fallback, a launch refused while an ended helper runs, an
@@ -699,8 +702,9 @@ cause of one.**
   `AddScribeTelemetry` registers `TraceLogListener` instead of the SDK: an `ActivityListener` that
   decides exactly as OpenTelemetry 1.18.0 does with its default ParentBased(AlwaysOn) sampler
   (`TraceLogBridge.Sample`, which reads `options.TraceId` as the SDK does, because that read gives a
-  root its trace id) and writes the same lines through the same `TraceLogBridge.Write` that
-  `LogTraceProcessor` now calls. It also skips the SDK's self-diagnostics worker, which polls for that
+  root its trace id) and writes the same lines through the same `TraceLogBridge.Write` (the source-generated
+  `TraceLogMessages`, with the event ids and templates `LogTraceProcessor` had) that `LogTraceProcessor` now calls. It
+  also skips the SDK's self-diagnostics worker, which polls for that
   file every 10 s for the whole session. Any `OTEL_*` setting keeps the SDK, so the exporter, its
   configuration and `TraceTagScrubProcessor` never change. `TraceLogBridgeTests` holds the listener to
   the real SDK scenario by scenario, which is why the test project references the `OpenTelemetry`
