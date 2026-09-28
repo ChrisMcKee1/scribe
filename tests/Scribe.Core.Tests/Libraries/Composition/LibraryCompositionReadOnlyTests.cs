@@ -247,6 +247,103 @@ public sealed class LibraryCompositionReadOnlyTests
         return false;
     }
 
+    public static TheoryData<string> CopyCases =>
+    [
+        "typed", "typed at an offset", "object", "wrong type", "widened type", "two dimensions", "lower bound 1",
+        "lower bound 1 at its first index", "null", "negative index", "too little room",
+    ];
+
+    // Review round 3: only SyncRoot is re-implemented, so the non-generic CopyTo, Count and IsSynchronized are exactly
+    // ReadOnlyCollection's: the same copy, or the same exception with the same parameter name and message, over a list and
+    // over an array, for a reference and a value element type.
+    [Theory]
+    [MemberData(nameof(CopyCases))]
+    public void The_shared_wrapper_copies_and_refuses_exactly_as_a_plain_ReadOnlyCollection(string copy)
+    {
+        List<string> words = ["a", "b", "c"];
+        string[] letters = ["x", "y"];
+        List<int> numbers = [1, 2, 3];
+        int[] digits = [7, 8];
+
+        Assert.Equal(Copy(words.AsReadOnly(), copy), Copy(new SharedReadOnlyCollection<string>(words), copy));
+        Assert.Equal(Copy(Array.AsReadOnly(letters), copy), Copy(new SharedReadOnlyCollection<string>(letters), copy));
+        Assert.Equal(Copy(numbers.AsReadOnly(), copy), Copy(new SharedReadOnlyCollection<int>(numbers), copy));
+        Assert.Equal(Copy(Array.AsReadOnly(digits), copy), Copy(new SharedReadOnlyCollection<int>(digits), copy));
+    }
+
+    [Fact]
+    public void The_shared_wrapper_counts_and_reports_synchronization_as_a_plain_ReadOnlyCollection()
+    {
+        List<string> words = ["a", "b", "c"];
+        string[] letters = ["x", "y"];
+        foreach (var (shared, plain) in new (System.Collections.ICollection, System.Collections.ICollection)[]
+                 {
+                     (new SharedReadOnlyCollection<string>(words), words.AsReadOnly()),
+                     (new SharedReadOnlyCollection<string>(letters), Array.AsReadOnly(letters)),
+                 })
+        {
+            Assert.Equal(plain.Count, shared.Count);
+            Assert.Equal(plain.IsSynchronized, shared.IsSynchronized);
+        }
+    }
+
+    // The reviewer's case: a library's entries copied into an array of the wrong type fail as a plain ReadOnlyCollection
+    // over the same entries fails.
+    [Fact]
+    public void A_library_s_entries_refuse_a_wrongly_typed_copy_as_a_plain_ReadOnlyCollection_does()
+    {
+        var (catalog, draft, dictionary, budget) = OverlappingInputs();
+        var entries = LibraryComposition.Preview(draft, catalog, dictionary, budget).EnabledLibraries[0].Entries;
+        var plain = Array.AsReadOnly(entries.ToArray());
+
+        var fromShared = Outcome(() => ((System.Collections.ICollection)entries).CopyTo(new int[entries.Count], 0), null);
+        var fromPlain = Outcome(() => ((System.Collections.ICollection)plain).CopyTo(new int[plain.Count], 0), null);
+
+        Assert.StartsWith("System.ArgumentException", fromShared, StringComparison.Ordinal);
+        Assert.Equal(fromPlain, fromShared);
+    }
+
+    // What one non-generic CopyTo does: the elements it leaves in the target, or the exception with its parameter name and
+    // message. Every case but "typed", "typed at an offset", "object" and "widened type" is one ReadOnlyCollection refuses.
+    private static string Copy<T>(ReadOnlyCollection<T> collection, string copy)
+    {
+        var count = collection.Count;
+        Array? target = copy switch
+        {
+            "typed" => new T[count],
+            "typed at an offset" or "negative index" or "too little room" => new T[count + 1],
+            "object" => new object[count + 2],
+            "wrong type" => typeof(T) == typeof(int) ? new string[count] : new int[count],
+            "widened type" => typeof(T) == typeof(int) ? new long[count] : new IComparable[count],
+            "two dimensions" => new T[count, 2],
+            "lower bound 1" or "lower bound 1 at its first index" => Array.CreateInstance(typeof(T), [count], [1]),
+            "null" => null,
+            _ => throw new ArgumentOutOfRangeException(nameof(copy), copy, null),
+        };
+        var index = copy switch
+        {
+            "typed at an offset" or "lower bound 1 at its first index" => 1,
+            "object" or "too little room" => 2,
+            "negative index" => -1,
+            _ => 0,
+        };
+
+        return Outcome(() => ((System.Collections.ICollection)collection).CopyTo(target!, index), target);
+    }
+
+    private static string Outcome(Action copy, Array? target)
+    {
+        try
+        {
+            copy();
+            return "copied: " + string.Join(",", target?.Cast<object?>().Select(value => value?.ToString() ?? "(null)") ?? []);
+        }
+        catch (Exception ex)
+        {
+            return $"{ex.GetType().FullName} | {(ex as ArgumentException)?.ParamName} | {ex.Message}";
+        }
+    }
+
     [Fact]
     public void Coverage_and_the_overlap_report_are_new_at_every_call_and_stay_the_caller_s_own()
     {

@@ -11,8 +11,9 @@ namespace Scribe.Core.Libraries;
 /// still a ReadOnlyCollection and a binding sees the same IList.
 /// </summary>
 /// <remarks>
-/// Only a list or an array is wrapped, both of which implement <see cref="ICollection"/>, so CopyTo always has the
-/// wrapped list's own copy to delegate to.
+/// Only SyncRoot is re-implemented. A re-implemented interface maps each member it does not declare to the inherited
+/// implementation, explicit ones included, so Count, IsSynchronized and CopyTo are exactly ReadOnlyCollection's, with its
+/// validation, exceptions and parameter names.
 /// </remarks>
 internal sealed class SharedReadOnlyCollection<T> : ReadOnlyCollection<T>, ICollection
 {
@@ -26,11 +27,5 @@ internal sealed class SharedReadOnlyCollection<T> : ReadOnlyCollection<T>, IColl
     {
     }
 
-    int ICollection.Count => Count;
-
-    bool ICollection.IsSynchronized => false;
-
     object ICollection.SyncRoot => this;
-
-    void ICollection.CopyTo(Array array, int index) => ((ICollection)Items).CopyTo(array, index);
 }
