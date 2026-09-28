@@ -1688,6 +1688,16 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   `GetEnabledLibraryEntries()`, which is `Current.Entries`: on defaults, what a surviving state row enables, or
   nothing. `LibrarySelectionInUseTests` pins both guarantees through the real library service and post-processor,
   and the callers by source.
+- **A Save can write its dictionary and snippet rows with fewer statements, never different ones** (off by
+  default). `PerfFlags.ReuseSaveCommands` (DATA-A-03) prepares one DELETE, INSERT and UPDATE per save (and per
+  `AddRange`, `SeedIfEmpty` and `DisableUnmodifiedEntries`) and rebinds them, same statements, order and
+  parameter types. `PerfFlags.DictionaryDiffSave` (DATA-O-07, on the same reused commands) also leaves out a
+  dictionary UPDATE only when the row it names already holds exactly what it would write: the stored bytes and
+  storage class of both texts and the stored integers of both flags, compared with what binding the entry
+  writes, so a flag stored as 2 is still rewritten as 1. Rows are compared as the save changes them (an id
+  listed twice ends with its last entry), and an id the inventory does not hold is always written, since a row
+  inserted earlier in the same save may carry it. `SaveCommandsEquivalenceTests` runs twin databases each way,
+  today's path the oracle, over those counterexamples and a seeded random corpus, failure codes included.
 
 ## Dictionary libraries: order and precedence (read before touching library order)
 

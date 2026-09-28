@@ -53,7 +53,17 @@ public sealed class SettingsRepository : ISettingsRepository
     private long _aiCleanupSavedThrough;
     private long _microphoneSavedThrough;
 
-    public SettingsRepository(ScribeDatabase database) => _database = database;
+    // How a whole Save writes the dictionary and snippet rows it carries (DATA-A-03 and DATA-O-07); today's command per
+    // row unless ReuseSaveCommands or DictionaryDiffSave is on.
+    private readonly DictionaryRepository.SaveCommands _dictionarySaveCommands;
+    private readonly bool _reuseSnippetCommands;
+
+    public SettingsRepository(ScribeDatabase database, Diagnostics.PerfFlags? flags = null)
+    {
+        _database = database;
+        _dictionarySaveCommands = DictionaryRepository.SaveCommandsFor(flags);
+        _reuseSnippetCommands = flags?.IsOn(Diagnostics.PerfFlags.ReuseSaveCommands) == true;
+    }
 
     /// <summary>
     /// Test seam: runs where a whole-document save and a checked change meet, with the step's connection and
@@ -354,12 +364,12 @@ public sealed class SettingsRepository : ISettingsRepository
 
             if (dictionaryEntries is not null)
             {
-                DictionaryRepository.SaveAll(connection, transaction, dictionaryEntries);
+                DictionaryRepository.SaveAll(connection, transaction, dictionaryEntries, _dictionarySaveCommands);
             }
 
             if (snippets is not null)
             {
-                SnippetRepository.SaveAll(connection, transaction, snippets);
+                SnippetRepository.SaveAll(connection, transaction, snippets, _reuseSnippetCommands);
             }
 
             if (libraries is not null)

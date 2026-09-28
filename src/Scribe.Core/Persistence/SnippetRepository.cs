@@ -7,8 +7,13 @@ namespace Scribe.Core.Persistence;
 public sealed class SnippetRepository : ISnippetRepository
 {
     private readonly ScribeDatabase _database;
+    private readonly bool _reuseCommands;
 
-    public SnippetRepository(ScribeDatabase database) => _database = database;
+    public SnippetRepository(ScribeDatabase database, Diagnostics.PerfFlags? flags = null)
+    {
+        _database = database;
+        _reuseCommands = flags?.IsOn(Diagnostics.PerfFlags.ReuseSaveCommands) == true;
+    }
 
     public IReadOnlyList<Snippet> GetAll() => Query(enabledOnly: false);
 
@@ -44,16 +49,22 @@ public sealed class SnippetRepository : ISnippetRepository
         using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
-        SaveAll(connection, transaction, snippets);
+        SaveAll(connection, transaction, snippets, _reuseCommands);
         transaction.Commit();
     }
 
     internal static void SaveAll(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        IReadOnlyList<Snippet> snippets)
+        IReadOnlyList<Snippet> snippets,
+        bool reuseCommands = false)
     {
         ArgumentNullException.ThrowIfNull(snippets);
+        if (reuseCommands)
+        {
+            SaveAllReusingCommands(connection, transaction, snippets);
+            return;
+        }
 
         // Delete first so a phrase can move from a deleted row to a new one within one save
         // without tripping the unique index (same pattern as DictionaryRepository.SaveAll).
@@ -108,5 +119,86 @@ public sealed class SnippetRepository : ISnippetRepository
             command.ExecuteNonQuery();
         }
 
+    }
+
+    // SaveAll with one prepared DELETE, INSERT and UPDATE rebound per row (DATA-A-03,
+    // Diagnostics.PerfFlags.ReuseSaveCommands): the same statements, in the same order, with the same parameter types.
+    private static void SaveAllReusingCommands(
+        SqliteConnection connection, SqliteTransaction transaction, IReadOnlyList<Snippet> snippets)
+    {
+        // Delete first so a phrase can move from a deleted row to a new one within one save
+        // without tripping the unique index (same pattern as DictionaryRepository.SaveAll).
+        var keptIds = snippets.Where(s => s.Id != 0).Select(s => s.Id).ToHashSet();
+        var toDelete = new List<long>();
+        using (var read = connection.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = "SELECT id FROM snippets;";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                if (!keptIds.Contains(id))
+                {
+                    toDelete.Add(id);
+                }
+            }
+        }
+
+        if (toDelete.Count > 0)
+        {
+            using var delete = connection.CreateCommand();
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM snippets WHERE id = $id;";
+            var deleteId = delete.Parameters.Add("$id", SqliteType.Integer);
+            foreach (var id in toDelete)
+            {
+                deleteId.Value = id;
+                delete.ExecuteNonQuery();
+            }
+        }
+
+        using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText =
+            """
+            INSERT INTO snippets (phrase, template, enabled)
+            VALUES ($phrase, $template, $enabled);
+            """;
+        var insertPhrase = insert.Parameters.Add("$phrase", SqliteType.Text);
+        var insertTemplate = insert.Parameters.Add("$template", SqliteType.Text);
+        var insertEnabled = insert.Parameters.Add("$enabled", SqliteType.Integer);
+
+        using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText =
+            """
+            UPDATE snippets
+            SET phrase = $phrase, template = $template, enabled = $enabled
+            WHERE id = $id;
+            """;
+        var updatePhrase = update.Parameters.Add("$phrase", SqliteType.Text);
+        var updateTemplate = update.Parameters.Add("$template", SqliteType.Text);
+        var updateEnabled = update.Parameters.Add("$enabled", SqliteType.Integer);
+        var updateId = update.Parameters.Add("$id", SqliteType.Integer);
+
+        foreach (var snippet in snippets)
+        {
+            if (snippet.Id == 0)
+            {
+                insertPhrase.Value = snippet.Phrase;
+                insertTemplate.Value = snippet.Template;
+                insertEnabled.Value = snippet.Enabled ? 1 : 0;
+                insert.ExecuteNonQuery();
+            }
+            else
+            {
+                updatePhrase.Value = snippet.Phrase;
+                updateTemplate.Value = snippet.Template;
+                updateEnabled.Value = snippet.Enabled ? 1 : 0;
+                updateId.Value = snippet.Id;
+                update.ExecuteNonQuery();
+            }
+        }
     }
 }

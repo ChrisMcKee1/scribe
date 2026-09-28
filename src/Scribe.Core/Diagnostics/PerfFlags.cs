@@ -36,6 +36,7 @@ public sealed class PerfFlags
         DataLayerWarmUp,
         DeduplicateOverlayMeter,
         DeferSettingsPageData,
+        DictionaryDiffSave,
         ForcedIdleGc,
         HistoryStageTiming,
         HookPriorityAboveNormal,
@@ -47,6 +48,7 @@ public sealed class PerfFlags
         OverlappedIntegrityCheck,
         PillBeforeTray,
         PreciseLocalTypingSettle,
+        ReuseSaveCommands,
         ReuseStatusComposition,
         ServiceLocalHookProbe,
         SkipVelopackWhenPackaged,
@@ -72,6 +74,7 @@ public sealed class PerfFlags
     public const string DataLayerWarmUp = nameof(DataLayerWarmUp);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
+    public const string DictionaryDiffSave = nameof(DictionaryDiffSave);
     public const string ForcedIdleGc = nameof(ForcedIdleGc);
     public const string HistoryStageTiming = nameof(HistoryStageTiming);
     public const string HookPriorityAboveNormal = nameof(HookPriorityAboveNormal);
@@ -83,6 +86,7 @@ public sealed class PerfFlags
     public const string OverlappedIntegrityCheck = nameof(OverlappedIntegrityCheck);
     public const string PillBeforeTray = nameof(PillBeforeTray);
     public const string PreciseLocalTypingSettle = nameof(PreciseLocalTypingSettle);
+    public const string ReuseSaveCommands = nameof(ReuseSaveCommands);
     public const string ReuseStatusComposition = nameof(ReuseStatusComposition);
     public const string ServiceLocalHookProbe = nameof(ServiceLocalHookProbe);
     public const string SkipVelopackWhenPackaged = nameof(SkipVelopackWhenPackaged);
