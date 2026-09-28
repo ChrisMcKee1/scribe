@@ -261,6 +261,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _microphonesLoading;
     private int _deviceListGeneration;
 
+    /// <summary>
+    /// Writes the diagnostics zip on a worker when <see cref="PerfFlags.BackgroundDiagnosticsExport"/> is on; the app's one
+    /// owner, so quit can wait for it and a second request is refused.
+    /// </summary>
+    public DiagnosticsExport? DiagnosticsExport { get; init; }
+
     public SettingsWindow(
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
@@ -3521,6 +3527,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private void AboutSaveDiagnostics_Click(object sender, RoutedEventArgs e)
     {
+        // DATA-O-09: with the flag on the zip is written on a worker; off, the handler below is unchanged.
+        if (DiagnosticsExport is { } export && _perfFlags.IsOn(PerfFlags.BackgroundDiagnosticsExport))
+        {
+            SaveDiagnosticsInBackground(export);
+            return;
+        }
+
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Save Scribe diagnostics",
@@ -3557,6 +3570,105 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TryLog(ex, "Could not write the diagnostics bundle.");
             ShowInfo("Couldn't save diagnostics. Choose another location or try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
+    }
+
+    /// <summary>
+    /// "Save diagnostics..." with the zip written on a worker (<see cref="PerfFlags.BackgroundDiagnosticsExport"/>). The
+    /// dialog and the report are made here on the dispatcher, as before; <see cref="Scribe.Core.Diagnostics.DiagnosticsExport"/>
+    /// writes the same zip and logs its outcome, so a result that lands after this window closed goes only to the log. Both
+    /// buttons stay disabled while it is written, and a request while another export runs is refused.
+    /// </summary>
+    private async void SaveDiagnosticsInBackground(DiagnosticsExport export)
+    {
+        try
+        {
+            if (export.IsRunning)
+            {
+                ShowInfo(DiagnosticsStillSaving, Wpf.Ui.Controls.InfoBarSeverity.Informational);
+                return;
+            }
+
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save Scribe diagnostics",
+                Filter = "Zip archive (*.zip)|*.zip",
+                DefaultExt = ".zip",
+                FileName = DiagnosticsBundle.SuggestedFileName(DateTimeOffset.Now),
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                OverwritePrompt = true,
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            string report;
+            try
+            {
+                report = _diagnostics?.ComposeReport()
+                    ?? "Environment details were unavailable when this bundle was created.";
+            }
+            catch (Exception ex)
+            {
+                TryLog(ex, "Could not write the diagnostics bundle.");
+                ShowInfo("Couldn't save diagnostics. Choose another location or try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
+                return;
+            }
+
+            DiagnosticsExportResult outcome;
+            SetSaveDiagnosticsEnabled(false);
+            try
+            {
+                outcome = await export.RunAsync(_paths.LogsDir, dialog.FileName, report, DateOnly.FromDateTime(DateTime.Now));
+            }
+            catch (Exception)
+            {
+                // The export logged the failure by its shape.
+                if (!_closed)
+                {
+                    ShowInfo("Couldn't save diagnostics. Choose another location or try again.", Wpf.Ui.Controls.InfoBarSeverity.Error);
+                }
+
+                return;
+            }
+            finally
+            {
+                if (!_closed)
+                {
+                    SetSaveDiagnosticsEnabled(true);
+                }
+            }
+
+            if (_closed)
+            {
+                return;
+            }
+
+            if (outcome.WasRefused)
+            {
+                ShowInfo(DiagnosticsStillSaving, Wpf.Ui.Controls.InfoBarSeverity.Informational);
+                return;
+            }
+
+            var result = outcome.Bundle;
+            ShowInfo(result.LogFileCount == 0
+                ? $"Saved {System.IO.Path.GetFileName(result.Path)}, but no log files were found to include."
+                : $"Saved {System.IO.Path.GetFileName(result.Path)} with {result.LogFileCount} day(s) of logs " +
+                  $"({result.Bytes / 1024.0:F0} KB). Open it and read report.txt before sharing.");
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Showing the diagnostics bundle's result failed.");
+        }
+    }
+
+    private const string DiagnosticsStillSaving = "Scribe is still saving diagnostics. Try again when it has finished.";
+
+    private void SetSaveDiagnosticsEnabled(bool enabled)
+    {
+        DiagnosticsSaveBundleButton.IsEnabled = enabled;
+        AboutSaveBundleButton.IsEnabled = enabled;
     }
 
     // Opens the containing folder rather than selecting scribe.db. Selecting a file invites

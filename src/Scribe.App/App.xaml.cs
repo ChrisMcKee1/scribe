@@ -56,6 +56,9 @@ public partial class App : Application
     // How long quitting waits for a tray settings change already on its way to the database.
     private static readonly TimeSpan SettingsWriteDrainTimeout = TimeSpan.FromSeconds(2);
 
+    // How long quitting waits for a diagnostics zip Settings is still writing on a worker (DATA-O-09).
+    private static readonly TimeSpan DiagnosticsExportDrainTimeout = TimeSpan.FromSeconds(10);
+
     private Mutex? _singleInstanceMutex;
     private EventWaitHandle? _showSettingsSignal;
     private MemoryMappedFile? _showSettingsPayload;
@@ -194,6 +197,10 @@ public partial class App : Application
         builder.Services.AddSingleton<AzureCliInstaller>();
         builder.Services.AddSingleton<StartupRegistration>();
         builder.Services.AddSingleton<SessionDiagnostics>();
+
+        // Settings' "Save diagnostics..." writes its zip through this one owner when BackgroundDiagnosticsExport is on, so
+        // quit can wait for it (DATA-O-09).
+        builder.Services.AddSingleton<DiagnosticsExport>();
 
         // Every dictation's vocabulary is built by the publisher from the library vocabulary's source, which AddScribeCore
         // registers: the library service (DictionaryLibraryService) is the one ILibraryVocabularySource, and AI cleanup
@@ -1895,7 +1902,10 @@ public partial class App : Application
                 services.GetRequiredService<SessionDiagnostics>(),
                 services.GetRequiredService<HistoryDeletionNotifier>(),
                 perfFlags: services.GetRequiredService<PerfFlags>(),
-                openStages: openStages);
+                openStages: openStages)
+            {
+                DiagnosticsExport = services.GetRequiredService<DiagnosticsExport>(),
+            };
             openStages?.Mark("ctor");
             _settingsWindow.Closed += (_, _) =>
             {
@@ -2583,6 +2593,19 @@ public partial class App : Application
             new("tray icon", () => _tray?.Dispose()),
             new("text scale", () => _textScale?.Dispose()),
             new("theme watcher", DisposeThemeWatcher),
+
+            // A diagnostics zip Settings is still writing on a worker (BackgroundDiagnosticsExport) gets a bounded time to
+            // finish and log its outcome while the logger is still up. With the flag off none can be running.
+            new("diagnostics export", () =>
+            {
+                if (_host?.Services.GetService<DiagnosticsExport>() is { } export &&
+                    !export.WaitForIdle(DiagnosticsExportDrainTimeout))
+                {
+                    _appLog?.LogWarning(
+                        "A diagnostics bundle was still being written after {Seconds} s at exit; the file may be incomplete.",
+                        DiagnosticsExportDrainTimeout.TotalSeconds);
+                }
+            }),
             new("drain settings writes", () =>
             {
                 if (_settingsWrites is { } writes && !writes.WaitForIdle(SettingsWriteDrainTimeout))

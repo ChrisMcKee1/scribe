@@ -776,7 +776,12 @@ matter are intermittent and hardware‑specific.
 - **Users export logs from Settings > Diagnostics > "Save diagnostics..."** (also offered on About) (`DiagnosticsBundle`), which
   writes the retained logs, redacted as described above, plus `report.txt` (what is inside, and the
   recognized formats with their version ranges and replacement counts) to a zip wherever they choose.
-  Never add `scribe.db` to that bundle: it holds every dictation and the saved API keys.
+  Never add `scribe.db` to that bundle: it holds every dictation and the saved API keys. With
+  `PerfFlags.BackgroundDiagnosticsExport` (DATA-O-09, off by default) the window still shows the dialog
+  and builds the report on the dispatcher, then `DiagnosticsExport` writes the same zip through
+  `DiagnosticsBundle.Create` on a worker, one at a time (a second request is refused, never joined), and
+  logs its outcome by shape itself, so a result that lands after the window closed reaches only the log.
+  Both "Save diagnostics..." buttons stay disabled while it runs, and quit waits up to 10 s for it.
 
 ## What the recogniser is NOT (measured, 0.3.11)
 
@@ -953,6 +958,8 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   gate plus its final checkpoint, and up to 10 s for a device open still in progress when the capture
   service is disposed), plus a native decode chunk or model load already running. After that open wait,
   stopping the capture it opened ends in NAudio's disposal, which joins the capture thread with no bound.
+  With `PerfFlags.BackgroundDiagnosticsExport` on, a diagnostics zip still being written adds up to 10 s,
+  before the settings-write drain.
 
 ## Hotkey hook threading (read before touching the hook)
 

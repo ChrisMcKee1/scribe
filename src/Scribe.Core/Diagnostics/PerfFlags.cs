@@ -25,6 +25,7 @@ public sealed class PerfFlags
     [
         AppendOnlyLog,
         AsyncDeviceList,
+        BackgroundDiagnosticsExport,
         BatchCleanupSelectionCounts,
         BoundedDiagnosticsReads,
         CachedRowSearchText,
@@ -56,6 +57,7 @@ public sealed class PerfFlags
     // for the old behaviour, brings back when on), is on the implementation that reads it.
     public const string AppendOnlyLog = nameof(AppendOnlyLog);
     public const string AsyncDeviceList = nameof(AsyncDeviceList);
+    public const string BackgroundDiagnosticsExport = nameof(BackgroundDiagnosticsExport);
     public const string BatchCleanupSelectionCounts = nameof(BatchCleanupSelectionCounts);
     public const string BoundedDiagnosticsReads = nameof(BoundedDiagnosticsReads);
     public const string CachedRowSearchText = nameof(CachedRowSearchText);
