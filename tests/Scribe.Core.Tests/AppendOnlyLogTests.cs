@@ -161,6 +161,18 @@ public sealed class AppendOnlyLogTests : IDisposable
             overlay,
             StringComparison.Ordinal);
         Assert.Contains("AppendOnlyFile.LaunchArgument", Source("src", "Scribe.Overlay", "Logging", "OverlayLog.cs"), StringComparison.Ordinal);
+
+        // Where this tree has built the overlay, every output of this build (the app's informational version) declares it.
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var bin = Path.Combine(RepositoryRoot(), "src", "Scribe.Overlay", "bin");
+        var outputs = Directory.Exists(bin) ? Directory.GetFiles(bin, "Scribe.Overlay.dll", SearchOption.AllDirectories) : [];
+        foreach (var payload in outputs.Select(output => AppendOnlyLogMode.ReadHelperPayload(Path.ChangeExtension(output, ".exe"))))
+        {
+            if (payload.InformationalVersion == appVersion)
+            {
+                Assert.True(payload.DeclaresCapability);
+            }
+        }
     }
 
     // ---- The switch retires the writes of the other way (DATA-IMPL-A-01) ---------------------------------------------
