@@ -142,12 +142,14 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                 ? replacements.ToArray()
                 : null;
 
+        // Each snippet template's pass adds its count to the seam itself: capturing the local counter would grow this
+        // lambda's closure, which every call allocates, by one field.
         var canonicalSnippets = snippetApplications.Select(application =>
         {
             var canonical = ApplySinglePass(
                 application.Replacement,
                 Candidates(rules, application.Replacement, UseMatcherPrefilter, out var snippetRuns));
-            regexRuns += snippetRuns;
+            Interlocked.Add(ref _regexRuns, snippetRuns);
             return application with { Length = canonical.Length, Replacement = canonical };
         });
         AddLocatedReplacements(output, canonicalSnippets, replacements, replaceOverlaps: true);
