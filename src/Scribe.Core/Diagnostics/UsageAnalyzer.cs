@@ -220,6 +220,13 @@ public static partial class UsageAnalyzer
     }
 
     /// <summary>What one term count did: the work each of 0.5.1's usage counting changes exists to cut, for its tests.</summary>
+    /// <remarks>
+    /// Counted on the shipping path whatever the flags, which is not free: with the flags off the counts are locals and this
+    /// struct, so they allocate nothing; each call does one add per known term, one check per phrase, one increment per
+    /// phrase regex run, one add per dictation the dense aggregation takes or per owner list the sparse one reaches, and one
+    /// read of the observer. With <see cref="PerfFlags.SparseUsageAggregation"/> on, its per-call index object holds one more
+    /// long.
+    /// </remarks>
     /// <param name="PhraseRegexesBuilt">Phrase regexes built: every phrase's, unless <see cref="PerfFlags.UsageTermIndex"/> is on.</param>
     /// <param name="PhraseRegexRuns">
     /// Phrase regexes run over a dictation: every phrase for every dictation, unless <see cref="PerfFlags.UsageTermIndex"/>
@@ -331,7 +338,8 @@ public static partial class UsageAnalyzer
         // Each form's owners: a form belongs to every term that lists it, each term listing it once (its forms are distinct).
         var sparse = counting.SparseAggregation ? new SparseTermCounts(known.ConvertAll(term => term.Forms)) : null;
 
-        // The work counts (UsageWork) are plain sums; a dictation the dense loop aggregates adds all its probes at once.
+        // The work counts (UsageWork, whose remarks give their cost) are plain sums; a dictation the dense loop aggregates
+        // adds all its probes at once.
         long phraseRegexRuns = 0;
         long denseFormProbes = 0;
         var formsPerDictation = 0;

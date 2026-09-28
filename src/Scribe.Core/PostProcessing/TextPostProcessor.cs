@@ -63,8 +63,9 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     /// <summary>
     /// Test seam: how many dictionary rules' regular expressions this post-processor's passes have run, the work
-    /// <see cref="PerfFlags.MatcherPrefilter"/> exists to cut. A pass counts in a local, one increment per rule that ran, and
-    /// each call adds the count with one interlocked add (a snippet template's pass adds its own), never one per rule.
+    /// <see cref="PerfFlags.MatcherPrefilter"/> exists to cut. It is counted on the shipping path whatever the flags, which is
+    /// not free: no added per-call allocation in the measured workloads; one increment per rule run and one interlocked add
+    /// per call (and one more for each snippet template's pass). The processor holds one more long for it.
     /// </summary>
     internal long RegexRuns => Interlocked.Read(ref _regexRuns);
 

@@ -523,7 +523,10 @@ post-processor runs (`TextPostProcessor.RegexRuns`, `The_post_processor_runs_onl
 and the form lookups, owners reached and phrase regexes run by one Usage page load, `UsageReport.Build` with the flags,
 observed through `UsageAnalyzer.ObserveWork` (an AsyncLocal, so tests running in parallel never see each other's counts;
 `The_usage_page_s_report_does_the_counting_work_its_flags_choose`). Switching an optimization off in the code, or dropping
-the flags on the way to it, fails a work test.
+the flags on the way to it, fails a work test. The seams run on the shipping path whatever the flags and are not free: in
+the dictionary pass, no added per-call allocation in the measured workloads; one increment per rule run and one interlocked
+add per call. In the usage counts, no allocation with the flags off; each page load does one add per known term, one check
+per phrase, one increment per phrase regex run, one add per dictation or owner list, and one AsyncLocal read.
 
 The changes proven by an oracle need no flag: the phrase regexes built without `Compiled`
 (`UsageAnalyzerTests.Cheap_path_matches_legacy_terms_for_seeded_histories`,
