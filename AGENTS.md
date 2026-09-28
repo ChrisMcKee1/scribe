@@ -453,7 +453,8 @@ desktop in use. The strict classifier tests have no window or clipboard; real-ta
 ```
 Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools)
   src/Scribe.Core/                  services + domain (UNIT-TESTABLE, no UI)
-    Audio/ Vad/ Transcription/      capture → 16 kHz mono (pooled capture buffer), Silero VAD, Parakeet ASR
+    Audio/ Vad/ Transcription/      capture → 16 kHz mono (pooled capture buffer and conversion scratch, bounded reads),
+                                    Silero VAD, Parakeet ASR
                                     (TranscriptionChunker plans long-capture seams)
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
                                     Local storage policy and janitor; the admission point every outbound
@@ -577,6 +578,10 @@ back into the code-behind; that is a recurring smell.
   before moving, damaging, copying or deleting it, call `DatabasePools.Release(new AppPaths(root))` (or
   `TempDatabaseFolder.ReleasePooledConnections()`) from `StorageTestSupport`, which clears only the pool
   keyed by `ScribeDatabase.BuildFileConnectionString` for that file.
+- **Never put a lone surrogate in a theory's string row:** xUnit hands rows through UTF-8 and the test receives U+FFFD.
+  Build such strings in the test body, or pass an index into a table.
+- **An exact allocation count can fail while dynamic PGO's instrumented tier runs;** warm across tier-up, and assert a
+  bound or `AllocationMeasurement.AssertZero` on a difference.
 - **Every string a person reads uses the Settings glossary's words.** `GlossarySourceTests` reads every
   C# string literal in `src` (regular, verbatim, interpolated and raw, with interpolation holes dropped as
   code) and every XAML text attribute and element text. It fails on a word the glossary retires: hotkey
@@ -2724,7 +2729,9 @@ mark. Changing it means changing every one of these together:
   icon, and commit its output. `src/Scribe.App/Assets/scribe.ico` keeps every frame it had byte for byte and gains 20 and
   40 px frames; it is also the executable, installer and shortcut icon.
 - All four icons are **embedded resources** (`Scribe.App.Assets.*.ico`) loaded by `Tray/TrayIcons.cs`, so an upgrade
-  replaces them atomically with the executable and can never leave stale artwork beside the new binary.
+  replaces them atomically with the executable and can never leave stale artwork beside the new binary. Each state keeps
+  one template icon, never handed out, and every state change makes a fresh icon over its bytes, so the 97 to 117 KB .ico
+  is not copied (a Large Object Heap array) on each change.
 - **`TrayIcons` loads the frame for the notification area's real size**: `GetSystemMetricsForDpi(SM_CXSMICON, dpi)` at
   the primary monitor's effective DPI, instead of handing the shell the 64 px frame to scale down. `TrayIconHost` sets
   the icon again when that size changes (`SystemEvents.DisplaySettingsChanged` and `UserPreferenceChanged`). The
@@ -2965,10 +2972,12 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
   no failure, and its log line is a shape.
 - A vocabulary can be republished at the same library generation (a restoration after a hold-back, a lock clearing after
   a fresh start, an adoption used in memory): the publisher rebuilds on every `Changed` from a fresh `Current`, and
-  nothing may cache vocabulary, rules, a glossary or an agent by generation. While libraries are held back, dictation runs
-  on the personal dictionary alone. The source is the library service itself (`DictionaryLibraryService`), which
-  `AddScribeCore` registers as the one `ILibraryVocabularySource`; its first read at startup publishes, which asks the
-  publisher for one more build right after the first.
+  nothing may cache vocabulary, rules, a glossary or an agent by generation. The post-processor reuses a compiled rule,
+  and the cleanup service an admitted prompt, only for identical content (a rule's spoken form, written form and
+  whole-word flag; a prompt's guardrail, writing style and glossary text), never by generation number. While libraries
+  are held back, dictation runs on the personal dictionary alone. The source is the library service itself
+  (`DictionaryLibraryService`), which `AddScribeCore` registers as the one `ILibraryVocabularySource`; its first read at
+  startup publishes, which asks the publisher for one more build right after the first.
 
 ## Git workflow
 
