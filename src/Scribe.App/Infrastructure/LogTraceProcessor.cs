@@ -23,39 +23,9 @@ internal sealed class LogTraceProcessor : BaseProcessor<Activity>
     private readonly ILogger _log;
 
     public LogTraceProcessor(ILoggerFactory loggerFactory) =>
-        _log = loggerFactory.CreateLogger("Scribe.Trace");
+        _log = loggerFactory.CreateLogger(TraceLogBridge.Category);
 
-    public override void OnEnd(Activity activity)
-    {
-        // OnEnd runs inside Activity.Stop on the dictation path, so the bridge must never fail the span
-        // it is describing.
-        try
-        {
-            var span = TraceTagPolicy.FormatSpan(activity.OperationName, activity.TagObjects, activity.Duration);
-
-            // Surface error spans (e.g. a partial SendInput) at Warning so they're easy to spot.
-            if (activity.Status == ActivityStatusCode.Error)
-            {
-                TraceLogMessages.TraceWarning(_log, span, TraceTagPolicy.FormatStatusDetail(activity.StatusDescription));
-            }
-            else
-            {
-                TraceLogMessages.TraceInformation(_log, span);
-            }
-        }
-        catch (Exception)
-        {
-            // Diagnostics are best-effort.
-        }
-    }
-}
-
-
-internal static partial class TraceLogMessages
-{
-    [LoggerMessage(EventId = 4100, Level = LogLevel.Warning, Message = "trace {Span}{Detail}")]
-    public static partial void TraceWarning(ILogger logger, string span, string detail);
-
-    [LoggerMessage(EventId = 4101, Level = LogLevel.Information, Message = "trace {Span}")]
-    public static partial void TraceInformation(ILogger logger, string span);
+    // OnEnd runs inside Activity.Stop on the dictation path, so the bridge must never fail the span it is describing;
+    // TraceLogBridge.Write never throws. The same method writes the lines of TraceLogListener, the path without the SDK.
+    public override void OnEnd(Activity activity) => TraceLogBridge.Write(_log, activity);
 }

@@ -42,6 +42,7 @@ public sealed class PerfFlags
         IncrementalWordPackRows,
         InputTimings,
         LeanFooterRefresh,
+        LightTraceBridge,
         PillBeforeTray,
         PreciseLocalTypingSettle,
         ReuseStatusComposition,
@@ -75,6 +76,7 @@ public sealed class PerfFlags
     public const string IncrementalWordPackRows = nameof(IncrementalWordPackRows);
     public const string InputTimings = nameof(InputTimings);
     public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
+    public const string LightTraceBridge = nameof(LightTraceBridge);
     public const string PillBeforeTray = nameof(PillBeforeTray);
     public const string PreciseLocalTypingSettle = nameof(PreciseLocalTypingSettle);
     public const string ReuseStatusComposition = nameof(ReuseStatusComposition);

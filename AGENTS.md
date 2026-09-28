@@ -665,6 +665,18 @@ cause of one.**
   or an app name) are shown, a wrong-shaped value shows as `(omitted)`, and unknown tags are counted as
   `omitted_tags=N`, never rendered. Every `SetTag`/`AddTag` key must be a `ScribeTelemetry` constant
   with a policy entry; `TelemetrySourceContractTests` scans the source and fails otherwise.
+- **Spans can reach the log without the OpenTelemetry SDK** (DATA-O-03, `PerfFlags.LightTraceBridge`,
+  off by default). With the flag on and nothing configuring OpenTelemetry (no setting named `OTEL_*` in
+  the environment or the host's configuration, no `OTEL_DIAGNOSTICS.json` in the working or app folder),
+  `AddScribeTelemetry` registers `TraceLogListener` instead of the SDK: an `ActivityListener` that
+  decides exactly as OpenTelemetry 1.18.0 does with its default ParentBased(AlwaysOn) sampler
+  (`TraceLogBridge.Sample`, which reads `options.TraceId` as the SDK does, because that read gives a
+  root its trace id) and writes the same lines through the same `TraceLogBridge.Write` that
+  `LogTraceProcessor` now calls. It also skips the SDK's self-diagnostics worker, which polls for that
+  file every 10 s for the whole session. Any `OTEL_*` setting keeps the SDK, so the exporter, its
+  configuration and `TraceTagScrubProcessor` never change. `TraceLogBridgeTests` holds the listener to
+  the real SDK scenario by scenario, which is why the test project references the `OpenTelemetry`
+  package at its central version.
 - **Historical leak redaction.** `HistoricalLogRedaction` and `LogLineRedactor` replace sensitive
   values in exactly the templates listed in `HistoricalLogRedaction.KnownFormats`, each anchored to its
   category and message template: in the diagnostics bundle copy, once in place in past days' files

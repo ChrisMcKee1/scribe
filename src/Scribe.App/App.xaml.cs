@@ -215,7 +215,7 @@ public partial class App : Application
         // takes it through its constructor as the admission point for every outbound request.
         builder.Services.AddSingleton<VocabularyPublisher>();
 
-        builder.Services.AddScribeTelemetry();
+        builder.Services.AddScribeTelemetry(perfFlags, builder.Configuration);
         builder.Logging.ClearProviders();
         // Held in a static so Settings can report whether logging is ACTUALLY working rather
         // than displaying the folder it was asked to use. A packaged build was found writing
