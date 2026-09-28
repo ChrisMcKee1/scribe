@@ -48,13 +48,18 @@ for the current tree or a shipping build; normal builds measure both current fla
 
 ## Language probes
 
-The `Lang*` classes measure 0.5.1's language changes. What their tables do not show comes from
+The `Lang*` classes measure 0.5.1's language changes. Two facts their tables do not show come from
 `--lang-probe`, which runs in its own process at the priority it was started with:
 
 ```powershell
 # What each matcher case processes: input rows, the rules they compile to, and both texts' lengths.
 # InputRows counts rows, not rules, and each text is cut at a word at or before MaxCharacters.
 dotnet run -c Release --project tools/Scribe.Benchmarks -- --lang-probe matcher-dimensions
+
+# The adoption plan's first call in a fresh process, and three more: time and thread-allocated bytes.
+# Under ColdStart, BenchmarkDotNet's Allocated column comes from a later, warm run, so run this in
+# several fresh processes per arm instead.
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --lang-probe adoption-first-call eager
 ```
 
 ## Which architecture actually ran

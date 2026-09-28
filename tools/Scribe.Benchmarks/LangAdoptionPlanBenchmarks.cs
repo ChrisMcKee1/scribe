@@ -9,6 +9,8 @@ namespace Scribe.Benchmarks;
 /// LANG-O-02): the planner that folded the shipped values eagerly, copied as the old arm, against the lazy one. Warm, the old arm pays
 /// the fold of 1,549 shipped forms; cold, in a fresh process, its first fold also builds SpokenFormFold's tables, which
 /// the lazy plan never touches (run cold with <c>--strategy ColdStart --launchCount 5 --warmupCount 0 --iterationCount 1</c>).
+/// Under ColdStart only the time is the first call's: the Allocated column comes from the memory diagnoser's separate, warm
+/// run. The first plan's own allocation is <c>--lang-probe adoption-first-call eager|lazy</c>'s (<see cref="LangProbe"/>).
 /// </summary>
 [MemoryDiagnoser]
 [BenchmarkCategory("Libraries")]
