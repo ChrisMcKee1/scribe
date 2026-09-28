@@ -21,11 +21,15 @@ public enum AppendOnlyLaunchDecision
     /// <summary>The helper's informational version is not the app's, or either is unknown.</summary>
     OtherBuild,
 
-    /// <summary>A write the other way was still in progress when the helper was due to start, so both keep their way.</summary>
+    /// <summary>
+    /// A write the other way was still in progress when the helper was due to start: the app keeps its way, and the helper
+    /// starts only if it can append that way (<see cref="SharedLogLaunch"/>).
+    /// </summary>
     WriteInProgress,
 
     /// <summary>
-    /// A helper the app ended had not been seen to exit, so this launch keeps the pair's way and a later one tries again.
+    /// A helper the app ended had not been seen to exit: the app keeps its way, the helper starts only if it can append that
+    /// way, and a later launch tries again.
     /// </summary>
     PreviousHelperRunning,
 
@@ -34,6 +38,22 @@ public enum AppendOnlyLaunchDecision
     /// session's first launch.
     /// </summary>
     StaysOldWay,
+}
+
+/// <summary>What a launch does with the helper (<see cref="AppendOnlyLogMode.DecideForLaunch"/>): one way for the pair, or none.</summary>
+public enum SharedLogLaunch
+{
+    /// <summary>Start the helper without <see cref="AppendOnlyLogMode.LaunchArgument"/>: both append the old way.</summary>
+    OldWay,
+
+    /// <summary>Start the helper with <see cref="AppendOnlyLogMode.LaunchArgument"/>: both append only.</summary>
+    AppendOnly,
+
+    /// <summary>
+    /// Start no helper now: the app appends only and could not move back in time, and this helper cannot append only, so
+    /// no way can be agreed yet. The client counts it as a failed launch; the next attempt decides again.
+    /// </summary>
+    Refused,
 }
 
 /// <summary>
@@ -54,16 +74,24 @@ public enum AppendOnlyLaunchDecision
 /// app's log writer makes announces itself and then reads the mode (<see cref="BeginWrite"/>), and the switch sets the
 /// mode and then waits for the writes of the other way to end: with full fences on both sides, either the switch sees
 /// the write and waits for its close, or the write sees the new mode. The writer never waits and takes no lock; only the
-/// launcher waits, bounded, and when a write of the other way does not end in time the pair keeps the way that write is
+/// launcher waits, bounded, and when a write of the other way does not end in time the app keeps the way that write is
 /// part of.
 /// </para>
 /// <para>
 /// A helper the app ended writes too until it has exited, so the way never changes while one may still be running
-/// (<see cref="RetiringHelpers"/>, waited for on the launcher's thread, bounded): that launch keeps the pair's way, and a
-/// later one tries again. And the pair becomes append-only only at a session's first launch, before any helper has run:
-/// once it has run the old way, whether a write held the switch back, a helper could not append, or the app moved the pair
-/// back, it stays so until the app starts again (<see cref="AppendOnlyLaunchDecision.StaysOldWay"/>). While the app
-/// appends only, a helper that does not qualify moves both back to the old way.
+/// (<see cref="RetiringHelpers"/>, waited for on the launcher's thread, bounded). And the pair becomes append-only only at a
+/// session's first launch, before any helper has run: once it has run the old way, whether a write held the switch back, a
+/// helper could not append, or the app moved the pair back, it stays so until the app starts again
+/// (<see cref="AppendOnlyLaunchDecision.StaysOldWay"/>). While the app appends only, a helper that does not qualify (another
+/// build, no capability entry, or a payload that cannot be read) moves both back to the old way.
+/// </para>
+/// <para>
+/// Every launch ends with one way for the pair or no launch (<see cref="SharedLogLaunch"/>). When the way cannot change in
+/// time, the app keeps its way and the helper starts only if it can append that way: every helper can append the old way,
+/// and a helper that declares the capability can append only; one that cannot append the app's way is not started
+/// (<see cref="SharedLogLaunch.Refused"/>): the client counts that as a failed launch, so its cooldown and its one retry
+/// decide when the next launch decides again, reading the payload afresh. The app's way is never forced to agree with a
+/// helper, and no helper is ever started to append another way than the app.
 /// </para>
 /// </remarks>
 public sealed class AppendOnlyLogMode
@@ -153,12 +181,14 @@ public sealed class AppendOnlyLogMode
 
     /// <summary>
     /// Decides the pair's way for a launch of the helper at <paramref name="overlayExecutable"/>, applies it to this app's
-    /// writer, and returns whether the launch passes <see cref="LaunchArgument"/>. Called on the launching thread before the
-    /// helper starts. The way changes only once every helper in <paramref name="endedHelpers"/> (the ones the app ended,
-    /// none when null) has been seen to exit and every write of the other way has ended, each waited for here, bounded by
-    /// <see cref="RetirementTimeout"/> and <see cref="HandoverTimeout"/>; nothing is waited for when the way stays.
+    /// writer, and returns what the launch does: start the helper the old way, start it with <see cref="LaunchArgument"/>,
+    /// or start none (<see cref="SharedLogLaunch.Refused"/>). Called on the launching thread before the helper starts. The
+    /// way changes only once every helper in <paramref name="endedHelpers"/> (the ones the app ended, none when null) has been
+    /// seen to exit and every write of the other way has ended, each waited for here, bounded by
+    /// <see cref="RetirementTimeout"/> and <see cref="HandoverTimeout"/>; nothing is waited for when the way stays. The
+    /// helper's payload is read again on every call.
     /// </summary>
-    public bool DecideForLaunch(string? overlayExecutable, RetiringHelpers? endedHelpers = null)
+    public SharedLogLaunch DecideForLaunch(string? overlayExecutable, RetiringHelpers? endedHelpers = null)
     {
         var payload = ReadHelperPayload(overlayExecutable);
         var wanted = Decide(Requested, AppVersion, payload);
@@ -193,9 +223,14 @@ public sealed class AppendOnlyLogMode
 
         Volatile.Write(ref _lastDecision, (int)decision);
 
-        // A helper appends only while the app does and only if it follows the argument: one that does not qualify but
-        // declares it (another build) is launched while the move back to the old way is held back, and keeps the pair whole.
-        return appendOnly && payload.DeclaresCapability;
+        // Every helper can append the old way. While the app appends only, a helper that declares the capability does too
+        // (another build, launched while the move back is held back); one that cannot is not started.
+        if (!appendOnly)
+        {
+            return SharedLogLaunch.OldWay;
+        }
+
+        return payload.DeclaresCapability ? SharedLogLaunch.AppendOnly : SharedLogLaunch.Refused;
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Overlay;
 using Scribe.Overlay.Logging;
 
 namespace Scribe.Core.Tests;
@@ -102,7 +103,9 @@ public sealed class AppendOnlyLogTests : IDisposable
         var helper = SyntheticHelper(name, version is null ? appVersion : version.Length == 0 ? null : version, key, value);
         var mode = new AppendOnlyLogMode(requested: true, appVersion);
 
-        Assert.Equal(decision == AppendOnlyLaunchDecision.AppendOnly, mode.DecideForLaunch(helper));
+        Assert.Equal(
+            decision == AppendOnlyLaunchDecision.AppendOnly ? SharedLogLaunch.AppendOnly : SharedLogLaunch.OldWay,
+            mode.DecideForLaunch(helper));
         Assert.Equal(decision, mode.LastDecision);
         Assert.Equal(decision == AppendOnlyLaunchDecision.AppendOnly, mode.AppendOnly);
     }
@@ -124,40 +127,44 @@ public sealed class AppendOnlyLogTests : IDisposable
         Assert.False(mode.AppendOnly);
         Assert.Equal(AppendOnlyLaunchDecision.None, mode.LastDecision);
 
-        Assert.True(mode.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.AppendOnly, mode.DecideForLaunch(capable));
         Assert.True(mode.AppendOnly);
 
         // A relaunch decides again, for whatever helper output it starts: the same one keeps the pair appending only.
-        Assert.True(mode.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.AppendOnly, mode.DecideForLaunch(capable));
         Assert.Equal(AppendOnlyLaunchDecision.AppendOnly, mode.LastDecision);
 
         // One that cannot append moves both back to the old way (no helper was ended here, so none is waited for) ...
-        Assert.False(mode.DecideForLaunch(legacySameVersion));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(legacySameVersion));
         Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, mode.LastDecision);
         Assert.False(mode.AppendOnly);
 
         // ... for the rest of the session: a capable helper afterwards is launched the old way too.
-        Assert.False(mode.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable));
         Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
-        Assert.False(mode.DecideForLaunch(anotherBuild));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(anotherBuild));
         Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, mode.LastDecision);
-        Assert.False(mode.DecideForLaunch(unreadable));
-        Assert.False(mode.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(unreadable));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable));
         Assert.False(mode.AppendOnly);
 
-        // The first launch of a session that finds a helper which cannot append starts the session the old way.
+        // A session whose first launch finds a helper that cannot append starts the old way, and stays so; an unreadable
+        // payload is one that cannot.
         var staleFirst = new AppendOnlyLogMode(requested: true, appVersion);
-        Assert.False(staleFirst.DecideForLaunch(legacySameVersion));
-        Assert.False(staleFirst.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.OldWay, staleFirst.DecideForLaunch(legacySameVersion));
+        Assert.Equal(SharedLogLaunch.OldWay, staleFirst.DecideForLaunch(capable));
         Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, staleFirst.LastDecision);
+        var unreadableFirst = new AppendOnlyLogMode(requested: true, appVersion);
+        Assert.Equal(SharedLogLaunch.OldWay, unreadableFirst.DecideForLaunch(unreadable));
+        Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, unreadableFirst.LastDecision);
 
         var off = new AppendOnlyLogMode(requested: false, appVersion);
-        Assert.False(off.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.OldWay, off.DecideForLaunch(capable));
         Assert.Equal(AppendOnlyLaunchDecision.NotRequested, off.LastDecision);
         Assert.False(off.AppendOnly);
 
         var noVersion = new AppendOnlyLogMode(requested: true, appVersion: null);
-        Assert.False(noVersion.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.OldWay, noVersion.DecideForLaunch(capable));
         Assert.Equal(AppendOnlyLaunchDecision.OtherBuild, noVersion.LastDecision);
         Assert.False(noVersion.AppendOnly);
     }
@@ -241,10 +248,11 @@ public sealed class AppendOnlyLogTests : IDisposable
         var held = Task.Run(() => file.Write([Record("held app line")]));
         Assert.True(opened.Wait(TimeSpan.FromSeconds(30)));
 
-        // Bounded: the launcher gives up after the handover timeout and both keep the old way.
+        // Bounded: the launcher gives up after the handover timeout and both keep the old way, the helper launched so too.
         Assert.False(mode.SwitchTo(true, TimeSpan.FromMilliseconds(100)));
         Assert.False(mode.AppendOnly);
-        Assert.False(await Task.Run(() => mode.DecideForLaunch(capable)).WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(
+            SharedLogLaunch.OldWay, await Task.Run(() => mode.DecideForLaunch(capable)).WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.Equal(AppendOnlyLaunchDecision.WriteInProgress, mode.LastDecision);
         Assert.False(mode.AppendOnly);
 
@@ -252,11 +260,11 @@ public sealed class AppendOnlyLogTests : IDisposable
         // helper launched then may still be writing it. The next start of the app decides afresh.
         release.Set();
         await held.WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.False(mode.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable));
         Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
         Assert.False(mode.AppendOnly);
         var nextStart = new AppendOnlyLogMode(requested: true, appVersion);
-        Assert.True(nextStart.DecideForLaunch(capable));
+        Assert.Equal(SharedLogLaunch.AppendOnly, nextStart.DecideForLaunch(capable));
         Assert.True(nextStart.AppendOnly);
     }
 
@@ -390,7 +398,7 @@ public sealed class AppendOnlyLogTests : IDisposable
         using (var appWrite = mode.BeginWrite())
         {
             Assert.False(appWrite.AppendOnly);
-            Assert.False(mode.DecideForLaunch(capable, ended));
+            Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable, ended));
             Assert.Equal(AppendOnlyLaunchDecision.WriteInProgress, mode.LastDecision);
         }
 
@@ -403,7 +411,7 @@ public sealed class AppendOnlyLogTests : IDisposable
             // The pair stays the old way, so no line is appended another way for that write to land over, and nothing
             // waits for the ended helper, which is kept.
             var clock = Stopwatch.StartNew();
-            Assert.False(mode.DecideForLaunch(capable, ended));
+            Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable, ended));
             clock.Stop();
             Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
             Assert.False(mode.AppendOnly);
@@ -422,90 +430,236 @@ public sealed class AppendOnlyLogTests : IDisposable
         }
 
         // Once it has exited it is released, and the session still keeps the old way.
-        Assert.False(mode.DecideForLaunch(capable, ended));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable, ended));
         Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
         Assert.Equal(0, ended.Count);
     }
 
+    // ---- A launch starts its helper with the pair's one way, or not at all (DATA-IMPL-A-01) --------------------------
+
     [Fact]
-    public void A_helper_that_cannot_append_moves_the_pair_back_only_once_the_ended_helper_has_exited()
+    public void A_helper_that_cannot_append_only_is_not_started_while_an_ended_helper_runs_and_the_retry_starts_it_the_old_way()
     {
         var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
         var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
         var legacy = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "legacy");
-        var capableOtherBuild = SyntheticHelper(
-            "capable-other-build", "0.0.1+ffffff", AppendOnlyLogMode.CapabilityKey, AppendOnlyLogMode.CapabilityValue);
         var mode = new AppendOnlyLogMode(requested: true, appVersion);
-        var ended = new RetiringHelpers();
         var file = OpenFile(mode);
-        Assert.True(mode.DecideForLaunch(capable, ended));
+        using var launcher = new Launcher(mode);
+        Assert.Equal(OverlayCommandAction.Launch, launcher.Show(nowMs: 0));
+        Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capable, nowMs: 0));
         file.Write([Record("existing")]);
 
-        using var oldHelper = StartFixture("hold-stdout");
-        try
+        // That helper is ended but has not exited, and its last line, appended only, is still to land. The next one
+        // selected cannot append only, so the app would move back, which waits for the ended helper, bounded.
+        var endedHelper = launcher.EndLast();
+        using (var endedHelperWrite = AppendOnlyFile.Open(DayPath))
         {
-            // That helper is ended but has not exited, and its last line, appended only, is still to land.
-            ended.Add(oldHelper);
-            using (var oldHelperWrite = AppendOnlyFile.Open(DayPath))
+            Assert.Equal(OverlayCommandAction.Launch, launcher.Show(nowMs: 100));
+            var clock = Stopwatch.StartNew();
+            Assert.Equal(SharedLogLaunch.Refused, launcher.Launch(legacy, nowMs: 100));
+            clock.Stop();
+            Assert.Equal(AppendOnlyLaunchDecision.PreviousHelperRunning, mode.LastDecision);
+            Assert.InRange(
+                clock.Elapsed, AppendOnlyLogMode.RetirementTimeout - TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(20));
+
+            // No helper was started and the app kept its way. The lifetime counts a failed launch: a 1 s cooldown, during
+            // which the recording's next command is held, and its one retry at the cooldown's end.
+            Assert.Equal(1, launcher.Starts);
+            Assert.True(mode.AppendOnly);
+            Assert.Equal(1, launcher.Lifetime.ConsecutiveFailures);
+            Assert.Equal(1_000, launcher.Lifetime.LastCooldownMs);
+            Assert.Equal(1_100, launcher.Lifetime.RetryDueAtMs);
+            Assert.Equal(OverlayCommandAction.Hold, launcher.Show(nowMs: 600));
+            Assert.Equal(1_100, launcher.Lifetime.RetryDueAtMs);
+            Assert.Equal(1, launcher.Starts);
+
+            // So the ended helper's line, landing between the app's open and its write, is appended after, not over.
+            file.BetweenOpenAndWrite = () =>
             {
-                // A helper that cannot append would move the pair back; the app waits for the ended one, bounded, then
-                // keeps appending only for this launch, and a helper of another build that declares the capability appends
-                // only too.
-                var clock = Stopwatch.StartNew();
-                Assert.False(mode.DecideForLaunch(legacy, ended));
-                clock.Stop();
-                Assert.Equal(AppendOnlyLaunchDecision.PreviousHelperRunning, mode.LastDecision);
-                Assert.True(mode.AppendOnly);
-                Assert.InRange(clock.Elapsed, AppendOnlyLogMode.RetirementTimeout - TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(20));
-                Assert.True(mode.DecideForLaunch(capableOtherBuild, ended));
-                Assert.Equal(AppendOnlyLaunchDecision.PreviousHelperRunning, mode.LastDecision);
-                Assert.Equal(1, ended.Count);
-
-                // So the ended helper's line, landing between the app's open and its write, is appended after, not over.
-                file.BetweenOpenAndWrite = () =>
-                {
-                    file.BetweenOpenAndWrite = null;
-                    oldHelperWrite.Write("old helper line\r\n"u8);
-                };
-                file.Write([Record("app line")]);
-            }
-
-            Assert.Equal(["existing", "old helper line", "app line"], File.ReadAllLines(DayPath));
-        }
-        finally
-        {
-            EndFixture(oldHelper);
+                file.BetweenOpenAndWrite = null;
+                endedHelperWrite.Write("old helper line\r\n"u8);
+            };
+            file.Write([Record("app line")]);
         }
 
-        // Seen to exit: the next launch of a helper that cannot append moves both back, for the rest of the session.
-        Assert.False(mode.DecideForLaunch(legacy, ended));
+        Assert.Equal(["existing", "old helper line", "app line"], File.ReadAllLines(DayPath));
+
+        // Once it has exited, the retry at the cooldown's end moves the pair back and starts the helper, both the old way,
+        // and the launch resets the backoff.
+        EndFixture(endedHelper);
+        Assert.Equal(OverlayDueWork.None, launcher.Lifetime.TakeDueWork(1_099, OverlayDemand.Sustained, OverlayHelperObservation.Absent));
+        Assert.Equal(OverlayDueWork.Retry, launcher.Lifetime.TakeDueWork(1_100, OverlayDemand.Sustained, OverlayHelperObservation.Absent));
+        Assert.Equal(SharedLogLaunch.OldWay, launcher.Launch(legacy, nowMs: 1_100));
         Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, mode.LastDecision);
         Assert.False(mode.AppendOnly);
-        Assert.Equal(0, ended.Count);
-        Assert.False(mode.DecideForLaunch(capable, ended));
-        Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
+        Assert.Equal(2, launcher.Starts);
+        Assert.Equal(0, launcher.Lifetime.ConsecutiveFailures);
+        Assert.Null(launcher.Lifetime.RetryDueAtMs);
+        Assert.Equal(0, launcher.Ended.Count);
+        launcher.AssertEveryStartAgreed();
     }
 
     [Fact]
-    public void A_move_back_held_back_by_an_app_write_appending_only_keeps_the_pair_appending_only()
+    public void A_helper_that_cannot_append_only_is_not_started_while_an_app_write_holds_the_move_back_and_the_retry_starts_it_the_old_way()
     {
         var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
         var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
         var legacy = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "legacy");
         var mode = new AppendOnlyLogMode(requested: true, appVersion);
-        Assert.True(mode.DecideForLaunch(capable, new RetiringHelpers()));
+        using var launcher = new Launcher(mode);
+        Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capable, nowMs: 0));
+        EndFixture(launcher.EndLast());
 
+        // No ended helper is left running; the app's own write, appending only, holds the move back past its bound, at the
+        // launch and again at its retry, which doubles the cooldown.
         using (var appWrite = mode.BeginWrite())
         {
             Assert.True(appWrite.AppendOnly);
-            Assert.False(mode.DecideForLaunch(legacy, new RetiringHelpers()));
+            Assert.Equal(SharedLogLaunch.Refused, launcher.Launch(legacy, nowMs: 100));
             Assert.Equal(AppendOnlyLaunchDecision.WriteInProgress, mode.LastDecision);
+            Assert.Equal(1, launcher.Starts);
             Assert.True(mode.AppendOnly);
+            Assert.Equal(0, launcher.Ended.Count);
+            Assert.Equal(1_100, launcher.Lifetime.RetryDueAtMs);
+
+            Assert.Equal(OverlayDueWork.Retry, launcher.Lifetime.TakeDueWork(1_100, OverlayDemand.Sustained, OverlayHelperObservation.Absent));
+            Assert.Equal(SharedLogLaunch.Refused, launcher.Launch(legacy, nowMs: 1_100));
+            Assert.Equal(AppendOnlyLaunchDecision.WriteInProgress, mode.LastDecision);
+            Assert.Equal(1, launcher.Starts);
+            Assert.True(mode.AppendOnly);
+            Assert.Equal(2, launcher.Lifetime.ConsecutiveFailures);
+            Assert.Equal(2_000, launcher.Lifetime.LastCooldownMs);
+            Assert.Equal(3_100, launcher.Lifetime.RetryDueAtMs);
         }
 
-        Assert.False(mode.DecideForLaunch(legacy, new RetiringHelpers()));
+        // That write has ended: the retry moves the pair back and starts the helper, both the old way.
+        Assert.Equal(OverlayDueWork.None, launcher.Lifetime.TakeDueWork(3_099, OverlayDemand.Sustained, OverlayHelperObservation.Absent));
+        Assert.Equal(OverlayDueWork.Retry, launcher.Lifetime.TakeDueWork(3_100, OverlayDemand.Sustained, OverlayHelperObservation.Absent));
+        Assert.Equal(SharedLogLaunch.OldWay, launcher.Launch(legacy, nowMs: 3_100));
         Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, mode.LastDecision);
         Assert.False(mode.AppendOnly);
+        Assert.Equal(2, launcher.Starts);
+        Assert.Equal(0, launcher.Lifetime.ConsecutiveFailures);
+        launcher.AssertEveryStartAgreed();
+    }
+
+    [Fact]
+    public void A_helper_whose_capability_cannot_be_read_is_not_started_while_the_move_back_is_held_and_the_retry_reads_it_again()
+    {
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
+        var mode = new AppendOnlyLogMode(requested: true, appVersion);
+        using var launcher = new Launcher(mode);
+        Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capable, nowMs: 0));
+        EndFixture(launcher.EndLast());
+
+        using (var appWrite = mode.BeginWrite())
+        {
+            // The same payload, held unreadable for a moment: it cannot append only as far as anyone can tell, so the app
+            // would move back, and its own write holds that past its bound.
+            using (new FileStream(Path.ChangeExtension(capable, ".dll"), FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                Assert.Equal(HelperPayload.Unreadable, AppendOnlyLogMode.ReadHelperPayload(capable));
+                Assert.Equal(SharedLogLaunch.Refused, launcher.Launch(capable, nowMs: 100));
+                Assert.Equal(AppendOnlyLaunchDecision.WriteInProgress, mode.LastDecision);
+                Assert.Equal(1, launcher.Starts);
+                Assert.True(mode.AppendOnly);
+            }
+
+            // Readable again: the retry reads the capability afresh and starts the same helper appending only, as the app
+            // does, with nothing to move and so nothing to wait for.
+            Assert.Equal(OverlayDueWork.Retry, launcher.Lifetime.TakeDueWork(1_100, OverlayDemand.Sustained, OverlayHelperObservation.Absent));
+            Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capable, nowMs: 1_100));
+            Assert.Equal(AppendOnlyLaunchDecision.AppendOnly, mode.LastDecision);
+            Assert.True(appWrite.AppendOnly);
+        }
+
+        Assert.Equal(2, launcher.Starts);
+        Assert.True(mode.AppendOnly);
+        Assert.Equal(0, launcher.Lifetime.ConsecutiveFailures);
+        launcher.AssertEveryStartAgreed();
+    }
+
+    [Fact]
+    public void A_helper_whose_capability_cannot_be_read_moves_an_append_only_pair_back_when_nothing_holds_it()
+    {
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
+        var mode = new AppendOnlyLogMode(requested: true, appVersion);
+        using var launcher = new Launcher(mode);
+        Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capable, nowMs: 0));
+        EndFixture(launcher.EndLast());
+
+        // A payload that cannot be read cannot append only: nothing holds the move back, so both go the old way.
+        using (new FileStream(Path.ChangeExtension(capable, ".dll"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Equal(SharedLogLaunch.OldWay, launcher.Launch(capable, nowMs: 100));
+            Assert.Equal(AppendOnlyLaunchDecision.HelperNotCapable, mode.LastDecision);
+            Assert.False(mode.AppendOnly);
+        }
+
+        // Readable again, it is still launched the old way: the session has run it.
+        EndFixture(launcher.EndLast());
+        Assert.Equal(SharedLogLaunch.OldWay, launcher.Launch(capable, nowMs: 200));
+        Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
+        Assert.Equal(3, launcher.Starts);
+        Assert.Equal(0, launcher.Lifetime.ConsecutiveFailures);
+        launcher.AssertEveryStartAgreed();
+    }
+
+    [Fact]
+    public void A_capable_helper_of_another_build_is_started_appending_only_while_the_move_back_is_held()
+    {
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
+        var capableOtherBuild = SyntheticHelper(
+            "capable-other-build", "0.0.1+ffffff", AppendOnlyLogMode.CapabilityKey, AppendOnlyLogMode.CapabilityValue);
+        var mode = new AppendOnlyLogMode(requested: true, appVersion);
+        using var launcher = new Launcher(mode);
+        Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capable, nowMs: 0));
+        launcher.EndLast();
+
+        // It would move the pair back, which waits for the ended helper; it can append the app's way, so it starts so.
+        Assert.Equal(SharedLogLaunch.AppendOnly, launcher.Launch(capableOtherBuild, nowMs: 100));
+        Assert.Equal(AppendOnlyLaunchDecision.PreviousHelperRunning, mode.LastDecision);
+        Assert.True(mode.AppendOnly);
+        Assert.Equal(2, launcher.Starts);
+        Assert.Equal(0, launcher.Lifetime.ConsecutiveFailures);
+        launcher.AssertEveryStartAgreed();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void With_the_flag_off_every_launch_starts_its_helper_the_old_way_and_nothing_is_decided_or_kept(bool withMode)
+    {
+        var appVersion = AppendOnlyLogMode.ReadVersion(typeof(PerfFlags).Assembly.Location);
+        var capable = HelperBuiltFrom(CapableHelperAssembly(), "capable");
+        var legacy = HelperBuiltFrom(typeof(PerfFlags).Assembly.Location, "legacy");
+        var unreadable = Path.Combine(_folder.FullName, "unreadable", "Scribe.Overlay.exe");
+
+        // No mode at all, as the app has with the flag off, or one not requested, which the client treats the same.
+        var off = withMode ? new AppendOnlyLogMode(requested: false, appVersion) : null;
+        using var launcher = new Launcher(off);
+        foreach (var (helper, nowMs) in new[] { (capable, 0L), (legacy, 100L), (unreadable, 200L), (capable, 300L) })
+        {
+            Assert.Equal(SharedLogLaunch.OldWay, launcher.Launch(helper, nowMs));
+            launcher.EndLast();
+        }
+
+        // Nothing decided, so nothing waited for; every ended helper let go at once; every launch a success.
+        Assert.Equal(0, launcher.Decisions);
+        Assert.Equal(4, launcher.Starts);
+        Assert.Equal(0, launcher.Ended.Count);
+        Assert.Equal(0, launcher.Lifetime.ConsecutiveFailures);
+        if (off is not null)
+        {
+            Assert.Equal(AppendOnlyLaunchDecision.None, off.LastDecision);
+            Assert.False(off.AppendOnly);
+        }
+
+        launcher.AssertEveryStartAgreed();
     }
 
     [Fact]
@@ -519,7 +673,7 @@ public sealed class AppendOnlyLogTests : IDisposable
         try
         {
             ended.Add(oldHelper);
-            Assert.False(mode.DecideForLaunch(capable, ended));
+            Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable, ended));
             Assert.Equal(AppendOnlyLaunchDecision.PreviousHelperRunning, mode.LastDecision);
             Assert.False(mode.AppendOnly);
         }
@@ -528,7 +682,7 @@ public sealed class AppendOnlyLogTests : IDisposable
             EndFixture(oldHelper);
         }
 
-        Assert.False(mode.DecideForLaunch(capable, ended));
+        Assert.Equal(SharedLogLaunch.OldWay, mode.DecideForLaunch(capable, ended));
         Assert.Equal(AppendOnlyLaunchDecision.StaysOldWay, mode.LastDecision);
         Assert.Equal(0, ended.Count);
     }
@@ -893,19 +1047,43 @@ public sealed class AppendOnlyLogTests : IDisposable
 
         Assert.Single(Regex.Matches(client, Regex.Escape("Process.Start(")));
         Assert.Single(Regex.Matches(client, Regex.Escape("LaunchArgument")));
+        Assert.Single(Regex.Matches(client, Regex.Escape("DecideForLaunch(")));
         string[] order =
         [
             "private LaunchOutcome TryLaunch()",
             "psi.ArgumentList.Add(\"--parent\");",
             "if (_appendMode is { Requested: true } appendMode)",
-            "var appendOnly = appendMode.DecideForLaunch(_exePath, _endedHelpers);",
-            "if (appendOnly)",
+            "var launch = appendMode.DecideForLaunch(_exePath, _endedHelpers);",
+            "if (launch == Scribe.Core.Diagnostics.SharedLogLaunch.Refused)",
+            "return LaunchOutcome.Refused;",
+            "if (launch == Scribe.Core.Diagnostics.SharedLogLaunch.AppendOnly)",
             "psi.ArgumentList.Add(Scribe.Core.Diagnostics.AppendOnlyLogMode.LaunchArgument);",
             "Process.Start(psi)",
         ];
         var positions = order.Select(text => client.IndexOf(text, StringComparison.Ordinal)).ToArray();
         Assert.DoesNotContain(-1, positions);
         Assert.Equal(positions.Order(), positions);
+    }
+
+    [Fact]
+    public void A_refused_launch_starts_nothing_and_reaches_the_lifetime_as_a_failed_launch()
+    {
+        var client = Source("src", "Scribe.App", "Overlay", "OverlayProcessClient.cs");
+
+        // The one launch path: every outcome of TryLaunch goes to the lifetime through ToResult, which counts a refusal as a
+        // failed launch (the cooldown, its doubling and the one retry of the Launcher below), and nothing else starts a helper.
+        Assert.Single(Regex.Matches(client, Regex.Escape("outcome = TryLaunch();")));
+        Assert.Single(Regex.Matches(client, Regex.Escape("_lifetime.OnLaunchCompleted(")));
+        Assert.Contains(
+            "_lifetime.OnLaunchCompleted(Environment.TickCount64, ToResult(outcome), _desired.Demand);", client, StringComparison.Ordinal);
+        Assert.Contains("LaunchOutcome.Refused => OverlayLaunchResult.Failed,", client, StringComparison.Ordinal);
+
+        // Refused before anything of a helper exists: no process, no exit watch, no pipe, no replay.
+        var refused = client.IndexOf("return LaunchOutcome.Refused;", StringComparison.Ordinal);
+        foreach (var later in new[] { "Process.Start(psi)", "_process = process;", "new NamedPipeClientStream(", "writer.WriteLine(_desired.ReplayLine);" })
+        {
+            Assert.True(client.IndexOf(later, StringComparison.Ordinal) > refused, later);
+        }
     }
 
     [Fact]
@@ -1021,6 +1199,109 @@ public sealed class AppendOnlyLogTests : IDisposable
         var folder = Directory.CreateDirectory(Path.Combine(_folder.FullName, name));
         File.Copy(assembly, Path.Combine(folder.FullName, "Scribe.Overlay.dll"));
         return Path.Combine(folder.FullName, "Scribe.Overlay.exe");
+    }
+
+    // Whether a helper can no longer write: seen to exit, or released by the ended helpers, which let a helper go only then.
+    private static bool Exited(Process helper)
+    {
+        try
+        {
+            return helper.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    // Stands in for the overlay client's launch (TryLaunch and Launch, pinned by source above; the client has no tests of its
+    // own): the same decision, taken only while the mode is requested; a refusal starts no process and reaches a real
+    // OverlayHelperLifetime as a failed launch, as ToResult hands it on; any other outcome starts a headless fixture of
+    // Scribe.LogAppendChild for the helper, recording the way it was given. Every launch is for a recording pill (a
+    // sustained demand), which is what earns the retry. After every decision it checks the pair's invariant: no helper that
+    // may still write (one not seen to exit, ended or not) appends another way than the app now does.
+    private sealed class Launcher(AppendOnlyLogMode? mode) : IDisposable
+    {
+        private readonly List<(Process Helper, SharedLogLaunch Launch, bool AppAppendOnly)> _started = [];
+
+        internal RetiringHelpers Ended { get; } = new();
+
+        internal OverlayHelperLifetime Lifetime { get; } = new();
+
+        // Helpers started, one per launch not refused.
+        internal int Starts => _started.Count;
+
+        // Launches that asked the mode, which only a requested mode is.
+        internal int Decisions { get; private set; }
+
+        // A recording's state command while no helper runs: the gate launches it, or holds it during a cooldown.
+        internal OverlayCommandAction Show(long nowMs) =>
+            Lifetime.OnStateCommand(
+                nowMs, Lifetime.IssueStamp(), ensureAlive: true, cancelsRetry: false, OverlayDemand.Sustained,
+                OverlayHelperObservation.Absent);
+
+        internal SharedLogLaunch Launch(string helper, long nowMs)
+        {
+            var launch = SharedLogLaunch.OldWay;
+            if (mode is { Requested: true })
+            {
+                Decisions++;
+                launch = mode.DecideForLaunch(helper, Ended);
+            }
+
+            var appAppendOnly = mode?.AppendOnly ?? false;
+            foreach (var running in _started.Where(start => !Exited(start.Helper)))
+            {
+                Assert.Equal(appAppendOnly, running.Launch == SharedLogLaunch.AppendOnly);
+            }
+
+            if (launch == SharedLogLaunch.Refused)
+            {
+                Lifetime.OnLaunchCompleted(nowMs, OverlayLaunchResult.Failed, OverlayDemand.Sustained);
+                return launch;
+            }
+
+            _started.Add((StartFixture("hold-stdout"), launch, appAppendOnly));
+            Lifetime.OnLaunchCompleted(nowMs, OverlayLaunchResult.Launched, OverlayDemand.Sustained);
+            return launch;
+        }
+
+        // KillProcess: while the mode is requested the helper is handed to the ended helpers, and here it is left running,
+        // a helper told to end whose exit has not been seen (the caller ends it with EndFixture when the test says so);
+        // otherwise it is ended and let go at once, as before.
+        internal Process EndLast()
+        {
+            var helper = _started[^1].Helper;
+            if (mode is { Requested: true })
+            {
+                Ended.Add(helper);
+            }
+            else
+            {
+                try
+                {
+                    helper.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+
+            return helper;
+        }
+
+        // Every helper started appended the way the app did when it started.
+        internal void AssertEveryStartAgreed() =>
+            Assert.All(_started, start => Assert.Equal(start.AppAppendOnly, start.Launch == SharedLogLaunch.AppendOnly));
+
+        public void Dispose()
+        {
+            foreach (var start in _started)
+            {
+                EndFixture(start.Helper);
+                start.Helper.Dispose();
+            }
+        }
     }
 
     // ASCII with two-, three- and four-byte characters mixed in, surrogate pairs never split, so a long line crosses the

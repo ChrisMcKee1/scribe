@@ -799,6 +799,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         LaunchOutcome.Launched => OverlayLaunchResult.Launched,
         LaunchOutcome.Abandoned => OverlayLaunchResult.Abandoned,
+
+        // DATA-O-02: no helper started, so the lifetime's cooldown and its one retry decide when the next launch decides again.
+        LaunchOutcome.Refused => OverlayLaunchResult.Failed,
         _ => OverlayLaunchResult.Failed,
     };
 
@@ -848,19 +851,27 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
             // One way of appending to the shared log for the pair (DATA-O-02): decided for this helper and applied to the
             // app's own writer before the helper starts, once the helpers ended before have exited and the app's writes the
-            // other way have ended; the helper appends only when told to here.
+            // other way have ended; the helper appends only when told to here. When no way can be agreed yet, no helper
+            // starts and the launch counts as failed, so the cooldown and the retry decide when to try again.
             if (_appendMode is { Requested: true } appendMode)
             {
-                var appendOnly = appendMode.DecideForLaunch(_exePath, _endedHelpers);
-                if (appendOnly)
+                var launch = appendMode.DecideForLaunch(_exePath, _endedHelpers);
+                if (launch == Scribe.Core.Diagnostics.SharedLogLaunch.Refused)
+                {
+                    TryLog(LogLevel.Information, null,
+                        "Overlay launch refused: the helper cannot append the shared log the app's way yet ({Decision}).",
+                        appendMode.LastDecision);
+                    return LaunchOutcome.Refused;
+                }
+
+                if (launch == Scribe.Core.Diagnostics.SharedLogLaunch.AppendOnly)
                 {
                     psi.ArgumentList.Add(Scribe.Core.Diagnostics.AppendOnlyLogMode.LaunchArgument);
                 }
 
                 TryLog(
-                    appendOnly == appendMode.AppendOnly ? LogLevel.Information : LogLevel.Warning, null,
-                    "Shared log for this overlay launch: helper {Mode}, app {AppMode} ({Decision}).",
-                    appendOnly ? "append-only" : "the old way", appendMode.AppendOnly ? "append-only" : "the old way",
+                    LogLevel.Information, null, "Shared log for this overlay launch: {Mode} ({Decision}).",
+                    launch == Scribe.Core.Diagnostics.SharedLogLaunch.AppendOnly ? "append-only" : "the old way",
                     appendMode.LastDecision);
             }
 
@@ -1285,6 +1296,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Failed,
         ExecutableMissing,
         Abandoned,
+
+        // DATA-O-02: no helper was started because the pair could not agree on one way to append to the shared log yet
+        // (SharedLogLaunch.Refused); the lifetime counts it as a failed launch.
+        Refused,
     }
 
     /// <param name="State">

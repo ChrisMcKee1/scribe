@@ -648,23 +648,32 @@ cause of one.**
   physical write of the app's writer is counted from before its open until after its close
   (`BeginWrite`, two interlocked operations, no lock, no wait), and the launcher, never the writer, the
   hook or the UI thread, waits up to 2 s for the writes of the other way to end; if one does not, the
-  pair keeps its way (`WriteInProgress` in the launch line). A helper the app ended writes until it has
+  app keeps its way (`WriteInProgress` in the launch line). A helper the app ended writes until it has
   exited (a kill only starts its end), so the client keeps each one it ends (`RetiringHelpers`) until its
   exit is seen, and the mode changes only once every one has been: the launcher waits up to 2 s, and past
-  that the launch keeps the pair's way (`PreviousHelperRunning`) and a later one tries again. The pair
+  that the app keeps its way (`PreviousHelperRunning`). The pair
   becomes append-only only at a session's first launch: once it has run the old way (a write held the
   switch back, a helper could not append, or the app moved the pair back) it stays so until the app
-  starts again (`StaysOldWay`). While the app appends only, a helper that does not qualify moves both
-  back. The helper follows only the `--append-only-log`
+  starts again (`StaysOldWay`). While the app appends only, a helper that does not qualify (another build,
+  no capability entry, or a payload that cannot be read) moves both back. Every launch ends in one agreed
+  way or in no launch (`SharedLogLaunch`): when the app keeps its way, a helper that can append that way
+  starts so (any helper the old way; one that declares the capability append-only), and one that cannot
+  is not started (`Refused`). The client counts a refusal as a failed launch (`LaunchOutcome.Refused`,
+  logged with its decision, no process started), so the overlay's cooldown (1 s doubling to 60 s) and its
+  one retry decide when the next launch decides again, reading the payload afresh. While a move back is
+  held the recording indicator therefore does not show: each refused attempt holds the overlay client's
+  command thread for at most 4 s (the two bounds), and once the hold ends the next attempt comes at the
+  end of the cooldown then running, at most 60 s later. The helper follows only the `--append-only-log`
   launch argument, never its environment, and says so in its first line. With the flag off the app has
   no mode at all and both writers open today's way. Append-only, every overlay line, however long, is one
   encoded write; the old way, the overlay writes as UI-3 left it. Unchanged in both modes: the overlay makes its logs folder only when
   its day changes, so a folder deleted mid-day loses its lines until the next day. `AppendOnlyLogTests`
   (two real processes through `tests/Scribe.LogAppendChild`, mixed pairs both ways, the switch while a
   write of the other way is held open, both directions, an ended helper still running with a write in
-  flight, the same payload relaunched after a fallback, capable and legacy helper payloads of one
-  version, renamed and replaced day files, faults) and `DailyLogFileAppendOnlyTests` (every
-  `DailyLogFileTests` case again, appended only) pin it.
+  flight, the same payload relaunched after a fallback, a launch refused while an ended helper runs, an
+  app write holds the move back or the payload cannot be read, each retried once the hold ends, capable
+  and legacy helper payloads of one version, renamed and replaced day files, faults) and
+  `DailyLogFileAppendOnlyTests` (every `DailyLogFileTests` case again, appended only) pin it.
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch
   that kills a process). Route diagnostics in catch blocks through non‑throwing helpers
   (`TryLog`). When in doubt, log *more* lifecycle/state detail, not less.
@@ -2149,7 +2158,8 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
     - A failed launch starts a cooldown of 1 s doubling to 60 s. While it runs nothing relaunches the
       helper; if a recording or processing pill must show, one retry at cooldown end replays only the
       latest state and position. A helper lost within 10 s of launching, judged by its process exit
-      time, counts as a failed launch; a successful launch resets the backoff.
+      time, counts as a failed launch; a successful launch resets the backoff. A launch the shared log's append mode
+      refuses (`PerfFlags.AppendOnlyLog` only; see the Logging mandate) starts no process and counts as a failed launch too.
     - A dictation's outcome keeps the helper while it is on screen: its command passes how long (the hold plus
       the fade out, `PillOutcome.OnScreen`), timed from when its write to the helper returns
       (`OverlayHelperLifetime.OnShown`, after an existing helper's write and a launch's alike): a write can take
