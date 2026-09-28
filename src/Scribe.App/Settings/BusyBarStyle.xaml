@@ -1,0 +1,115 @@
+<!--
+    The busy bars' style while StopInactiveProgress is on: WPF-UI 4.3.0's ProgressBar style
+    (src/Wpf.Ui/Controls/ProgressBar/ProgressBar.xaml, MIT License, Copyright (C) Leszek Pomianowski and WPF UI
+    Contributors), copied whole. The one change is the glow's name: ScribeBusyGlow instead of PART_GlowRect, so
+    ProgressBar's own code never animates it (it detaches its glow animation when the bar hides but never stops it,
+    and WPF keeps asking for frames for it). BusyBarAnimation runs the same sweep on a clock it owns and stops.
+    Re-check this copy against WPF-UI's on every WPF-UI upgrade.
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Style x:Key="ScribeBusyBarStyle" TargetType="{x:Type ProgressBar}">
+        <Setter Property="Foreground" Value="{DynamicResource ProgressBarForeground}" />
+        <Setter Property="Background" Value="{DynamicResource ProgressBarBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ProgressBarBorderBrush}" />
+        <Setter Property="Height" Value="4" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ProgressBar}">
+                    <Grid Name="TemplateRoot" SnapsToDevicePixels="True">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Orientation}" Value="Horizontal">
+                                        <Setter Property="LayoutTransform">
+                                            <Setter.Value>
+                                                <RotateTransform Angle="0" />
+                                            </Setter.Value>
+                                        </Setter>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Orientation}" Value="Vertical">
+                                        <Setter Property="LayoutTransform">
+                                            <Setter.Value>
+                                                <RotateTransform Angle="-90" />
+                                            </Setter.Value>
+                                        </Setter>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Border
+                            Margin="1,1,1,1"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="1.5" />
+                        <Rectangle Name="PART_Track" Margin="1,1,1,1" />
+                        <Border
+                            Name="PART_Indicator"
+                            Margin="1,1,1,1"
+                            HorizontalAlignment="Left"
+                            Background="{TemplateBinding Foreground}"
+                            CornerRadius="2" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsIndeterminate" Value="True">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type ProgressBar}">
+                            <Grid Name="TemplateRoot">
+                                <Grid.Style>
+                                    <Style TargetType="Grid">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Orientation}" Value="Horizontal">
+                                                <Setter Property="LayoutTransform">
+                                                    <Setter.Value>
+                                                        <RotateTransform Angle="0" />
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Orientation}" Value="Vertical">
+                                                <Setter Property="LayoutTransform">
+                                                    <Setter.Value>
+                                                        <RotateTransform Angle="-90" />
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
+                                <Border
+                                    Margin="1,1,1,1"
+                                    Background="{DynamicResource ProgressBarIndeterminateBackground}"
+                                    BorderBrush="{DynamicResource ProgressBarIndeterminateBackground}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="4" />
+                                <Rectangle Name="PART_Track" Margin="1,1,1,1" />
+                                <Decorator
+                                    Name="PART_Indicator"
+                                    Margin="1,1,1,1"
+                                    HorizontalAlignment="Left">
+                                    <Grid Name="Animation" ClipToBounds="True">
+                                        <Border
+                                            Name="ScribeBusyGlow"
+                                            Width="200"
+                                            Margin="0,0,0,0"
+                                            HorizontalAlignment="Left"
+                                            Background="{TemplateBinding Foreground}"
+                                            CornerRadius="2" />
+                                    </Grid>
+                                </Decorator>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+</ResourceDictionary>

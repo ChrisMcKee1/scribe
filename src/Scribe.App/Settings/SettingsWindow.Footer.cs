@@ -1,4 +1,4 @@
-﻿using System.Collections.Specialized;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Automation;
@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
 
@@ -19,6 +20,13 @@ public partial class SettingsWindow
     private bool _imeComposing;
     private SettingsChangeSet _currentChanges = new(new HashSet<SettingsPage>());
 
+    // LeanFooterRefresh: the controls whose typing and selection change nothing Save stores (the search boxes, Try
+    // dictation's box, the navigation rail, the History list, the Dictionary page's tabs and the usage period), so their
+    // events no longer run the whole dirty check; and the row subscriptions made without LINQ iterators or a delegate per
+    // row. Null with the flag off, when every event schedules the check as before.
+    private HashSet<DependencyObject>? _footerIgnoredSources;
+    private PropertyChangedEventHandler? _rowChangedForFooter;
+
     private void InitializeFooterAndClose()
     {
         _footerRefreshTimer.Tick += (_, _) =>
@@ -27,11 +35,28 @@ public partial class SettingsWindow
             RefreshFooterNow();
         };
 
-        AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => ScheduleFooterRefresh()));
-        AddHandler(PasswordBox.PasswordChangedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
-        AddHandler(Selector.SelectionChangedEvent, new SelectionChangedEventHandler((_, _) => ScheduleFooterRefresh()));
-        AddHandler(ToggleButton.CheckedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
-        AddHandler(ToggleButton.UncheckedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+        if (_perfFlags.IsOn(PerfFlags.LeanFooterRefresh))
+        {
+            _footerIgnoredSources =
+            [
+                SettingsSearchBox, DictionarySearchBox, LibrarySearchBox, HistorySearchBox, PlaygroundInput,
+                NavList, HistoryGrid, DictionaryTabs, UsagePeriodBox,
+            ];
+            AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, e) => ScheduleFooterRefreshFor(e)));
+            AddHandler(PasswordBox.PasswordChangedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+            AddHandler(Selector.SelectionChangedEvent, new SelectionChangedEventHandler((_, e) => ScheduleFooterRefreshFor(e)));
+            AddHandler(ToggleButton.CheckedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+            AddHandler(ToggleButton.UncheckedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+        }
+        else
+        {
+            AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => ScheduleFooterRefresh()));
+            AddHandler(PasswordBox.PasswordChangedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+            AddHandler(Selector.SelectionChangedEvent, new SelectionChangedEventHandler((_, _) => ScheduleFooterRefresh()));
+            AddHandler(ToggleButton.CheckedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+            AddHandler(ToggleButton.UncheckedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
+        }
+
         _rows.CollectionChanged += RowsChangedForFooter;
         _snippetRows.CollectionChanged += RowsChangedForFooter;
         _profileRows.CollectionChanged += RowsChangedForFooter;
@@ -46,6 +71,37 @@ public partial class SettingsWindow
 
     private void RowsChangedForFooter(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (_footerIgnoredSources is not null)
+        {
+            // The same subscriptions, in the same order, with one cached handler (a delegate equal to the method group,
+            // so a removal matches exactly as before).
+            var handler = _rowChangedForFooter ??= RowChangedForFooter;
+            if (e.OldItems is { } oldItems)
+            {
+                for (var i = 0; i < oldItems.Count; i++)
+                {
+                    if (oldItems[i] is INotifyPropertyChanged item)
+                    {
+                        item.PropertyChanged -= handler;
+                    }
+                }
+            }
+
+            if (e.NewItems is { } newItems)
+            {
+                for (var i = 0; i < newItems.Count; i++)
+                {
+                    if (newItems[i] is INotifyPropertyChanged item)
+                    {
+                        item.PropertyChanged += handler;
+                    }
+                }
+            }
+
+            ScheduleFooterRefresh();
+            return;
+        }
+
         foreach (var item in e.OldItems?.OfType<INotifyPropertyChanged>() ?? [])
         {
             item.PropertyChanged -= RowChangedForFooter;
@@ -60,6 +116,34 @@ public partial class SettingsWindow
     }
 
     private void RowChangedForFooter(object? sender, PropertyChangedEventArgs e) => ScheduleFooterRefresh();
+
+    // IncrementalWordPackRows: rows put in by one Reset (ReplaceableObservableCollection.ReplaceAll), which names no new
+    // items, watched as an Add per row would have had RowsChangedForFooter watch them (the Reset itself schedules the check).
+    private void WatchRowsForFooter<T>(IReadOnlyList<T> rows)
+        where T : INotifyPropertyChanged
+    {
+        var handler = _rowChangedForFooter ??= RowChangedForFooter;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            rows[i].PropertyChanged += handler;
+        }
+    }
+
+    // LeanFooterRefresh: an event from a control whose value Save never stores schedules nothing. The source as the window
+    // sees it, the element that raised it, and that element's templated parent (the text box inside Find a setting's
+    // suggest box) are each checked against the ignored controls.
+    private void ScheduleFooterRefreshFor(RoutedEventArgs e)
+    {
+        var ignored = _footerIgnoredSources!;
+        if ((e.Source is DependencyObject source && ignored.Contains(source)) ||
+            (e.OriginalSource is DependencyObject original && ignored.Contains(original)) ||
+            ((e.OriginalSource as FrameworkElement)?.TemplatedParent is { } templated && ignored.Contains(templated)))
+        {
+            return;
+        }
+
+        ScheduleFooterRefresh();
+    }
 
     private void ScheduleFooterRefresh()
     {

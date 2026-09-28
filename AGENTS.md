@@ -681,6 +681,14 @@ matter are intermittent and hardware‑specific.
   before the owner is assigned, and the capture thread only stamps it (no lock, no log, no allocation;
   `CaptureTimingDiagnosticsTests` measures the callback). The start line is written before the first packet can be
   known, so it never carries it. Off, no record is made and nothing is timed or logged.
+- **Stage lines, with `StartupStageTiming` on** (0.5.1, off by default). After `Scribe started` the start logs
+  `Startup stages in ms since the process was created: main=N velopack=N app=N ... started=N.` (or `since Main` when
+  Windows' creation time cannot be read), and each Settings window, once its content first renders,
+  `Settings window open N stages in ms since it was asked for: xaml=N ... rendered=N.`: the fixed codes of the marks in
+  `Program.Main`, `App.StartAsync`, `App.OpenSettings` and the Settings constructor, each with whole milliseconds from one
+  anchor (`StageTimeline`, Core), nothing else. The startup marks are taken with the flag off too (one timestamp read
+  each, nothing written); only the flag logs them. A new mark's code must be 1 to 16 lowercase ASCII letters or digits,
+  used once per timeline (`StartupStageTimingSourceTests`).
 - **Retention is bounded and enforced** (`LogRetentionPolicy`): 7 days, 16 MB per day, 64 MB total
   (soft budgets: past its day budget a file takes only warnings and errors, and the total is enforced
   by the sweep). Swept at startup and at each midnight rollover. Today's file is never swept.
@@ -2279,6 +2287,33 @@ Each of these compiled warning-clean and showed only at run time or in a render,
   `RefreshDictionaryStatus` and `RefreshWordPackList`. The `Header` stays the tab's plain name, because UI Automation, Find
   a setting (`SelectDictionarySearchTab`) and `SettingsSearchIndexTests` read it; the selected tab keeps WPF-UI's
   `TabViewItemForegroundSelected`, which the tab's content inherits.
+- **A busy indicator that hides keeps the UI thread working** (0.5.1, `StopInactiveProgress`, off by default). WPF keeps
+  scheduling render passes while any animation clock is running or interactively paused. WPF-UI 4.3.0's indeterminate
+  ProgressRing only pauses its storyboard when it hides (and resumes it when enabled, even while hidden), and WPF's
+  ProgressBar only detaches its glow animation when it hides, which leaves that clock running until a collection; a reload
+  of the ring's tree adds one more running clock. After a status row's spinner or a Dictionary busy bar had been shown,
+  an idle Settings window, open or closed, kept running about 64 render-priority dispatcher operations a second
+  (offscreen probe, render ops counted, not presented frames; UI-thread cycles 57 to 84 megacycles a second, not converted
+  to time, against 0.1 and no render operations with the flag). With the flag, `BusyRingAnimation` and `BusyBarAnimation`
+  (`Settings\BusyAnimation.cs`) animate them only while shown: `IsVisible`, which folds in the busy state, the page, an
+  ancestor, an unloaded tree and a closed window (the decision is `BusyAnimationLifecycle`, Core, tested). Hiding stops
+  and removes the clocks and showing starts them again with no status update; a ring that is shown but disabled keeps
+  WPF-UI's pause. The bars get WPF-UI's own ProgressBar style copied into `Settings\BusyBarStyle.xaml` with the glow
+  renamed, so ProgressBar never animates it, and run ProgressBar's own sweep (`BusyBarSweep`) from the same events on a
+  clock they stop: offscreen renders are pixel-identical to the originals in light, dark and contrast, at 100% and 225%
+  text and 96 and 168 DPI. A new spinner or indeterminate bar must join them (`BusyAnimationSourceTests` fails
+  otherwise), and a WPF-UI upgrade re-checks the style copy against WPF-UI's ProgressBar.xaml.
+- **The Settings window's 0.5.1 performance flags keep their own invariants** (all off by default). With
+  `CoalesceDictionaryStatus` every Your words refresh goes through `QueueDictionaryStatusRefresh` (one posted refresh per
+  burst), `RefreshDictionaryStatusForRowChange` (at once, as a row change always refreshed) or `BatchDictionaryStatus` (a
+  bulk edit: one refresh at its end, before anything selects or scrolls to a new row); a new bulk edit is a batch too.
+  With `LeanFooterRefresh`, text and selection events from the controls Save never reads (the search boxes, Try
+  dictation's box, the rail, the History list, the Dictionary tabs and the usage period) schedule no dirty check, so a
+  control Save starts reading must leave that list, and a new search box should join it (`LeanFooterRefreshSourceTests`);
+  row keys are kept (`DraftRowKeyCache`) until what they are made of changes. With `IncrementalWordPackRows`, rows put in
+  by one Reset (`ReplaceableObservableCollection.ReplaceAll`) name no new items, so the footer is told to watch them
+  (`WatchRowsForFooter`). With `DeferSettingsPageData` the Diagnostics failures and speed figures load when that page first
+  shows, and with `AsyncDeviceList` the microphone picker shows `MicrophoneChoices.Loading` until the list is read.
 
 ## Azure authentication (read before touching credentials)
 

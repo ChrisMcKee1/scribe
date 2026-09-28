@@ -1,8 +1,9 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
 using Wpf.Ui.Controls;
@@ -21,8 +22,13 @@ public partial class DictionaryCleanupWindow : FluentWindow
     private bool _syncingSelectAll;
     private DictionaryCleanupChoice? _choice;
 
-    private DictionaryCleanupWindow(DictionaryUsageReport report)
+    // BatchCleanupSelectionCounts: Select everything sets every row inside its guard and then counts once, so the rows it
+    // changes no longer count every row each (two full counts per row, quadratic in the rows).
+    private readonly bool _batchSelectionCounts;
+
+    private DictionaryCleanupWindow(DictionaryUsageReport report, PerfFlags perfFlags)
     {
+        _batchSelectionCounts = perfFlags.IsOn(PerfFlags.BatchCleanupSelectionCounts);
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
         InitializeComponent();
 
@@ -68,6 +74,11 @@ public partial class DictionaryCleanupWindow : FluentWindow
         {
             row.PropertyChanged += (_, _) =>
             {
+                if (_batchSelectionCounts && _syncingSelectAll)
+                {
+                    return;
+                }
+
                 UpdateButtons();
                 SyncSelectAll();
             };
@@ -81,9 +92,9 @@ public partial class DictionaryCleanupWindow : FluentWindow
     /// Runs the review modally. Returns <see langword="null"/> when the user cancels, so a closed
     /// dialog and an empty selection are never confused.
     /// </summary>
-    public static DictionaryCleanupChoice? Show(Window owner, DictionaryUsageReport report)
+    public static DictionaryCleanupChoice? Show(Window owner, DictionaryUsageReport report, PerfFlags? perfFlags = null)
     {
-        var window = new DictionaryCleanupWindow(report) { Owner = owner };
+        var window = new DictionaryCleanupWindow(report, perfFlags ?? PerfFlags.None) { Owner = owner };
         window.ShowDialog();
         return window._choice;
     }

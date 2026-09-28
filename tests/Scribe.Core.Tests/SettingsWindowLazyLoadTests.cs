@@ -1,44 +1,27 @@
 namespace Scribe.Core.Tests;
 
+/// <summary>
+/// The Settings window's deferred page reads, and the app shell probe that measures them. When the History and Diagnostics
+/// pages read is DeferSettingsPageData's to decide (off: the constructor reads all three, as 0.5.0 did; on: each page reads
+/// when it shows), and <see cref="SettingsPageDataSourceTests"/> pins the constructor and ShowPage; this class pins the
+/// committed-settings refresh and the probe.
+/// </summary>
 public sealed class SettingsWindowLazyLoadTests
 {
     [Fact]
-    public void Settings_constructor_does_not_start_hidden_history_or_diagnostics_reads()
-    {
-        var source = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
-        var constructorTail = Slice(
-            source,
-            "LoadSnippetsAsync();",
-            "_cleanup.StatusChanged += OnCleanupStatusChanged;");
-
-        Assert.DoesNotContain("LoadHistory();", constructorTail, StringComparison.Ordinal);
-        Assert.DoesNotContain("LoadFailures();", constructorTail, StringComparison.Ordinal);
-        Assert.DoesNotContain("LoadPerformanceStats();", constructorTail, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Navigating_to_history_or_diagnostics_starts_the_page_reads()
-    {
-        var source = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
-        var showPage = Slice(source, "internal void ShowPage(SettingsPage page, string? focusName = null)", "if (!string.IsNullOrWhiteSpace(focusName)");
-
-        Assert.Contains("if (page == SettingsPage.History)", showPage, StringComparison.Ordinal);
-        Assert.Contains("LoadHistory();", showPage, StringComparison.Ordinal);
-        Assert.Contains("else if (page == SettingsPage.Diagnostics)", showPage, StringComparison.Ordinal);
-        Assert.Contains("LoadFailures();", showPage, StringComparison.Ordinal);
-        Assert.Contains("LoadPerformanceStats();", showPage, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Committed_settings_change_refreshes_diagnostics_only_when_visible()
+    public void Committed_settings_change_refreshes_speed_figures_as_before_unless_the_deferred_page_has_not_asked()
     {
         var source = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.History.cs"));
         var handler = Slice(source, "private void OnCommittedSettingsChanged()", "private void RefreshHistoryEmptyTextFromCommitted()");
 
         Assert.Contains("RefreshHistoryEmptyTextFromCommitted();", handler, StringComparison.Ordinal);
         Assert.Contains("RefreshUsageInsightAvailability();", handler, StringComparison.Ordinal);
-        Assert.Contains("if (SectionDiagnostics.Visibility == Visibility.Visible)", handler, StringComparison.Ordinal);
+        Assert.Contains(
+            "if (!_perfFlags.IsOn(PerfFlags.DeferSettingsPageData) || _diagnosticsDataRequested)",
+            handler,
+            StringComparison.Ordinal);
         Assert.Contains("LoadPerformanceStats();", handler, StringComparison.Ordinal);
+        Assert.DoesNotContain("SectionDiagnostics.Visibility", handler, StringComparison.Ordinal);
     }
 
     [Fact]

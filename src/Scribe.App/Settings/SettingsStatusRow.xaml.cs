@@ -11,6 +11,7 @@ public partial class SettingsStatusRow : UserControl
 {
     private AiCleanupAction? _primary;
     private AiCleanupAction? _secondary;
+    private BusyRingAnimation? _busyAnimation;
 
     public SettingsStatusRow()
     {
@@ -49,6 +50,14 @@ public partial class SettingsStatusRow : UserControl
         UpdateLayoutMode();
     }
 
+    /// <summary>
+    /// StopInactiveProgress: from now on the busy spinner animates only while it is shown. <see cref="Show"/> is unchanged;
+    /// the spinner's visibility stays the busy state, and the animation follows whether the spinner is actually on screen.
+    /// </summary>
+    internal void UseBusyAnimationLifecycle() => _busyAnimation ??= new BusyRingAnimation(BusyRing);
+
+    /// <summary>The window closed: stop the spinner for good.</summary>
+    internal void CloseBusyAnimation() => _busyAnimation?.Close();
 
     public bool FocusPrimaryButton()
     {

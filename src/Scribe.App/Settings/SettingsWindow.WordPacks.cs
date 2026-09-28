@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
@@ -13,6 +13,7 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
@@ -38,7 +39,7 @@ public partial class SettingsWindow
     private LibraryOrdering? _libraryOrdering;
     private readonly LibrarySearch _librarySearch = LibrarySearch.ForCurrentCulture();
     private readonly LibraryTermSort _libraryTermSort = LibraryTermSort.ForCurrentCulture();
-    private readonly ObservableCollection<LibraryTermRow> _libraryTermRows = new();
+    private readonly ReplaceableObservableCollection<LibraryTermRow> _libraryTermRows = new();
     private DispatcherTimer? _librarySearchTimer;
     private LibrarySearchResult? _librarySearchResult;
     private LibraryTermSortOrder _libraryTermSortOrder = LibraryTermSortOrder.SavedOrder;
@@ -189,6 +190,16 @@ public partial class SettingsWindow
             _updatingLibraryRows = false;
         }
 
+        // IncrementalWordPackRows: the list rows brought up to date in place (no rebuild, no new selection), then the one
+        // detail and term rebuild the old path ran twice (once through the reselection, once here).
+        if (_perfFlags.IsOn(PerfFlags.IncrementalWordPackRows) && TryPatchWordPackList())
+        {
+            RefreshDictionaryStatus();
+            UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
+            ShowWordPackCardPageIfStackedAndOpen();
+            return;
+        }
+
         RefreshWordPackList(_selectedLibraryId);
         RefreshDictionaryStatus();
         UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
@@ -210,7 +221,78 @@ public partial class SettingsWindow
         }
 
         LibraryAiHelpText.Text = WordPackUiText.AiHelp(permitted, _savedAiProvider == CleanupProvider.FoundryLocal);
+
+        // IncrementalWordPackRows: in place, then the detail and term rebuild the old path's reselection ran.
+        if (_perfFlags.IsOn(PerfFlags.IncrementalWordPackRows) && TryPatchWordPackList())
+        {
+            UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
+            ShowWordPackCardPageIfStackedAndOpen();
+            return;
+        }
+
         RefreshWordPackList(_selectedLibraryId);
+    }
+
+    // IncrementalWordPackRows, for a change of one pack's header (its On or AI cleanup box): when the list still shows the
+    // draft's packs in the same order under the same names, sources and term counts, the rows take what a rebuild would give
+    // them (unsaved, on, AI cleanup, the search state) in place, so the list keeps its rows, selection, focus and scroll.
+    // Otherwise, or while a rename is pending (a rebuild's reselection would finish it), nothing changes and the caller
+    // rebuilds. The semantic work (statuses, coverage, glossary) is left to the caller, which still runs it.
+    private bool TryPatchWordPackList()
+    {
+        if (_wordPackWorkspace is null || _renamingLibraryId is not null)
+        {
+            return false;
+        }
+
+        var ordering = _libraryOrdering ??= LibraryOrdering.ForCurrentCulture();
+        var libraries = ordering.Sort(
+                _wordPackWorkspace.Draft.Libraries.Where(l => !l.PendingDelete).Select(l => l.Content),
+                l => l.Name,
+                l => l.Id)
+            .ToList();
+        if (libraries.Count != _libraryRows.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < libraries.Count; i++)
+        {
+            var row = _libraryRows[i];
+            var library = libraries[i];
+            if (!string.Equals(row.Id, library.Id, StringComparison.Ordinal) ||
+                !string.Equals(row.Name, library.Name, StringComparison.Ordinal) ||
+                !string.Equals(row.Category, library.Category, StringComparison.Ordinal) ||
+                row.Terms != library.Rows.Count ||
+                row.BuiltIn != library.BuiltIn ||
+                !string.Equals(row.Source, LibrarySource(library.BuiltIn), StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        // What NewLibraryRow gives each row, set through the rows' own setters, which notify only what changed.
+        _updatingLibraryRows = true;
+        foreach (var row in _libraryRows)
+        {
+            row.Unsaved = _wordPackWorkspace.UnsavedLibraryIds.Contains(row.Id);
+            row.Enabled = _wordPackWorkspace.Draft.LocalState.EnabledIds.Contains(row.Id);
+            row.AiCleanup = _wordPackWorkspace.ShowsAiPermission(row.Id);
+            ApplySearchState(row);
+        }
+
+        _updatingLibraryRows = false;
+        UpdateDictionaryTabSummaries();
+        return true;
+    }
+
+    // What the old path's reselection did after the detail rebuild, for the stacked layout.
+    private void ShowWordPackCardPageIfStackedAndOpen()
+    {
+        if (_wordPackLayout?.SideBySide == false && _wordPackStackedCardOpen)
+        {
+            ShowWordPackCardPage();
+        }
     }
 
     // The enabled set is saved from these rows, so an unloaded list must not be editable: saving it
@@ -1295,13 +1377,32 @@ public partial class SettingsWindow
         rows = _libraryTermSort.Sort(rows, _libraryTermSortOrder);
         var composition = BuildLibraryCompositionPreview();
         _updatingLibraryTerms = true;
-        _libraryTermRows.Clear();
-        foreach (var row in rows)
+        if (_perfFlags.IsOn(PerfFlags.IncrementalWordPackRows))
         {
-            var status = composition?.StatusOf(libraryId, row.Row.Key);
-            var view = new LibraryTermRow(row.RowId, row.Row.Values, status, LibraryTermLint.Check(row.Row.Values));
-            view.PropertyChanged += LibraryTermRow_PropertyChanged;
-            _libraryTermRows.Add(view);
+            // One Reset for the whole rebuild instead of a Reset and an Add per row. The footer watches each row as an Add
+            // made it do, and never let go of the rows a clear removed either.
+            var views = new List<LibraryTermRow>(rows.Count);
+            foreach (var row in rows)
+            {
+                var status = composition?.StatusOf(libraryId, row.Row.Key);
+                var view = new LibraryTermRow(row.RowId, row.Row.Values, status, LibraryTermLint.Check(row.Row.Values));
+                view.PropertyChanged += LibraryTermRow_PropertyChanged;
+                views.Add(view);
+            }
+
+            _libraryTermRows.ReplaceAll(views);
+            WatchRowsForFooter(views);
+        }
+        else
+        {
+            _libraryTermRows.Clear();
+            foreach (var row in rows)
+            {
+                var status = composition?.StatusOf(libraryId, row.Row.Key);
+                var view = new LibraryTermRow(row.RowId, row.Row.Values, status, LibraryTermLint.Check(row.Row.Values));
+                view.PropertyChanged += LibraryTermRow_PropertyChanged;
+                _libraryTermRows.Add(view);
+            }
         }
 
         _updatingLibraryTerms = false;

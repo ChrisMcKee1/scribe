@@ -22,25 +22,38 @@ public sealed class PerfFlags
     private static readonly string[] KnownNames =
     [
         AggressiveIdleGc,
+        AsyncDeviceList,
+        BatchCleanupSelectionCounts,
+        BoundedDiagnosticsReads,
         BoundedUsageTokenLookup,
+        CachedRowSearchText,
         CacheWordPackPreview,
         CacheWordPackSort,
         CaptureTimingDiagnostics,
         CleanupPhaseTelemetry,
         CliAccessTokenCache,
+        CoalesceDictionaryStatus,
         CompositionIndex,
         DeduplicateOverlayMeter,
+        DeferSettingsPageData,
         DirectGlossaryProjection,
         HookPriorityAboveNormal,
         HookRecoveryObservations,
+        IncrementalWordPackRows,
         InputTimings,
+        LeanFooterRefresh,
         LeanHostDefaults,
         MatcherPrefilter,
         MatcherSpans,
+        PillBeforeTray,
         PreciseLocalTypingSettle,
+        ReuseStatusComposition,
         ServiceLocalHookProbe,
+        SkipVelopackWhenPackaged,
         SnapshotInjectionLayout,
         SparseUsageAggregation,
+        StartupStageTiming,
+        StopInactiveProgress,
         UsageTermIndex,
         VadWindowCancellation,
         WarmManagedAudioPath,
@@ -49,25 +62,38 @@ public sealed class PerfFlags
     // The flags, one constant per name (0.5.1). What each changes, and the old path it keeps when off, is on the
     // implementation that reads it.
     public const string AggressiveIdleGc = nameof(AggressiveIdleGc);
+    public const string AsyncDeviceList = nameof(AsyncDeviceList);
+    public const string BatchCleanupSelectionCounts = nameof(BatchCleanupSelectionCounts);
+    public const string BoundedDiagnosticsReads = nameof(BoundedDiagnosticsReads);
     public const string BoundedUsageTokenLookup = nameof(BoundedUsageTokenLookup);
+    public const string CachedRowSearchText = nameof(CachedRowSearchText);
     public const string CacheWordPackPreview = nameof(CacheWordPackPreview);
     public const string CacheWordPackSort = nameof(CacheWordPackSort);
     public const string CaptureTimingDiagnostics = nameof(CaptureTimingDiagnostics);
     public const string CleanupPhaseTelemetry = nameof(CleanupPhaseTelemetry);
     public const string CliAccessTokenCache = nameof(CliAccessTokenCache);
+    public const string CoalesceDictionaryStatus = nameof(CoalesceDictionaryStatus);
     public const string CompositionIndex = nameof(CompositionIndex);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
+    public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
     public const string DirectGlossaryProjection = nameof(DirectGlossaryProjection);
     public const string HookPriorityAboveNormal = nameof(HookPriorityAboveNormal);
     public const string HookRecoveryObservations = nameof(HookRecoveryObservations);
+    public const string IncrementalWordPackRows = nameof(IncrementalWordPackRows);
     public const string InputTimings = nameof(InputTimings);
+    public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
     public const string LeanHostDefaults = nameof(LeanHostDefaults);
     public const string MatcherPrefilter = nameof(MatcherPrefilter);
     public const string MatcherSpans = nameof(MatcherSpans);
+    public const string PillBeforeTray = nameof(PillBeforeTray);
     public const string PreciseLocalTypingSettle = nameof(PreciseLocalTypingSettle);
+    public const string ReuseStatusComposition = nameof(ReuseStatusComposition);
     public const string ServiceLocalHookProbe = nameof(ServiceLocalHookProbe);
+    public const string SkipVelopackWhenPackaged = nameof(SkipVelopackWhenPackaged);
     public const string SnapshotInjectionLayout = nameof(SnapshotInjectionLayout);
     public const string SparseUsageAggregation = nameof(SparseUsageAggregation);
+    public const string StartupStageTiming = nameof(StartupStageTiming);
+    public const string StopInactiveProgress = nameof(StopInactiveProgress);
     public const string UsageTermIndex = nameof(UsageTermIndex);
     public const string VadWindowCancellation = nameof(VadWindowCancellation);
     public const string WarmManagedAudioPath = nameof(WarmManagedAudioPath);

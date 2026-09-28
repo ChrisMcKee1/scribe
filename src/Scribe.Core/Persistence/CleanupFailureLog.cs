@@ -71,6 +71,53 @@ public sealed class CleanupFailureLog : ICleanupFailureLog
         return results;
     }
 
+    // One deferred transaction, so both statements read the same snapshot, as today's single statement does; only the rows
+    // shown are read and parsed, and the count stops at the cap.
+    public CleanupFailurePage GetRecentPage(int shown, int countCap)
+    {
+        if (countCap <= 0)
+        {
+            return new CleanupFailurePage([], 0);
+        }
+
+        using var connection = _database.Open();
+        using var transaction = connection.BeginTransaction(deferred: true);
+        var results = new List<CleanupFailure>();
+        var take = Math.Min(Math.Max(0, shown), countCap);
+        if (take > 0)
+        {
+            using var rows = connection.CreateCommand();
+            rows.Transaction = transaction;
+            rows.CommandText =
+                """
+                SELECT id, timestamp_utc, provider, model, reason, sample
+                FROM cleanup_failures
+                ORDER BY timestamp_utc DESC, id DESC
+                LIMIT $limit;
+                """;
+            rows.Parameters.AddWithValue("$limit", take);
+            using var reader = rows.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(new CleanupFailure(
+                    reader.GetInt64(0),
+                    DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+        }
+
+        using var count = connection.CreateCommand();
+        count.Transaction = transaction;
+        count.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM cleanup_failures LIMIT $cap);";
+        count.Parameters.AddWithValue("$cap", countCap);
+        var total = Convert.ToInt32(count.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
+        transaction.Commit();
+        return new CleanupFailurePage(results, total);
+    }
+
     public int Count()
     {
         using var connection = _database.Open();

@@ -496,7 +496,10 @@ public partial class SettingsWindow
     {
         RefreshHistoryEmptyTextFromCommitted();
         RefreshUsageInsightAvailability();
-        if (SectionDiagnostics.Visibility == Visibility.Visible)
+
+        // With DeferSettingsPageData off this refreshes the speed figures on every committed change, as 0.5.0 did; with it
+        // on, not before the Diagnostics page has asked for them, since its first visit reads them fresh.
+        if (!_perfFlags.IsOn(PerfFlags.DeferSettingsPageData) || _diagnosticsDataRequested)
         {
             LoadPerformanceStats();
         }

@@ -49,6 +49,34 @@ public static partial class TextFilter
             Normalize(second).Contains(normalizedQuery, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Exactly <see cref="Matches(string?, string?, string?)"/>, with each field's normalized text kept in the row's
+    /// <see cref="CachedSearchText"/> (CachedRowSearchText: a row keeps its fields' normalized text until they change,
+    /// instead of normalizing them again for every keystroke). The work runs in the old order: the query is normalized
+    /// first, and a blank query, or one that normalizes to nothing, matches before either field is looked at; the first
+    /// field comes next, and the second only when the first does not match. So the answer, and any exception a field's
+    /// text raises, are the old filter's.
+    /// </summary>
+    public static bool MatchesCached(
+        string? query,
+        ref CachedSearchText first,
+        string? firstValue,
+        ref CachedSearchText second,
+        string? secondValue)
+    {
+        var normalizedQuery = NormalizeQuery(query);
+        if (normalizedQuery.Length == 0)
+        {
+            return true;
+        }
+
+        return first.For(firstValue).Contains(normalizedQuery, StringComparison.Ordinal) ||
+            second.For(secondValue).Contains(normalizedQuery, StringComparison.Ordinal);
+    }
+
+    /// <summary>The form a field is matched in: the one <see cref="Matches(string?, string?, string?)"/> compares.</summary>
+    public static string NormalizeField(string? value) => Normalize(value);
+
     private static string NormalizeQuery(string? query) =>
         string.IsNullOrWhiteSpace(query) ? string.Empty : NormalizedQueries.GetValue(query, static text => Normalize(text));
 
@@ -74,6 +102,39 @@ public static partial class TextFilter
 
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex SpaceRuns();
+}
+
+/// <summary>
+/// A field's normalized search text (<see cref="TextFilter.NormalizeField"/>), kept until the field holds a different
+/// string (CachedRowSearchText). Normalizing depends only on the text, so a kept form is exactly what normalizing again
+/// would give. Held as a mutable field of the row it belongs to.
+/// </summary>
+public struct CachedSearchText
+{
+    private string? _source;
+    private string? _normalized;
+
+    /// <summary>The normalized form of <paramref name="value"/>, made again only when it is not the string last given.</summary>
+    /// <remarks>
+    /// The new form is made first and kept, with the string it was made from, only once making it succeeded: text that
+    /// cannot be normalized (ill-formed UTF-16 throws) leaves what was kept as it was, so asking again fails the same way,
+    /// as normalizing again would, and never hands back another string's text.
+    /// </remarks>
+    public string For(string? value)
+    {
+        if (_normalized is not null && ReferenceEquals(_source, value))
+        {
+            return _normalized;
+        }
+
+        var normalized = TextFilter.NormalizeField(value);
+        _source = value;
+        _normalized = normalized;
+        return normalized;
+    }
+
+    /// <summary>Whether the text kept is <paramref name="value"/>'s: what the tests read to see which fields were looked at.</summary>
+    internal readonly bool Holds(string? value) => _normalized is not null && ReferenceEquals(_source, value);
 }
 
 public static class ProgramNames

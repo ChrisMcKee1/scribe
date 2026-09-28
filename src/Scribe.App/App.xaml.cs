@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Text;
@@ -96,6 +96,15 @@ public partial class App : Application
     // Kept so the first stage of OnExit can stop it before anything it uses is torn down.
     private StorageMaintenance? _storageMaintenance;
 
+    // StartupStageTiming: the start's stage timeline, anchored first thing in Main and dropped once the start is described;
+    // and how many Settings windows this process has opened, so each open's stage line says which one it was.
+    internal StageTimeline? StartupStages { get; set; }
+
+    // The performance changes this process runs, from the host (every one off until the host has started).
+    private PerfFlags _perfFlags = PerfFlags.None;
+
+    private int _settingsOpens;
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -105,6 +114,7 @@ public partial class App : Application
         ButtonLabelContrast.Apply(Resources);
         _textScale = new TextScaleService(Dispatcher);
         _textScale.Start();
+        StartupStages?.Mark("resources");
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         var requestedPage = RequestedSettingsPage(e.Args, out var hasSettingsSwitch);
@@ -123,6 +133,7 @@ public partial class App : Application
             return;
         }
 
+        StartupStages?.Mark("mutex");
         // Everything from here on holds the single-instance mutex, so nothing may fail without ending the process.
         // This method is async void and the dispatcher handler marks what reaches it as handled, so a failure that
         // escaped used to leave a hidden process that every relaunch reported as already running, or a tray icon
@@ -170,6 +181,7 @@ public partial class App : Application
             return false;
         }
 
+        StartupStages?.Mark("paths");
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddScribeCore();
         builder.Services.AddSingleton(paths);
@@ -209,11 +221,14 @@ public partial class App : Application
         builder.Logging.AddFilter("Azure", LogLevel.Warning);
 
         _host = builder.Build();
+        StartupStages?.Mark("build");
         _host.Start();
+        StartupStages?.Mark("hoststart");
 
         var services = _host.Services;
         var log = services.GetRequiredService<ILogger<App>>();
         _appLog = log;
+        _perfFlags = services.GetRequiredService<PerfFlags>();
 
         // First thing in the file, before anything can fail. A log that opens mid-story is the
         // reason a 0.3.10 report about dictation cutting out short could not be investigated at
@@ -221,6 +236,7 @@ public partial class App : Application
         // settings were in play, and the daily file had rolled over since the process started.
         _diagnostics = services.GetRequiredService<SessionDiagnostics>();
         _diagnostics.WriteBanner(log);
+        StartupStages?.Mark("banner");
 
         WireGlobalExceptionLogging(log);
 
@@ -229,6 +245,7 @@ public partial class App : Application
         AccentContrastResources.Attach(
             this, services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(AccentContrastResources).FullName!));
         InitializeApplicationTheme(log);
+        StartupStages?.Mark("theme");
         if (paths.IsFallbackRoot)
         {
             log.LogWarning(
@@ -265,6 +282,7 @@ public partial class App : Application
         try
         {
             services.GetRequiredService<ScribeDatabase>().Initialize();
+            StartupStages?.Mark("database");
         }
         catch (NewerDatabaseSchemaException ex)
         {
@@ -312,6 +330,7 @@ public partial class App : Application
             FoundryDemotionReset.Apply(settingsRepository, services.GetRequiredService<AppPaths>(), log);
         }
 
+        StartupStages?.Mark("seed");
         _settingsWrites = new Scribe.Core.Settings.SettingsWriteLane(
             settingsRepository,
             callback => Dispatcher.BeginInvoke(callback));
@@ -331,6 +350,7 @@ public partial class App : Application
             services.GetRequiredService<LastTranscriptStore>(),
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
+        StartupStages?.Mark("controller");
 
         // Before anything that takes input exists (the tray, and at Start the hotkey): the persisted settings load, and the
         // first vocabulary generation is built on a worker and awaited here, never waited on, so the library source's first
@@ -347,6 +367,7 @@ public partial class App : Application
             return false;
         }
 
+        StartupStages?.Mark("vocabulary");
         _tray = new TrayIconHost(ex =>
         {
             try
@@ -384,6 +405,7 @@ public partial class App : Application
         _tray.OpenHistoryRequested += () => OpenSettings(Scribe.Core.Settings.SettingsPage.History);
         _tray.SetUpAiCleanupRequested += () => OpenSettings(Scribe.Core.Settings.SettingsPage.AiCleanup);
         _tray.NoticeActionRequested += OnTrayNoticeAction;
+        StartupStages?.Mark("tray");
 
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
@@ -499,6 +521,7 @@ public partial class App : Application
         cleanupService.StatusChanged += RefreshFoundryDownloadedModel;
 
         _controller.Start();
+        StartupStages?.Mark("hook");
         AccentContrastResources.UseSource(_controller.CurrentSettings.AccentSource);
         RefreshFoundryDownloadedModel();
 
@@ -525,6 +548,7 @@ public partial class App : Application
             _overlay.Warmup();
         }
 
+        StartupStages?.Mark("warmup");
         _tray.SetAiCleanupChecked(_controller.CurrentSettings.EnableAiCleanup);
 
         // History text, stored audio, the AI cleanup failure log and damaged-database copies are
@@ -554,12 +578,14 @@ public partial class App : Application
         storageMaintenance.Start(
             () => controller.CurrentSettings,
             () => !controller.IsDictationInFlight && _settingsWindow is null && _quickAddWindow is null);
+        StartupStages?.Mark("maintenance");
 
         log.LogInformation(
             "Scribe started. Dictation hotkey {Key} ({Mode}), dictation-only hotkey {DictationOnlyKey}.",
             HotkeyText.Describe(_controller.CurrentSettings.Hotkey),
             _controller.CurrentSettings.Hotkey.Mode,
             _controller.CurrentSettings.DictationOnlyHotkey is { } dictationOnly ? HotkeyText.Describe(dictationOnly) : "none");
+        LogStartupStages(log, services.GetRequiredService<PerfFlags>());
 
         // The accelerator inventory itself is on the session banner above ("compute: ..."); only
         // the advice is repeated here, because a recommendation deserves its own Warning line
@@ -927,62 +953,65 @@ public partial class App : Application
         // The tray and the overlay are independent views of the same state. A failure updating one
         // must never stop the other: when this method threw, the overlay was left showing whatever
         // it had last been told, so the pill sat on "Transcribing" while dictation kept working.
-        try
-        {
-            _tray?.SetState(state);
-        }
-        catch (Exception ex)
-        {
-            _appLog?.LogWarning("Could not update the tray icon for state {State} ({Failure}).", state, FailureShape.Describe(ex));
-        }
-
-        // Read here, at the render, so a setting saved since the change was raised applies to it.
-        var settings = _controller?.CurrentSettings;
-        var overlayEnabled = settings?.ShowOverlay ?? false;
-
-        // Pushed with every state change, so a keep-warm saved in Settings reaches the overlay client
-        // without its command thread ever reading the controller's settings. Unchanged values cost nothing.
-        // The resident flag is for the state rendered here, so a pause pushes false before its release below (the push is
-        // unstamped and vetoes nothing): while paused the idle deadline ends whatever brought the helper back, a preview or
-        // a release that a stamped command vetoed, instead of trimming it until the resume. The resume pushes true.
-        if (settings is not null)
-        {
-            _overlay?.SetKeepWarm(
-                settings.ReleaseModelsAfterIdleMinutes,
-                OverlayWarmup.KeepResident(settings.ShowOverlay, state == DictationState.Paused));
-        }
-
-        if (!overlayEnabled)
-        {
-            _overlay?.HideOverlay();
-        }
-        else
-        {
-            switch (state)
+        // DictationStateViews gives each view the change once, in order, and still gives it to the second view when the
+        // first throws. PillBeforeTray picks the order: the pill's commands first and the tray icon (a new icon and the
+        // shell's own notify calls) after them, so the pill's thread starts on them sooner; off, the tray first, as before.
+        // Either way both come before the warmup and the release below, which a throw from the pill's calls skips, as before.
+        var overlayEnabled = false;
+        DictationStateViews.Show(
+            pillFirst: _perfFlags.IsOn(PerfFlags.PillBeforeTray),
+            tray: () => UpdateTrayState(state),
+            pill: () =>
             {
-                case DictationState.Recording:
-                    _overlay?.ShowRecording();
-                    break;
-                case DictationState.Processing:
-                    // The dictation-only hotkey overrides AI cleanup for its capture without changing the global
-                    // setting, so this comes from the capture that was admitted, carried with the change.
-                    _overlay?.ShowProcessing(change.AiPolishing);
-                    break;
-                default:
-                    // What the finished dictation did ("Typed", or a notice), held by the overlay and then hidden; a
-                    // quietly discarded one, a pause while idle and every other idle change just hide.
-                    if (change.Outcome is { } outcome)
-                    {
-                        _overlay?.ShowOutcome(outcome);
-                    }
-                    else
-                    {
-                        _overlay?.HideOverlay();
-                    }
+                // Read here, at the render, so a setting saved since the change was raised applies to it.
+                var settings = _controller?.CurrentSettings;
+                overlayEnabled = settings?.ShowOverlay ?? false;
 
-                    break;
-            }
-        }
+                // Pushed with every state change, so a keep-warm saved in Settings reaches the overlay client
+                // without its command thread ever reading the controller's settings. Unchanged values cost nothing.
+                // The resident flag is for the state rendered here, so a pause pushes false before its release below (the
+                // push is unstamped and vetoes nothing): while paused the idle deadline ends whatever brought the helper
+                // back, a preview or a release that a stamped command vetoed, instead of trimming it until the resume. The
+                // resume pushes true.
+                if (settings is not null)
+                {
+                    _overlay?.SetKeepWarm(
+                        settings.ReleaseModelsAfterIdleMinutes,
+                        OverlayWarmup.KeepResident(settings.ShowOverlay, state == DictationState.Paused));
+                }
+
+                if (!overlayEnabled)
+                {
+                    _overlay?.HideOverlay();
+                }
+                else
+                {
+                    switch (state)
+                    {
+                        case DictationState.Recording:
+                            _overlay?.ShowRecording();
+                            break;
+                        case DictationState.Processing:
+                            // The dictation-only hotkey overrides AI cleanup for its capture without changing the global
+                            // setting, so this comes from the capture that was admitted, carried with the change.
+                            _overlay?.ShowProcessing(change.AiPolishing);
+                            break;
+                        default:
+                            // What the finished dictation did ("Typed", or a notice), held by the overlay and then hidden;
+                            // a quietly discarded one, a pause while idle and every other idle change just hide.
+                            if (change.Outcome is { } outcome)
+                            {
+                                _overlay?.ShowOutcome(outcome);
+                            }
+                            else
+                            {
+                                _overlay?.HideOverlay();
+                            }
+
+                            break;
+                    }
+                }
+            });
 
         // A pause released the helper; the first dictation after the resume would otherwise wait for a launch (0.5 s idle,
         // 2 to 11 s while the speech models reload), so the resume warms it again (OverlayWarmup decides).
@@ -999,6 +1028,19 @@ public partial class App : Application
         if (state == DictationState.Paused)
         {
             _overlay?.ReleaseWhenIdle();
+        }
+    }
+
+    // The tray's view of a dictation state, guarded on its own so a failure never stops the pill's (see RenderDictationState).
+    private void UpdateTrayState(DictationState state)
+    {
+        try
+        {
+            _tray?.SetState(state);
+        }
+        catch (Exception ex)
+        {
+            _appLog?.LogWarning("Could not update the tray icon for state {State} ({Failure}).", state, FailureShape.Describe(ex));
         }
     }
 
@@ -1778,6 +1820,7 @@ public partial class App : Application
         }
 
         var services = _host!.Services;
+        var openStages = services.GetRequiredService<PerfFlags>().IsOn(PerfFlags.StartupStageTiming) ? StageTimeline.Start() : null;
         var audio = services.GetRequiredService<IAudioCaptureService>();
 
         // While the window is open its saves run on this thread: the one-time VACUUM stays off until it
@@ -1839,7 +1882,10 @@ public partial class App : Application
                 RunAboutUpdateGuardThenAsync,
                 () => ShowTrayNotice(TrayNotices.RestartFailed()),
                 services.GetRequiredService<SessionDiagnostics>(),
-                services.GetRequiredService<HistoryDeletionNotifier>());
+                services.GetRequiredService<HistoryDeletionNotifier>(),
+                perfFlags: services.GetRequiredService<PerfFlags>(),
+                openStages: openStages);
+            openStages?.Mark("ctor");
             _settingsWindow.Closed += (_, _) =>
             {
                 audio.InputDevicesChanged -= OnInputDevicesChanged;
@@ -1848,9 +1894,17 @@ public partial class App : Application
                 foreground.Dispose();
             };
             _settingsWindow.ShowWelcomeRequested += SettingsWindow_ShowWelcomeRequested;
+            if (openStages is not null)
+            {
+                LogSettingsOpenStagesWhenRendered(_settingsWindow, openStages);
+            }
+
             _settingsWindow.Show();
+            openStages?.Mark("show");
             _settingsWindow.ShowPage(page, focusName);
+            openStages?.Mark("page");
             _settingsWindow.Activate();
+            openStages?.Mark("activate");
         }
         catch
         {
@@ -1862,6 +1916,61 @@ public partial class App : Application
             throw;
         }
     });
+
+    // StartupStageTiming: where the start went, as stage codes and whole milliseconds since Windows created the process (or
+    // since Main when that time cannot be read). Codes and numbers only; the timeline is dropped either way.
+    private void LogStartupStages(ILogger log, PerfFlags perfFlags)
+    {
+        var stages = StartupStages;
+        StartupStages = null;
+        if (stages is null || !perfFlags.IsOn(PerfFlags.StartupStageTiming))
+        {
+            return;
+        }
+
+        try
+        {
+            stages.Mark("started");
+            long? createdToMain = null;
+            try
+            {
+                using var self = Process.GetCurrentProcess();
+                createdToMain = stages.AnchorAfter(self.StartTime.ToUniversalTime(), DateTime.UtcNow);
+            }
+            catch (Exception)
+            {
+                // Without the creation time the stages are still given, from Main.
+            }
+
+            if (createdToMain is { } offset)
+            {
+                log.LogInformation("Startup stages in ms since the process was created: main={Main} {Stages}.", offset, stages.Describe(offset));
+            }
+            else
+            {
+                log.LogInformation("Startup stages in ms since Main: {Stages}.", stages.Describe());
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug("Could not describe the startup stages ({Failure}).", FailureShape.Describe(ex));
+        }
+    }
+
+    // StartupStageTiming: one line per Settings window, once its content has first rendered: which open of this process it
+    // was, and its stages in whole milliseconds since it was asked for. A window closed before it rendered logs nothing.
+    private void LogSettingsOpenStagesWhenRendered(SettingsWindow window, StageTimeline stages)
+    {
+        var open = ++_settingsOpens;
+        EventHandler? rendered = null;
+        rendered = (_, _) =>
+        {
+            window.ContentRendered -= rendered;
+            stages.Mark("rendered");
+            _appLog?.LogInformation("Settings window open {Open} stages in ms since it was asked for: {Stages}.", open, stages.Describe());
+        };
+        window.ContentRendered += rendered;
+    }
 
     private void CopyLastDictation() => Dispatcher.Invoke(() =>
     {

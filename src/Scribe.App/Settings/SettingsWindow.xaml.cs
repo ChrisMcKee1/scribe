@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -92,6 +92,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ILogger<SettingsWindow> _log;
     private readonly TranscriptionOptions _runningTranscription;
 
+    // The performance changes this process runs (SCRIBE_PERF_FLAGS); every one is off unless named there.
+    private readonly PerfFlags _perfFlags;
+
+    // LeanFooterRefresh, for the row types' keys: process-wide, like the flags it mirrors, and set before any row exists.
+    private static bool _leanRowKeys;
+
     private readonly AppSettings _settings;
     private AppSettings _committedSettings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
@@ -125,6 +131,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly SettingsSectionLoad _historyLoad = new();
     private readonly SettingsSectionLoad _failureLoad = new();
     private readonly SettingsSectionLoad _statsLoad = new();
+
+    // DeferSettingsPageData: whether the Diagnostics page has asked for its failures and speed figures yet.
+    private bool _diagnosticsDataRequested;
     private readonly PendingRowUpdates<long, AiRating> _ratingWrites = new();
 
     // Hint texts as written in the XAML, restored once a section's loading message is no longer needed.
@@ -246,6 +255,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _showingMicrophones;
     private bool _microphonesStale;
 
+    // AsyncDeviceList: the devices are read on a worker at open, and until a list arrives the picker shows the current
+    // choice alone (MicrophoneChoices.Loading). Every list shown counts, so a read that finishes after a newer list (a
+    // device change the capture service announced meanwhile) is dropped.
+    private bool _microphonesLoading;
+    private int _deviceListGeneration;
+
     public SettingsWindow(
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
@@ -272,8 +287,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Func<Func<Task>, Task>? runUpdateRestartGuard = null,
         Action? showRestartFailedNotice = null,
         SessionDiagnostics? diagnostics = null,
-        HistoryDeletionNotifier? historyDeletionNotifier = null)
+        HistoryDeletionNotifier? historyDeletionNotifier = null,
+        PerfFlags? perfFlags = null,
+        StageTimeline? openStages = null)
     {
+        _perfFlags = perfFlags ?? PerfFlags.None;
+        _leanRowKeys = _perfFlags.IsOn(PerfFlags.LeanFooterRefresh);
         _settingsRepository = settingsRepository;
         _audio = audio;
         _dictionary = dictionary;
@@ -322,6 +341,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this, Wpf.Ui.Controls.WindowBackdropType.Mica, updateAccents: false);
 
         InitializeComponent();
+        openStages?.Mark("xaml");
         InitializeNavigation();
         if (Content is FrameworkElement rootContent)
         {
@@ -336,6 +356,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         InitializeFooterAndClose();
         InitializeWindowFit();
         InitializeSettingsSearch();
+        InitializeBusyAnimations();
+        openStages?.Mark("chrome");
 
         // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
         EditableComboBoxName.ShareWithTextBox(AiModelBox);
@@ -351,20 +373,34 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AttachComboFilter(AzureModelBox, UpdateAzureDeploymentHint);
 
         PopulateDevices();
+        openStages?.Mark("devices");
         PopulateChoices();
         LoadFromSettings();
+        openStages?.Mark("settings");
         InitializeDictionaryGrid();
         InitializeLibraryGrid();
         InitializeSnippetList();
         LoadProfiles();
         InitializeReadOnlySections();
         SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
+        openStages?.Mark("lists");
 
         // Everything read from the database now arrives off the UI thread, so a large history or
         // dictionary no longer holds the window back from appearing.
         LoadDictionaryAsync();
         LoadLibrariesAsync();
         LoadSnippetsAsync();
+
+        // DeferSettingsPageData: History reads when its page shows (ShowPage always read it again then, and dropped the read
+        // made here), and the Diagnostics failures and speed figures when the Diagnostics page first shows.
+        if (!_perfFlags.IsOn(PerfFlags.DeferSettingsPageData))
+        {
+            LoadHistory();
+            LoadFailures();
+            LoadPerformanceStats();
+        }
+
+        openStages?.Mark("reads");
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
@@ -999,14 +1035,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             LoadHistory();
         }
+        else if (page == SettingsPage.Diagnostics && !_diagnosticsDataRequested && _perfFlags.IsOn(PerfFlags.DeferSettingsPageData))
+        {
+            _diagnosticsDataRequested = true;
+            LoadFailures();
+            LoadPerformanceStats();
+        }
         else if (page == SettingsPage.Usage)
         {
             LoadUsage();
-        }
-        else if (page == SettingsPage.Diagnostics)
-        {
-            LoadFailures();
-            LoadPerformanceStats();
         }
         else if (page == SettingsPage.TryDictation)
         {
@@ -1045,6 +1082,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PopulateDevices()
     {
+        if (_perfFlags.IsOn(PerfFlags.AsyncDeviceList))
+        {
+            _microphonesLoading = true;
+            ShowMicrophones(MicrophoneSelection.From(_settings));
+            LoadInputDevicesAsync();
+            return;
+        }
+
         try
         {
             _inputDevices = _audio.GetInputDevices();
@@ -1066,6 +1111,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     public void ShowInputDevices(IReadOnlyList<AudioDevice> devices)
     {
+        _deviceListGeneration++;
+        _microphonesLoading = false;
         _inputDevices = devices;
         if (DeviceCombo.IsDropDownOpen)
         {
@@ -1099,6 +1146,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    // AsyncDeviceList: the list read off this thread, shown as a device change would be (while the picker's list is open it
+    // waits for it to close), unless the window closed or a newer list was shown first.
+    private async void LoadInputDevicesAsync()
+    {
+        var generation = _deviceListGeneration;
+        IReadOnlyList<AudioDevice> devices;
+        try
+        {
+            devices = await Task.Run(_audio.GetInputDevices);
+        }
+        catch (Exception ex)
+        {
+            // Device enumeration can fail transiently; the Windows default choice is always available.
+            TryLog(ex, "Could not list the microphones.");
+            devices = [];
+        }
+
+        if (_closed || generation != _deviceListGeneration)
+        {
+            return;
+        }
+
+        ShowInputDevices(devices);
+    }
+
     // What the picker shows now, which a save writes unless a tray change is still waiting to be shown.
     private MicrophoneSelection ShownMicrophone =>
         DeviceCombo.SelectedItem is MicrophoneChoice choice ? choice.Selection : MicrophoneSelection.From(_settings);
@@ -1107,7 +1179,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // changes what is chosen, only what is offered and how the Windows default reads.
     private void ShowMicrophones(MicrophoneSelection selection)
     {
-        var menu = MicrophoneChoices.Build(_inputDevices, selection);
+        var menu = _microphonesLoading ? MicrophoneChoices.Loading(selection) : MicrophoneChoices.Build(_inputDevices, selection);
         _showingMicrophones = true;
         try
         {
@@ -1848,9 +1920,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         IReadOnlyList<CleanupFailure> failures;
+        int failureCount;
         try
         {
-            failures = await Task.Run(() => _failureLog.GetRecent(10_000));
+            // BoundedDiagnosticsReads: the 20 rows shown and a count up to 10,000, instead of 10,000 rows with their
+            // samples to show 20 of them.
+            if (_perfFlags.IsOn(PerfFlags.BoundedDiagnosticsReads))
+            {
+                var page = await Task.Run(() => _failureLog.GetRecentPage(20, 10_000));
+                failures = page.Recent;
+                failureCount = page.Count;
+            }
+            else
+            {
+                failures = await Task.Run(() => _failureLog.GetRecent(10_000));
+                failureCount = failures.Count;
+            }
         }
         catch (Exception ex)
         {
@@ -1882,8 +1967,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         SetFailuresListState(_noFailuresText, showGrid: _failures.Count > 0);
-        FailuresCountText.Text = failures.Count > _failures.Count
-            ? $"Showing the 20 most recent of {failures.Count:N0} failures."
+        FailuresCountText.Text = failureCount > _failures.Count
+            ? $"Showing the 20 most recent of {failureCount:N0} failures."
             : string.Empty;
         ClearFailuresButton.IsEnabled = true;
     }
@@ -4618,6 +4703,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // dispatcher's timer list until the tick fires; stop it so close releases everything now.
         _infoDismissTimer?.Stop();
         CleanupWindowFit();
+        CloseBusyAnimations();
+        _dictionaryStatus?.Close();
 
         // Reads still running off the UI thread finish on their own; these make sure nothing they
         // return is published to the closed window, and cancel the usage computation between steps.
@@ -5461,7 +5548,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string? LoadedReplacement { get; set; }
         public bool LoadedWholeWord { get; set; } = true;
         public bool LoadedEnabled { get; set; } = true;
-        public string RowKey => Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
+        public string RowKey => _leanRowKeys
+            ? _rowKey.ForId(Id, this)
+            : Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
+
+        // LeanFooterRefresh: the key, kept until the Id it is made from changes.
+        private DraftRowKeyCache _rowKey;
+
+        // CachedRowSearchText: Find a word's normalized text for each field, kept until the field changes.
+        private CachedSearchText _patternSearch;
+        private CachedSearchText _replacementSearch;
+
+        /// <summary>
+        /// Whether Find a word's <paramref name="query"/> finds this row: exactly TextFilter.Matches over its fields, in the
+        /// same order (the query first, the replacement only when the pattern does not match).
+        /// </summary>
+        public bool MatchesSearch(string? query) =>
+            TextFilter.MatchesCached(query, ref _patternSearch, Pattern, ref _replacementSearch, Replacement);
 
         public string Pattern
         {
@@ -5585,7 +5688,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string? LoadedPhrase { get; set; }
         public string? LoadedTemplate { get; set; }
         public bool LoadedEnabled { get; set; } = true;
-        public string RowKey => Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
+        public string RowKey => _leanRowKeys
+            ? _rowKey.ForId(Id, this)
+            : Id > 0 ? Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"new:{GetHashCode()}";
+
+        // LeanFooterRefresh: the key, kept until the Id it is made from changes.
+        private DraftRowKeyCache _rowKey;
 
         public string Phrase
         {
@@ -5652,7 +5760,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string? LoadedProcesses { get; set; }
         public string? LoadedWritingStyle { get; set; }
         public NewlineInjectionMode? LoadedNewlineHandling { get; set; }
-        public string RowKey => Origin == DraftRowOrigin.Saved ? $"saved:{LoadedName}:{LoadedProcesses}" : $"new:{GetHashCode()}";
+        public string RowKey => _leanRowKeys
+            ? _rowKey.ForProfile(Origin == DraftRowOrigin.Saved, LoadedName, LoadedProcesses, this)
+            : Origin == DraftRowOrigin.Saved ? $"saved:{LoadedName}:{LoadedProcesses}" : $"new:{GetHashCode()}";
+
+        // LeanFooterRefresh: the key, kept until the origin, name or processes it is made from change.
+        private DraftRowKeyCache _rowKey;
 
         public string Name
         {

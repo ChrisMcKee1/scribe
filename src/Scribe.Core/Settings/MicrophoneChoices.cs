@@ -112,6 +112,29 @@ public static class MicrophoneChoices
         return new MicrophoneMenu(choices, choices.Count - 1);
     }
 
+    /// <summary>The Windows default entry while the devices are still being read, before its device is known.</summary>
+    public const string WindowsDefaultLoadingLabel = "Windows default";
+
+    /// <summary>A saved microphone's entry while the devices are still being read, when it was saved without a name.</summary>
+    public const string SavedMicrophoneLoadingLabel = "Saved microphone";
+
+    /// <summary>
+    /// The picker while the devices are still being read (AsyncDeviceList): the current choice alone, still chosen and named
+    /// as it was saved, claiming nothing about which device is the default or whether it is available, so a save made
+    /// before the list arrives keeps the choice and nothing on screen is untrue.
+    /// </summary>
+    public static MicrophoneMenu Loading(MicrophoneSelection current)
+    {
+        var chosen = MicrophoneSelection.Normalize(current.DeviceId, current.DeviceName);
+        var choice = chosen.DeviceId is null
+            ? new MicrophoneChoice(MicrophoneChoiceKind.WindowsDefault, WindowsDefaultLoadingLabel, MicrophoneSelection.WindowsDefault)
+            : new MicrophoneChoice(
+                MicrophoneChoiceKind.Device,
+                string.IsNullOrWhiteSpace(chosen.DeviceName) ? SavedMicrophoneLoadingLabel : chosen.DeviceName,
+                chosen);
+        return new MicrophoneMenu([choice], 0);
+    }
+
     /// <summary>The Windows default entry, naming the device it resolves to now.</summary>
     public static string WindowsDefaultLabel(string? defaultDeviceName) =>
         string.IsNullOrWhiteSpace(defaultDeviceName)

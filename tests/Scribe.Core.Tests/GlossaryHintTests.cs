@@ -203,10 +203,12 @@ public sealed class GlossaryHintTests
     [Fact]
     public void The_settings_window_hands_the_hint_the_entries_its_libraries_compose_to()
     {
-        // The window composes the word pack draft in precedence order, whatever order its A to Z list holds rows in.
+        // The window composes the word pack draft in precedence order, whatever order its A to Z list holds rows in. The hint
+        // takes it from the refresh's holder, which composes through CurrentLibraryComposition (ReuseStatusComposition).
         var code = ReadSettingsWindowCode();
 
-        Assert.Contains("var composition = CurrentLibraryComposition();", code, StringComparison.Ordinal);
+        Assert.Contains("var composition = refreshComposition.Get(this);", code, StringComparison.Ordinal);
+        Assert.Contains("_composition = window.CurrentLibraryComposition();", code, StringComparison.Ordinal);
         Assert.Contains("var aiEntries = composition?.AiLibraryEntries ?? localEntries;", code, StringComparison.Ordinal);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(code, @"new GlossaryHint\.Input\("));
     }

@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
@@ -26,15 +26,25 @@ public partial class SettingsWindow
     private bool _dictionarySuggestionRunning;
     private DictionaryRow? _dictionarySelectionPendingRestore;
 
+    // CoalesceDictionaryStatus: one status refresh per burst of row notifications (typing in a cell raises two per
+    // keystroke) and one per bulk edit (an import, suggestions, a cleanup) instead of one per row. Null with the flag off,
+    // when every notification queues its own refresh and every row added or removed refreshes at once, as before.
+    private StatusRefreshScheduler? _dictionaryStatus;
+
     private void InitializeDictionaryGrid()
     {
+        if (_perfFlags.IsOn(PerfFlags.CoalesceDictionaryStatus))
+        {
+            _dictionaryStatus = new StatusRefreshScheduler(RefreshDictionaryStatus, work => Dispatcher.BeginInvoke(work));
+        }
+
         _dictionaryView = CollectionViewSource.GetDefaultView(_rows);
         _dictionaryView.Filter = DictionaryFilter;
         DictionaryGrid.ItemsSource = _dictionaryView;
         DataGridCheckBoxClick.Attach(DictionaryGrid);
         DataGridTypingTab.Attach(DictionaryGrid);
         _rows.CollectionChanged += DictionaryRows_CollectionChanged;
-        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        DictionaryGrid.CellEditEnding += (_, _) => QueueDictionaryStatusRefresh();
         SetDictionaryEditable(false);
         RefreshDictionaryStatus();
     }
@@ -138,7 +148,7 @@ public partial class SettingsWindow
             row.PropertyChanged += DictionaryRow_PropertyChanged;
         }
 
-        RefreshDictionaryStatus();
+        RefreshDictionaryStatusForRowChange();
     }
 
     private void DictionaryRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -152,17 +162,76 @@ public partial class SettingsWindow
             return;
         }
 
+        QueueDictionaryStatusRefresh();
+    }
+
+    // A row changed: refresh soon (CoalesceDictionaryStatus: once for the whole burst).
+    private void QueueDictionaryStatusRefresh()
+    {
+        if (_dictionaryStatus is { } scheduler)
+        {
+            scheduler.Request();
+            return;
+        }
+
         Dispatcher.BeginInvoke(RefreshDictionaryStatus);
     }
+
+    // A row was added, removed or replaced: refresh at once (CoalesceDictionaryStatus: at a bulk edit's end instead).
+    private void RefreshDictionaryStatusForRowChange()
+    {
+        if (_dictionaryStatus is { } scheduler)
+        {
+            scheduler.RefreshNow();
+            return;
+        }
+
+        RefreshDictionaryStatus();
+    }
+
+    // A bulk edit: with CoalesceDictionaryStatus, every refresh it asks for waits for its end, which refreshes once; null
+    // (nothing held) with the flag off.
+    private IDisposable? BatchDictionaryStatus() => _dictionaryStatus?.Batch();
 
     /// <summary>Recomputes the glossary hint, empty state and per-row word pack coverage badges together.</summary>
     private void RefreshDictionaryStatus()
     {
         UpdateDictionaryViewState();
-        UpdateDictionaryGlossaryHint();
-        UpdateDictionaryCoverage();
+        if (_perfFlags.IsOn(PerfFlags.ReuseStatusComposition))
+        {
+            var composition = new RefreshComposition();
+            UpdateDictionaryGlossaryHint(ref composition);
+            UpdateDictionaryCoverage(ref composition);
+        }
+        else
+        {
+            UpdateDictionaryGlossaryHint();
+            UpdateDictionaryCoverage();
+        }
+
         UpdateSelectedDictionaryCoverageStatus();
         UpdateDictionaryTabSummaries();
+    }
+
+    // ReuseStatusComposition: one refresh's word pack composition, made the first time a consumer asks. LibraryComposition
+    // is immutable, and between the glossary hint and the badges nothing changes what it is composed from (the hint only
+    // sets text and visibility), so the badges get exactly what composing again would give; a composition that failed
+    // cleared the catalog and logged, after which composing again returned null without logging, which is what reuse gives.
+    private struct RefreshComposition
+    {
+        private bool _made;
+        private LibraryComposition? _composition;
+
+        public LibraryComposition? Get(SettingsWindow window)
+        {
+            if (!_made)
+            {
+                _composition = window.CurrentLibraryComposition();
+                _made = true;
+            }
+
+            return _composition;
+        }
     }
 
     private bool DictionaryFilter(object item)
@@ -170,6 +239,12 @@ public partial class SettingsWindow
         if (item is not DictionaryRow row)
         {
             return false;
+        }
+
+        // CachedRowSearchText: each row keeps its fields' normalized text, so a keystroke normalizes only the query.
+        if (_perfFlags.IsOn(PerfFlags.CachedRowSearchText))
+        {
+            return row.MatchesSearch(DictionarySearchBox?.Text);
         }
 
         return TextFilter.Matches(DictionarySearchBox?.Text, row.Pattern, row.Replacement);
@@ -208,6 +283,12 @@ public partial class SettingsWindow
     /// <remarks>Deliberately tolerant: a failure here costs a badge, never an edit.</remarks>
     private void UpdateDictionaryCoverage()
     {
+        var composition = new RefreshComposition();
+        UpdateDictionaryCoverage(ref composition);
+    }
+
+    private void UpdateDictionaryCoverage(ref RefreshComposition composition)
+    {
         try
         {
             if (_rows.Count == 0)
@@ -216,7 +297,7 @@ public partial class SettingsWindow
             }
 
             // Precedence, not the list's A to Z order: the badge must name the word pack dictation uses.
-            var covering = CurrentLibraryComposition()?.Coverage()
+            var covering = composition.Get(this)?.Coverage()
                 ?? DictionaryLibraryOverlapAnalyzer.Coverage(CurrentWordPackLibraries(), CollectEnabledLibraryIds());
 
             foreach (var row in _rows)
@@ -378,6 +459,12 @@ public partial class SettingsWindow
     // still works.
     private void UpdateDictionaryGlossaryHint()
     {
+        var composition = new RefreshComposition();
+        UpdateDictionaryGlossaryHint(ref composition);
+    }
+
+    private void UpdateDictionaryGlossaryHint(ref RefreshComposition refreshComposition)
+    {
         // Also reached from the AI page's handlers, which can run while InitializeComponent is still
         // creating the controls this reads.
         if (DictionaryGlossaryHint is null || AiPromptStyleCombo is null ||
@@ -403,7 +490,7 @@ public partial class SettingsWindow
 
         // The entries the selected word packs compose to: precedence, not the list's A to Z order, decides which row
         // survives a shared spoken form. The hint counts them as given and never reorders them.
-        var composition = CurrentLibraryComposition();
+        var composition = refreshComposition.Get(this);
         if (_wordPackWorkspace is not null && _wordPackCatalog is null)
         {
             DictionaryGlossaryHint.Text = "Word pack vocabulary is unavailable right now.";
@@ -513,12 +600,15 @@ public partial class SettingsWindow
             return;
         }
 
-        foreach (var item in listed.Where(item => _rows.Contains(item.Row) && item.StillMatches()))
+        using (BatchDictionaryStatus())
         {
-            _rows.Remove(item.Row);
-        }
+            foreach (var item in listed.Where(item => _rows.Contains(item.Row) && item.StillMatches()))
+            {
+                _rows.Remove(item.Row);
+            }
 
-        RefreshDictionaryStatus();
+            RefreshDictionaryStatusForRowChange();
+        }
     }
 
     private static bool IsRedundantWithWordPack(DictionaryRow row, IReadOnlyDictionary<string, LibraryCoverage> covering)
@@ -743,11 +833,14 @@ public partial class SettingsWindow
         // until it's cleared): suggestions from a finished run are never dropped.
         ClearDictionarySearchForNewRow();
         DictionaryRow? first = null;
-        foreach (var (pattern, replacement) in entries)
+        using (BatchDictionaryStatus())
         {
-            var row = new DictionaryRow { Pattern = pattern, Replacement = replacement };
-            _rows.Add(row);
-            first ??= row;
+            foreach (var (pattern, replacement) in entries)
+            {
+                var row = new DictionaryRow { Pattern = pattern, Replacement = replacement };
+                _rows.Add(row);
+                first ??= row;
+            }
         }
 
         if (first is not null)
@@ -843,7 +936,7 @@ public partial class SettingsWindow
             return;
         }
 
-        var choice = DictionaryCleanupWindow.Show(this, report);
+        var choice = DictionaryCleanupWindow.Show(this, report, _perfFlags);
         if (choice is null)
         {
             return;
@@ -880,22 +973,26 @@ public partial class SettingsWindow
             return;
         }
 
-        if (choice.Delete)
+        using (BatchDictionaryStatus())
         {
-            foreach (var row in targets)
+            if (choice.Delete)
             {
-                _rows.Remove(row);
+                foreach (var row in targets)
+                {
+                    _rows.Remove(row);
+                }
             }
-        }
-        else
-        {
-            foreach (var row in targets)
+            else
             {
-                row.Enabled = false;
+                foreach (var row in targets)
+                {
+                    row.Enabled = false;
+                }
             }
+
+            RefreshDictionaryStatusForRowChange();
         }
 
-        RefreshDictionaryStatus();
         ShowInfo(choice.Delete
             ? $"{targets.Count} {(targets.Count == 1 ? "word" : "words")} removed. Review the change, then save to apply it."
             : $"{targets.Count} {(targets.Count == 1 ? "word" : "words")} turned off. Review the change, then save to apply it.");
@@ -1019,6 +1116,7 @@ public partial class SettingsWindow
 
         var plan = DictionaryImportMerger.Merge(existing, imported);
 
+        using var batch = BatchDictionaryStatus();
         foreach (var op in plan.Operations)
         {
             var entry = op.Entry;
