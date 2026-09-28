@@ -63,8 +63,8 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     /// <summary>
     /// Test seam: how many dictionary rules' regular expressions this post-processor's passes have run, the work
-    /// <see cref="PerfFlags.MatcherPrefilter"/> exists to cut. Each call adds its passes' count once, so a pass does no
-    /// extra work per rule.
+    /// <see cref="PerfFlags.MatcherPrefilter"/> exists to cut. A pass counts in a local, one increment per rule that ran, and
+    /// each call adds the count with one interlocked add (a snippet template's pass adds its own), never one per rule.
     /// </summary>
     internal long RegexRuns => Interlocked.Read(ref _regexRuns);
 
