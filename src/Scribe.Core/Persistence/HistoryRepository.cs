@@ -47,6 +47,13 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         => Add(entry, audio: null);
 
     public HistoryEntry Add(HistoryEntry entry, CapturedAudio? audio)
+        => Add(entry, audio, stages: null);
+
+    /// <summary>
+    /// <see cref="Add(HistoryEntry, CapturedAudio?)"/>, marking each step's time in <paramref name="stages"/> when one is
+    /// given (<see cref="Diagnostics.PerfFlags.HistoryStageTiming"/>). Without it, the same write, statement for statement.
+    /// </summary>
+    internal HistoryEntry Add(HistoryEntry entry, CapturedAudio? audio, HistoryWriteStages? stages)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -58,12 +65,15 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         var storedAudio = false;
         using (_database.EnterWriteScope())
         {
+            stages?.MarkGateEntered();
             using var connection = _database.Open();
+            stages?.MarkOpened();
             using var transaction = connection.BeginTransaction();
+            stages?.MarkBegan();
 
             long? blobId = entry.AudioBlobId;
             var audioEncodingColumnAvailable = false;
-            if (audio is not null && InsertAudioBlob(connection, audio) is { } inserted)
+            if (audio is not null && InsertAudioBlob(connection, audio, stages) is { } inserted)
             {
                 blobId = inserted.Id;
                 storedAudio = true;
@@ -72,6 +82,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
             var hasCleanupColumn = _historyCleanupColumnAvailable || EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
             var hasModelColumn = _historyModelColumnAvailable || EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
+            stages?.MarkColumnsChecked();
             var optionalColumns =
                 (hasCleanupColumn ? ", cleanup_ms" : string.Empty) +
                 (hasModelColumn ? ", transcription_model_id" : string.Empty);
@@ -104,13 +115,16 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
             historyCommand.Parameters.AddWithValue("$blob_id", (object?)blobId ?? DBNull.Value);
 
             var id = (long)(historyCommand.ExecuteScalar() ?? 0L);
+            stages?.MarkInserted();
             transaction.Commit();
+            stages?.MarkCommitted();
             _audioEncodingColumnAvailable |= audioEncodingColumnAvailable;
             _historyCleanupColumnAvailable |= hasCleanupColumn;
             _historyModelColumnAvailable |= hasModelColumn;
             saved = entry with { Id = id, AudioBlobId = blobId };
         }
 
+        stages?.MarkClosed();
         if (storedAudio)
         {
             _database.NotifyStorageChanged(StorageChange.AudioStored);
@@ -131,7 +145,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         using (_database.EnterWriteScope())
         {
             using var connection = _database.Open();
-            var inserted = InsertAudioBlob(connection, audio)
+            var inserted = InsertAudioBlob(connection, audio, stages: null)
                 ?? throw new ArgumentOutOfRangeException(
                     nameof(audio), "The capture is larger than the stored audio limit.");
             blobId = inserted.Id;
@@ -146,7 +160,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     // large to keep. The PCM16 header makes a blob readable even where the encoding column is
     // missing, so the format no longer depends on the column; the column is still written wherever
     // it exists, for anything that reads it.
-    private InsertedAudioBlob? InsertAudioBlob(SqliteConnection connection, CapturedAudio audio)
+    private InsertedAudioBlob? InsertAudioBlob(SqliteConnection connection, CapturedAudio audio, HistoryWriteStages? stages)
     {
         if (AudioBlobCodec.EncodedLength(audio.Samples.Length, AudioBlobEncoding.Pcm16) > MaxAudioBlobBytes)
         {
@@ -155,6 +169,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
         var hasEncoding = _audioEncodingColumnAvailable ||
             EnsureColumn(connection, "audio_blobs", "encoding", "INTEGER NOT NULL DEFAULT 0");
+        stages?.MarkBlobColumnsChecked();
         using var command = connection.CreateCommand();
         command.CommandText = hasEncoding
             ? """
@@ -168,14 +183,18 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
               SELECT last_insert_rowid();
               """;
         command.Parameters.AddWithValue("$rate", audio.SampleRate);
-        command.Parameters.AddWithValue("$samples", AudioBlobCodec.EncodePcm16(audio.Samples));
+        var samples = AudioBlobCodec.EncodePcm16(audio.Samples);
+        stages?.MarkBlobEncoded(samples.Length);
+        command.Parameters.AddWithValue("$samples", samples);
         command.Parameters.AddWithValue("$created", FormatTimestamp(DateTimeOffset.UtcNow));
         if (hasEncoding)
         {
             command.Parameters.AddWithValue("$encoding", (int)AudioBlobEncoding.Pcm16);
         }
 
-        return new InsertedAudioBlob((long)(command.ExecuteScalar() ?? 0L), hasEncoding);
+        var blobId = (long)(command.ExecuteScalar() ?? 0L);
+        stages?.MarkBlobInserted();
+        return new InsertedAudioBlob(blobId, hasEncoding);
     }
 
     public IReadOnlyList<HistoryEntry> GetRecent(int limit = 100)

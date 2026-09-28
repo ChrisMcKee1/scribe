@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -16,9 +17,12 @@ namespace Scribe.Core.Tests;
 /// accounts for anything it abandons, one failed write never stops the next or leaks its text, and the capture handed
 /// over is the capture written.
 /// </summary>
-public sealed class HistoryWriterTests
+public class HistoryWriterTests
 {
     private const string SecretText = "Zanzibar lighthouse keeper 90210";
+
+    /// <summary>The flags every writer here runs with: none here, HistoryStageTiming in <see cref="HistoryWriterStageTimingTests"/>.</summary>
+    protected virtual PerfFlags Flags => PerfFlags.None;
     private static readonly DateTimeOffset Epoch = new(2020, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
     [Fact]
@@ -106,7 +110,7 @@ public sealed class HistoryWriterTests
         using var releaseFirst = new ManualResetEventSlim();
         using var barrierWaiting = new ManualResetEventSlim();
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>())
+        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>(), Flags)
         {
             BarrierWaiting = barrierWaiting.Set,
         };
@@ -152,7 +156,7 @@ public sealed class HistoryWriterTests
                 }
             },
         };
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>())
+        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>(), Flags)
         {
             BarrierWaiting = barrierWaiting.Set,
         };
@@ -186,7 +190,7 @@ public sealed class HistoryWriterTests
         using var releaseFirst = new ManualResetEventSlim();
         using var barrierWaiting = new ManualResetEventSlim();
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>())
+        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>(), Flags)
         {
             BarrierWaiting = barrierWaiting.Set,
         };
@@ -214,7 +218,7 @@ public sealed class HistoryWriterTests
         using var inFirst = new ManualResetEventSlim();
         using var releaseFirst = new ManualResetEventSlim();
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>());
+        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>(), Flags);
         using var releaseAtExit = new ReleaseAtExit(releaseFirst);
         var ordered = Ordered(history, writer);
 
@@ -240,7 +244,7 @@ public sealed class HistoryWriterTests
         using var inFirst = new ManualResetEventSlim();
         using var releaseFirst = new ManualResetEventSlim();
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>());
+        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>(), Flags);
         using var releaseAtExit = new ReleaseAtExit(releaseFirst);
         var logger = new CapturingLogger<OrderedHistoryRepository>();
         var ordered = new OrderedHistoryRepository(history, writer, logger, TimeSpan.Zero, TimeSpan.Zero);
@@ -265,7 +269,7 @@ public sealed class HistoryWriterTests
         using var releaseAtExit = new ReleaseAtExit(releaseFirst);
         var logger = new CapturingLogger<HistoryWriter>();
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
-        var writer = new HistoryWriter(history, logger);
+        var writer = new HistoryWriter(history, logger, Flags);
 
         writer.Enqueue(Entry(1), null);
         Assert.True(inFirst.Wait(BlockedThreads.SafetyTimeout));
@@ -296,7 +300,7 @@ public sealed class HistoryWriterTests
         using var releaseAtExit = new ReleaseAtExit(releaseFirst);
         var logger = new CapturingLogger<HistoryWriter>();
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
-        var writer = new HistoryWriter(history, logger);
+        var writer = new HistoryWriter(history, logger, Flags);
 
         writer.Enqueue(Entry(1), null, dictationId: 1);
         Assert.True(inFirst.Wait(BlockedThreads.SafetyTimeout));
@@ -357,7 +361,7 @@ public sealed class HistoryWriterTests
 
         // Any positive bound times out here, because the write it waits behind is held until after the call returns.
         using var writer = new HistoryWriter(
-            history, logger, producerWaitBound: TimeSpan.FromMilliseconds(20), disposeTimeout: BlockedThreads.SafetyTimeout);
+            history, logger, producerWaitBound: TimeSpan.FromMilliseconds(20), disposeTimeout: BlockedThreads.SafetyTimeout, Flags);
         using var releaseAtExit = new ReleaseAtExit(releaseFirst);
 
         Assert.True(writer.Enqueue(Entry(1), null, dictationId: 1));
@@ -396,7 +400,7 @@ public sealed class HistoryWriterTests
         var history = new FakeHistory { DuringAdd = HoldFirstWrite(inFirst, releaseFirst) };
         var completionWaits = 0;
         var writer = new HistoryWriter(
-            history, logger, producerWaitBound: Timeout.InfiniteTimeSpan, disposeTimeout: TimeSpan.FromMilliseconds(1))
+            history, logger, producerWaitBound: Timeout.InfiniteTimeSpan, disposeTimeout: TimeSpan.FromMilliseconds(1), Flags)
         {
             CompletionWaiting = () => completionWaits++,
         };
@@ -431,7 +435,7 @@ public sealed class HistoryWriterTests
                 }
             },
         };
-        using var writer = new HistoryWriter(history, logger);
+        using var writer = new HistoryWriter(history, logger, Flags);
 
         Assert.True(writer.Enqueue(Entry(1, SecretText), Audio(0.25f), dictationId: 7));
         Assert.True(writer.Enqueue(Entry(2), null, dictationId: 8));
@@ -453,7 +457,7 @@ public sealed class HistoryWriterTests
     public void Commit_timing_is_logged_under_the_dictation_stamp()
     {
         var logger = new CapturingLogger<HistoryWriter>();
-        using var writer = new HistoryWriter(new FakeHistory(), logger);
+        using var writer = new HistoryWriter(new FakeHistory(), logger, Flags);
 
         writer.Enqueue(Entry(1, SecretText), Audio(0.5f), dictationId: 42);
         Assert.True(writer.WaitForAcceptedWrites(BlockedThreads.SafetyTimeout));
@@ -470,7 +474,7 @@ public sealed class HistoryWriterTests
     public void The_capture_handed_over_is_the_capture_written_and_each_write_keeps_its_own_buffer()
     {
         var history = new FakeHistory();
-        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>());
+        using var writer = new HistoryWriter(history, new CapturingLogger<HistoryWriter>(), Flags);
         var first = Audio(0.25f);
         var second = Audio(-0.5f);
 
@@ -491,7 +495,7 @@ public sealed class HistoryWriterTests
     {
         using var database = ScribeDatabase.CreateInMemory();
         var repository = new HistoryRepository(database);
-        using var writer = new HistoryWriter(repository, new CapturingLogger<HistoryWriter>());
+        using var writer = new HistoryWriter(repository, new CapturingLogger<HistoryWriter>(), Flags);
         var ordered = Ordered(repository, writer);
 
         writer.Enqueue(Entry(1), Audio(0.25f));
@@ -537,8 +541,8 @@ public sealed class HistoryWriterTests
     private static CapturedAudio Audio(float value) => new(Enumerable.Repeat(value, 1_600).ToArray(), 16_000);
 
     // For tests about waiting for room: the production wait bound is real time, and these tests must never race it.
-    private static HistoryWriter Unbounded(IHistoryRepository history, CapturingLogger<HistoryWriter> logger) =>
-        new(history, logger, producerWaitBound: Timeout.InfiniteTimeSpan, disposeTimeout: BlockedThreads.SafetyTimeout);
+    private HistoryWriter Unbounded(IHistoryRepository history, CapturingLogger<HistoryWriter> logger) =>
+        new(history, logger, producerWaitBound: Timeout.InfiniteTimeSpan, disposeTimeout: BlockedThreads.SafetyTimeout, Flags);
 
     private static OrderedHistoryRepository Ordered(IHistoryRepository inner, IHistoryWriter writer) =>
         new(inner, writer, new CapturingLogger<OrderedHistoryRepository>(), BlockedThreads.SafetyTimeout, BlockedThreads.SafetyTimeout);

@@ -738,7 +738,12 @@ matter are intermittent and hardware‑specific.
   (RTF {Rtf:F2}, {Chunks} chunk(s), {Chars} characters); model load {LoadMs} ms, waited {WaitMs} ms for
   the engine.`, with no transcript text. Under `#<n>`, the controller logs `accepting the next dictation
   N ms after insertion` with the count of activations rejected while it processed, and the history
-  writer logs `history committed N ms after it was queued`. Silence auto-stop lines carry the tracker's
+  writer logs `history committed N ms after it was queued`. With `PerfFlags.HistoryStageTiming`
+  (DATA-O-08, off by default) a Debug line follows it for each write through the concrete repository:
+  `history write stages (us)` with the wait for room and in the queue, then the write's gate, open,
+  begin, blob columns, encode, blob insert (and its bytes), columns, insert, commit and close, and the
+  collections that ran meanwhile; numbers only, from one `HistoryWriteStages` per write, with no WAL
+  hook, no checkpoint and no file read. Silence auto-stop lines carry the tracker's
   `NoiseFloor` and `VoiceThreshold` as numbers. AI cleanup skip and failure lines carry the provider
   and status names, codes the live redaction and `TraceTagPolicy` leave visible; the reasons stay out.
   Each AI cleanup attempt logs one Debug line, `AI cleanup attempt: N request(s) in N ms, after N ms of

@@ -55,6 +55,10 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
     private readonly ILogger<HistoryWriter> _logger;
     private readonly TimeSpan _producerWaitBound;
     private readonly TimeSpan _disposeTimeout;
+
+    // DATA-O-08 and DATA-A-01 (PerfFlags.HistoryStageTiming): each write through the concrete repository also logs where
+    // its time went, numbers only. Off, nothing is timed beyond today's committed line.
+    private readonly HistoryRepository? _stageTimed;
     private readonly object _sync = new();
     private readonly Queue<PendingWrite> _queue = new();
 
@@ -77,14 +81,18 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
     private int _abandonedQueued;
     private int _droppedForRoom;
 
-    public HistoryWriter(IHistoryRepository inner, ILogger<HistoryWriter> logger)
-        : this(inner, logger, ProducerWaitBound, DefaultDisposeTimeout)
+    public HistoryWriter(IHistoryRepository inner, ILogger<HistoryWriter> logger, Diagnostics.PerfFlags? flags = null)
+        : this(inner, logger, ProducerWaitBound, DefaultDisposeTimeout, flags)
     {
     }
 
     /// <summary>Test seam: the production bounds are real time, which a deterministic test must not depend on.</summary>
     internal HistoryWriter(
-        IHistoryRepository inner, ILogger<HistoryWriter> logger, TimeSpan producerWaitBound, TimeSpan disposeTimeout)
+        IHistoryRepository inner,
+        ILogger<HistoryWriter> logger,
+        TimeSpan producerWaitBound,
+        TimeSpan disposeTimeout,
+        Diagnostics.PerfFlags? flags = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(logger);
@@ -92,6 +100,7 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
         _logger = logger;
         _producerWaitBound = producerWaitBound;
         _disposeTimeout = disposeTimeout;
+        _stageTimed = flags?.IsOn(Diagnostics.PerfFlags.HistoryStageTiming) == true ? inner as HistoryRepository : null;
     }
 
     /// <summary>Test hook: runs under the writer's lock when a producer first has to wait for room.</summary>
@@ -134,7 +143,8 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
                 _waiting.Remove(ticket);
                 if (admit)
                 {
-                    _queue.Enqueue(new PendingWrite(ticket, entry, audio, dictationId, queuedAt));
+                    var admittedAt = _stageTimed is null ? 0 : Stopwatch.GetTimestamp();
+                    _queue.Enqueue(new PendingWrite(ticket, entry, audio, dictationId, queuedAt, admittedAt));
                     startConsumer = !_consumerActive;
                     _consumerActive = true;
                     outcome = EnqueueOutcome.Accepted;
@@ -279,11 +289,21 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
 
             var started = Stopwatch.GetTimestamp();
             Exception? failure = null;
+            HistoryWriteStages? stages = null;
             if (!drop)
             {
                 try
                 {
-                    _inner.Add(item.Entry, item.Audio);
+                    if (_stageTimed is { } repository)
+                    {
+                        stages = new HistoryWriteStages();
+                        stages.Start();
+                        repository.Add(item.Entry, item.Audio, stages);
+                    }
+                    else
+                    {
+                        _inner.Add(item.Entry, item.Audio);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -295,6 +315,10 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
             // Reported before the write counts as finished, so anything that waited for it finds its outcome already in
             // the log.
             Report(item, drop, failure, Stopwatch.GetElapsedTime(started));
+            if (stages is not null && failure is null)
+            {
+                ReportStages(item, started, stages);
+            }
 
             lock (_sync)
             {
@@ -345,6 +369,35 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
             item.Audio is not null));
     }
 
+    // Where a committed write's time went (HistoryStageTiming), after today's committed line: the wait for room, the wait
+    // in the queue, then each step of the repository's write, in microseconds, and the collections that ran meanwhile.
+    // Numbers only, like the line before it.
+    private void ReportStages(PendingWrite item, long started, HistoryWriteStages stages)
+    {
+        TryLog(logger => logger.LogDebug(
+            "#{Id} history write stages (us): room {RoomUs}, queue {QueueUs}, gate {GateUs}, open {OpenUs}, " +
+            "begin {BeginUs}, blob columns {BlobColumnsUs}, encode {EncodeUs}, blob insert {BlobInsertUs} " +
+            "({BlobBytes} bytes), columns {ColumnsUs}, insert {InsertUs}, commit {CommitUs}, close {CloseUs}; " +
+            "collections {Gen0}/{Gen1}/{Gen2}.",
+            item.DictationId,
+            HistoryWriteStages.Microseconds(item.QueuedTimestamp, item.AdmittedTimestamp),
+            HistoryWriteStages.Microseconds(item.AdmittedTimestamp, started),
+            HistoryWriteStages.Microseconds(stages.Started, stages.GateEntered),
+            HistoryWriteStages.Microseconds(stages.GateEntered, stages.Opened),
+            HistoryWriteStages.Microseconds(stages.Opened, stages.Began),
+            HistoryWriteStages.Microseconds(stages.Began, stages.BlobColumnsChecked),
+            HistoryWriteStages.Microseconds(stages.BlobColumnsChecked, stages.BlobEncoded),
+            HistoryWriteStages.Microseconds(stages.BlobEncoded, stages.BlobInserted),
+            stages.BlobBytes,
+            HistoryWriteStages.Microseconds(stages.BlobInserted != 0 ? stages.BlobInserted : stages.Began, stages.ColumnsChecked),
+            HistoryWriteStages.Microseconds(stages.ColumnsChecked, stages.Inserted),
+            HistoryWriteStages.Microseconds(stages.Inserted, stages.Committed),
+            HistoryWriteStages.Microseconds(stages.Committed, stages.Closed),
+            stages.Gen0Collections,
+            stages.Gen1Collections,
+            stages.Gen2Collections));
+    }
+
     // Diagnostics must never take down the writer they describe: a throwing log call here would kill the consumer and
     // strand every write queued behind it.
     private void TryLog(Action<ILogger> write)
@@ -371,5 +424,6 @@ public sealed class HistoryWriter : IHistoryWriter, IDisposable
         HistoryEntry Entry,
         CapturedAudio? Audio,
         long DictationId,
-        long QueuedTimestamp);
+        long QueuedTimestamp,
+        long AdmittedTimestamp);
 }

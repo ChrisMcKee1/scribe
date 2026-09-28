@@ -37,6 +37,7 @@ public sealed class PerfFlags
         DeduplicateOverlayMeter,
         DeferSettingsPageData,
         ForcedIdleGc,
+        HistoryStageTiming,
         HookPriorityAboveNormal,
         HookRecoveryObservations,
         IncrementalWordPackRows,
@@ -71,6 +72,7 @@ public sealed class PerfFlags
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
     public const string ForcedIdleGc = nameof(ForcedIdleGc);
+    public const string HistoryStageTiming = nameof(HistoryStageTiming);
     public const string HookPriorityAboveNormal = nameof(HookPriorityAboveNormal);
     public const string HookRecoveryObservations = nameof(HookRecoveryObservations);
     public const string IncrementalWordPackRows = nameof(IncrementalWordPackRows);

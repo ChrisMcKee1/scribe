@@ -62,7 +62,9 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<HistoryDeletionNotifier>();
         services.AddSingleton<HistoryRepository>();
         services.AddSingleton(sp => new HistoryWriter(
-            sp.GetRequiredService<HistoryRepository>(), sp.GetRequiredService<ILogger<HistoryWriter>>()));
+            sp.GetRequiredService<HistoryRepository>(),
+            sp.GetRequiredService<ILogger<HistoryWriter>>(),
+            sp.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>()));
         services.AddSingleton<IHistoryWriter>(sp => sp.GetRequiredService<HistoryWriter>());
         services.AddSingleton<IHistoryRepository>(sp => new OrderedHistoryRepository(
             sp.GetRequiredService<HistoryRepository>(),
