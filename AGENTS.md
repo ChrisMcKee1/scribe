@@ -1586,12 +1586,11 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   roll back, and the two channels can share one data folder, so any build may open a file a newer one
   wrote. A build that meets a newer `user_version` throws `NewerDatabaseSchemaException`, and the app
   says so and exits instead of hanging. History also checks, and repairs, the newer columns it uses
-  on every read and write (a table rebuilt from a damaged file can come back without them); with
-  `PerfFlags.GroupHistorySchemaProbes` (DATA-A-06, off by default) one operation reads the history
-  table's columns once (`TableColumns`) instead of once per column, with the same repair and fallback,
-  never kept past the operation. Every open's configuration batch (`ScribeDatabase.Configure`) is
-  built once per process (DATA-A-10, no flag: `ScribeDatabaseConfigureTextTests` holds both batches
-  to the interpolation each open used to make).
+  (a table rebuilt from a damaged file can come back without them), until it has seen each one: a
+  column found, or added by a write that committed, is not probed again by that repository
+  (`HistoryRepository`'s schema cache; a repair a rollback undid is not kept). Every open's
+  configuration batch (`ScribeDatabase.Configure`) is built once per process (DATA-A-10, no flag:
+  `ScribeDatabaseConfigureTextTests` holds both batches to the interpolation each open used to make).
 - **Opt-in recordings are stored as 16-bit PCM.** A PCM16 blob opens with a 4-byte header
   (`AudioBlobCodec.Pcm16Magic`) and is marked in `audio_blobs.encoding` (0 is the legacy float32).
   Size things with `AudioBlobCodec.EncodedLength`, which includes the header.

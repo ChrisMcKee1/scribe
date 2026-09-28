@@ -38,7 +38,6 @@ public sealed class PerfFlags
         DeferSettingsPageData,
         DictionaryDiffSave,
         ForcedIdleGc,
-        GroupHistorySchemaProbes,
         HistoryStageTiming,
         HookPriorityAboveNormal,
         HookRecoveryObservations,
@@ -77,7 +76,6 @@ public sealed class PerfFlags
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
     public const string DictionaryDiffSave = nameof(DictionaryDiffSave);
     public const string ForcedIdleGc = nameof(ForcedIdleGc);
-    public const string GroupHistorySchemaProbes = nameof(GroupHistorySchemaProbes);
     public const string HistoryStageTiming = nameof(HistoryStageTiming);
     public const string HookPriorityAboveNormal = nameof(HookPriorityAboveNormal);
     public const string HookRecoveryObservations = nameof(HookRecoveryObservations);

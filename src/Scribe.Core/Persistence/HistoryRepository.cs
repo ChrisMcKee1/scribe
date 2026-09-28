@@ -19,18 +19,15 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     private readonly ScribeDatabase _database;
     private readonly HistoryDeletionNotifier _deletions;
-    private readonly bool _groupSchemaProbes;
     private bool _audioEncodingColumnAvailable;
     private bool _historyCleanupColumnAvailable;
     private bool _historyModelColumnAvailable;
     private bool _historyRatingColumnAvailable;
 
-    public HistoryRepository(
-        ScribeDatabase database, HistoryDeletionNotifier? deletions = null, Diagnostics.PerfFlags? flags = null)
+    public HistoryRepository(ScribeDatabase database, HistoryDeletionNotifier? deletions = null)
     {
         _database = database;
         _deletions = deletions ?? new HistoryDeletionNotifier();
-        _groupSchemaProbes = flags?.IsOn(Diagnostics.PerfFlags.GroupHistorySchemaProbes) == true;
     }
 
     /// <summary>
@@ -83,9 +80,8 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
                 audioEncodingColumnAvailable = inserted.EncodingColumnAvailable;
             }
 
-            TableColumns? columns = null;
-            var hasCleanupColumn = _historyCleanupColumnAvailable || EnsureHistoryColumn(connection, ref columns, "cleanup_ms", "INTEGER NULL");
-            var hasModelColumn = _historyModelColumnAvailable || EnsureHistoryColumn(connection, ref columns, "transcription_model_id", "TEXT NULL");
+            var hasCleanupColumn = _historyCleanupColumnAvailable || EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
+            var hasModelColumn = _historyModelColumnAvailable || EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
             stages?.MarkColumnsChecked();
             var optionalColumns =
                 (hasCleanupColumn ? ", cleanup_ms" : string.Empty) +
@@ -292,10 +288,9 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     private SqliteCommand CreateHistoryReadCommand(SqliteConnection connection, string extraSelect = "")
     {
-        TableColumns? columns = null;
-        var hasCleanupColumn = EnsureHistoryColumnAvailable(connection, ref columns, "cleanup_ms", "INTEGER NULL", ref _historyCleanupColumnAvailable);
-        var hasModelColumn = EnsureHistoryColumnAvailable(connection, ref columns, "transcription_model_id", "TEXT NULL", ref _historyModelColumnAvailable);
-        var hasRatingColumn = EnsureHistoryColumnAvailable(connection, ref columns, "ai_rating", "INTEGER NULL", ref _historyRatingColumnAvailable);
+        var hasCleanupColumn = EnsureHistoryColumnAvailable(connection, "cleanup_ms", "INTEGER NULL", ref _historyCleanupColumnAvailable);
+        var hasModelColumn = EnsureHistoryColumnAvailable(connection, "transcription_model_id", "TEXT NULL", ref _historyModelColumnAvailable);
+        var hasRatingColumn = EnsureHistoryColumnAvailable(connection, "ai_rating", "INTEGER NULL", ref _historyRatingColumnAvailable);
         var cleanupExpression = hasCleanupColumn ? "cleanup_ms" : "NULL";
         var modelExpression = hasModelColumn ? "transcription_model_id" : "NULL";
         var ratingExpression = hasRatingColumn ? "ai_rating" : "NULL";
@@ -790,44 +785,7 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
         return exists;
     }
 
-    // DATA-A-06 (GroupHistorySchemaProbes): with the flag, the history columns one operation still has to probe (the
-    // schema cache has not seen them) are read from one inventory, made when the first of them is probed; without it, each
-    // is probed on its own, as before.
-    private bool EnsureHistoryColumn(
-        SqliteConnection connection, ref TableColumns? columns, string columnName, string declaration)
-    {
-        if (!_groupSchemaProbes)
-        {
-            return EnsureHistoryColumn(connection, columnName, declaration);
-        }
-
-        columns ??= new TableColumns(connection, "history");
-        return columns.Ensure(columnName, declaration);
-    }
-
-    private bool EnsureHistoryColumnAvailable(
-        SqliteConnection connection, ref TableColumns? columns, string columnName, string declaration, ref bool available)
-    {
-        if (!_groupSchemaProbes)
-        {
-            return EnsureHistoryColumnAvailable(connection, columnName, declaration, ref available);
-        }
-
-        if (available)
-        {
-            return true;
-        }
-
-        var exists = EnsureHistoryColumn(connection, ref columns, columnName, declaration);
-        if (exists)
-        {
-            available = true;
-        }
-
-        return exists;
-    }
-
-    internal static bool EnsureColumn(
+    private static bool EnsureColumn(
         SqliteConnection connection,
         string table,
         string columnName,
