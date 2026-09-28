@@ -244,8 +244,22 @@ public partial class App : Application
         builder.Logging.AddFilter("System", LogLevel.Warning);
         builder.Logging.AddFilter("Azure", LogLevel.Warning);
 
+        // DATA-O-05b: the database's first use (its full integrity check, any repair and the migrations) starts now on a
+        // worker, while the host is built, on the same resolved paths; every use of the database waits for it under the
+        // database's own lock, so nothing reads it before the check has finished. The container hands out and disposes
+        // this one instance. Off, the container makes it and the banner's settings load runs the check.
+        StartupLogger<ScribeDatabase>? earlyDatabaseLog = null;
+        if (perfFlags.IsOn(PerfFlags.OverlappedIntegrityCheck))
+        {
+            earlyDatabaseLog = new StartupLogger<ScribeDatabase>(logSink);
+            var earlyDatabase = new ScribeDatabase(paths, earlyDatabaseLog);
+            builder.Services.Replace(ServiceDescriptor.Singleton(_ => earlyDatabase));
+            _ = earlyDatabase.InitializeInBackground();
+        }
+
         _host = builder.Build();
         StartupStages?.Mark("build");
+        earlyDatabaseLog?.Attach(_host.Services.GetRequiredService<ILoggerFactory>());
         _host.Start();
         StartupStages?.Mark("hoststart");
 

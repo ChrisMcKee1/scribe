@@ -1989,6 +1989,20 @@ the sums and needs a decision (and probably a flag) of its own; a native Arm64 r
   refusal). The one thing the two share is the SQLite provider's initialization, which `RunOnce` runs
   once per process: a second caller waits until it has returned, and a failed one is not retried, as
   before.
+- **The database's first use can start early, on a worker** (DATA-O-05b,
+  `PerfFlags.OverlappedIntegrityCheck`, off by default; approval: behaviour). With the flag on,
+  `StartAsync` makes the `ScribeDatabase` itself once the paths have settled and the log provider
+  exists, hands the container that instance through a factory (so the container still disposes it), and
+  calls `InitializeInBackground` before the host is built: the full `quick_check`, any repair, the
+  lost-settings record, the WAL decision and the migrations run exactly as the banner's first settings
+  load would run them, under the database's own initialization lock, which every `Open` and
+  `Initialize` takes, so nothing reads the database before the check has finished, whatever thread
+  asks. A failure is kept and thrown to the first caller, as if it had run the initialization, and the
+  next call tries again; exit waits for a check in progress; the keep-alive connection holds the
+  checked file open, so no other file can take its place before the first use. Its log lines go
+  straight to the file provider until the host exists (`StartupLogger`), and they still come before the
+  banner, as the banner's own load put them. `ScribeDatabaseBackgroundInitializationTests` compares twin
+  damaged files (garbage, a history page, an audio_blobs page, the freelist trunk) checked each way.
 
 ## Microphone choice and the Windows default (read before touching capture devices)
 

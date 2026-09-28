@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Runtime.ExceptionServices;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -92,6 +93,9 @@ public sealed class ScribeDatabase : IDisposable
     private SqliteConnection? _keepAlive;
     private bool _initialized;
     private bool _disposed;
+
+    // A background initialization's failure, thrown to the first caller after it (InitializeInBackground). Guarded by _gate.
+    private ExceptionDispatchInfo? _backgroundFailure;
 
     /// <summary>
     /// True when startup found the database file corrupted and rebuilt it from whatever rows were
@@ -505,6 +509,39 @@ public sealed class ScribeDatabase : IDisposable
     /// <summary>Forces provider initialization and schema migration without returning a connection.</summary>
     public void Initialize() => EnsureInitialized();
 
+    /// <summary>
+    /// Starts this database's first-use initialization on a worker: the integrity check and any repair, the WAL decision,
+    /// migrations and the additive schema, exactly as the first <see cref="Open"/> would run them (DATA-O-05b,
+    /// <see cref="Diagnostics.PerfFlags.OverlappedIntegrityCheck"/>). It holds the same lock every <see cref="Open"/> and
+    /// <see cref="Initialize"/> takes to initialize, so no use of the database can begin before it has finished, whatever
+    /// thread asks. A failure is kept and thrown to the first caller, as if that caller had run the initialization itself,
+    /// and the call after it tries again, as it always has. The task never faults.
+    /// </summary>
+    public Task InitializeInBackground() => Task.Run(() =>
+    {
+        lock (_gate)
+        {
+            if (_disposed || _initialized || _backgroundFailure is not null)
+            {
+                return;
+            }
+
+            try
+            {
+                InitializeLocked();
+            }
+            catch (Exception ex)
+            {
+                _backgroundFailure = ExceptionDispatchInfo.Capture(ex);
+            }
+        }
+    });
+
+    /// <summary>
+    /// Test seam: runs on the initializing thread, holding the initialization lock, before anything is initialized.
+    /// </summary>
+    internal Action? InitializationStarting { get; set; }
+
     private void EnsureInitialized()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
@@ -515,66 +552,81 @@ public sealed class ScribeDatabase : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_initialized) return;
 
-            // Microsoft.Data.Sqlite auto-initializes SQLitePCLRaw, but doing it explicitly once is
-            // idempotent and removes any ambiguity about which bundle provides the native library.
-            s_providerInitialization.Run(SQLitePCL.Batteries_V2.Init);
+            if (_backgroundFailure is { } failure)
+            {
+                // The initialization ran on a worker and failed: this caller gets what running it would have thrown.
+                _backgroundFailure = null;
+                failure.Throw();
+            }
+
+            InitializeLocked();
+        }
+    }
+
+    // Caller holds _gate, and the database is neither disposed nor initialized.
+    private void InitializeLocked()
+    {
+        InitializationStarting?.Invoke();
+
+        // Microsoft.Data.Sqlite auto-initializes SQLitePCLRaw, but doing it explicitly once is
+        // idempotent and removes any ambiguity about which bundle provides the native library.
+        s_providerInitialization.Run(SQLitePCL.Batteries_V2.Init);
+
+        if (!_isMemory)
+        {
+            // A corrupted file must be caught before anything reads through it: a "malformed"
+            // database can serve some tables and fail others, which shows up to the user as
+            // settings or dictionary entries silently vanishing. Detect it now and rebuild
+            // from whatever is still readable, keeping the damaged original beside the new file.
+            EnsureFileDatabaseHealthy();
+
+            // A WAL this large at startup is a backfill an earlier session did not finish, for
+            // example one that exited straight after a maintenance VACUUM. Leave that copy to
+            // maintenance's first pass rather than the first writer's commit, which at startup
+            // is the UI thread.
+            _deferAutoCheckpoint = FileLengthOrZero(DataSourcePath() + "-wal") >= DeferredBackfillWalBytes;
+        }
+
+        var keepAlive = new SqliteConnection(_connectionString);
+        try
+        {
+            keepAlive.Open();
+            Configure(keepAlive, autoCheckpoint: !_deferAutoCheckpoint);
 
             if (!_isMemory)
             {
-                // A corrupted file must be caught before anything reads through it: a "malformed"
-                // database can serve some tables and fail others, which shows up to the user as
-                // settings or dictionary entries silently vanishing. Detect it now and rebuild
-                // from whatever is still readable, keeping the damaged original beside the new file.
-                EnsureFileDatabaseHealthy();
+                EnableIncrementalAutoVacuumIfNew(keepAlive);
 
-                // A WAL this large at startup is a backfill an earlier session did not finish, for
-                // example one that exited straight after a maintenance VACUUM. Leave that copy to
-                // maintenance's first pass rather than the first writer's commit, which at startup
-                // is the UI thread.
-                _deferAutoCheckpoint = FileLengthOrZero(DataSourcePath() + "-wal") >= DeferredBackfillWalBytes;
+                // WAL is persistent and only meaningful for a file database; on :memory: SQLite
+                // silently keeps its MEMORY journal, so this is best-effort.
+                Execute(keepAlive, "PRAGMA journal_mode=WAL;");
             }
 
-            var keepAlive = new SqliteConnection(_connectionString);
-            try
+            Migrate(keepAlive);
+            EnsureAdditiveSchema(keepAlive);
+
+            // A rebuild recorded the loss before it recovered anything; a repair that fell back to a fresh file,
+            // or recovered nothing, has not. Best effort here: such a file holds nothing recovered, so no later
+            // start can delete anything by taking it for a first run, and this start already knows.
+            if (SettingsLostInRepair && !TryRecordSettingsLoss(keepAlive, out var recordFailure))
             {
-                keepAlive.Open();
-                Configure(keepAlive, autoCheckpoint: !_deferAutoCheckpoint);
-
-                if (!_isMemory)
-                {
-                    EnableIncrementalAutoVacuumIfNew(keepAlive);
-
-                    // WAL is persistent and only meaningful for a file database; on :memory: SQLite
-                    // silently keeps its MEMORY journal, so this is best-effort.
-                    Execute(keepAlive, "PRAGMA journal_mode=WAL;");
-                }
-
-                Migrate(keepAlive);
-                EnsureAdditiveSchema(keepAlive);
-
-                // A rebuild recorded the loss before it recovered anything; a repair that fell back to a fresh file,
-                // or recovered nothing, has not. Best effort here: such a file holds nothing recovered, so no later
-                // start can delete anything by taking it for a first run, and this start already knows.
-                if (SettingsLostInRepair && !TryRecordSettingsLoss(keepAlive, out var recordFailure))
-                {
-                    _logger.LogWarning(
-                        "Could not record that the repair lost the settings; only this start treats them as lost ({Failure}).",
-                        Diagnostics.FailureShape.Describe(recordFailure));
-                }
-
-                var version = QueryScalar(keepAlive, "SELECT sqlite_version();");
-                _logger.LogInformation(
-                    "SQLite database ready (native {Version}, schema v{Schema}, {Mode}).",
-                    version, SchemaVersion, _isMemory ? "in-memory" : "file");
-
-                _keepAlive = keepAlive;
-                _initialized = true;
+                _logger.LogWarning(
+                    "Could not record that the repair lost the settings; only this start treats them as lost ({Failure}).",
+                    Diagnostics.FailureShape.Describe(recordFailure));
             }
-            catch
-            {
-                keepAlive.Dispose();
-                throw;
-            }
+
+            var version = QueryScalar(keepAlive, "SELECT sqlite_version();");
+            _logger.LogInformation(
+                "SQLite database ready (native {Version}, schema v{Schema}, {Mode}).",
+                version, SchemaVersion, _isMemory ? "in-memory" : "file");
+
+            _keepAlive = keepAlive;
+            _initialized = true;
+        }
+        catch
+        {
+            keepAlive.Dispose();
+            throw;
         }
     }
 

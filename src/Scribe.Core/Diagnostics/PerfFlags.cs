@@ -44,6 +44,7 @@ public sealed class PerfFlags
         InputTimings,
         LeanFooterRefresh,
         LightTraceBridge,
+        OverlappedIntegrityCheck,
         PillBeforeTray,
         PreciseLocalTypingSettle,
         ReuseStatusComposition,
@@ -79,6 +80,7 @@ public sealed class PerfFlags
     public const string InputTimings = nameof(InputTimings);
     public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
     public const string LightTraceBridge = nameof(LightTraceBridge);
+    public const string OverlappedIntegrityCheck = nameof(OverlappedIntegrityCheck);
     public const string PillBeforeTray = nameof(PillBeforeTray);
     public const string PreciseLocalTypingSettle = nameof(PreciseLocalTypingSettle);
     public const string ReuseStatusComposition = nameof(ReuseStatusComposition);
