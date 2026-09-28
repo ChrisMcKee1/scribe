@@ -43,9 +43,20 @@ internal sealed class TableColumns
         }
         catch
         {
-            // Read again either way: another connection may have added it since this operation read the table.
-            _names = Read(_connection, _table);
-            return _names.Contains(columnName);
+            // The repair failed, and the column's own probe answers false here unless the column was there when it looked.
+            // This operation read the table earlier, and another connection can have added the column since, so the table
+            // is read again to see, best-effort (DATA-IMPL-A-04): if that read fails too, the old false result stands, and
+            // the next column reads the table afresh, as its own probe would have.
+            try
+            {
+                _names = Read(_connection, _table);
+                return _names.Contains(columnName);
+            }
+            catch
+            {
+                _names = null;
+                return false;
+            }
         }
 
         _names = Read(_connection, _table);

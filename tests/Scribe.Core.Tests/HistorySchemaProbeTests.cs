@@ -49,8 +49,91 @@ public sealed class HistorySchemaProbeTests
 
         Execute(second, "ALTER TABLE history ADD COLUMN ai_rating INTEGER NULL;");
 
-        // The read this operation made no longer lists it, the repair finds it there already, and the table is read again.
+        // The read this operation made no longer lists it, the repair finds it there already, and the table is read again,
+        // which is what the column's own probe, made now, would have found.
         Assert.True(columns.Ensure("ai_rating", "INTEGER NULL"));
+        Assert.True(HistoryRepository.EnsureColumn(second, "history", "ai_rating", "INTEGER NULL"));
+    }
+
+    [Fact]
+    public void A_refused_repair_whose_follow_up_read_fails_too_answers_false_as_the_column_s_own_probe_does()
+    {
+        // The review's fault: the first metadata read is allowed, then ALTER and every later metadata read are refused.
+        bool Probe(bool grouped)
+        {
+            using var connection = new SqliteConnection("Data Source=:memory:");
+            connection.Open();
+            Execute(connection, "CREATE TABLE history (id INTEGER PRIMARY KEY);");
+            var reads = 0;
+            SQLitePCL.delegate_authorizer authorizer = (_, action, _, _, _, _) =>
+                action == SQLitePCL.raw.SQLITE_PRAGMA
+                    ? ++reads == 1 ? SQLitePCL.raw.SQLITE_OK : SQLitePCL.raw.SQLITE_DENY
+                    : action == SQLitePCL.raw.SQLITE_ALTER_TABLE ? SQLitePCL.raw.SQLITE_DENY : SQLitePCL.raw.SQLITE_OK;
+            SQLitePCL.raw.sqlite3_set_authorizer(connection.Handle, authorizer, null);
+            try
+            {
+                return grouped
+                    ? new TableColumns(connection, "history").Ensure("ai_rating", "INTEGER NULL")
+                    : HistoryRepository.EnsureColumn(connection, "history", "ai_rating", "INTEGER NULL");
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_set_authorizer(connection.Handle, (SQLitePCL.delegate_authorizer)null!, null);
+                GC.KeepAlive(authorizer);
+            }
+        }
+
+        Assert.False(Probe(grouped: false));
+        Assert.False(Probe(grouped: true));
+    }
+
+    [Fact]
+    public void A_history_read_whose_repair_and_follow_up_read_are_refused_returns_its_rows_either_way()
+    {
+        string Read(PerfFlags flags)
+        {
+            using var folder = new TempDatabaseFolder();
+            using var database = folder.Open();
+            var repository = new HistoryRepository(database, flags: flags);
+            repository.Add(new HistoryEntry(0, new DateTimeOffset(2026, 9, 21, 9, 0, 0, TimeSpan.Zero), "synthetic", 10, 1));
+
+            // ai_rating goes, and the pooled connection the read will take refuses its repair and every metadata read after.
+            var repairRefused = false;
+            SQLitePCL.delegate_authorizer authorizer = (_, action, _, _, _, _) =>
+            {
+                if (action == SQLitePCL.raw.SQLITE_ALTER_TABLE)
+                {
+                    repairRefused = true;
+                    return SQLitePCL.raw.SQLITE_DENY;
+                }
+
+                return repairRefused && action == SQLitePCL.raw.SQLITE_PRAGMA ? SQLitePCL.raw.SQLITE_DENY : SQLitePCL.raw.SQLITE_OK;
+            };
+            SQLitePCL.sqlite3 handle;
+            using (var connection = database.Open())
+            {
+                Execute(connection, "ALTER TABLE history DROP COLUMN ai_rating;");
+                handle = connection.Handle!;
+                SQLitePCL.raw.sqlite3_set_authorizer(handle, authorizer, null);
+            }
+
+            try
+            {
+                var entries = repository.GetRecent();
+                Assert.True(repairRefused);
+                return string.Join("\n", entries.Select(entry => entry.ToString()));
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_set_authorizer(handle, (SQLitePCL.delegate_authorizer)null!, null);
+                GC.KeepAlive(authorizer);
+                folder.ReleasePooledConnections();
+            }
+        }
+
+        var today = Read(PerfFlags.None);
+        Assert.Contains("synthetic", today, StringComparison.Ordinal);
+        Assert.Equal(today, Read(PerfFlags.Parse(PerfFlags.GroupHistorySchemaProbes)));
     }
 
     public static TheoryData<string> Schemas() => ["current", "missing the three newer columns", "missing the rating"];
