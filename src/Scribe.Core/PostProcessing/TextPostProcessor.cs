@@ -166,11 +166,19 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     }
 
     // The candidates of one pass, collected by this post-processor or, when UseLoopCandidateScan is false, by release 0.5.0.
+    // The 0.5.0 collection is a method of its own: its lambda captures the text, and a closure over a parameter is made at
+    // the start of the method that holds it, whichever branch runs.
     private List<ReplacementCandidate>? DictionaryCandidates(CompiledRule[] rules, string text) =>
-        UseLoopCandidateScan ? Candidates(rules, text) : rules.SelectMany((rule, order) => rule.Find(text, order)).ToList();
+        UseLoopCandidateScan ? Candidates(rules, text) : Release050Candidates(rules, text);
 
     private List<ReplacementCandidate>? SnippetCandidates(SnippetRule[] rules, string text) =>
-        UseLoopCandidateScan ? Candidates(rules, text) : rules.SelectMany((rule, order) => rule.Find(text, order)).ToList();
+        UseLoopCandidateScan ? Candidates(rules, text) : Release050Candidates(rules, text);
+
+    private static List<ReplacementCandidate> Release050Candidates(CompiledRule[] rules, string text) =>
+        rules.SelectMany((rule, order) => rule.Find(text, order)).ToList();
+
+    private static List<ReplacementCandidate> Release050Candidates(SnippetRule[] rules, string text) =>
+        rules.SelectMany((rule, order) => rule.Find(text, order)).ToList();
 
     // Null when nothing matched, so a pass over rules that do not match allocates nothing.
     internal static List<ReplacementCandidate>? Candidates(CompiledRule[] rules, string text)
