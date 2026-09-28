@@ -1,3 +1,4 @@
+using System.Reflection;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Xunit.Abstractions;
@@ -8,7 +9,8 @@ namespace Scribe.Core.Tests.Libraries.Composition;
 /// <summary>
 /// The statuses' comparison index keeps a spoken form's first row inline and lists any others after it, and a status makes
 /// its set of listed libraries only once a second library holds the form (ledger LB3). The libraries a status names, and
-/// their order, must not change.
+/// their order, must not change. Each saving is also checked on its own: the index and a library's row lookup by the room
+/// they end with, the inline first row by the first status measured per form held once, and the set by warm statuses.
 /// </summary>
 [Collection(AllocationMeasurementCollection.Name)]
 public sealed class LibraryCompositionStatusOrderTests(ITestOutputHelper output)
@@ -117,6 +119,68 @@ public sealed class LibraryCompositionStatusOrderTests(ITestOutputHelper output)
         Assert.True(bytes <= 27_200, $"100 statuses allocated {bytes} bytes; the bound is 27,200.");
     }
 
+    // The bounds above measure several of LB3's savings together, so each is checked on its own too (the set made only for
+    // a second library is the one the warm statuses above measure alone). The index and a library's row lookup end with
+    // exactly the room a map sized for their count gets, never what growth from empty reaches, which for 1,000 entries is
+    // more. The composition keeps both private; the test reads them by reflection, without growing either.
+    [Fact]
+    public void The_index_and_a_library_s_row_lookup_have_exactly_the_room_their_counts_need()
+    {
+        var composition = LibraryComposition.Committed(ThousandRowCatalog(), [], new GlossaryBudget(80));
+        GC.KeepAlive(composition.StatusOf("team", Key("term 0500")));
+        Assert.NotEqual(SizedFor(1_000), GrownTo(1_000));
+
+        var index = Capacity(Index(composition));
+        var lookup = Capacity(RowLookup(composition, "team"));
+
+        Assert.True(SizedFor(1_000) == index, $"The index of spoken forms has room for {index}.");
+        Assert.True(SizedFor(1_000) == lookup, $"The library's row lookup has room for {lookup}.");
+    }
+
+    // The first status of a library with one row builds the index of every library's forms and that library's one-entry
+    // row lookup, so per form it measures the index: for forms held once, their slots in the index and nothing else, each
+    // form's row held inline. A form held twice lists only its second row.
+    [Fact]
+    public void The_first_status_indexes_forms_held_once_inline_with_no_list_each()
+    {
+        var catalog = ThousandRowCatalogWith(CustomLibrary("tiny", Custom("lonely", "Lonely")));
+        IReadOnlyList<DictionaryEntry> dictionary = [];
+        var budget = new GlossaryBudget(80);
+
+        var bytes = Smallest(() =>
+        {
+            var composition = LibraryComposition.Committed(catalog, dictionary, budget);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var status = composition.StatusOf("tiny", Key("lonely"));
+            var after = GC.GetAllocatedBytesForCurrentThread() - before;
+            GC.KeepAlive(status);
+            return after;
+        });
+        var perForm = bytes / 1_001.0;
+        output.WriteLine($"First StatusOf indexing 1,001 forms held once: {bytes} bytes, {perForm:F1} per form");
+
+        var index = Index(LibraryComposition.Committed(catalog, dictionary, budget));
+        Assert.Equal(1_001, index.Count);
+        foreach (var form in index.Keys)
+        {
+            var holders = index[form]!;
+            Assert.True(holders.GetType().IsValueType, $"The index holds a {holders.GetType().Name} for a form held once.");
+            Assert.Null(holders.GetType().GetProperty("Rest")!.GetValue(holders));
+        }
+
+        var twice = Index(Compose(Catalog(
+            State(enabled: ["alpha", "beta"], accepted: [("alpha", H1), ("beta", H2)]),
+            Committed(CustomLibrary("alpha", Custom("shared", "Alpha")), H1), Committed(CustomLibrary("beta", Custom("shared", "Beta")), H2))));
+        var shared = twice[Key("shared")]!;
+        var rest = Assert.IsAssignableFrom<System.Collections.IEnumerable>(shared.GetType().GetProperty("Rest")!.GetValue(shared));
+        Assert.Single(rest.Cast<object>());
+
+        // Held inline, a form held once takes only its slot in the index; a List per form (a List object and a four-slot
+        // array) cost about 102 bytes more each. Measured on x64: 49.1 bytes per form, and 151.4 with a List per form (the
+        // older bound above still passed that at 182,264 bytes); the bound sits halfway.
+        Assert.True(perForm <= 100, $"The first status allocated {perForm:F1} bytes per form; the bound is 100.");
+    }
+
     // Permission is off so the first status builds no glossary: only the index and the identity map are measured.
     private static LibraryCatalog ThousandRowCatalog()
     {
@@ -125,6 +189,51 @@ public sealed class LibraryCompositionStatusOrderTests(ITestOutputHelper output)
             .ToArray();
         return Catalog(
             State(enabled: ["team"], ai: [("team", false)], accepted: [("team", H1)]), Committed(CustomLibrary("team", rows), H1));
+    }
+
+    // The same 1,000 forms and one more library, permission off for both.
+    private static LibraryCatalog ThousandRowCatalogWith(LibraryContent extra)
+    {
+        var rows = Enumerable.Range(0, 1_000)
+            .Select(i => Custom(FormattableString.Invariant($"term {i:D4}"), FormattableString.Invariant($"Term{i:D4}")))
+            .ToArray();
+        return Catalog(
+            State(enabled: ["team", extra.Id], ai: [("team", false), (extra.Id, false)], accepted: [("team", H1), (extra.Id, H2)]),
+            Committed(CustomLibrary("team", rows), H1), Committed(extra, H2));
+    }
+
+    private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
+
+    // The composition's index of each spoken form's rows, built the way the first status builds it (its Lazy).
+    private static System.Collections.IDictionary Index(LibraryComposition composition)
+    {
+        var lazy = typeof(LibraryComposition).GetField("_rowsByKey", Private)!.GetValue(composition)!;
+        return (System.Collections.IDictionary)lazy.GetType().GetProperty(nameof(Lazy<object>.Value))!.GetValue(lazy)!;
+    }
+
+    // A library's lookup of its rows by identity, which its first status builds.
+    private static object RowLookup(LibraryComposition composition, string libraryId)
+    {
+        var byId = (System.Collections.IDictionary)typeof(LibraryComposition).GetField("_byId", Private)!.GetValue(composition)!;
+        var source = byId[libraryId]!;
+        return source.GetType().GetField("_rowsByIdentity", Private)!.GetValue(source)
+            ?? throw new InvalidOperationException("The library's row lookup has not been built.");
+    }
+
+    private static int Capacity(object map) =>
+        (int)map.GetType().GetMethod(nameof(Dictionary<int, int>.EnsureCapacity))!.Invoke(map, [0])!;
+
+    private static int SizedFor(int count) => new Dictionary<int, int>(count).EnsureCapacity(0);
+
+    private static int GrownTo(int count)
+    {
+        var map = new Dictionary<int, int>();
+        for (var i = 0; i < count; i++)
+        {
+            map.Add(i, i);
+        }
+
+        return map.EnsureCapacity(0);
     }
 
     // Warmed, then the smallest of three runs: the first calls JIT the path and load its types.
