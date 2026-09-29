@@ -859,12 +859,13 @@ shape of every capture (peak/RMS in dBFS, clipping, DC offset, and **per-channel
 the downmix**) so the next report of this arrives answerable. Statistics only, never audio.
 
 Every channel count runs the one loop 0.5.0 shipped. 0.5.1 tried loops of their own for one and two channels
-(AUDIO-O-06, about 1 ms per stop at a 9.5 s dictation), with every statistic bit-identical to the general loop's on x64,
-and backed them out: on the windows-11-arm runner the RMS differed from the general loop's in its last bits
-(`CaptureSignalAnalyzerDifferentialTests`), most likely because the Arm64 JIT fuses a multiply and add in one loop shape
-and not the other. That test keeps the 0.5.0 loop as the oracle, compares every field by bit pattern and `Describe()`,
-and must pass on both architectures before any faster loop returns; SIMD, a reordered or parallel reduction, or pooling
-would change the sums and needs a decision (and probably a flag) of its own.
+(AUDIO-O-06, about 1 ms per stop at a 9.5 s dictation) and backed them out when `CaptureSignalAnalyzerDifferentialTests`
+failed on the windows-11-arm runner, on the RMS of an input holding NaNs with different payloads. The same test later
+failed on x64 with both sides running 0.5.0's own loop: which NaN payload an addition passes on depends on the operand
+order the JIT picks, which can differ between two compilations of the same source, so the test now matches a NaN with
+any NaN and compares every other value by bit pattern and `Describe()`. The faster loops can come back once that test
+passes on both architectures; SIMD, a reordered or parallel reduction, or pooling would change the sums and needs a
+decision (and probably a flag) of its own.
 
 ## Transcription engine (one gate, cancellation, chunk seams)
 

@@ -6,10 +6,12 @@ using Scribe.Core.Audio;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// <see cref="CaptureSignalAnalyzer"/> has loops of its own for one and two channels. They must report exactly what the
-/// original single loop reported, bit for bit, on every input: the original is kept here, verbatim from 0.5.0, as the
-/// oracle, and every statistic is compared by its bit pattern (a float comparison would call NaN unequal to itself and
-/// -0 equal to +0).
+/// <see cref="CaptureSignalAnalyzer"/> must report exactly what the original single loop reported, on every input: the
+/// original is kept here, verbatim from 0.5.0, as the oracle, and every statistic is compared by its bit pattern (a float
+/// comparison would call -0 equal to +0), except that a NaN matches any NaN. Which NaN's payload an addition passes on
+/// depends on the order the JIT gives its operands, which can differ between two compilations of the same loop (the
+/// shipping one and this copy, at different tiers), so NaN payloads made this test fail at random on x64 and Arm64 while
+/// the two loops were the same code. Every value a capture's log line can show is still compared exactly.
 /// </summary>
 public sealed class CaptureSignalAnalyzerDifferentialTests
 {
@@ -163,9 +165,10 @@ public sealed class CaptureSignalAnalyzerDifferentialTests
         Assert.Equal(expected.Describe(), actual.Describe());
     }
 
-    private static int Bits(float value) => BitConverter.SingleToInt32Bits(value);
+    // The bit pattern, with every NaN folded to one pattern (see the class remarks).
+    private static int Bits(float value) => float.IsNaN(value) ? BitConverter.SingleToInt32Bits(float.NaN) : BitConverter.SingleToInt32Bits(value);
 
-    private static long Bits(double value) => BitConverter.DoubleToInt64Bits(value);
+    private static long Bits(double value) => double.IsNaN(value) ? BitConverter.DoubleToInt64Bits(double.NaN) : BitConverter.DoubleToInt64Bits(value);
 
     /// <summary>The analyzer as 0.5.0 shipped it (one loop for every format and channel count), kept as the oracle.</summary>
     private static class OriginalCaptureSignalAnalyzer
