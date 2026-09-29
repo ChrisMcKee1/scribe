@@ -21,6 +21,14 @@ let package = Package(
             name: "ScribeTests",
             dependencies: ["Scribe"],
             path: "Tests/ScribeTests"
-        )
+        ),
+        // Headless scenarios on the committed speech fixtures (tests/fixtures/speech) through the production capture,
+        // silence, pipeline and storage code. A target of its own, so `swift test --filter ScribeScenarioTests` runs
+        // them alone, as the workflow's optional real speech recognition job does.
+        .testTarget(
+            name: "ScribeScenarioTests",
+            dependencies: ["Scribe"],
+            path: "Tests/ScribeScenarioTests"
+        ),
     ]
 )

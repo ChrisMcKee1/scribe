@@ -34,13 +34,14 @@ enum BuiltInDictionaryLibraries {
             let file = DictionaryLibraryCsv.parse(text)
             guard !file.entries.isEmpty else { continue }
 
-            libraries.append(DictionaryLibrary(
-                id: id,
-                name: file.name ?? humanize(id),
-                category: file.category ?? "General",
-                description: file.description,
-                builtIn: true,
-                entries: file.entries))
+            libraries.append(
+                DictionaryLibrary(
+                    id: id,
+                    name: file.name ?? humanize(id),
+                    category: file.category ?? "General",
+                    description: file.description,
+                    builtIn: true,
+                    entries: file.entries))
         }
 
         return libraries.sorted {

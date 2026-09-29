@@ -95,7 +95,8 @@ enum DictionaryCsv {
                 continue
             }
 
-            entries.append(DictionaryEntry(pattern: pattern, replacement: replacement, wholeWord: wholeWord, enabled: enabled))
+            entries.append(
+                DictionaryEntry(pattern: pattern, replacement: replacement, wholeWord: wholeWord, enabled: enabled))
         }
 
         return ParseResult(entries: entries, errors: errors)
@@ -103,7 +104,7 @@ enum DictionaryCsv {
 
     private static func parseFlag(_ field: String?, defaultValue: Bool) -> Bool? {
         guard let field, !field.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return defaultValue // optional column
+            return defaultValue  // optional column
         }
 
         switch field.trimmingCharacters(in: .whitespaces).lowercased() {
@@ -168,7 +169,7 @@ enum DictionaryCsv {
                 fields.append(field)
                 field = ""
             case "\r":
-                break // handled by the following \n (or ignored for a lone \r)
+                break  // handled by the following \n (or ignored for a lone \r)
             case "\n":
                 fields.append(field)
                 field = ""

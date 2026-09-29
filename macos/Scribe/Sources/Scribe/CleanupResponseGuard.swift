@@ -68,13 +68,17 @@ enum CleanupResponseGuard {
             return .rejected(.replyLike)
         }
 
-        return .accepted(cleaned)
+        // Last, because the guards above compare the model's own answer with the text it was sent. The dashes the
+        // writing style forbids come out of the model's prose here. The replacements that can hold the user's own dash
+        // are made after the guard: the snippets', and those of every dictionary rule that is not vocabulary, which
+        // includes each replacement with a dash (`TextPostProcessor.isVocabulary`). So a dash in the user's own text
+        // survives.
+        return .accepted(DashNormalizer.normalize(cleaned))
     }
 
     static func looksLikeRefusal(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty &&
-            (matches(refusalPreamble, in: text) || matches(refusalInability, in: text))
+        return !trimmed.isEmpty && (matches(refusalPreamble, in: text) || matches(refusalInability, in: text))
     }
 
     static func looksLikeInventedReply(_ candidate: String?, original: String) -> Bool {
@@ -91,8 +95,8 @@ enum CleanupResponseGuard {
         }
 
         let candidateWords = wordSet(candidate)
-        if (1 ... 3).contains(candidateWords.count) &&
-            !candidate.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+        if (1...3).contains(candidateWords.count)
+            && !candidate.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
         {
             if looksLikeQuestion(original) {
                 return true
@@ -152,27 +156,43 @@ enum CleanupResponseGuard {
         options: [.caseInsensitive, .dotMatchesLineSeparators])
 
     private static let refusalPreamble = try! NSRegularExpression(
-        pattern: #"^\s*(?:i(?:'m| am)\s+(?:sorry|afraid)\b|i apologi[sz]e\b|my apologies\b|as an ai\b|as a language model\b)"#,
+        pattern:
+            #"^\s*(?:i(?:'m| am)\s+(?:sorry|afraid)\b|i apologi[sz]e\b|my apologies\b|as an ai\b|"#
+            + #"as a language model\b)"#,
         options: [.caseInsensitive])
 
     private static let refusalInability = try! NSRegularExpression(
-        pattern: #"\b(?:can'?t|cannot|could\s*n'?t|unable to|not able to|won'?t|will not)\s+(?:assist|help|comply|fulfil|fulfill|provide|process|complete|continue)\b"#,
+        pattern:
+            #"\b(?:can'?t|cannot|could\s*n'?t|unable to|not able to|won'?t|will not)\s+"#
+            + #"(?:assist|help|comply|fulfil|fulfill|provide|process|complete|continue)\b"#,
         options: [.caseInsensitive])
 
     private static let replyOpener = try! NSRegularExpression(
-        pattern: #"^\s*["']?\s*(?:yes|yeah|yep|yup|sure\s+thing|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|affirmative|you\s+bet|my\s+pleasure)\b"#,
+        pattern:
+            #"^\s*["']?\s*(?:yes|yeah|yep|yup|sure\s+thing|sure|absolutely|definitely|certainly|of\s+course|"#
+            + #"no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|"#
+            + #"sounds\s+good|will\s+do|affirmative|you\s+bet|my\s+pleasure)\b"#,
         options: [.caseInsensitive])
 
     private static let affirmationAnywhere = try! NSRegularExpression(
-        pattern: #"\b(?:yes|yeah|yep|yup|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|affirmative|you\s+bet)\b"#,
+        pattern:
+            #"\b(?:yes|yeah|yep|yup|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|"#
+            + #"okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|"#
+            + #"affirmative|you\s+bet)\b"#,
         options: [.caseInsensitive])
 
     private static let replyOffer = try! NSRegularExpression(
-        pattern: #"\b(?:i\s+can\s+(?:help|assist)|i(?:'d|\s+would)\s+be\s+(?:happy|glad)\s+to|(?:happy|glad)\s+to\s+(?:help|assist)|how\s+(?:can|may)\s+i\s+(?:help|assist)|let\s+me\s+(?:help|assist)|i(?:'m|\s+am)\s+here\s+to\s+(?:help|assist)|is\s+there\s+anything\s+else\s+i)\b"#,
+        pattern:
+            #"\b(?:i\s+can\s+(?:help|assist)|i(?:'d|\s+would)\s+be\s+(?:happy|glad)\s+to|"#
+            + #"(?:happy|glad)\s+to\s+(?:help|assist)|how\s+(?:can|may)\s+i\s+(?:help|assist)|"#
+            + #"let\s+me\s+(?:help|assist)|i(?:'m|\s+am)\s+here\s+to\s+(?:help|assist)|"#
+            + #"is\s+there\s+anything\s+else\s+i)\b"#,
         options: [.caseInsensitive])
 
     private static let questionOpener = try! NSRegularExpression(
-        pattern: #"^\s*(?:who|what|what'?s|when|where|why|how|how'?s|which|whose|whom|do|does|did|is|are|am|was|were|can|could|will|would|should|shall|may|might|have|has|had|must)\b"#,
+        pattern:
+            #"^\s*(?:who|what|what'?s|when|where|why|how|how'?s|which|whose|whom|do|does|did|is|are|am|was|were|"#
+            + #"can|could|will|would|should|shall|may|might|have|has|had|must)\b"#,
         options: [.caseInsensitive])
 
     private static let wordToken = try! NSRegularExpression(

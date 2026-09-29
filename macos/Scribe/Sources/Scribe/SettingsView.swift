@@ -4,17 +4,16 @@ import CoreGraphics
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Full Settings window replacing the earlier static scaffold text. Sections mirror the feature
-/// areas already implemented: overlay position, input (hotkey and microphone), dictionary, snippets, and per-app
-/// profiles. Backed directly by `PersistenceStore` (no separate view-model layer yet; the store's
-/// CRUD surface is already small and synchronous, matching the CLI verbs used to verify each
-/// feature).
+/// The Settings window: a sidebar of sections, one tab per feature area. Tabs that show preferences re-read them
+/// after any preference write in this process, so a change made from the tray (AI cleanup, the overlay position)
+/// shows in an open window; tabs backed by `PersistenceStore` load when they appear, through a main-actor model whose
+/// storage calls are all asynchronous and whose reads publish only if they are still the newest
+/// (`SettingsSectionLoad`). `SettingsWindowController` builds the window afresh on every open, so nothing a closed
+/// window showed is shown again later, while what the user typed but did not save, and the section that was showing,
+/// live in the app-owned `SettingsDrafts`.
 ///
-/// Uses a `NavigationSplitView` sidebar rather than `TabView`'s top segmented control: once the
-/// section count reached double digits (Overlay/Hotkey/Dictionary/Libraries/Snippets/App
-/// Profiles/AI Cleanup/Playground/Diagnostics/Usage Insights/About), the segmented strip truncated
-/// labels and became unreadable. A sidebar `List` scales to any number of sections the same way
-/// System Settings itself does.
+/// A `NavigationSplitView` sidebar rather than `TabView`'s segmented control: with a dozen sections the segmented
+/// strip truncated its labels and became unreadable, while a sidebar `List` scales the way System Settings does.
 enum SettingsSection: String, CaseIterable, Identifiable {
     case overlay
     case hotkey
@@ -26,6 +25,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case playground
     case diagnostics
     case usageInsights
+    case history
     case about
 
     var id: String { rawValue }
@@ -42,6 +42,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .playground: return "Playground"
         case .diagnostics: return "Diagnostics"
         case .usageInsights: return "Usage Insights"
+        case .history: return "History"
         case .about: return "About"
         }
     }
@@ -58,6 +59,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .playground: return "wand.and.rays"
         case .diagnostics: return "waveform.path.ecg"
         case .usageInsights: return "chart.bar.xaxis"
+        case .history: return "clock.arrow.circlepath"
         case .about: return "info.circle"
         }
     }
@@ -68,14 +70,21 @@ struct SettingsView: View {
     let overlayPanelController: OverlayPanelController
     let pipelineReportStore: PipelineReportStore
     let dictionaryLibraryService: DictionaryLibraryService
-    let onProfilesOrRulesChanged: () -> Void
+    /// Refreshes the rules every dictation applies after a Settings edit; runs on the main actor.
+    let onProfilesOrRulesChanged: @MainActor () -> Void
     let onHotkeyChanged: (CGKeyCode) -> Void
-
-    @State private var selection: SettingsSection? = .overlay
+    /// Reads and writes the history limit and runs Clear history (`HistorySettingsAccess.live` in the app).
+    let historyAccess: HistorySettingsAccess
+    /// Empties the tray's recent dictations after a successful Clear history.
+    let onHistoryCleared: @MainActor () -> Void
+    /// Owned by the app, not the window, so unsaved entries and the section on screen survive the window closing.
+    @ObservedObject var drafts: SettingsDrafts
+    var hotkeyStore: HotkeySettingsStore = .live
+    var audioDeviceStore: AudioDeviceStore = .live
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selection) { section in
+            List(SettingsSection.allCases, selection: $drafts.section) { section in
                 Label(section.label, systemImage: section.systemImage)
                     .tag(section)
             }
@@ -92,27 +101,35 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        switch selection ?? .overlay {
+        switch drafts.section ?? .overlay {
         case .overlay:
             OverlaySettingsTab(overlayPanelController: overlayPanelController)
         case .hotkey:
-            HotkeySettingsTab(onHotkeyChanged: onHotkeyChanged)
+            HotkeySettingsTab(
+                hotkeyStore: hotkeyStore,
+                audioDeviceStore: audioDeviceStore,
+                onHotkeyChanged: onHotkeyChanged)
         case .dictionary:
-            DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+            DictionarySettingsTab(
+                persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .libraries:
-            DictionaryLibrariesSettingsTab(dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
+            DictionaryLibrariesSettingsTab(
+                dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
         case .snippets:
-            SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+            SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .appProfiles:
-            AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+            AppProfilesSettingsTab(
+                persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .aiCleanup:
-            CleanupSettingsTab()
+            CleanupSettingsTab(drafts: drafts)
         case .playground:
             PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
         case .diagnostics:
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
         case .usageInsights:
             UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+        case .history:
+            HistorySettingsTab(access: historyAccess, onCleared: onHistoryCleared)
         case .about:
             AboutView(persistenceStore: persistenceStore)
         }
@@ -122,10 +139,11 @@ struct SettingsView: View {
 // MARK: - Overlay tab
 
 private struct OverlaySettingsTab: View {
-    let overlayPanelController: OverlayPanelController
-    @State private var selectedAnchor: OverlayAnchor = .bottomCenter
+    @StateObject private var selection: OverlayAnchorSelection
 
-    private static let overlayAnchorDefaultsKey = "ScribeOverlayAnchor"
+    init(overlayPanelController: OverlayPanelController) {
+        _selection = StateObject(wrappedValue: OverlayAnchorSelection(controller: overlayPanelController))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -137,14 +155,14 @@ private struct OverlaySettingsTab: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                 ForEach(OverlayAnchor.allCases, id: \.self) { anchor in
                     Button {
-                        selectedAnchor = anchor
-                        overlayPanelController.anchor = anchor
-                        UserDefaults.standard.set(anchor.rawValue, forKey: Self.overlayAnchorDefaultsKey)
+                        selection.select(anchor)
                     } label: {
                         Text(anchor.displayName)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(selectedAnchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .background(
+                                selection.anchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
+                            )
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -153,7 +171,42 @@ private struct OverlaySettingsTab: View {
             Spacer()
         }
         .onAppear {
-            selectedAnchor = overlayPanelController.anchor
+            selection.reload()
+        }
+    }
+}
+
+/// The Overlay tab's anchor. The tray's Overlay Position menu moves the pill and stores the anchor, so the tab
+/// re-reads the pill's anchor after any preference write instead of keeping the one it showed first.
+@MainActor
+final class OverlayAnchorSelection: ObservableObject {
+    /// Shared with `AppDelegate`, which restores the anchor at launch and stores the tray's choice under it.
+    static let defaultsKey = "ScribeOverlayAnchor"
+
+    @Published private(set) var anchor: OverlayAnchor
+
+    private let controller: OverlayPanelController
+    private let defaults: UserDefaults
+    private var observation: SettingsNotificationObservation?
+
+    init(controller: OverlayPanelController, defaults: UserDefaults = .standard) {
+        self.controller = controller
+        self.defaults = defaults
+        anchor = controller.anchor
+        observation = SettingsNotificationObservation(UserDefaults.didChangeNotification) { [weak self] in
+            self?.reload()
+        }
+    }
+
+    func select(_ anchor: OverlayAnchor) {
+        controller.anchor = anchor
+        defaults.set(anchor.rawValue, forKey: Self.defaultsKey)
+        reload()
+    }
+
+    func reload() {
+        if controller.anchor != anchor {
+            anchor = controller.anchor
         }
     }
 }
@@ -161,14 +214,21 @@ private struct OverlaySettingsTab: View {
 // MARK: - Hotkey tab
 
 private struct HotkeySettingsTab: View {
-    let onHotkeyChanged: (CGKeyCode) -> Void
-
-    @State private var currentKeyCode: CGKeyCode = HotkeySettingsStore.keyCode
+    @StateObject private var model: InputSettingsModel
     @State private var isRecording = false
     @State private var localMonitor: Any?
 
-    @State private var availableDevices: [AudioInputDevice] = AudioDeviceStore.availableInputDevices()
-    @State private var selectedDeviceUID: String? = AudioDeviceStore.selectedDeviceUID
+    init(
+        hotkeyStore: HotkeySettingsStore,
+        audioDeviceStore: AudioDeviceStore,
+        onHotkeyChanged: @escaping (CGKeyCode) -> Void
+    ) {
+        _model = StateObject(
+            wrappedValue: InputSettingsModel(
+                hotkeyStore: hotkeyStore,
+                deviceStore: audioDeviceStore,
+                onHotkeyChanged: onHotkeyChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -178,20 +238,23 @@ private struct HotkeySettingsTab: View {
 
             Text("Push-to-Talk Key")
                 .font(.headline)
-            Text(currentKeyCode == 57
-                ? "Tap Caps Lock once to start dictating, and tap it again to stop, just like Caps Lock's own on/off light."
-                : "Hold this key anywhere on your Mac to start dictating, and release it to stop.")
+            Text(model.hint)
                 .foregroundStyle(.secondary)
             // Input Monitoring is what a global push-to-talk key requires, and is easy to miss
             // since (unlike Microphone/Accessibility) macOS never shows a system prompt for it;
             // the user has to add Scribe manually. Surfaced here because "the key does nothing"
             // is otherwise indistinguishable from a wrong binding.
-            Text("If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > Privacy & Security > Input Monitoring, then relaunch Scribe.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            Text(
+                """
+                If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > \
+                Privacy & Security > Input Monitoring, then relaunch Scribe.
+                """
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
-                Text(isRecording ? "Press any key..." : HotkeyKeyCodeCatalog.displayName(for: currentKeyCode))
+                Text(isRecording ? "Press any key..." : model.binding.displayName)
                     .font(.title3.bold())
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -208,9 +271,9 @@ private struct HotkeySettingsTab: View {
                     }
                 }
 
-                if currentKeyCode != HotkeySettingsStore.defaultKeyCode {
+                if !model.isDefaultBinding {
                     Button("Reset to \(HotkeyKeyCodeCatalog.displayName(for: HotkeySettingsStore.defaultKeyCode))") {
-                        apply(keyCode: HotkeySettingsStore.defaultKeyCode)
+                        model.apply(keyCode: HotkeySettingsStore.defaultKeyCode)
                     }
                 }
             }
@@ -221,22 +284,51 @@ private struct HotkeySettingsTab: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                 ForEach(HotkeyKeyCodeCatalog.entries) { entry in
                     Button {
-                        apply(keyCode: entry.keyCode)
+                        model.apply(keyCode: entry.keyCode)
                     } label: {
                         Text(entry.name)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
-                            .background(currentKeyCode == entry.keyCode ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .background(
+                                model.binding.keyCode == entry.keyCode
+                                    ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
+                            )
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
                 }
             }
+
+            Divider()
+
+            Toggle("Also stop after a pause", isOn: autoStopBinding)
+            Text(
+                """
+                For a key you tap on and off, such as Caps Lock: the dictation also ends after about four seconds \
+                of silence, or after ten seconds if you never start talking. Off by default, because a pause to \
+                think ends the dictation too. A dictation that ends by itself leaves Caps Lock's light on: the next \
+                tap only turns it off, and the tap after it starts a new dictation.
+                """
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            if !model.autoStopAppliesToBinding {
+                Text("\(model.binding.displayName) is held while you talk, so it never stops on silence.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
+        }
+        .onAppear {
+            model.reload()
         }
         .onDisappear {
             stopRecording()
         }
+    }
+
+    private var autoStopBinding: Binding<Bool> {
+        Binding(get: { model.autoStopOnSilence }, set: { model.setAutoStopOnSilence($0) })
     }
 
     /// Captures the next key press (modifier or regular key) within the Settings window only, via
@@ -257,7 +349,7 @@ private struct HotkeySettingsTab: View {
                 }
             }
 
-            apply(keyCode: candidateKeyCode)
+            model.apply(keyCode: candidateKeyCode)
             stopRecording()
             return nil
         }
@@ -271,43 +363,41 @@ private struct HotkeySettingsTab: View {
         localMonitor = nil
     }
 
-    private func apply(keyCode: CGKeyCode) {
-        currentKeyCode = keyCode
-        HotkeySettingsStore.keyCode = keyCode
-        onHotkeyChanged(keyCode)
-    }
-
     @ViewBuilder
     private var microphoneSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Microphone")
                 .font(.headline)
-            Text("Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as soon as macOS lists it here, no extra setup needed.")
-                .foregroundStyle(.secondary)
+            Text(
+                """
+                Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as \
+                soon as macOS lists it here, no extra setup needed.
+                """
+            )
+            .foregroundStyle(.secondary)
 
-            Picker("Microphone", selection: Binding(
-                get: { selectedDeviceUID },
-                set: { newValue in
-                    selectedDeviceUID = newValue
-                    let device = availableDevices.first { $0.uid == newValue }
-                    AudioDeviceStore.select(device)
-                }
-            )) {
+            Picker(
+                "Microphone",
+                selection: Binding(
+                    get: { model.selectedDeviceUID },
+                    set: { model.selectDevice(uid: $0) }
+                )
+            ) {
                 Text("System default (recommended)").tag(String?.none)
-                ForEach(availableDevices) { device in
+                ForEach(model.devices) { device in
                     Text(device.isDefault ? "\(device.name) (default)" : device.name)
                         .tag(String?.some(device.uid))
                 }
-                if let selectedDeviceUID, !availableDevices.contains(where: { $0.uid == selectedDeviceUID }) {
-                    Text("Unavailable: \(AudioDeviceStore.selectedDeviceName ?? "saved microphone")")
-                        .tag(String?.some(selectedDeviceUID))
+                if let label = model.unavailableSelectionLabel, let uid = model.selectedDeviceUID {
+                    Text(label)
+                        .tag(String?.some(uid))
                 }
             }
             .labelsHidden()
             .frame(maxWidth: 360)
         }
         .onAppear {
-            availableDevices = AudioDeviceStore.availableInputDevices()
+            model.refreshDevices()
         }
     }
 }
@@ -315,18 +405,15 @@ private struct HotkeySettingsTab: View {
 // MARK: - Dictionary tab
 
 private struct DictionarySettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: DictionarySettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    @State private var entries: [DictionaryEntry] = []
-    @State private var newPattern = ""
-    @State private var newReplacement = ""
-    @State private var errorMessage: String?
-    @State private var statusMessage: String?
-    @State private var isLearning = false
-    @State private var isCleaning = false
-    @State private var cleanupReport: DictionaryUsageReport?
-    @State private var cleanupSelection: Set<Int64> = []
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(
+            wrappedValue: DictionarySettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged)
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -334,34 +421,43 @@ private struct DictionarySettingsTab: View {
                 .font(.headline)
 
             HStack {
-                TextField("Spoken form (e.g. \"sherpa onnx\")", text: $newPattern)
-                TextField("Written form (e.g. \"sherpa-onnx\")", text: $newReplacement)
-                Button("Add", action: addEntry)
-                    .disabled(newPattern.trimmingCharacters(in: .whitespaces).isEmpty
-                        || newReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
+                TextField("Spoken form (e.g. \"sherpa onnx\")", text: $drafts.dictionaryPattern)
+                TextField("Written form (e.g. \"sherpa-onnx\")", text: $drafts.dictionaryReplacement)
+                Button("Add") {
+                    Task { await model.addFromDrafts() }
+                }
+                .disabled(!model.canAdd)
             }
 
             HStack {
-                Button("Import CSV\u{2026}", action: importCsv)
+                Button(model.isImporting ? "Importing\u{2026}" : "Import CSV\u{2026}", action: importCsv)
+                    .disabled(model.isImporting)
                 Button("Export CSV\u{2026}", action: exportCsv)
-                    .disabled(entries.isEmpty)
+                    .disabled(!model.canExport)
                 Button("Get Template\u{2026}", action: saveTemplate)
-                Button("Learn from History", action: learnFromHistory)
-                    .disabled(isLearning)
-                Button("Clean Up\u{2026}", action: runCleanup)
-                    .disabled(isCleaning)
+                Button("Learn from History") {
+                    Task { await model.learnFromHistory() }
+                }
+                .disabled(model.isLearning)
+                Button("Clean Up\u{2026}") {
+                    Task { await model.reviewUsage() }
+                }
+                .disabled(model.isCleaning)
                 Spacer()
             }
 
-            if let errorMessage {
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
-            if let statusMessage {
+            if let statusMessage = model.statusMessage {
                 Text(statusMessage).foregroundStyle(.secondary).font(.caption)
             }
 
             List {
-                ForEach(entries, id: \.id) { entry in
+                ForEach(model.entries, id: \.id) { entry in
                     HStack {
                         Toggle("", isOn: binding(for: entry))
                             .labelsHidden()
@@ -371,7 +467,7 @@ private struct DictionarySettingsTab: View {
                         Text(entry.replacement)
                         Spacer()
                         Button(role: .destructive) {
-                            deleteEntry(entry)
+                            Task { await model.delete(entry) }
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -380,19 +476,22 @@ private struct DictionarySettingsTab: View {
                 }
             }
         }
-        .onAppear(perform: reload)
-        .sheet(isPresented: Binding(
-            get: { cleanupReport != nil },
-            set: { if !$0 { cleanupReport = nil } }
-        )) {
-            if let report = cleanupReport {
+        .onAppear {
+            Task { await model.reload() }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.cleanupReport != nil },
+                set: { if !$0 { model.cleanupReport = nil } }
+            )
+        ) {
+            if let report = model.cleanupReport {
                 DictionaryCleanupView(
                     report: report,
                     onApply: { idsToDisable in
-                        applyCleanup(idsToDisable: idsToDisable)
-                        cleanupReport = nil
+                        Task { await model.applyCleanup(disabling: idsToDisable) }
                     },
-                    onCancel: { cleanupReport = nil })
+                    onCancel: { model.cleanupReport = nil })
             }
         }
     }
@@ -400,57 +499,14 @@ private struct DictionarySettingsTab: View {
     private func binding(for entry: DictionaryEntry) -> Binding<Bool> {
         Binding(
             get: { entry.enabled },
-            set: { newValue in setEnabled(entry, enabled: newValue) })
+            set: { newValue in
+                Task { await model.setEnabled(entry, enabled: newValue) }
+            })
     }
 
-    private func reload() {
-        do {
-            entries = try persistenceStore.fetchAllDictionaryEntries()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addEntry() {
-        do {
-            _ = try persistenceStore.insertDictionaryEntry(
-                DictionaryEntry(pattern: newPattern, replacement: newReplacement))
-            newPattern = ""
-            newReplacement = ""
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func setEnabled(_ entry: DictionaryEntry, enabled: Bool) {
-        do {
-            try persistenceStore.setDictionaryEntryEnabled(id: entry.id, enabled: enabled)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteEntry(_ entry: DictionaryEntry) {
-        do {
-            try persistenceStore.deleteDictionaryEntry(id: entry.id)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    // MARK: - CSV import/export
+    // MARK: - CSV import/export: the panels live here, the model reads and writes the files
 
     private func importCsv() {
-        errorMessage = nil
-        statusMessage = nil
-
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
@@ -459,48 +515,10 @@ private struct DictionarySettingsTab: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-
-        do {
-            let csv = try String(contentsOf: url, encoding: .utf8)
-            let result = DictionaryCsv.parse(csv)
-
-            let existingRows = entries.enumerated().map { index, entry in
-                DictionaryImportMerger.ExistingRow(
-                    index: index,
-                    id: entry.id,
-                    pattern: entry.pattern,
-                    replacement: entry.replacement,
-                    wholeWord: entry.wholeWord,
-                    enabled: entry.enabled)
-            }
-            let plan = DictionaryImportMerger.merge(existing: existingRows, imported: result.entries)
-
-            for operation in plan.operations {
-                switch operation.kind {
-                case .add:
-                    _ = try persistenceStore.insertDictionaryEntry(operation.entry)
-                case .update:
-                    try persistenceStore.updateDictionaryEntry(operation.entry)
-                }
-            }
-
-            reload()
-            onChanged()
-
-            var summary = "Imported: \(plan.added) added, \(plan.updated) updated, \(plan.unchanged) unchanged."
-            if !result.errors.isEmpty {
-                summary += " \(result.errors.count) row(s) skipped: \(result.errors.joined(separator: "; "))"
-            }
-            statusMessage = summary
-        } catch {
-            errorMessage = "Couldn't import that file: \(error.localizedDescription)"
-        }
+        Task { await model.importCsvFile(at: url) }
     }
 
     private func exportCsv() {
-        errorMessage = nil
-        statusMessage = nil
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "scribe-dictionary.csv"
@@ -508,20 +526,10 @@ private struct DictionarySettingsTab: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-
-        do {
-            let csv = DictionaryCsv.export(entries)
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            statusMessage = "Exported \(entries.count) entr\(entries.count == 1 ? "y" : "ies") to \(url.lastPathComponent)."
-        } catch {
-            errorMessage = "Couldn't export the dictionary: \(error.localizedDescription)"
-        }
+        Task { await model.exportCsv(to: url) }
     }
 
     private func saveTemplate() {
-        errorMessage = nil
-        statusMessage = nil
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "scribe-dictionary-template.csv"
@@ -529,93 +537,7 @@ private struct DictionarySettingsTab: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-
-        do {
-            try DictionaryCsv.template.write(to: url, atomically: true, encoding: .utf8)
-            statusMessage = "Saved the template to \(url.lastPathComponent)."
-        } catch {
-            errorMessage = "Couldn't save the template: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Learn from history
-
-    /// Mines recent dictation history for recurring jargon (`DictionaryHistoryLearner`) and adds
-    /// any newly discovered entries. Guarded by `isLearning` because the mining scan, while quick,
-    /// still shouldn't be re-entrant if the user clicks twice.
-    private func learnFromHistory() {
-        guard !isLearning else { return }
-        isLearning = true
-        errorMessage = nil
-        statusMessage = nil
-
-        defer { isLearning = false }
-
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let learned = DictionaryHistoryLearner.buildEntries(history: history, existing: entries)
-
-            guard !learned.isEmpty else {
-                statusMessage = "No new recurring terms found in your dictation history yet."
-                return
-            }
-
-            for entry in learned {
-                _ = try persistenceStore.insertDictionaryEntry(entry)
-            }
-
-            reload()
-            onChanged()
-            statusMessage = "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
-        } catch {
-            errorMessage = "Couldn't learn from history: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Clean up unused entries
-
-    /// Scans dictation history for entries that never appear, in either their spoken or written
-    /// form (`DictionaryUsageAnalyzer`), and presents them for review. Nothing is disabled until
-    /// the user confirms in the sheet.
-    private func runCleanup() {
-        guard !isCleaning else { return }
-        isCleaning = true
-        errorMessage = nil
-        statusMessage = nil
-        defer { isCleaning = false }
-
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let transcripts = history.compactMap { $0.transcriptText }
-            let report = DictionaryUsageAnalyzer.analyze(transcripts: transcripts, baseEntries: entries)
-
-            guard report.hasFindings else {
-                statusMessage = report.hasEnoughEvidence
-                    ? "Every term in your dictionary turned up in your recent dictations. Nothing to clean up."
-                    : report.summary
-                return
-            }
-
-            cleanupReport = report
-        } catch {
-            errorMessage = "Couldn't check dictionary usage: \(error.localizedDescription)"
-        }
-    }
-
-    /// Soft-disables the confirmed entries rather than deleting them, mirroring Windows: the
-    /// evidence is a sample of recent history, not proof the term will never be needed again.
-    private func applyCleanup(idsToDisable: Set<Int64>) {
-        guard !idsToDisable.isEmpty else { return }
-        do {
-            for id in idsToDisable {
-                try persistenceStore.setDictionaryEntryEnabled(id: id, enabled: false)
-            }
-            reload()
-            onChanged()
-            statusMessage = "Turned off \(idsToDisable.count) unused entr\(idsToDisable.count == 1 ? "y" : "ies")."
-        } catch {
-            errorMessage = "Couldn't update the dictionary: \(error.localizedDescription)"
-        }
+        Task { await model.saveTemplate(to: url) }
     }
 }
 
@@ -652,11 +574,13 @@ private struct DictionaryCleanupView: View {
                             .labelsHidden()
                         VStack(alignment: .leading) {
                             Text("\"\(usage.entry.pattern)\" becomes \"\(usage.entry.replacement)\"")
-                            Text(usage.entry.enabled
-                                ? "Currently on. Neither wording came up in your recent dictations."
-                                : "Already off. Neither wording came up in your recent dictations.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text(
+                                usage.entry.enabled
+                                    ? "Currently on. Neither wording came up in your recent dictations."
+                                    : "Already off. Neither wording came up in your recent dictations."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                         Spacer()
                     }
@@ -664,10 +588,12 @@ private struct DictionaryCleanupView: View {
             }
             .frame(minHeight: 160)
 
-            Text("Turning a term off is reversible: it stays in your dictionary with its tick "
-                + "cleared and stops being applied. Nothing is written until you confirm below.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "Turning a term off is reversible: it stays in your dictionary with its tick "
+                    + "cleared and stops being applied. Nothing is written until you confirm below."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             HStack {
                 Spacer()
@@ -700,7 +626,7 @@ private struct DictionaryCleanupView: View {
 
 private struct DictionaryLibrariesSettingsTab: View {
     let dictionaryLibraryService: DictionaryLibraryService
-    let onChanged: () -> Void
+    let onChanged: @MainActor () -> Void
 
     @State private var libraries: [DictionaryLibrary] = []
     @State private var enabledIds: Set<String> = []
@@ -724,11 +650,13 @@ private struct DictionaryLibrariesSettingsTab: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Dictionary Libraries")
                 .font(.headline)
-            Text("Switch on ready-made glossaries to canonicalize domain vocabulary (Azure, GitHub, "
-                + "programming languages, and more) without typing every term yourself. Library entries "
-                + "never override your own dictionary.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(
+                "Switch on ready-made glossaries to canonicalize domain vocabulary (Azure, GitHub, "
+                    + "programming languages, and more) without typing every term yourself. Library entries "
+                    + "never override your own dictionary."
+            )
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Button("Import Library CSV\u{2026}") { showingImporter = true }
@@ -832,13 +760,14 @@ private struct DictionaryLibrariesSettingsTab: View {
 // MARK: - Snippets tab
 
 private struct SnippetsSettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: SnippetSettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    @State private var snippets: [Snippet] = []
-    @State private var newPhrase = ""
-    @State private var newTemplate = ""
-    @State private var errorMessage: String?
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(
+            wrappedValue: SnippetSettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -846,21 +775,25 @@ private struct SnippetsSettingsTab: View {
                 .font(.headline)
 
             HStack(alignment: .top) {
-                TextField("Trigger phrase (e.g. \"sign off block\")", text: $newPhrase)
-                TextEditor(text: $newTemplate)
+                TextField("Trigger phrase (e.g. \"sign off block\")", text: $drafts.snippetPhrase)
+                TextEditor(text: $drafts.snippetTemplate)
                     .frame(height: 60)
                     .border(Color.gray.opacity(0.3))
-                Button("Add", action: addSnippet)
-                    .disabled(newPhrase.trimmingCharacters(in: .whitespaces).isEmpty
-                        || newTemplate.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Add") {
+                    Task { await model.addFromDrafts() }
+                }
+                .disabled(!model.canAdd)
             }
 
-            if let errorMessage {
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
 
             List {
-                ForEach(snippets, id: \.id) { snippet in
+                ForEach(model.snippets, id: \.id) { snippet in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Toggle("", isOn: binding(for: snippet))
@@ -868,7 +801,7 @@ private struct SnippetsSettingsTab: View {
                             Text(snippet.phrase).fontWeight(.medium)
                             Spacer()
                             Button(role: .destructive) {
-                                deleteSnippet(snippet)
+                                Task { await model.delete(snippet) }
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -881,104 +814,76 @@ private struct SnippetsSettingsTab: View {
                 }
             }
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
     }
 
     private func binding(for snippet: Snippet) -> Binding<Bool> {
         Binding(
             get: { snippet.enabled },
-            set: { newValue in setEnabled(snippet, enabled: newValue) })
-    }
-
-    private func reload() {
-        do {
-            snippets = try persistenceStore.fetchAllSnippets()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addSnippet() {
-        do {
-            _ = try persistenceStore.insertSnippet(Snippet(phrase: newPhrase, template: newTemplate))
-            newPhrase = ""
-            newTemplate = ""
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func setEnabled(_ snippet: Snippet, enabled: Bool) {
-        do {
-            try persistenceStore.setSnippetEnabled(id: snippet.id, enabled: enabled)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteSnippet(_ snippet: Snippet) {
-        do {
-            try persistenceStore.deleteSnippet(id: snippet.id)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+            set: { newValue in
+                Task { await model.setEnabled(snippet, enabled: newValue) }
+            })
     }
 }
 
 // MARK: - App profiles tab
 
 private struct AppProfilesSettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: AppProfileSettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    @State private var profiles: [AppProfile] = []
-    @State private var newName = ""
-    @State private var newBundleIdentifiers = ""
-    @State private var newWritingStyle = ""
-    @State private var newNewlineMode: NewlineInjectionMode = .smartFlatten
-    @State private var errorMessage: String?
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(
+            wrappedValue: AppProfileSettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged)
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Per-App Profiles")
                 .font(.headline)
-            Text("Override writing style or line-break handling for specific apps, matched by bundle identifier (e.g. com.apple.Terminal).")
-                .foregroundStyle(.secondary)
-                .font(.caption)
+            Text(
+                """
+                Override writing style or line-break handling for specific apps, matched by bundle identifier \
+                (e.g. com.apple.Terminal).
+                """
+            )
+            .foregroundStyle(.secondary)
+            .font(.caption)
 
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Profile name (e.g. \"Terminal\")", text: $newName)
-                TextField("Bundle identifiers, comma-separated", text: $newBundleIdentifiers)
-                TextField("Writing style override (optional)", text: $newWritingStyle)
-                Picker("Newline handling", selection: $newNewlineMode) {
+                TextField("Profile name (e.g. \"Terminal\")", text: $drafts.profileName)
+                TextField("Bundle identifiers, comma-separated", text: $drafts.profileBundleIdentifiers)
+                TextField("Writing style override (optional)", text: $drafts.profileWritingStyle)
+                Picker("Newline handling", selection: $drafts.profileNewlineMode) {
                     Text("Smart Flatten").tag(NewlineInjectionMode.smartFlatten)
                     Text("Always Flatten").tag(NewlineInjectionMode.alwaysFlatten)
                     Text("Keep Newlines").tag(NewlineInjectionMode.keepNewlines)
                 }
-                Button("Add Profile", action: addProfile)
-                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
-                        || newBundleIdentifiers.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Add Profile") {
+                    Task { await model.addFromDrafts() }
+                }
+                .disabled(!model.canAdd)
             }
 
-            if let errorMessage {
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
 
             List {
-                ForEach(profiles, id: \.id) { profile in
+                ForEach(model.profiles, id: \.id) { profile in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(profile.name).fontWeight(.medium)
                             Spacer()
                             Button(role: .destructive) {
-                                deleteProfile(profile)
+                                Task { await model.delete(profile) }
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -994,286 +899,168 @@ private struct AppProfilesSettingsTab: View {
                 }
             }
         }
-        .onAppear(perform: reload)
-    }
-
-    private func reload() {
-        do {
-            profiles = try persistenceStore.fetchAppProfiles()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addProfile() {
-        do {
-            let bundleIdentifiers = newBundleIdentifiers
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-            _ = try persistenceStore.insertAppProfile(AppProfile(
-                name: newName,
-                bundleIdentifiers: bundleIdentifiers,
-                processNames: [],
-                writingStylePrompt: newWritingStyle.isEmpty ? nil : newWritingStyle,
-                newlineHandling: newNewlineMode))
-            newName = ""
-            newBundleIdentifiers = ""
-            newWritingStyle = ""
-            newNewlineMode = .smartFlatten
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteProfile(_ profile: AppProfile) {
-        do {
-            try persistenceStore.deleteAppProfile(id: profile.id)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
+        .onAppear {
+            Task { await model.reload() }
         }
     }
 }
 
 // MARK: - AI Cleanup tab
 
-/// Settings surface for AI cleanup: turning it on, picking a provider, and configuring that
-/// provider's connection details and credentials, replacing the original env-var-only
-/// configuration story. Reads and writes `CleanupSettingsStore` directly (no separate view-model
-/// layer, matching every other tab in this file); non-secret fields save on every change, while
-/// the two secret fields (OpenAI-compatible API key, Azure service-principal client secret) are
-/// explicit "Save"/"Clear" actions against Keychain so a partially-typed secret is never persisted.
+/// Settings surface for AI cleanup: turning it on, picking a provider, and configuring that provider's
+/// connection details and credentials. `CleanupSettingsModel` stores every non-secret field the moment it changes
+/// and re-reads them after a change made elsewhere, such as the tray's AI Cleanup item. The two secrets
+/// (OpenAI-compatible API key, Azure service-principal client secret) are explicit Save and Clear actions against
+/// Keychain, so a partly typed secret is never stored; until it is saved, what was typed lives in `SettingsDrafts`.
 private struct CleanupSettingsTab: View {
-    @State private var isEnabled = CleanupSettingsStore.isEnabled
-    @State private var providerKind = CleanupSettingsStore.providerKind
-    @State private var foundryLocalModelAlias = CleanupSettingsStore.foundryLocalModelAlias
-    @State private var ollamaModel = CleanupSettingsStore.ollamaModel
-    @State private var openAIBaseURL = CleanupSettingsStore.openAIBaseURL
-    @State private var openAIModel = CleanupSettingsStore.openAIModel
-    @State private var openAIApiKeyInput = ""
-    @State private var hasSavedOpenAIApiKey = CleanupSettingsStore.openAIApiKey() != nil
-    @State private var azureEndpoint = CleanupSettingsStore.azureEndpoint
-    @State private var azureDeployment = CleanupSettingsStore.azureDeployment
-    @State private var azureAuthMode = CleanupSettingsStore.azureAuthMode
-    @State private var azureTenantId = CleanupSettingsStore.azureTenantId
-    @State private var azureClientId = CleanupSettingsStore.azureClientId
-    @State private var azureClientSecretInput = ""
-    @State private var hasSavedAzureClientSecret = false
-    @State private var statusMessage: String?
-    @State private var errorMessage: String?
-    @State private var isTesting = false
+    @StateObject private var model: CleanupSettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
+
+    init(drafts: SettingsDrafts, access: CleanupSettingsAccess = .live) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(wrappedValue: CleanupSettingsModel(access: access, drafts: drafts))
+    }
 
     var body: some View {
         Form {
             Section {
-                Toggle("Enable AI Cleanup", isOn: $isEnabled)
-                    .onChange(of: isEnabled) { _ in CleanupSettingsStore.isEnabled = isEnabled }
-                Text("Cleans up punctuation and phrasing after each dictation using a locally or "
-                    + "remotely hosted model. Strictly opt-in and off by default: only the "
-                    + "transcribed text is ever sent to a cleanup provider, never audio.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle("Enable AI Cleanup", isOn: $model.values.isEnabled)
+                    .disabled(model.isDisabled(.enableSwitch))
+                Text(
+                    "Cleans up punctuation and phrasing after each dictation using a locally or "
+                        + "remotely hosted model. Strictly opt-in and off by default: only the "
+                        + "transcribed text is ever sent to a cleanup provider, never audio."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section("Provider") {
-                Picker("Provider", selection: $providerKind) {
+                Picker("Provider", selection: $model.values.providerKind) {
                     ForEach(CleanupProviderKind.allCases) { kind in
                         Text(kind.displayName).tag(kind)
                     }
                 }
-                .onChange(of: providerKind) { _ in CleanupSettingsStore.providerKind = providerKind }
-                .disabled(!isEnabled)
             }
+            .disabled(model.isDisabled(.provider))
 
             providerConfigurationSection
+                .disabled(model.isDisabled(.providerDetails))
 
             Section {
                 HStack {
-                    Button(isTesting ? "Testing\u{2026}" : "Test Connection", action: testConnection)
-                        .disabled(isTesting || !CleanupSettingsStore.isConfigured(for: providerKind))
-                    if isTesting {
+                    Button(model.isTesting ? "Testing\u{2026}" : "Test Connection") {
+                        Task { await model.testConnection() }
+                    }
+                    .disabled(model.isDisabled(.connectionTest))
+                    if model.isTesting {
                         ProgressView().controlSize(.small)
+                        Button("Cancel") { model.cancelConnectionTest() }
                     }
                     Spacer()
                 }
-                if let errorMessage {
+                if let errorMessage = model.errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.caption)
-                } else if let statusMessage {
+                } else if let statusMessage = model.statusMessage {
                     Text(statusMessage).foregroundStyle(.secondary).font(.caption)
                 }
             }
         }
         .formStyle(.grouped)
-        .disabled(!isEnabled)
-        .onAppear { refreshAzureSecretState() }
+        .onAppear {
+            model.reload()
+            model.refreshSecretState()
+        }
+        // Leaving the tab stops a Test Connection still running; closing the window does too, through
+        // `SettingsWindowController.willCloseNotification`, in case the window goes without this firing.
+        .onDisappear {
+            model.cancelConnectionTest()
+        }
     }
 
     @ViewBuilder
     private var providerConfigurationSection: some View {
-        switch providerKind {
+        switch model.values.providerKind {
         case .foundryLocal:
             Section("Foundry Local") {
-                TextField("Model alias", text: $foundryLocalModelAlias)
-                    .onChange(of: foundryLocalModelAlias) { _ in
-                        CleanupSettingsStore.foundryLocalModelAlias = foundryLocalModelAlias
-                    }
-                Text("Runs fully on-device via Foundry Local. Requires "
-                    + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
-                    + "first use.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                TextField("Model alias", text: $model.values.foundryLocalModelAlias)
+                Text(
+                    "Runs fully on-device via Foundry Local. Requires "
+                        + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
+                        + "first use."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         case .ollama:
             Section("Local model (Ollama managed)") {
-                TextField("Model", text: $ollamaModel)
-                    .onChange(of: ollamaModel) { _ in CleanupSettingsStore.ollamaModel = ollamaModel }
-                Text("Runs fully on-device via a local Ollama installation "
-                    + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                TextField("Model", text: $model.values.ollamaModel)
+                Text(
+                    "Runs fully on-device via a local Ollama installation "
+                        + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         case .openAICompatible:
             Section("OpenAI-compatible endpoint") {
-                TextField("Base URL (e.g. http://localhost:1234)", text: $openAIBaseURL)
-                    .onChange(of: openAIBaseURL) { _ in CleanupSettingsStore.openAIBaseURL = openAIBaseURL }
-                TextField("Model", text: $openAIModel)
-                    .onChange(of: openAIModel) { _ in CleanupSettingsStore.openAIModel = openAIModel }
+                TextField("Base URL (e.g. http://localhost:1234)", text: $model.values.openAIBaseURL)
+                TextField("Model", text: $model.values.openAIModel)
                 SecureField(
-                    hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
-                    text: $openAIApiKeyInput)
+                    model.hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
+                    text: $drafts.openAIApiKey)
                 HStack {
-                    Button("Save Key", action: saveOpenAIApiKey)
-                        .disabled(openAIApiKeyInput.isEmpty)
-                    if hasSavedOpenAIApiKey {
-                        Button("Clear Key", role: .destructive, action: clearOpenAIApiKey)
+                    Button("Save Key") { model.saveOpenAIApiKey() }
+                        .disabled(!model.canSaveOpenAIApiKey)
+                    if model.hasSavedOpenAIApiKey {
+                        Button("Clear Key", role: .destructive) { model.clearOpenAIApiKey() }
                     }
                 }
-                Text("For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
-                    + "key, if any, is stored in Keychain, never in plain text.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
+                        + "key, if any, is stored in Keychain, never in plain text."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         case .microsoftFoundry:
             Section("Microsoft Foundry (cloud)") {
-                TextField("Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)", text: $azureEndpoint)
-                    .onChange(of: azureEndpoint) { _ in CleanupSettingsStore.azureEndpoint = azureEndpoint }
-                TextField("Deployment name", text: $azureDeployment)
-                    .onChange(of: azureDeployment) { _ in CleanupSettingsStore.azureDeployment = azureDeployment }
-                Picker("Authentication", selection: $azureAuthMode) {
+                TextField(
+                    "Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)",
+                    text: $model.values.azureEndpoint)
+                TextField("Deployment name", text: $model.values.azureDeployment)
+                Picker("Authentication", selection: $model.values.azureAuthMode) {
                     Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
                     Text("Service principal").tag(AzureAuthMode.servicePrincipal)
                 }
-                .onChange(of: azureAuthMode) { _ in CleanupSettingsStore.azureAuthMode = azureAuthMode }
 
-                if azureAuthMode == .servicePrincipal {
-                    TextField("Tenant ID", text: $azureTenantId)
-                        .onChange(of: azureTenantId) { _ in CleanupSettingsStore.azureTenantId = azureTenantId }
-                    TextField("Client ID", text: $azureClientId)
-                        .onChange(of: azureClientId) { _ in
-                            CleanupSettingsStore.azureClientId = azureClientId
-                            refreshAzureSecretState()
-                        }
+                if model.values.azureAuthMode == .servicePrincipal {
+                    TextField("Tenant ID", text: $model.values.azureTenantId)
+                    TextField("Client ID", text: $model.values.azureClientId)
                     SecureField(
-                        hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
-                        text: $azureClientSecretInput)
+                        model.hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
+                        text: $drafts.azureClientSecret)
                     HStack {
-                        Button("Save Secret", action: saveAzureClientSecret)
-                            .disabled(azureClientSecretInput.isEmpty
-                                || azureClientId.trimmingCharacters(in: .whitespaces).isEmpty)
-                        if hasSavedAzureClientSecret {
-                            Button("Clear Secret", role: .destructive, action: clearAzureClientSecret)
+                        Button("Save Secret") { model.saveAzureClientSecret() }
+                            .disabled(!model.canSaveAzureClientSecret)
+                        if model.hasSavedAzureClientSecret {
+                            Button("Clear Secret", role: .destructive) { model.clearAzureClientSecret() }
                         }
                     }
-                    Text("The client secret is stored in Keychain, never in an environment "
-                        + "variable, a plist, or a script.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "The client secret is stored in Keychain, never in an environment "
+                            + "variable, a plist, or a script."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 } else {
-                    Text("Uses the signed-in 'az login' session on this Mac. Install the Azure "
-                        + "CLI and run 'az login' once.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "Uses the signed-in 'az login' session on this Mac. Install the Azure "
+                            + "CLI and run 'az login' once."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-            }
-        }
-    }
-
-    private func refreshAzureSecretState() {
-        hasSavedAzureClientSecret = CleanupSettingsStore.azureClientSecret(clientId: azureClientId) != nil
-    }
-
-    private func saveOpenAIApiKey() {
-        do {
-            try CleanupSettingsStore.setOpenAIApiKey(openAIApiKeyInput)
-            openAIApiKeyInput = ""
-            hasSavedOpenAIApiKey = true
-            statusMessage = "API key saved to Keychain."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to save API key: \(error.localizedDescription)"
-        }
-    }
-
-    private func clearOpenAIApiKey() {
-        do {
-            try CleanupSettingsStore.setOpenAIApiKey(nil)
-            hasSavedOpenAIApiKey = false
-            statusMessage = "API key removed."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to remove API key: \(error.localizedDescription)"
-        }
-    }
-
-    private func saveAzureClientSecret() {
-        do {
-            try CleanupSettingsStore.setAzureClientSecret(azureClientSecretInput, clientId: azureClientId)
-            azureClientSecretInput = ""
-            hasSavedAzureClientSecret = true
-            statusMessage = "Client secret saved to Keychain."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to save client secret: \(error.localizedDescription)"
-        }
-    }
-
-    private func clearAzureClientSecret() {
-        do {
-            try CleanupSettingsStore.setAzureClientSecret(nil, clientId: azureClientId)
-            hasSavedAzureClientSecret = false
-            statusMessage = "Client secret removed."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to remove client secret: \(error.localizedDescription)"
-        }
-    }
-
-    /// Builds a provider from current settings and runs its cheap reachability check. Uses
-    /// `CleanupProviderResolver`, so an env-var override (if one happens to be set) is tested
-    /// exactly the same way the live dictation pipeline would resolve it, avoiding a UI that lies
-    /// about which provider is actually about to run.
-    private func testConnection() {
-        isTesting = true
-        statusMessage = nil
-        errorMessage = nil
-        Task {
-            do {
-                let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
-                let snapshot = await provider.healthSnapshot()
-                isTesting = false
-                if snapshot.reachable {
-                    statusMessage = "\(provider.displayName): \(snapshot.detail)"
-                } else {
-                    errorMessage = "\(provider.displayName): \(snapshot.detail)"
-                }
-            } catch {
-                isTesting = false
-                errorMessage = error.localizedDescription
             }
         }
     }
@@ -1285,7 +1072,7 @@ private struct CleanupSettingsTab: View {
 /// highlights, and per-step timings. Mirrors Windows' Playground panel (see
 /// src/Scribe.App/Settings/SettingsWindow.xaml, "Playground" section), which is populated from
 /// `DictationController.PipelineReported`. On macOS the analogous signal is `PipelineReportStore`,
-/// published from `AppDelegate.transcribeAndInject` after every real dictation (hotkey or the
+/// published by `DictationController` after every real dictation (hotkey or the
 /// "Start Test Dictation" menu item). There is no separate "Run" button here because macOS's
 /// push-to-talk hotkey already works regardless of which window is focused, so simply dictating
 /// normally while this tab is open is enough to see a report land.
@@ -1297,13 +1084,21 @@ private struct PlaygroundSettingsTab: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Playground")
                     .font(.headline)
-                Text("Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw transcript, dictionary/snippet replacements, and per-step timings for the most recent run.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    """
+                    Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw \
+                    transcript, dictionary/snippet replacements, and per-step timings for the most recent run.
+                    """
+                )
+                .foregroundStyle(.secondary)
 
                 if let report = pipelineReportStore.latest {
                     if let failureStage = report.failureStage {
-                        Label("Failed at \(failureStage.rawValue): \(report.failureReason ?? "unknown error")", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
+                        Label(
+                            "Failed at \(failureStage.rawValue): \(report.failureReason ?? "unknown error")",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(.red)
                     }
 
                     GroupBox("Raw Recognition") {
@@ -1312,6 +1107,16 @@ private struct PlaygroundSettingsTab: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 4)
+                    }
+
+                    if let sent = report.sentText {
+                        GroupBox("Sent to AI Cleanup (Vocabulary Applied)") {
+                            Text(sent)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 4)
+                        }
                     }
 
                     GroupBox("Processed Text (Replacements Highlighted)") {
@@ -1325,10 +1130,12 @@ private struct PlaygroundSettingsTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             timingRow("Capture", report.captureDuration)
                             timingRow("Speech Recognition (Decode)", report.decodeDuration)
-                            timingRow("Dictionary / Snippets", report.postProcessingDuration)
                             if let cleanupDuration = report.cleanupDuration {
-                                timingRow(report.cleanupApplied ? "AI Cleanup" : "AI Cleanup (failed, raw text used)", cleanupDuration)
+                                timingRow(
+                                    report.cleanupApplied ? "AI Cleanup" : "AI Cleanup (failed, raw text used)",
+                                    cleanupDuration)
                             }
+                            timingRow("Dictionary / Snippets", report.postProcessingDuration)
                             timingRow("Text Insertion", report.injectionDuration)
                             Divider()
                             timingRow("Total", report.totalDuration)
@@ -1341,11 +1148,8 @@ private struct PlaygroundSettingsTab: View {
                         .padding(.vertical, 4)
                     }
 
-                    // NOTE: There is no timing row here for "AI cleanup" or a Silero-style "VAD
-                    // decode" stage. macOS's live pipeline does not yet call AI cleanup (only
-                    // reachable via the `--cleanup-text` CLI verb), and macOS's capture uses an
-                    // energy-threshold auto-stop detector rather than a true VAD model with a
-                    // discrete inference step to time. See PORTING-PLAN.md for tracking.
+                    // No row for voice activity detection: macOS runs none as a step of its own (silence auto-stop
+                    // is `SilenceAutoStopTracker`, inside capture), so there is nothing separate to time.
                 } else {
                     Text("No dictation captured yet this session.")
                         .foregroundStyle(.secondary)
@@ -1384,7 +1188,8 @@ private struct PlaygroundSettingsTab: View {
         for replacement in result.replacements.sorted(by: { $0.start < $1.start }) {
             guard replacement.start >= cursor, replacement.start + replacement.length <= nsText.length else { continue }
             if replacement.start > cursor {
-                segments.append(Text(nsText.substring(with: NSRange(location: cursor, length: replacement.start - cursor))))
+                segments.append(
+                    Text(nsText.substring(with: NSRange(location: cursor, length: replacement.start - cursor))))
             }
             let highlighted = nsText.substring(with: NSRange(location: replacement.start, length: replacement.length))
             let color: Color = replacement.kind == .dictionary ? .blue : .green
@@ -1406,11 +1211,11 @@ private struct PlaygroundSettingsTab: View {
 /// (P50/P95 decode latency, real-time factor). Computed with `DictationStats.compute`, the same
 /// aggregation used by `Scribe --diagnostics` for headless verification.
 private struct DiagnosticsSettingsTab: View {
-    let persistenceStore: PersistenceStore
+    @StateObject private var model: DiagnosticsSettingsModel
 
-    @State private var snapshot: DictationStats.Snapshot?
-    @State private var errorMessage: String?
-    @State private var windowDays: Double = 7
+    init(persistenceStore: PersistenceStore) {
+        _model = StateObject(wrappedValue: DiagnosticsSettingsModel(access: .live(persistenceStore)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1418,28 +1223,37 @@ private struct DiagnosticsSettingsTab: View {
                 Text("Performance")
                     .font(.headline)
                 Spacer()
-                Picker("Window", selection: $windowDays) {
+                Picker("Window", selection: $model.windowDays) {
                     Text("24 hours").tag(1.0)
                     Text("7 days").tag(7.0)
                     Text("30 days").tag(30.0)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 260)
-                .onChange(of: windowDays) { _ in reload() }
+                .onChange(of: model.windowDays) { _ in
+                    Task { await model.reload() }
+                }
             }
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .foregroundStyle(.red)
             }
 
-            if let snapshot {
+            if let snapshot = model.stats {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        if let coverageNote = model.coverageNote {
+                            Text(coverageNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         metricRow(label: "Dictations", value: "\(snapshot.count)")
                         metricRow(
                             label: "Total audio",
-                            value: String(format: "%.1f s (longest %.1f s)", snapshot.totalAudioSeconds, snapshot.longestAudioSeconds))
+                            value: String(
+                                format: "%.1f s (longest %.1f s)", snapshot.totalAudioSeconds,
+                                snapshot.longestAudioSeconds))
 
                         Divider()
 
@@ -1449,7 +1263,8 @@ private struct DiagnosticsSettingsTab: View {
                             metricRow(label: "Average", value: String(format: "%.0f", decodeMs.average))
                             metricRow(label: "P50", value: String(format: "%.0f", decodeMs.p50))
                             metricRow(label: "P95", value: String(format: "%.0f", decodeMs.p95))
-                            metricRow(label: "Min / Max", value: String(format: "%.0f / %.0f", decodeMs.min, decodeMs.max))
+                            metricRow(
+                                label: "Min / Max", value: String(format: "%.0f / %.0f", decodeMs.min, decodeMs.max))
 
                             Divider()
 
@@ -1459,8 +1274,10 @@ private struct DiagnosticsSettingsTab: View {
                             metricRow(label: "P50", value: String(format: "%.3fx", snapshot.rtfP50))
                             metricRow(label: "P95", value: String(format: "%.3fx", snapshot.rtfP95))
                         } else {
-                            Text("No timed dictations yet. Decode latency is recorded starting with the next dictation.")
-                                .foregroundStyle(.secondary)
+                            Text(
+                                "No timed dictations yet. Decode latency is recorded starting with the next dictation."
+                            )
+                            .foregroundStyle(.secondary)
                         }
 
                         if let cleanupMs = snapshot.cleanupMs {
@@ -1468,7 +1285,8 @@ private struct DiagnosticsSettingsTab: View {
                             Text("AI cleanup latency (ms)")
                                 .font(.subheadline.bold())
                             metricRow(label: "Average", value: String(format: "%.0f", cleanupMs.average))
-                            metricRow(label: "Min / Max", value: String(format: "%.0f / %.0f", cleanupMs.min, cleanupMs.max))
+                            metricRow(
+                                label: "Min / Max", value: String(format: "%.0f / %.0f", cleanupMs.min, cleanupMs.max))
                         }
                     }
                 }
@@ -1479,7 +1297,9 @@ private struct DiagnosticsSettingsTab: View {
 
             Spacer()
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
     }
 
     private func metricRow(label: String, value: String) -> some View {
@@ -1491,37 +1311,23 @@ private struct DiagnosticsSettingsTab: View {
                 .monospacedDigit()
         }
     }
-
-    private func reload() {
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let since = Date().addingTimeInterval(-windowDays * 86400)
-            snapshot = DictationStats.compute(entries: history, since: since)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }
 
 // MARK: - Usage Insights tab
 
 /// Local-only usage totals, a trend chart, top apps, and recurring-term mining, backed by
 /// `UsageAnalyzer`. The AI summary section is the one part of this tab that leaves the device: it
-/// is opt-in per generation (never automatic) and sends only the aggregate `UsageInsight` payload
-/// (counts and dictionary-covered term labels), never raw transcripts. Mirrors Windows' Usage
-/// Insights page, split across the totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
+/// is opt-in per generation (never automatic), available only while AI cleanup is on, and sends
+/// only the aggregate `UsageInsight` payload (counts and dictionary-covered term labels other than
+/// template-like replacements), never raw transcripts (see `UsageSummaryModel`). Mirrors Windows'
+/// Usage Insights page, split across the totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
 private struct UsageInsightsSettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: UsageInsightsModel
+    @StateObject private var summaryModel = UsageSummaryModel()
 
-    @State private var snapshot: UsageAnalyzer.Snapshot?
-    @State private var errorMessage: String?
-    @State private var windowDays: Double = 30
-
-    @State private var aiSummaryText: String?
-    @State private var aiSummaryError: String?
-    @State private var isGeneratingSummary = false
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void) {
+        _model = StateObject(wrappedValue: UsageInsightsModel(access: .live(persistenceStore), onChanged: onChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1529,24 +1335,41 @@ private struct UsageInsightsSettingsTab: View {
                 Text("Usage Insights")
                     .font(.headline)
                 Spacer()
-                Picker("Window", selection: $windowDays) {
+                Picker("Window", selection: $model.windowDays) {
                     Text("7 days").tag(7.0)
                     Text("30 days").tag(30.0)
                     Text("90 days").tag(90.0)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 260)
-                .onChange(of: windowDays) { _ in reload() }
+                .onChange(of: model.windowDays) { _ in
+                    summaryModel.reset()
+                    Task { await model.reload() }
+                }
             }
 
-            if let errorMessage {
+            if let loadError = model.loadError {
+                Text(loadError)
+                    .foregroundStyle(.red)
+            }
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .foregroundStyle(.red)
             }
+            if let statusMessage = model.statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
-            if let snapshot {
+            if let snapshot = model.snapshot {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        if let coverageNote = model.coverageNote {
+                            Text(coverageNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         totalsSection(snapshot)
                         Divider()
                         trendSection(snapshot)
@@ -1565,7 +1388,12 @@ private struct UsageInsightsSettingsTab: View {
 
             Spacer()
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
+        .onDisappear {
+            summaryModel.cancelInFlight()
+        }
     }
 
     // MARK: Totals
@@ -1594,7 +1422,9 @@ private struct UsageInsightsSettingsTab: View {
             } else {
                 Chart(snapshot.trend, id: \.start) { point in
                     BarMark(
-                        x: .value("Period", String(format: "%04d-%02d-%02d", point.start.year, point.start.month, point.start.day)),
+                        x: .value(
+                            "Period",
+                            String(format: "%04d-%02d-%02d", point.start.year, point.start.month, point.start.day)),
                         y: .value("Dictations", point.dictations))
                 }
                 .frame(height: 160)
@@ -1647,22 +1477,13 @@ private struct UsageInsightsSettingsTab: View {
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         } else {
-                            Button("Add to Dictionary") { addTermToDictionary(term) }
+                            Button("Add to Dictionary") {
+                                Task { await model.addTermToDictionary(term) }
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-
-    private func addTermToDictionary(_ term: UsageAnalyzer.TermUsage) {
-        do {
-            _ = try persistenceStore.insertDictionaryEntry(
-                DictionaryEntry(pattern: term.text, replacement: term.text, wholeWord: true, enabled: true))
-            onChanged()
-            reload()
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -1672,53 +1493,42 @@ private struct UsageInsightsSettingsTab: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("AI summary")
                 .font(.subheadline.bold())
-            Text("Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup provider. Novel terms and raw transcripts never leave this device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                """
+                Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup \
+                provider. Novel terms, replacements that are templates in all but name (such as a signature \
+                block), and raw transcripts never leave this device.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             HStack {
-                Button(isGeneratingSummary ? "Generating..." : "Generate AI Summary") {
-                    generateSummary(snapshot)
+                Button(summaryModel.isGenerating ? "Generating..." : "Generate AI Summary") {
+                    summaryModel.generate(payload: UsageInsight.buildSummary(snapshot))
                 }
-                .disabled(isGeneratingSummary)
-                if isGeneratingSummary {
+                .disabled(!summaryModel.canGenerate)
+                if summaryModel.isGenerating {
                     ProgressView()
                         .controlSize(.small)
                 }
             }
 
-            if let aiSummaryError {
-                Text(aiSummaryError)
+            if !summaryModel.isCleanupEnabled {
+                Text("Turn on AI cleanup to generate a summary.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = summaryModel.errorMessage {
+                Text(error)
                     .foregroundStyle(.red)
             }
 
-            if let aiSummaryText {
-                Text(aiSummaryText)
+            if let summary = summaryModel.summary {
+                Text(summary)
                     .textSelection(.enabled)
                     .padding(.top, 4)
-            }
-        }
-    }
-
-    private func generateSummary(_ snapshot: UsageAnalyzer.Snapshot) {
-        isGeneratingSummary = true
-        aiSummaryError = nil
-        let payload = UsageInsight.buildSummary(snapshot)
-        Task {
-            do {
-                let provider = CleanupProviderResolver.resolveDefaultProvider()
-                let response = try await provider.clean(
-                    CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt))
-                let parsed = UsageInsight.parse(response.cleanedText)
-                await MainActor.run {
-                    aiSummaryText = parsed ?? "The AI provider returned no usable summary."
-                    isGeneratingSummary = false
-                }
-            } catch {
-                await MainActor.run {
-                    aiSummaryError = error.localizedDescription
-                    isGeneratingSummary = false
-                }
             }
         }
     }
@@ -1732,24 +1542,96 @@ private struct UsageInsightsSettingsTab: View {
                 .monospacedDigit()
         }
     }
+}
 
-    private func reload() {
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let knownTerms = try persistenceStore.fetchAllDictionaryEntries()
-            let now = Date()
-            let since = now.addingTimeInterval(-windowDays * 86400)
-            let entries = history.map {
-                UsageAnalyzer.Entry(
-                    timestampUtc: $0.startedAt,
-                    text: $0.transcriptText ?? "",
-                    audioMilliseconds: $0.audioMilliseconds,
-                    targetApp: $0.targetApp)
+// MARK: - History tab
+
+/// How long dictation text is kept, and Clear history (`HistorySettingsModel`). Windows keeps the limit on its storage
+/// card and Clear on its History page; macOS has no history list, so both live here.
+private struct HistorySettingsTab: View {
+    @StateObject private var model: HistorySettingsModel
+
+    init(access: HistorySettingsAccess, onCleared: @escaping @MainActor () -> Void) {
+        _model = StateObject(wrappedValue: HistorySettingsModel(access: access, onCleared: onCleared))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Dictation History")
+                .font(.headline)
+
+            Picker(
+                "Keep dictation history for",
+                selection: Binding(
+                    get: { model.selection },
+                    set: { choice in _ = model.choose(choice) }
+                )
+            ) {
+                ForEach(model.options, id: \.self) { option in
+                    Text(option.label).tag(option)
+                }
             }
-            snapshot = UsageAnalyzer.compute(entries: entries, knownTerms: knownTerms, sinceUtc: since, nowUtc: now)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            .frame(maxWidth: 360)
+            .disabled(!model.canChooseRetention)
+
+            Text(model.hint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            if let storedCountText = model.storedCountText {
+                Text(storedCountText)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button(model.isClearing ? "Clearing\u{2026}" : "Clear History\u{2026}", role: .destructive) {
+                    model.requestClear()
+                }
+                .disabled(!model.canClear)
+                if model.isClearing {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Spacer()
+            }
+
+            Text("Clear deletes every stored dictation and also empties Recent Dictations in the menu bar.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
+            if let errorMessage = model.errorMessage {
+                Text(errorMessage).foregroundStyle(.red).font(.caption)
+            }
+            if let statusMessage = model.statusMessage {
+                Text(statusMessage).foregroundStyle(.secondary).font(.caption)
+            }
+
+            Spacer()
+        }
+        .onAppear {
+            Task { await model.reload() }
+        }
+        .confirmationDialog(
+            "Clear all dictation history?",
+            isPresented: $model.isConfirmingClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All", role: .destructive) {
+                Task { await model.confirmClear() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                """
+                This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be \
+                undone.
+                """
+            )
         }
     }
 }

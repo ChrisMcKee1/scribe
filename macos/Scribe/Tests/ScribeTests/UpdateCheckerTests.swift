@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class SemanticVersionTests: XCTestCase {
@@ -37,17 +38,6 @@ final class SemanticVersionTests: XCTestCase {
 }
 
 final class UpdateCheckerTests: XCTestCase {
-    override func tearDown() {
-        StubURLProtocol.responseProvider = nil
-        super.tearDown()
-    }
-
-    private func stubbedSession() -> URLSession {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        return URLSession(configuration: configuration)
-    }
-
     func testCompareReportsUpdateAvailableWhenReleaseIsNewer() {
         let release = GitHubRelease(
             tagName: "v0.2.0",
@@ -90,23 +80,21 @@ final class UpdateCheckerTests: XCTestCase {
     }
 
     func testCheckForUpdateParsesRealisticGitHubResponse() async {
-        StubURLProtocol.responseProvider = { request in
-            XCTAssertEqual(request.url?.host, "api.github.com")
-            XCTAssertEqual(request.url?.path, "/repos/x3nc0n/scribe/releases/latest")
+        let requests = RequestLog()
+        let session = makeStubSession { request in
+            requests.record(request)
             let json = """
-            {
-                "tag_name": "v9.9.9",
-                "html_url": "https://github.com/x3nc0n/scribe/releases/tag/v9.9.9",
-                "name": "Scribe 9.9.9"
-            }
-            """.data(using: .utf8)!
+                {
+                    "tag_name": "v9.9.9",
+                    "html_url": "https://github.com/x3nc0n/scribe/releases/tag/v9.9.9",
+                    "name": "Scribe 9.9.9"
+                }
+                """.data(using: .utf8)!
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (response, json)
         }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let checker = UpdateChecker(session: URLSession(configuration: configuration))
+        let checker = UpdateChecker(session: session)
         let result = await checker.checkForUpdate(currentVersion: "0.1.0")
         XCTAssertEqual(
             result,
@@ -114,17 +102,17 @@ final class UpdateCheckerTests: XCTestCase {
                 current: "0.1.0",
                 latest: "v9.9.9",
                 url: URL(string: "https://github.com/x3nc0n/scribe/releases/tag/v9.9.9")!))
+        XCTAssertEqual(requests.all.first?.host, "api.github.com")
+        XCTAssertEqual(requests.all.first?.path, "/repos/x3nc0n/scribe/releases/latest")
     }
 
     func testCheckForUpdateFailsOnNonSuccessStatus() async {
-        StubURLProtocol.responseProvider = { request in
+        let session = makeStubSession { request in
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
             return (response, Data())
         }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let checker = UpdateChecker(session: URLSession(configuration: configuration))
+        let checker = UpdateChecker(session: session)
         let result = await checker.checkForUpdate(currentVersion: "0.1.0")
         if case .failed = result {
             // expected
@@ -134,14 +122,12 @@ final class UpdateCheckerTests: XCTestCase {
     }
 
     func testCheckForUpdateFailsOnUndecodableBody() async {
-        StubURLProtocol.responseProvider = { request in
+        let session = makeStubSession { request in
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (response, "not json".data(using: .utf8)!)
         }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let checker = UpdateChecker(session: URLSession(configuration: configuration))
+        let checker = UpdateChecker(session: session)
         let result = await checker.checkForUpdate(currentVersion: "0.1.0")
         if case .failed = result {
             // expected

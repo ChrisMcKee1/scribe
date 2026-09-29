@@ -1,19 +1,18 @@
-import SwiftUI
 import Combine
+import SwiftUI
 
-/// Shared observable model driving the overlay pill's contents. Owned by `AppDelegate`, updated
-/// from the audio capture/transcription pipeline, observed by `OverlayPillView` via SwiftUI.
-/// Mirrors the intent of Windows' `OverlayIpcServer` pushing state to the separate overlay
-/// process, but in-process here since macOS doesn't need the WPF-transparency workaround that
-/// forced Windows into a second process.
+/// Shared observable model driving the overlay pill's contents. Owned by `OverlayPanelController`, which the
+/// dictation lifecycle drives through numbered changes (`render(_:revision:)`), observed by `OverlayPillView` via
+/// SwiftUI. Mirrors the intent of Windows' `OverlayIpcServer` pushing state to the separate overlay process, but
+/// in-process here since macOS doesn't need the WPF-transparency workaround that forced Windows into a second process.
 @MainActor
 final class DictationSessionModel: ObservableObject {
     @Published var state: OverlayState = .hidden
 }
 
-/// The pill's visual contents: pulsing dot + meter while listening, bouncing dots while
-/// processing, a red notice on failure. Sized to roughly match Windows' 264x110 logical pill,
-/// scaled down since macOS's pill is a lightweight compact indicator rather than a full panel.
+/// The pill's visual contents: pulsing dot + meter while listening, bouncing dots while processing, a notice that
+/// names its stage afterwards. Sized to roughly match Windows' 264x110 logical pill, scaled down since macOS's pill is
+/// a lightweight compact indicator rather than a full panel.
 struct OverlayPillView: View {
     @ObservedObject var session: DictationSessionModel
 
@@ -46,9 +45,9 @@ struct OverlayPillView: View {
         case .processing:
             ProgressView()
                 .controlSize(.small)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color.red)
+        case .notice(let notice):
+            Image(systemName: notice.isFailure ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                .foregroundStyle(notice.isFailure ? Color.red : Color.secondary)
         }
     }
 
@@ -56,6 +55,7 @@ struct OverlayPillView: View {
         Text(labelText)
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(.primary)
+            .lineLimit(1)
     }
 
     private var labelText: String {
@@ -63,23 +63,57 @@ struct OverlayPillView: View {
         case .hidden: return ""
         case .listening(let levelDbfs): return String(format: "Listening %.0f dBFS", levelDbfs)
         case .processing: return "Processing…"
-        case .failed: return "Cleanup failed"
+        case .notice(let notice): return notice.label
         }
     }
 }
 
-/// Borderless, non-activating floating panel hosting `OverlayPillView`. Stays above normal
-/// windows, never steals keyboard focus (so the focused app keeps typing focus for injection),
-/// and repositions itself to the configured `OverlayAnchor` whenever shown.
+/// Borderless, non-activating floating panel hosting `OverlayPillView`. Stays above normal windows, including a
+/// full-screen app's space, never steals keyboard focus (so the focused app keeps typing focus for injection), and
+/// repositions itself to the configured `OverlayAnchor` whenever it appears.
 @MainActor
 final class OverlayPanelController {
     private let session = DictationSessionModel()
     private var panel: NSPanel?
-    private let pillSize = NSSize(width: 220, height: 40)
+    private var revisions = PresentationRevisionGate()
+    private let pillSize = NSSize(width: 280, height: 40)
     var anchor: OverlayAnchor = .bottomCenter
 
-    /// Lazily creates the panel on first use so app launch doesn't pay for it when the pill is
-    /// never shown (e.g. hotkey-only workflows where the user never glances at the menu bar).
+    /// What the pill shows now.
+    var displayedState: OverlayState {
+        session.state
+    }
+
+    /// The revision of the change shown last; 0 before the first.
+    var lastRenderedRevision: UInt64 {
+        revisions.lastAdmitted
+    }
+
+    /// The panel's collection behavior, once the panel exists.
+    var panelCollectionBehavior: NSWindow.CollectionBehavior? {
+        panel?.collectionBehavior
+    }
+
+    /// Shows `state` when `revision` is higher than every revision shown before, and returns whether it did. A
+    /// change that arrives late, after a newer one, is dropped, so a hide scheduled for one dictation can never take
+    /// down the pill of the recording that started after it.
+    @discardableResult
+    func render(_ state: OverlayState, revision: UInt64) -> Bool {
+        guard revisions.admit(revision) else { return false }
+        session.state = state
+        guard state != .hidden else {
+            panel?.orderOut(nil)
+            return true
+        }
+        let panel = ensurePanel()
+        if !panel.isVisible {
+            reposition(panel)
+            panel.orderFrontRegardless()
+        }
+        return true
+    }
+
+    /// Lazily creates the panel on first use so app launch doesn't pay for it when the pill is never shown.
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
 
@@ -94,39 +128,21 @@ final class OverlayPanelController {
         newPanel.backgroundColor = .clear
         newPanel.hasShadow = true
         newPanel.level = .floating
-        newPanel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // `.fullScreenAuxiliary` lets the pill share a full-screen app's space, where the user is most likely to be
+        // dictating into a focused editor or a browser.
+        newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         newPanel.isMovableByWindowBackground = false
         newPanel.hidesOnDeactivate = false
         panel = newPanel
         return newPanel
     }
 
-    /// Repositions the panel to the current anchor on the screen holding the mouse cursor (falls
-    /// back to `NSScreen.main`), matching Windows' "the pill follows the active display" behavior.
+    /// Repositions the panel to the current anchor on the screen holding the mouse cursor (falls back to
+    /// `NSScreen.main`), matching Windows' "the pill follows the active display" behavior.
     private func reposition(_ panel: NSPanel) {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         guard let visibleFrame = screen?.visibleFrame else { return }
         let origin = anchor.origin(for: pillSize, in: visibleFrame)
         panel.setFrameOrigin(origin)
-    }
-
-    func show(state: OverlayState) {
-        session.state = state
-        guard state != .hidden else {
-            hide()
-            return
-        }
-        let panel = ensurePanel()
-        reposition(panel)
-        panel.orderFrontRegardless()
-    }
-
-    func update(state: OverlayState) {
-        session.state = state
-    }
-
-    func hide() {
-        session.state = .hidden
-        panel?.orderOut(nil)
     }
 }

@@ -57,8 +57,8 @@ struct LocalDate: Hashable, Comparable {
         components.month = month
         components.day = day
         let date = Self.utcCalendar.date(from: components) ?? Date(timeIntervalSince1970: 0)
-        let weekday = Self.utcCalendar.component(.weekday, from: date) // 1 = Sunday ... 7 = Saturday
-        let offset = (weekday + 5) % 7 // Monday-based offset, matching C#'s DayOfWeek arithmetic
+        let weekday = Self.utcCalendar.component(.weekday, from: date)  // 1 = Sunday ... 7 = Saturday
+        let offset = (weekday + 5) % 7  // Monday-based offset, matching C#'s DayOfWeek arithmetic
         return addingDays(-offset)
     }
 
@@ -94,6 +94,11 @@ enum UsageAnalyzer {
         let dictations: Int
         let occurrences: Int
         let covered: Bool
+        /// A covered term that is the replacement of a template-like dictionary rule (`TextPostProcessor.isVocabulary`
+        /// is false for one of the rules it comes from): a signature block, a long or multi-line text, one with a dash
+        /// or with spacing the reply's normalization would change. The dictation path never sends such a replacement
+        /// to a cleanup provider, so the AI summary never sends it either (`UsageInsight.buildSummary`).
+        var isTemplateLike = false
     }
 
     struct Snapshot {
@@ -115,6 +120,39 @@ enum UsageAnalyzer {
         let text: String
         let audioMilliseconds: Double
         let targetApp: String?
+    }
+
+    /// Newest dictations one snapshot reads, as Windows' `UsageReport.HistoryLimit`.
+    static let historyLimit = 5_000
+
+    /// A snapshot plus whether the period held more dictations than it covers.
+    struct Report {
+        let snapshot: Snapshot
+        /// True when the period holds more than `historyLimit` dictations, so the page must say the
+        /// numbers cover only the newest ones.
+        let periodCapped: Bool
+    }
+
+    /// Computes the snapshot for the period from `records`, the period's newest dictations oldest
+    /// first, as `PersistenceStore.fetchDictationHistory(since:limit:)` returns them. Read
+    /// `historyLimit + 1`: the row past the cap is what reveals that the period holds more.
+    static func report(
+        records: [DictationHistoryRecord],
+        knownTerms: [DictionaryEntry],
+        sinceUtc: Date,
+        nowUtc: Date,
+        timeZone: TimeZone = .current
+    ) -> Report {
+        let entries = records.suffix(historyLimit).map {
+            Entry(
+                timestampUtc: $0.startedAt,
+                text: $0.transcriptText ?? "",
+                audioMilliseconds: $0.audioMilliseconds,
+                targetApp: $0.targetApp)
+        }
+        let snapshot = compute(
+            entries: entries, knownTerms: knownTerms, sinceUtc: sinceUtc, nowUtc: nowUtc, timeZone: timeZone)
+        return Report(snapshot: snapshot, periodCapped: records.count > historyLimit)
     }
 
     /// Computes one internally consistent snapshot. Every metric uses entries on or after
@@ -187,7 +225,8 @@ enum UsageAnalyzer {
     ) -> ([TrendPoint], TrendGranularity) {
         let end = LocalDate(date: nowUtc, timeZone: timeZone)
         let requestedStart = LocalDate(date: sinceUtc, timeZone: timeZone)
-        let firstEntry = entries.isEmpty
+        let firstEntry =
+            entries.isEmpty
             ? end
             : entries.map { LocalDate(date: $0.timestampUtc, timeZone: timeZone) }.min()!
         var start = requestedStart.year <= 1 ? firstEntry : requestedStart
@@ -226,6 +265,7 @@ enum UsageAnalyzer {
     private struct KnownTerm {
         let canonical: String
         let forms: [String]
+        let isTemplateLike: Bool
     }
 
     private static func extractTerms(
@@ -265,12 +305,13 @@ enum UsageAnalyzer {
             // A 1-char pattern with a 1-char replacement leaves no usable forms; skipping keeps
             // the max-over-forms lookup below from ever seeing an empty form list.
             guard !forms.isEmpty else { continue }
-            known.append(KnownTerm(canonical: canonical, forms: forms))
+            let isTemplateLike = groupEntries.contains { !TextPostProcessor.isVocabulary($0) }
+            known.append(KnownTerm(canonical: canonical, forms: forms, isTemplateLike: isTemplateLike))
         }
 
         // Forms Token() can represent whole are counted through one tokenization pass and hash
         // lookups; only multi-token phrases retain compiled regex matching.
-        var singleTokenForms: [String: String] = [:] // lowercased form -> canonical-cased form
+        var singleTokenForms: [String: String] = [:]  // lowercased form -> canonical-cased form
         var phraseMatchers: [(text: String, regex: NSRegularExpression)] = []
         var seenFormKeys = Set<String>()
         for term in known {
@@ -280,7 +321,8 @@ enum UsageAnalyzer {
                 if isSingleTokenForm(form) {
                     singleTokenForms[key] = form
                 } else if let regex = try? NSRegularExpression(
-                    pattern: phrasePattern(for: form), options: [.caseInsensitive]) {
+                    pattern: phrasePattern(for: form), options: [.caseInsensitive])
+                {
                     phraseMatchers.append((text: form, regex: regex))
                 }
             }
@@ -300,7 +342,7 @@ enum UsageAnalyzer {
         for entry in entries {
             let nsText = entry.text as NSString
             let fullRange = NSRange(location: 0, length: nsText.length)
-            var formCounts: [String: Int] = [:] // keyed by canonical form text
+            var formCounts: [String: Int] = [:]  // keyed by canonical form text
             var lastMatchEnds: [String: Int] = [:]
             var seenNovelForms = Set<String>()
 
@@ -321,7 +363,8 @@ enum UsageAnalyzer {
                 }
                 let lowered = trimmed.lowercased()
                 guard trimmed.count >= 2, !coveredForms.contains(lowered),
-                      DictionarySuggestionMiner.isJargonShaped(trimmed) else {
+                    DictionarySuggestionMiner.isJargonShaped(trimmed)
+                else {
                     continue
                 }
 
@@ -354,18 +397,22 @@ enum UsageAnalyzer {
 
         var results: [TermUsage] = []
         for (index, term) in known.enumerated() where termDictations[index] > 0 {
-            results.append(TermUsage(
-                text: term.canonical,
-                dictations: termDictations[index],
-                occurrences: termOccurrences[index],
-                covered: true))
+            results.append(
+                TermUsage(
+                    text: term.canonical,
+                    dictations: termDictations[index],
+                    occurrences: termOccurrences[index],
+                    covered: true,
+                    isTemplateLike: term.isTemplateLike))
         }
         for value in novelForms.values where value.dictations >= 2 {
-            results.append(TermUsage(
-                text: value.surface, dictations: value.dictations, occurrences: value.occurrences, covered: false))
+            results.append(
+                TermUsage(
+                    text: value.surface, dictations: value.dictations, occurrences: value.occurrences, covered: false))
         }
 
-        return results
+        return
+            results
             .sorted { lhs, rhs in
                 if lhs.dictations != rhs.dictations { return lhs.dictations > rhs.dictations }
                 if lhs.occurrences != rhs.occurrences { return lhs.occurrences > rhs.occurrences }

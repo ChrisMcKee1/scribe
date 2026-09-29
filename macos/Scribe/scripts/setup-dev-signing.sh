@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # One-time setup for local macOS development: creates a stable, self-signed code-signing identity
-# so rebuilt Scribe.app bundles keep a consistent signature across builds.
+# so rebuilt Scribe.app bundles keep a consistent signature across builds, and stores it in a
+# dedicated keychain with a user-chosen password that can be reused later to unlock, delete, or
+# recreate that keychain without regenerating the signing identity.
 #
 # Why this matters: macOS's TCC (privacy) database keys Accessibility/Microphone grants off the
 # app's code signature, not its bundle path. build-app.sh previously ad-hoc signed ("codesign
@@ -16,7 +18,20 @@ set -euo pipefail
 KEYCHAIN_NAME="scribe-dev.keychain-db"
 KEYCHAIN_PATH="$HOME/Library/Keychains/$KEYCHAIN_NAME"
 IDENTITY_NAME="Scribe Local Dev"
-KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+if [[ -n "${SCRIBE_KEYCHAIN_PASSWORD:-}" ]]; then
+    KEYCHAIN_PASSWORD="$SCRIBE_KEYCHAIN_PASSWORD"
+else
+    read -r -s -p "Enter a password for $KEYCHAIN_NAME: " KEYCHAIN_PASSWORD
+    echo
+    read -r -s -p "Re-enter the password for $KEYCHAIN_NAME: " KEYCHAIN_PASSWORD_CONFIRM
+    echo
+
+    if [[ "$KEYCHAIN_PASSWORD" != "$KEYCHAIN_PASSWORD_CONFIRM" ]]; then
+        echo "Keychain passwords did not match. Re-run the script and try again." >&2
+        exit 1
+    fi
+fi
 
 if security find-identity 2>/dev/null | grep -q "$IDENTITY_NAME"; then
     echo "A '$IDENTITY_NAME' signing identity already exists; nothing to do."
@@ -53,8 +68,8 @@ openssl pkcs12 -export -out "$WORKDIR/scribe-dev.p12" \
 
 # A dedicated keychain (rather than the login keychain) avoids the interactive "codesign wants to
 # use your confidential information" prompt that a login-keychain import can trigger in a
-# non-interactive session; creating and unlocking it here with a throwaway password sidesteps that
-# entirely, and macOS keeps it unlocked for the rest of the login session.
+# non-interactive session; creating and unlocking it here with a user-chosen password sidesteps
+# that entirely, and macOS keeps it unlocked for the rest of the login session.
 security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings "$KEYCHAIN_PATH"
@@ -71,3 +86,5 @@ echo "Created '$IDENTITY_NAME' signing identity in $KEYCHAIN_PATH."
 echo "Rebuild the app (scripts/build-app.sh) and re-grant Accessibility one more time in"
 echo "System Settings > Privacy & Security > Accessibility. Every future rebuild will keep the"
 echo "same signature, so that grant will stick without re-prompting."
+echo "Keep the $KEYCHAIN_NAME password somewhere safe. You will need it if you later want to"
+echo "unlock, delete, or recreate that dedicated keychain."

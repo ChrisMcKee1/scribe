@@ -1,0 +1,315 @@
+import Foundation
+
+/// The AI cleanup settings the AI Cleanup tab shows, as one value. Secrets are not part of it: they live in
+/// Keychain and are only written by an explicit Save.
+struct CleanupSettingsValues: Equatable {
+    var isEnabled: Bool
+    var providerKind: CleanupProviderKind
+    var foundryLocalModelAlias: String
+    var ollamaModel: String
+    var openAIBaseURL: String
+    var openAIModel: String
+    var azureEndpoint: String
+    var azureDeployment: String
+    var azureAuthMode: AzureAuthMode
+    var azureTenantId: String
+    var azureClientId: String
+}
+
+/// What "Test Connection" found, in words for the tab.
+struct CleanupConnectionCheck: Equatable, Sendable {
+    let reachable: Bool
+    let message: String
+}
+
+/// How the AI Cleanup tab reaches stored settings, Keychain and the provider. `live` goes through
+/// `CleanupSettingsStore.live` and `CleanupProviderCache.shared`, the same store and provider the tray and the
+/// dictation pipeline use, so the tab can never describe a configuration they would not run; tests pass their own.
+struct CleanupSettingsAccess {
+    var load: @MainActor () -> CleanupSettingsValues
+    /// Stores the fields that differ between `new` and `old`.
+    var save: @MainActor (_ new: CleanupSettingsValues, _ old: CleanupSettingsValues) -> Void
+    var isConfigured: @MainActor (CleanupProviderKind) -> Bool
+    var hasOpenAIApiKey: @MainActor () -> Bool
+    var setOpenAIApiKey: @MainActor (String?) throws -> Void
+    var hasAzureClientSecret: @MainActor (_ clientId: String) -> Bool
+    var setAzureClientSecret: @MainActor (_ secret: String?, _ clientId: String) throws -> Void
+    /// Runs Test Connection through the provider the pipeline would use. Runs off the main actor.
+    var checkConnection: @Sendable () async -> CleanupConnectionCheck
+}
+
+extension CleanupSettingsAccess {
+    static var live: CleanupSettingsAccess {
+        backed(by: .live, providers: .shared)
+    }
+
+    /// The tab over `store`, with Test Connection through `providers`, which should read the same store.
+    static func backed(by store: CleanupSettingsStore, providers: CleanupProviderCache) -> CleanupSettingsAccess {
+        CleanupSettingsAccess(
+            load: {
+                let stored = store.snapshot()
+                return CleanupSettingsValues(
+                    isEnabled: stored.isEnabled,
+                    providerKind: stored.providerKind,
+                    foundryLocalModelAlias: stored.foundryLocalModelAlias,
+                    ollamaModel: stored.ollamaModel,
+                    openAIBaseURL: stored.openAIBaseURL,
+                    openAIModel: stored.openAIModel,
+                    azureEndpoint: stored.azureEndpoint,
+                    azureDeployment: stored.azureDeployment,
+                    azureAuthMode: stored.azureAuthMode,
+                    azureTenantId: stored.azureTenantId,
+                    azureClientId: stored.azureClientId)
+            },
+            save: { new, old in
+                if new.isEnabled != old.isEnabled { store.isEnabled = new.isEnabled }
+                if new.providerKind != old.providerKind { store.providerKind = new.providerKind }
+                if new.foundryLocalModelAlias != old.foundryLocalModelAlias {
+                    store.foundryLocalModelAlias = new.foundryLocalModelAlias
+                }
+                if new.ollamaModel != old.ollamaModel { store.ollamaModel = new.ollamaModel }
+                if new.openAIBaseURL != old.openAIBaseURL { store.openAIBaseURL = new.openAIBaseURL }
+                if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
+                if new.azureEndpoint != old.azureEndpoint { store.azureEndpoint = new.azureEndpoint }
+                if new.azureDeployment != old.azureDeployment { store.azureDeployment = new.azureDeployment }
+                if new.azureAuthMode != old.azureAuthMode { store.azureAuthMode = new.azureAuthMode }
+                if new.azureTenantId != old.azureTenantId { store.azureTenantId = new.azureTenantId }
+                if new.azureClientId != old.azureClientId { store.azureClientId = new.azureClientId }
+            },
+            isConfigured: { store.isConfigured(for: $0) },
+            hasOpenAIApiKey: { store.openAIApiKey() != nil },
+            setOpenAIApiKey: { try store.setOpenAIApiKey($0) },
+            hasAzureClientSecret: { store.azureClientSecret(clientId: $0) != nil },
+            setAzureClientSecret: { try store.setAzureClientSecret($0, clientId: $1) },
+            checkConnection: { await providers.checkConnection() })
+    }
+}
+
+/// The AI Cleanup tab. Every field is stored the moment it changes, and the tab re-reads storage after any
+/// preference write elsewhere in the process (the tray's AI Cleanup item above all), so the switch and the fields
+/// always show what the pipeline will use. Only the provider controls depend on the switch, so cleanup can always
+/// be turned on from here. What is typed into the two secret fields lives in `SettingsDrafts`, so it survives the
+/// window closing until it is saved or cleared.
+@MainActor
+final class CleanupSettingsModel: ObservableObject {
+    enum Control {
+        case enableSwitch
+        case provider
+        case providerDetails
+        case connectionTest
+    }
+
+    @Published var values: CleanupSettingsValues {
+        didSet { store(changesFrom: oldValue) }
+    }
+    @Published private(set) var hasSavedOpenAIApiKey = false
+    @Published private(set) var hasSavedAzureClientSecret = false
+    @Published private(set) var isTesting = false
+    @Published private(set) var statusMessage: String?
+    @Published private(set) var errorMessage: String?
+
+    let drafts: SettingsDrafts
+    private let access: CleanupSettingsAccess
+    /// Where Test Connection runs, so Quit can cancel it and wait for its `az` or `foundry` to be reaped.
+    private let operations: AuxiliaryOperations
+    private var isReloading = false
+    private var isSaving = false
+    /// Advances on every change to `values` and every stored credential change, so a connection test can tell its
+    /// result is for a configuration the tab no longer shows.
+    private var revision = 0
+    /// The Test Connection running now, for `cancelConnectionTest()`, and whether the user stopped it.
+    private var runningCheck: Task<CleanupConnectionCheck?, Never>?
+    private var checkCancelledByUser = false
+    private var observation: SettingsNotificationObservation?
+    /// Stops a running Test Connection when Settings closes. The task running it keeps this model alive, so waiting
+    /// for the model to be freed would wait for the check.
+    private var closeObservation: SettingsNotificationObservation?
+
+    init(
+        access: CleanupSettingsAccess, drafts: SettingsDrafts, center: NotificationCenter = .default,
+        operations: AuxiliaryOperations = .shared
+    ) {
+        self.access = access
+        self.drafts = drafts
+        self.operations = operations
+        values = access.load()
+        observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
+            [weak self] in
+            self?.reload()
+        }
+        closeObservation = SettingsNotificationObservation(
+            SettingsWindowController.willCloseNotification, center: center
+        ) { [weak self] in
+            self?.cancelConnectionTest()
+        }
+    }
+
+    /// Whether a control is disabled now. The switch never is: the provider controls depend on it, it does not.
+    func isDisabled(_ control: Control) -> Bool {
+        switch control {
+        case .enableSwitch:
+            return false
+        case .provider, .providerDetails:
+            return !values.isEnabled
+        case .connectionTest:
+            return !values.isEnabled || isTesting || !access.isConfigured(values.providerKind)
+        }
+    }
+
+    var canSaveOpenAIApiKey: Bool {
+        !drafts.openAIApiKey.isEmpty
+    }
+
+    var canSaveAzureClientSecret: Bool {
+        !drafts.azureClientSecret.isEmpty && !values.azureClientId.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Re-reads stored settings. What is typed into a secret field is kept: it is not stored until Save.
+    func reload() {
+        // A write of the tab's own reaches here from inside `save`; storage already holds what the tab shows.
+        guard !isSaving else { return }
+        let stored = access.load()
+        guard stored != values else { return }
+        isReloading = true
+        values = stored
+        isReloading = false
+    }
+
+    /// Re-reads which secrets Keychain holds. Done when the tab appears and after a change that affects it, never
+    /// for every preference write, so an open tab does not read Keychain each time anything is stored.
+    func refreshSecretState() {
+        hasSavedOpenAIApiKey = access.hasOpenAIApiKey()
+        hasSavedAzureClientSecret = access.hasAzureClientSecret(values.azureClientId)
+    }
+
+    func saveOpenAIApiKey() {
+        do {
+            try access.setOpenAIApiKey(drafts.openAIApiKey)
+            drafts.openAIApiKey = ""
+            hasSavedOpenAIApiKey = true
+            credentialsChanged()
+            show(status: "API key saved to Keychain.")
+        } catch {
+            show(error: "Failed to save API key: \(error.localizedDescription)")
+        }
+    }
+
+    /// Removes the saved key, and with it anything typed into the field: Clear means no key, so a half-typed
+    /// replacement must not come back when Settings reopens. A failed removal keeps both.
+    func clearOpenAIApiKey() {
+        do {
+            try access.setOpenAIApiKey(nil)
+            drafts.openAIApiKey = ""
+            hasSavedOpenAIApiKey = false
+            credentialsChanged()
+            show(status: "API key removed.")
+        } catch {
+            show(error: "Failed to remove API key: \(error.localizedDescription)")
+        }
+    }
+
+    func saveAzureClientSecret() {
+        do {
+            try access.setAzureClientSecret(drafts.azureClientSecret, values.azureClientId)
+            drafts.azureClientSecret = ""
+            hasSavedAzureClientSecret = true
+            credentialsChanged()
+            show(status: "Client secret saved to Keychain.")
+        } catch {
+            show(error: "Failed to save client secret: \(error.localizedDescription)")
+        }
+    }
+
+    /// Removes the saved secret for this client ID, and with it anything typed into the field, as Clear does for
+    /// the API key. A failed removal keeps both.
+    func clearAzureClientSecret() {
+        do {
+            try access.setAzureClientSecret(nil, values.azureClientId)
+            drafts.azureClientSecret = ""
+            hasSavedAzureClientSecret = false
+            credentialsChanged()
+            show(status: "Client secret removed.")
+        } catch {
+            show(error: "Failed to remove client secret: \(error.localizedDescription)")
+        }
+    }
+
+    /// Runs Test Connection through the provider the pipeline would use, environment overrides included. A result that
+    /// arrives after the settings or a stored credential changed is dropped rather than shown against them.
+    /// `cancelConnectionTest()` stops it while it runs, and so does Quit (`AuxiliaryOperations`).
+    func testConnection() async {
+        guard !isDisabled(.connectionTest) else { return }
+        let started = revision
+        isTesting = true
+        statusMessage = nil
+        errorMessage = nil
+        checkCancelledByUser = false
+        let checkConnection = access.checkConnection
+        let operations = operations
+        // Nil when the check was cancelled before it was admitted, so nothing ran; a refusal at Quit says so.
+        let check = Task { () -> CleanupConnectionCheck? in
+            do {
+                return try await operations.run { await checkConnection() }
+            } catch AuxiliaryOperations.Refusal.closed {
+                return CleanupConnectionCheck(
+                    reachable: false, message: "Test Connection did not run, because Scribe is quitting.")
+            } catch {
+                return nil
+            }
+        }
+        runningCheck = check
+        let outcome = await withTaskCancellationHandler {
+            await check.value
+        } onCancel: {
+            check.cancel()
+        }
+        runningCheck = nil
+        isTesting = false
+        guard started == revision else { return }
+        guard let result = outcome, !checkCancelledByUser else {
+            statusMessage = "Test Connection was cancelled."
+            return
+        }
+        if result.reachable {
+            statusMessage = result.message
+        } else {
+            errorMessage = result.message
+        }
+    }
+
+    /// Stops the Test Connection that is running, if one is: its request, and any `az` or `foundry` it started, are
+    /// cancelled, and the tab says it was cancelled rather than showing a failure.
+    func cancelConnectionTest() {
+        guard let runningCheck else { return }
+        checkCancelledByUser = true
+        runningCheck.cancel()
+    }
+
+    /// A stored key or secret changed: a connection test still running checked the credential that was replaced.
+    private func credentialsChanged() {
+        revision += 1
+    }
+
+    private func store(changesFrom old: CleanupSettingsValues) {
+        guard values != old else { return }
+        revision += 1
+        if !isReloading {
+            isSaving = true
+            access.save(values, old)
+            isSaving = false
+        }
+        if values.azureClientId != old.azureClientId {
+            hasSavedAzureClientSecret = access.hasAzureClientSecret(values.azureClientId)
+        }
+    }
+
+    private func show(status: String) {
+        statusMessage = status
+        errorMessage = nil
+    }
+
+    private func show(error: String) {
+        errorMessage = error
+        statusMessage = nil
+    }
+}

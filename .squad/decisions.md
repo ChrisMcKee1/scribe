@@ -47,6 +47,11 @@
 - Reversed the "do not surface Foundry Local in macOS UI" guidance; the Settings provider picker now lists `Foundry Local` as a real, named, default-selected option.
 **Why:** User corrected the record with a source link; verifying it was straightforward (Homebrew tap + install + `foundry status`/`foundry model info`/`foundry transcribe`). Standardizing on Foundry Local for both AI features keeps macOS on one real Microsoft-supported local-inference stack instead of three unrelated ones (sherpa-onnx, whisper.cpp, Ollama), and matches the Windows product's own "SDK owns hardware selection" philosophy. User explicitly directed: recommend Foundry Local and explain why, but keep Ollama fully supported too; default should optimize for the best experience even at a storage or separate-install cost, which this recommendation reflects (Foundry Local + `qwen2.5-1.5b` costs roughly 1.7 GB beyond the ~200 MB CLI install).
 
+### 2026-08-24: Temporary macOS ASR subprocess bridge
+**By:** Backend
+**What:** Wired the macOS Swift shell to transcribe captured 16 kHz mono audio through a local `whisper-cli` subprocess and `ggml-tiny.en` model, with a `TranscriptionEngine` that can also transcribe a WAV file for repeatable end-to-end checks.
+**Why:** The preferred sherpa-onnx plus Parakeet path was attempted first, but downloading the exact Windows Parakeet encoder model exceeded the agreed time-box on this Mac. This stopgap proves real speech-to-text from the Swift app today while keeping the documented production target on native sherpa-onnx plus Parakeet.
+
 ## Governance
 
 - All meaningful changes require team consensus

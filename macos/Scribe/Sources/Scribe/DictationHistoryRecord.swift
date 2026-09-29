@@ -3,8 +3,9 @@ import Foundation
 /// One row of dictation history, mirroring Windows' `HistoryEntry` shape closely enough for
 /// `DictationStats.compute` to be a faithful port. macOS has a single ASR backend today (no
 /// model-catalog concept yet), so there is no `transcriptionModelId` filter here; every row with
-/// a decode time counts toward the decode/RTF stats.
-struct DictationHistoryRecord {
+/// a decode time counts toward the decode/RTF stats. Also the unit `HistoryWriter` commits, so it is
+/// `Sendable`.
+struct DictationHistoryRecord: Equatable, Sendable {
     let startedAt: Date
     let durationSeconds: Double
     let sampleCount: Int

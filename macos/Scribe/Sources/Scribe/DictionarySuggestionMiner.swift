@@ -65,12 +65,14 @@ enum DictionarySuggestionMiner {
             }
         }
 
-        return dictations
+        return
+            dictations
             .filter { $0.value >= minDictations }
             .map { key, dictationCount -> Suggestion in
                 // Suggest the surface form the user's text uses most often.
                 let forms = counts[key] ?? [:]
-                let bestForm = forms
+                let bestForm =
+                    forms
                     .sorted { lhs, rhs in
                         if lhs.value != rhs.value {
                             return lhs.value > rhs.value
@@ -149,7 +151,7 @@ enum DictionarySuggestionMiner {
         }
         guard i > digitsStart else { return false }
         while i < chars.count {
-            guard chars[i].isASCII, (chars[i].isLetter || chars[i].isNumber) else { return false }
+            guard chars[i].isASCII, chars[i].isLetter || chars[i].isNumber else { return false }
             i += 1
         }
         return true

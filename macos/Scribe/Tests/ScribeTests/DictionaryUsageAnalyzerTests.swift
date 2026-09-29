@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionaryUsageAnalyzerTests: XCTestCase {
@@ -10,7 +11,8 @@ final class DictionaryUsageAnalyzerTests: XCTestCase {
             s.split(whereSeparator: { $0.isWhitespace }).count
         }
         while transcripts.count < DictionaryUsageAnalyzer.minimumTranscripts
-            || transcripts.reduce(0, { $0 + wordCount($1) }) < DictionaryUsageAnalyzer.minimumWords {
+            || transcripts.reduce(0, { $0 + wordCount($1) }) < DictionaryUsageAnalyzer.minimumWords
+        {
             transcripts.append(Array(repeating: "the meeting went well today", count: 20).joined(separator: " "))
         }
         return transcripts
@@ -72,8 +74,10 @@ final class DictionaryUsageAnalyzerTests: XCTestCase {
 
         let text = corpus("this said nothing important")
 
-        XCTAssertEqual(DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [wholeWord]).unusedEntries.count, 1)
-        XCTAssertTrue(DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [substring]).unusedEntries.isEmpty)
+        XCTAssertEqual(
+            DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [wholeWord]).unusedEntries.count, 1)
+        XCTAssertTrue(
+            DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [substring]).unusedEntries.isEmpty)
     }
 
     func testEvidenceMatchingIgnoresCase() {
@@ -189,21 +193,29 @@ final class DictionaryUsageAnalyzerTests: XCTestCase {
         XCTAssertEqual(report.unusedEntries.map { $0.entry.pattern }, ["alpha", "mike", "zulu"])
     }
 
-    /// The glossary cap is only worth mentioning when the dictionary is big enough for it to
-    /// bite; quoting a limit to someone nowhere near it is noise.
-    func testTheGlossaryCapIsOnlyMentionedWhenTheDictionaryExceedsIt() {
+    /// The summary says only what the scan found. macOS sends a cleanup model none of the dictionary, so a dictionary
+    /// past the 80 terms Windows sends its local models is told nothing about freeing room there, and one term reads as
+    /// one term.
+    func testTheSummaryStatesOnlyWhatTheScanFoundHoweverLargeTheDictionary() {
+        let transcripts = corpus("unrelated content")
         let small = DictionaryUsageAnalyzer.analyze(
-            transcripts: corpus("unrelated content"),
+            transcripts: transcripts,
             baseEntries: [DictionaryEntry(id: 1, pattern: "kubernetes", replacement: "Kubernetes")])
 
-        XCTAssertFalse(small.summary.localizedCaseInsensitiveContains("frees room"))
+        XCTAssertEqual(
+            small.summary,
+            "Checked 1 term against your last \(transcripts.count) dictations. "
+                + "1 of your own entries did not appear.")
 
         let many = (1...200).map {
             DictionaryEntry(id: $0, pattern: "term number \($0)", replacement: "Term\($0)")
         }
-        let large = DictionaryUsageAnalyzer.analyze(transcripts: corpus("unrelated content"), baseEntries: many)
+        let large = DictionaryUsageAnalyzer.analyze(transcripts: transcripts, baseEntries: many)
 
-        XCTAssertTrue(large.summary.localizedCaseInsensitiveContains("frees room"))
+        XCTAssertEqual(
+            large.summary,
+            "Checked 200 terms against your last \(transcripts.count) dictations. "
+                + "200 of your own entries did not appear.")
     }
 
     func testEvidenceCountsBothDirectionsForALiveTerm() {

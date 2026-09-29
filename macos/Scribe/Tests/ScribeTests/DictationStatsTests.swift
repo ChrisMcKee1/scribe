@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// Direct port of Windows' `DictationStatsTests`, verifying the aggregation math is unchanged
@@ -34,9 +35,9 @@ final class DictationStatsTests: XCTestCase {
 
     func testComputeAggregatesDecodeAndRtf() {
         let entries = [
-            entry(audioMs: 10_000, decodeMs: 1_000, cleanupMs: 400), // RTF 0.10
-            entry(audioMs: 20_000, decodeMs: 3_000, cleanupMs: 700), // RTF 0.15
-            entry(audioMs: 5_000, decodeMs: 1_000),                  // RTF 0.20
+            entry(audioMs: 10_000, decodeMs: 1_000, cleanupMs: 400),  // RTF 0.10
+            entry(audioMs: 20_000, decodeMs: 3_000, cleanupMs: 700),  // RTF 0.15
+            entry(audioMs: 5_000, decodeMs: 1_000),  // RTF 0.20
         ]
 
         let stats = DictationStats.compute(entries: entries, since: Date().addingTimeInterval(-7 * 86400))
@@ -66,8 +67,8 @@ final class DictationStatsTests: XCTestCase {
     func testComputeExcludesEntriesOutsideTheWindowAndZeroLengthAudio() {
         let entries = [
             entry(audioMs: 10_000, decodeMs: 1_000, ageHours: 1),
-            entry(audioMs: 10_000, decodeMs: 9_999, ageHours: 24 * 30), // too old
-            entry(audioMs: 0, decodeMs: 50),                             // undefined RTF
+            entry(audioMs: 10_000, decodeMs: 9_999, ageHours: 24 * 30),  // too old
+            entry(audioMs: 0, decodeMs: 50),  // undefined RTF
         ]
 
         let stats = DictationStats.compute(entries: entries, since: Date().addingTimeInterval(-7 * 86400))

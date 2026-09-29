@@ -1,157 +1,79 @@
 import Foundation
-import OSLog
 
-/// Cloud AI cleanup via Microsoft Foundry (Azure), reached directly over REST rather than through
-/// an SDK (Azure's .NET Agent Framework / Azure.Identity have no macOS-relevant Swift equivalent).
-/// Authenticates with either the user's own Azure CLI session or a pinned Entra service principal
-/// (see AzureCredential.swift), and calls the Azure OpenAI-compatible chat completions endpoint,
-/// reusing the same JSON wire format as OpenAICompatibleCleanupProvider.
+/// Cloud AI cleanup via Microsoft Foundry (Azure), reached directly over REST rather than through an SDK (Azure's .NET
+/// Agent Framework and Azure.Identity have no macOS-relevant Swift equivalent). Authenticates with the user's own
+/// Azure CLI session or a pinned Entra service principal (see AzureCredential.swift).
 ///
-/// Deliberately has no ARM/subscription/deployment discovery: the endpoint and deployment name are
-/// supplied directly, mirroring how Windows' own service-principal mode already hides ARM discovery
-/// (a data-plane-only permission footprint), just applied uniformly to both auth modes here since
-/// macOS has no Settings GUI yet to drive a discovery flow from.
+/// Requests go to the account's unified inference endpoint, `{account}/openai/v1/chat/completions`, with `model` set to
+/// the deployment name, whichever endpoint shape was saved. Windows 0.4.3 routes the same way after a Foundry project's
+/// own route returned HTTP 500 for a model the account endpoint served. The body has no `temperature`, which reasoning
+/// deployments reject, and no `store`, which Chat Completions act on only when it is `true`.
+///
+/// Deliberately has no ARM subscription or deployment discovery: the endpoint and deployment name are supplied
+/// directly, mirroring how Windows' service-principal mode hides ARM discovery (a data-plane-only permission
+/// footprint), applied to both auth modes here.
 final class MicrosoftFoundryCleanupProvider: CleanupProvider {
-    /// The Cognitive Services resource scope covers both Foundry and classic Azure OpenAI
-    /// resources; see AGENTS.md's RBAC section (`Foundry User` / `Cognitive Services OpenAI User`
-    /// both grant access under this same resource type).
-    static let defaultScope = "https://cognitiveservices.azure.com/.default"
-    static let defaultAPIVersion = "2024-08-01-preview"
+    /// The audience of the unified `/openai/v1/` endpoint, the one Windows requests
+    /// (`AzureOpenAIResponsesClientFactory.AzureAIScope`). The dated deployments route took the Cognitive Services
+    /// audience instead.
+    static let inferenceScope = "https://ai.azure.com/.default"
 
     let id = "microsoft-foundry"
-    let displayName: String
-
-    private let endpoint: URL
-    private let deployment: String
-    private let apiVersion: String
-    private let scope: String
-    private let model: String
-    private let credentialProvider: AzureCredentialProvider
+    let displayName = "Microsoft Foundry"
+    let deployment: String
+    /// `{account}/openai/v1/chat/completions`.
+    let completionsURL: URL
+    private let credential: any AzureCredentialProvider
     private let timeout: TimeInterval
-    private let session: URLSession
-    private let logger: Logger
+    private let transport: ChatCompletionsTransport
 
+    /// - Parameter inferenceBase: The account's `/openai/v1/` base, from `inferenceBase(for:)`.
     init(
-        endpoint: URL,
+        inferenceBase: URL,
         deployment: String,
-        apiVersion: String = MicrosoftFoundryCleanupProvider.defaultAPIVersion,
-        scope: String = MicrosoftFoundryCleanupProvider.defaultScope,
-        credentialProvider: AzureCredentialProvider,
-        displayName: String = "Microsoft Foundry",
+        credential: any AzureCredentialProvider,
         timeout: TimeInterval = 30,
-        session: URLSession = .shared
+        session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
-        self.endpoint = endpoint
         self.deployment = deployment
-        self.apiVersion = apiVersion
-        self.scope = scope
-        self.model = deployment
-        self.credentialProvider = credentialProvider
-        self.displayName = displayName
+        self.completionsURL = inferenceBase.appendingPathComponent("chat").appendingPathComponent("completions")
+        self.credential = credential
         self.timeout = timeout
-        self.session = session
-        self.logger = Logger(subsystem: "com.scribe.macos", category: "Cleanup.microsoft-foundry")
+        self.transport = ChatCompletionsTransport(session: session)
     }
 
-    func healthSnapshot() async -> CleanupHealthSnapshot {
-        do {
-            _ = try await credentialProvider.accessToken(scope: scope)
-            return CleanupHealthSnapshot(
-                providerID: id, reachable: true, detail: "Authenticated for \(endpoint.absoluteString)")
-        } catch {
-            return CleanupHealthSnapshot(providerID: id, reachable: false, detail: error.localizedDescription)
+    /// The account's inference base, `{scheme}://{host}[:{port}]/openai/v1/`, from any endpoint a user pastes: the
+    /// resource endpoint, a Foundry project URL (`.../api/projects/<name>`), a URL that already ends in `/openai/v1`,
+    /// or a dated deployments URL. The path, query, fragment and any user info are dropped, as Windows'
+    /// `AzureOpenAIResponsesClientFactory.GetV1Endpoint` keeps only the authority. `nil` unless the endpoint is an
+    /// https URL with a host: Azure serves these endpoints over TLS only, and the Entra token each request carries
+    /// must never cross the network in plain text.
+    static func inferenceBase(for endpoint: URL) -> URL? {
+        guard let components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false),
+            components.scheme?.lowercased() == "https",
+            let host = components.host?.lowercased(), !host.isEmpty
+        else {
+            return nil
         }
+        var base = URLComponents()
+        base.scheme = "https"
+        base.host = host
+        base.port = components.port
+        base.path = "/openai/v1/"
+        return base.url
     }
 
-    func clean(_ cleanupRequest: CleanupRequest) async throws -> CleanupResponse {
+    func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         let token: AzureAccessToken
         do {
-            token = try await credentialProvider.accessToken(scope: scope)
-        } catch {
-            throw CleanupProviderError.notConfigured(error.localizedDescription)
+            token = try await credential.accessToken(scope: Self.inferenceScope)
+        } catch let error as AzureCredentialError {
+            throw CleanupProviderError.credentialUnavailable(error)
         }
-
-        guard var components = URLComponents(
-            url: endpoint.appendingPathComponent("openai/deployments/\(deployment)/chat/completions"),
-            resolvingAgainstBaseURL: false)
-        else {
-            throw CleanupProviderError.notConfigured("Invalid Microsoft Foundry endpoint")
-        }
-        components.queryItems = [URLQueryItem(name: "api-version", value: apiVersion)]
-        guard let url = components.url else {
-            throw CleanupProviderError.notConfigured("Invalid Microsoft Foundry endpoint")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token.token)", forHTTPHeaderField: "Authorization")
-
-        let body = ChatCompletionRequest(
-            model: model,
-            messages: [
-                .init(role: "system", content: cleanupRequest.writingStylePrompt),
-                .init(role: "user", content: cleanupRequest.transcript)
-            ],
-            temperature: 0.2,
-            stream: false)
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let started = Date()
-        let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch let urlError as URLError where urlError.code == .timedOut {
-            throw CleanupProviderError.timedOut
-        } catch {
-            throw CleanupProviderError.requestFailed(error.localizedDescription)
-        }
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw CleanupProviderError.invalidResponse("No HTTP response")
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw CleanupProviderError.requestFailed(describeFailure(status: httpResponse.statusCode, data: data))
-        }
-
-        let decoded: ChatCompletionResponse
-        do {
-            decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
-        } catch {
-            throw CleanupProviderError.invalidResponse("Could not decode chat completion: \(error.localizedDescription)")
-        }
-
-        guard let text = decoded.choices.first?.message.content, !text.isEmpty else {
-            throw CleanupProviderError.invalidResponse("Empty completion from \(displayName)")
-        }
-
-        let latency = Date().timeIntervalSince(started)
-        logger.debug("Cleanup via \(self.deployment, privacy: .public) completed in \(latency, format: .fixed(precision: 3))s")
-
+        let completion = try await transport.complete(
+            request, at: completionsURL, model: deployment, bearerToken: token.token, temperature: nil,
+            defaultTimeout: timeout, provider: .microsoftFoundry)
         return CleanupResponse(
-            cleanedText: CleanupPrompt.stripTranscriptTags(text),
-            latency: latency,
-            providerID: id,
-            modelID: deployment)
-    }
-
-    /// Surfaces the two failure modes AGENTS.md documents as easy to misdiagnose: a fresh role
-    /// assignment that hasn't propagated yet (which looks identical to "wrong role" for the first
-    /// several minutes), and a Cognitive Services resource missing the custom-subdomain setting
-    /// Entra auth requires (a regional endpoint rejects the token regardless of role).
-    private func describeFailure(status: Int, data: Data) -> String {
-        let bodyText = String(data: data, encoding: .utf8) ?? "<undecodable body>"
-        guard status == 401 || status == 403 else {
-            return "HTTP \(status): \(bodyText)"
-        }
-        return """
-        HTTP \(status): \(bodyText)
-        This is commonly caused by one of: the role assignment has not finished propagating yet \
-        (this can take longer than the widely quoted five minutes), the resource is missing the \
-        custom subdomain Entra auth requires (a regional endpoint always rejects the token), or the \
-        signed-in identity does not hold the "Foundry User" (Foundry) or "Cognitive Services OpenAI \
-        User" (classic Azure OpenAI) role on the resource.
-        """
+            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: deployment)
     }
 }

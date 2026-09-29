@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionarySuggestionMinerTests: XCTestCase {
@@ -8,16 +9,16 @@ final class DictionarySuggestionMinerTests: XCTestCase {
 
     func testJargonShapeDetection() {
         let cases: [(String, Bool)] = [
-            ("ReBAC", true), // camel hump
+            ("ReBAC", true),  // camel hump
             ("GitHub", true),
-            ("ASR", true), // acronym
-            (".NET", true), // leading dot + caps
-            ("K8s", true), // letter+digit
+            ("ASR", true),  // acronym
+            (".NET", true),  // leading dot + caps
+            ("K8s", true),  // letter+digit
             ("net10", true),
-            ("hello", false), // plain word
-            ("Hello", false), // sentence-case word
-            ("WORD-SALAD", false), // hyphen breaks the acronym shape
-            ("42", false), // pure number
+            ("hello", false),  // plain word
+            ("Hello", false),  // sentence-case word
+            ("WORD-SALAD", false),  // hyphen breaks the acronym shape
+            ("42", false),  // pure number
         ]
         for (token, expected) in cases {
             XCTAssertEqual(DictionarySuggestionMiner.isJargonShaped(token), expected, token)
@@ -34,7 +35,7 @@ final class DictionarySuggestionMinerTests: XCTestCase {
 
         let suggestions = DictionarySuggestionMiner.mine(entries: history, existing: [], minDictations: 3)
 
-        XCTAssertEqual(suggestions.count, 1) // K8s only hit 2 dictations
+        XCTAssertEqual(suggestions.count, 1)  // K8s only hit 2 dictations
         XCTAssertEqual(suggestions[0].term, "ReBAC")
         XCTAssertEqual(suggestions[0].dictations, 3)
     }
@@ -58,7 +59,7 @@ final class DictionarySuggestionMinerTests: XCTestCase {
         let suggestions = DictionarySuggestionMiner.mine(entries: history, existing: [], minDictations: 3)
 
         XCTAssertEqual(suggestions.count, 1)
-        XCTAssertEqual(suggestions[0].term, "K8s") // punctuation gone, OK never suggested
+        XCTAssertEqual(suggestions[0].term, "K8s")  // punctuation gone, OK never suggested
     }
 
     func testMostCommonSurfaceFormWins() {
@@ -122,9 +123,10 @@ final class DictionarySuggestionMinerTests: XCTestCase {
 
         // The original defect: history is written after the dictionary runs, so lowercasing its
         // output invents a left-hand side the recognizer never produced.
-        XCTAssertFalse(entries.contains {
-            $0.pattern.caseInsensitiveCompare($0.replacement) == .orderedSame
-        })
+        XCTAssertFalse(
+            entries.contains {
+                $0.pattern.caseInsensitiveCompare($0.replacement) == .orderedSame
+            })
     }
 
     func testHistoryLearnerSkipsTwoLetterAcronyms() {

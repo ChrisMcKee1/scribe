@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// Ported 1:1 from `QuickDictionaryAddTests.cs` and `QuickDictionaryAddSelectionTests.cs`. The
@@ -38,7 +39,8 @@ final class QuickDictionaryAddTests: XCTestCase {
     func testSelectingARangeKeepsInnerPunctuationAndDropsTheOuter() {
         let transcript = "It said \"cloud pilot, apparently\" again."
         let tokens = QuickDictionaryAdd.tokenize(transcript)
-        XCTAssertEqual(QuickDictionaryAdd.select(transcript, tokens: tokens, first: 2, last: 4), "cloud pilot, apparently")
+        XCTAssertEqual(
+            QuickDictionaryAdd.select(transcript, tokens: tokens, first: 2, last: 4), "cloud pilot, apparently")
     }
 
     func testSelectingRightToLeftGivesTheSameText() {
@@ -58,7 +60,8 @@ final class QuickDictionaryAddTests: XCTestCase {
         // what `build(...)` itself inspects.
         XCTAssertTrue(selected.unicodeScalars.contains("\n"))
 
-        let plan = QuickDictionaryAdd.build(pattern: selected, replacement: "anything", wholeWord: true, existing: empty)
+        let plan = QuickDictionaryAdd.build(
+            pattern: selected, replacement: "anything", wholeWord: true, existing: empty)
         XCTAssertEqual(plan.kind, .invalid)
         XCTAssertTrue(plan.message.lowercased().contains("line break"))
     }
@@ -71,21 +74,26 @@ final class QuickDictionaryAddTests: XCTestCase {
 
     func testAPatternAnotherRuleAlreadyProducesIsRejectedAsUnreachable() {
         let existing = [DictionaryEntry(id: 7, pattern: "teams", replacement: "Microsoft Teams")]
-        let plan = QuickDictionaryAdd.build(pattern: "Microsoft Teams", replacement: "Teams", wholeWord: true, existing: existing)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "Microsoft Teams", replacement: "Teams", wholeWord: true, existing: existing)
         XCTAssertEqual(plan.kind, .invalid)
         XCTAssertTrue(plan.message.lowercased().contains("never apply"))
         XCTAssertTrue(plan.message.lowercased().contains("teams"))
     }
 
     func testADisabledRulesReplacementDoesNotBlockANewPattern() {
-        let existing = [DictionaryEntry(id: 7, pattern: "teams", replacement: "Microsoft Teams", wholeWord: true, enabled: false)]
-        let plan = QuickDictionaryAdd.build(pattern: "Microsoft Teams", replacement: "Teams", wholeWord: true, existing: existing)
+        let existing = [
+            DictionaryEntry(id: 7, pattern: "teams", replacement: "Microsoft Teams", wholeWord: true, enabled: false)
+        ]
+        let plan = QuickDictionaryAdd.build(
+            pattern: "Microsoft Teams", replacement: "Teams", wholeWord: true, existing: existing)
         XCTAssertEqual(plan.kind, .create)
     }
 
     func testARuleIsNotTreatedAsBlockingItsOwnPattern() {
         let existing = [DictionaryEntry(id: 3, pattern: "github", replacement: "GitHub")]
-        let plan = QuickDictionaryAdd.build(pattern: "GitHub", replacement: "GitHub Enterprise", wholeWord: true, existing: existing)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "GitHub", replacement: "GitHub Enterprise", wholeWord: true, existing: existing)
         XCTAssertEqual(plan.kind, .update)
     }
 
@@ -119,19 +127,22 @@ final class QuickDictionaryAddTests: XCTestCase {
     }
 
     func testARuleThatRewritesTextToItselfCannotBeSaved() {
-        let plan = QuickDictionaryAdd.build(pattern: "Copilot", replacement: " Copilot ", wholeWord: true, existing: empty)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "Copilot", replacement: " Copilot ", wholeWord: true, existing: empty)
         XCTAssertEqual(plan.kind, .invalid)
     }
 
     func testACaseOnlyCorrectionIsARealRule() {
-        let plan = QuickDictionaryAdd.build(pattern: "copilot", replacement: "Copilot", wholeWord: true, existing: empty)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "copilot", replacement: "Copilot", wholeWord: true, existing: empty)
         XCTAssertEqual(plan.kind, .create)
         XCTAssertEqual(plan.entry?.pattern, "copilot")
         XCTAssertEqual(plan.entry?.replacement, "Copilot")
     }
 
     func testNewSpokenFormCreatesAnUnsavedEntry() {
-        let plan = QuickDictionaryAdd.build(pattern: "cloud pilot", replacement: "Copilot", wholeWord: false, existing: empty)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "cloud pilot", replacement: "Copilot", wholeWord: false, existing: empty)
         XCTAssertEqual(plan.kind, .create)
         XCTAssertTrue(plan.canSave)
         XCTAssertEqual(plan.entry?.id, 0)
@@ -149,7 +160,8 @@ final class QuickDictionaryAddTests: XCTestCase {
     }
 
     func testAPendingPlanNeverClaimsTheRuleIsAlreadySaved() {
-        let create = QuickDictionaryAdd.build(pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, existing: empty)
+        let create = QuickDictionaryAdd.build(
+            pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, existing: empty)
         let update = QuickDictionaryAdd.build(
             pattern: "cloud pilot", replacement: "Copilot", wholeWord: true,
             existing: [DictionaryEntry(id: 1, pattern: "cloud pilot", replacement: "CoPilot")])
@@ -162,7 +174,8 @@ final class QuickDictionaryAddTests: XCTestCase {
 
     func testAnExistingSpokenFormUpdatesInPlaceRegardlessOfCase() {
         let existing = [DictionaryEntry(id: 7, pattern: "Cloud Pilot", replacement: "Copilot")]
-        let plan = QuickDictionaryAdd.build(pattern: "cloud pilot", replacement: "GitHub Copilot", wholeWord: true, existing: existing)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "cloud pilot", replacement: "GitHub Copilot", wholeWord: true, existing: existing)
         XCTAssertEqual(plan.kind, .update)
         XCTAssertEqual(plan.entry?.id, 7)
         XCTAssertEqual(plan.entry?.pattern, "cloud pilot")
@@ -170,22 +183,27 @@ final class QuickDictionaryAddTests: XCTestCase {
     }
 
     func testUpdatingReEnablesADisabledRule() {
-        let existing = [DictionaryEntry(id: 7, pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, enabled: false)]
-        let plan = QuickDictionaryAdd.build(pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, existing: existing)
+        let existing = [
+            DictionaryEntry(id: 7, pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, enabled: false)
+        ]
+        let plan = QuickDictionaryAdd.build(
+            pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, existing: existing)
         XCTAssertEqual(plan.kind, .update)
         XCTAssertEqual(plan.entry?.enabled, true)
     }
 
     func testAnIdenticalExistingRuleReportsNoChange() {
         let existing = [DictionaryEntry(id: 7, pattern: "cloud pilot", replacement: "Copilot")]
-        let plan = QuickDictionaryAdd.build(pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, existing: existing)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, existing: existing)
         XCTAssertEqual(plan.kind, .noChange)
         XCTAssertFalse(plan.canSave)
     }
 
     func testChangingOnlyTheWholeWordFlagStillCountsAsAnUpdate() {
         let existing = [DictionaryEntry(id: 7, pattern: "cloud pilot", replacement: "Copilot", wholeWord: true)]
-        let plan = QuickDictionaryAdd.build(pattern: "cloud pilot", replacement: "Copilot", wholeWord: false, existing: existing)
+        let plan = QuickDictionaryAdd.build(
+            pattern: "cloud pilot", replacement: "Copilot", wholeWord: false, existing: existing)
         XCTAssertEqual(plan.kind, .update)
         XCTAssertEqual(plan.entry?.wholeWord, false)
     }

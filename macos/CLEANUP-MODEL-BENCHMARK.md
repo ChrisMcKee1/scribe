@@ -30,7 +30,9 @@ a storage or install-size cost:
   the actual model family Windows Scribe ships (`parakeet-tdt-0.6b-v3-int8`, not identical version,
   same family). One runtime, one install, both AI features. This is a strictly better match to
   Windows' architecture than layering in whisper.cpp for ASR and Ollama for cleanup as two unrelated
-  dependencies.
+  dependencies. The family is shared, the language coverage is not: v2 is English-only, while
+  Windows' v3 covers about 25 European languages, so macOS dictation is English-only until another
+  speech model is chosen (see the ASR section of `PORTING-PLAN.md`).
 - **Ollama remains fully supported**, not deprecated. Some users already have Ollama installed and
   configured for other tools, prefer its model catalog/quantization ecosystem, or simply don't want a
   second background service. Scribe should let them point at their existing Ollama install exactly as
@@ -140,7 +142,9 @@ and instruction-immunity, the two hardest cases across every model tested.
 4. **Storage/install tradeoff is accepted deliberately**, per explicit product direction: the default
    should optimize for the best experience even if that means a separate install and extra disk space
    (Foundry Local itself is ~200 MB via Homebrew; `qwen2.5-1.5b`'s GPU variant is another ~1.5 GB).
-   This is no worse than Windows shipping its own bundled ASR/VAD models today.
+   This is no worse than Windows shipping its own bundled ASR/VAD models today. Those downloads live in
+   Foundry Local's and Ollama's own caches, which the user installed and other apps share, so Scribe
+   never deletes them automatically; the only audio it removes is its own scratch recordings.
 
 `llama3.2:1b` and Foundry Local's `qwen2.5-0.5b` are not recommended as defaults; both trade too much
 quality for their latency advantage (0.446 and 0.411 average score respectively, both below every
@@ -162,8 +166,12 @@ run.
    just default) and with longer/noisier ASR-derived transcripts, not just clean authored text.
 4. Confirm the observed lack of cold-start latency spikes on Foundry Local holds at larger sample
    sizes; this run only sent six requests per model.
-5. Test `foundry transcribe -m parakeet-tdt-0.6b-v2` as the production ASR path (see
-   `PORTING-PLAN.md`), since it is now confirmed to produce correct transcripts on this hardware.
+5. `foundry transcribe -m parakeet-tdt-0.6b-v2` is the production ASR path (`TranscriptionEngine.swift`,
+   see `PORTING-PLAN.md`). The macOS workflow's optional real speech recognition job, dispatched by
+   hand, runs the committed short speech fixtures through it on a hosted runner, where it fits: Foundry
+   Local's 692 MB `generic-cpu` variant of the model, about 1.1 GB resident at peak, 5.5 s for the cold
+   first phrase and about 1 s for each warm one. The long-audio and degraded-audio characterization
+   Windows has is still to do.
 
 ## Original partial-run status (superseded above, kept for history)
 
@@ -198,7 +206,7 @@ $ foundry status
 
 ```bash
 brew tap microsoft/foundrylocal
-brew trust microsoft/foundrylocal   # required in some environments before the tap is usable
+brew trust microsoft/foundrylocal   # Homebrew 6.0 and later load a third-party tap only once it is trusted
 brew install foundrylocal
 foundry server start
 foundry model load qwen2.5-1.5b     # downloads + loads the GPU variant automatically

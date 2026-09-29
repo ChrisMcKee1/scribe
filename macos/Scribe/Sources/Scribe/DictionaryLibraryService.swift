@@ -1,18 +1,19 @@
 import Foundation
 
-/// Persisted user-facing settings for dictionary libraries: which library ids are switched on.
-/// UserDefaults-backed, the same stopgap pattern used by `CleanupSettingsStore` and the overlay
-/// anchor, pending a general structured settings store on macOS.
-enum DictionaryLibrarySettingsStore {
-    private static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
+/// Which dictionary libraries are switched on, persisted in `defaults` as a set of library ids.
+/// Injectable so tests use a suite of their own instead of the user's real preferences.
+struct DictionaryLibrarySettings {
+    static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
+
+    let defaults: UserDefaults
 
     /// The ids of every library the user has switched on. Order is not meaningful; membership is.
-    static var enabledLibraryIds: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: enabledIdsKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: enabledIdsKey) }
+    var enabledLibraryIds: Set<String> {
+        get { Set(defaults.stringArray(forKey: Self.enabledIdsKey) ?? []) }
+        nonmutating set { defaults.set(Array(newValue), forKey: Self.enabledIdsKey) }
     }
 
-    static func setEnabled(_ enabled: Bool, id: String) {
+    func setEnabled(_ enabled: Bool, id: String) {
         var ids = enabledLibraryIds
         if enabled {
             ids.insert(id)
@@ -20,6 +21,24 @@ enum DictionaryLibrarySettingsStore {
             ids.remove(id)
         }
         enabledLibraryIds = ids
+    }
+}
+
+/// The app's library switches in `UserDefaults.standard`: the same stopgap pattern used by
+/// `CleanupSettingsStore` and the overlay anchor, pending a general structured settings store on
+/// macOS.
+enum DictionaryLibrarySettingsStore {
+    static var standard: DictionaryLibrarySettings {
+        DictionaryLibrarySettings(defaults: .standard)
+    }
+
+    static var enabledLibraryIds: Set<String> {
+        get { standard.enabledLibraryIds }
+        set { standard.enabledLibraryIds = newValue }
+    }
+
+    static func setEnabled(_ enabled: Bool, id: String) {
+        standard.setEnabled(enabled, id: id)
     }
 }
 
@@ -50,15 +69,22 @@ enum DictionaryLibraryServiceError: Error, LocalizedError {
 /// Direct port of Windows' `Scribe.Core.PostProcessing.DictionaryLibraryService`.
 final class DictionaryLibraryService {
     let librariesDirectory: URL
+    let settings: DictionaryLibrarySettings
     private let fileManager: FileManager
 
-    init(fileManager: FileManager = .default, librariesDirectory overrideDirectory: URL? = nil) {
+    init(
+        fileManager: FileManager = .default,
+        librariesDirectory overrideDirectory: URL? = nil,
+        settings: DictionaryLibrarySettings = DictionaryLibrarySettingsStore.standard
+    ) {
         self.fileManager = fileManager
+        self.settings = settings
         if let overrideDirectory {
             self.librariesDirectory = overrideDirectory
         } else {
             let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.librariesDirectory = applicationSupportURL
+            self.librariesDirectory =
+                applicationSupportURL
                 .appendingPathComponent("Scribe", isDirectory: true)
                 .appendingPathComponent("Libraries", isDirectory: true)
         }
@@ -69,11 +95,10 @@ final class DictionaryLibraryService {
         BuiltInDictionaryLibraries.all + loadCustom()
     }
 
-    /// The de-duplicated entries of every library the user has switched on (per
-    /// `DictionaryLibrarySettingsStore`), for layering on top of the base dictionary. Empty when
-    /// nothing is enabled.
+    /// The de-duplicated entries of every library the user has switched on (per `settings`), for
+    /// layering on top of the base dictionary. Empty when nothing is enabled.
     func enabledLibraryEntries() -> [DictionaryEntry] {
-        let enabledIds = DictionaryLibrarySettingsStore.enabledLibraryIds
+        let enabledIds = settings.enabledLibraryIds
         guard !enabledIds.isEmpty else { return [] }
 
         let matching = libraries().filter { enabledIds.contains($0.id) }
@@ -100,7 +125,8 @@ final class DictionaryLibraryService {
         try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
         let id = uniqueId(baseSlug: slugify(name))
         let library = DictionaryLibrary(
-            id: id, name: name, category: category, description: file.description, builtIn: false, entries: file.entries)
+            id: id, name: name, category: category, description: file.description, builtIn: false, entries: file.entries
+        )
 
         // Re-export through the library writer so the stored file is normalized and always
         // carries a header, regardless of what the source file looked like.
@@ -128,7 +154,7 @@ final class DictionaryLibraryService {
         if fileManager.fileExists(atPath: path.path) {
             try fileManager.removeItem(at: path)
         }
-        DictionaryLibrarySettingsStore.setEnabled(false, id: id)
+        settings.setEnabled(false, id: id)
     }
 
     private func loadCustom() -> [DictionaryLibrary] {
@@ -139,7 +165,9 @@ final class DictionaryLibraryService {
         }
 
         var libraries: [DictionaryLibrary] = []
-        for fileURL in fileURLs.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending })
+        for fileURL in fileURLs.sorted(by: {
+            $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending
+        })
         where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
             guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
@@ -147,13 +175,14 @@ final class DictionaryLibraryService {
             let file = DictionaryLibraryCsv.parse(text)
             guard !file.entries.isEmpty else { continue }
 
-            libraries.append(DictionaryLibrary(
-                id: id,
-                name: file.name ?? BuiltInDictionaryLibraries.humanize(id),
-                category: file.category ?? "Custom",
-                description: file.description,
-                builtIn: false,
-                entries: file.entries))
+            libraries.append(
+                DictionaryLibrary(
+                    id: id,
+                    name: file.name ?? BuiltInDictionaryLibraries.humanize(id),
+                    category: file.category ?? "Custom",
+                    description: file.description,
+                    builtIn: false,
+                    entries: file.entries))
         }
         return libraries
     }
@@ -165,7 +194,8 @@ final class DictionaryLibraryService {
         var candidate = baseSlug
         var n = 2
         while builtinIds.contains(candidate.lowercased())
-            || fileManager.fileExists(atPath: librariesDirectory.appendingPathComponent("\(candidate).csv").path) {
+            || fileManager.fileExists(atPath: librariesDirectory.appendingPathComponent("\(candidate).csv").path)
+        {
             candidate = "\(baseSlug)-\(n)"
             n += 1
         }

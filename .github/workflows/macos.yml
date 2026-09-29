@@ -2,29 +2,47 @@ name: macOS
 
 # The native macOS port (macos/Scribe) is a separate Swift package with no shared code with the
 # Windows build, so it gets its own workflow. GitHub's arm64 macOS runners can build it, run its
-# XCTest suite and the sanitizers, and lint it. They cannot grant microphone, accessibility or
-# input-monitoring consent, so anything behind those permissions (the event tap, capture, paste,
-# the menu bar and overlay UI) still needs a real Mac.
+# XCTest suites (the unit tests, and the headless scenarios on the committed speech fixtures) and
+# the sanitizers, and lint it. They cannot grant microphone, accessibility or input-monitoring
+# consent, so anything behind those permissions (the event tap, capture from a real microphone,
+# paste, the menu bar and overlay UI) still needs a real Mac.
 
 on:
   push:
     branches: ['macos/**']
     paths:
       - 'macos/**'
+      - 'tests/fixtures/speech/**'
       - '.github/workflows/macos.yml'
   pull_request:
     branches: [main]
     paths:
       - 'macos/**'
+      - 'tests/fixtures/speech/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
-
+    inputs:
+      real_asr:
+        description: >-
+          Also run the optional real speech recognition job: it installs Foundry Local and its speech model and
+          transcribes the committed short fixtures. Optional and never required.
+        type: boolean
+        default: false
 permissions:
   contents: read
 
+# A newer push cancels the run it replaces. The event is part of the group, so a push does not cancel a run
+# dispatched by hand (the only way to run the optional real speech recognition job), and a dispatch does not
+# cancel a push's run.
 concurrency:
-  group: macos-${{ github.ref }}
+  group: macos-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
+
+# An explicit bash runs every step with -o pipefail, so a build or a test run piped through tee
+# still fails its step when the build or a test fails.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build-test:
@@ -49,22 +67,90 @@ jobs:
         run: swift build --package-path macos/Scribe 2>&1 | tee build-debug.log
 
       - name: Build (release)
+        id: release
         run: swift build --package-path macos/Scribe -c release 2>&1 | tee build-release.log
 
-      - name: Count compiler warnings
+      # Each test runs in a worker process of its own. Every suite keeps its state to itself (a
+      # defaults suite, Keychain service, temporary directory and pasteboard of its own), so no
+      # worker can see another's settings or secrets.
+      - name: Unit and scenario tests
+        env:
+          SCRIBE_SCENARIO_REPORT_DIR: ${{ runner.temp }}/scenario-reports
+        run: |
+          swift test --package-path macos/Scribe --parallel --xunit-output "$RUNNER_TEMP/xunit.xml" 2>&1 \
+            | tee test.log
+
+      # The app as users get it, which no test sees: build-app.sh packages the release build above into Scribe.app,
+      # plutil checks the Info.plist it writes, and codesign checks the bundle is sealed. The packaged app then lists
+      # its dictionary libraries, which it must find inside the bundle: the build tree's resource bundle, which
+      # Bundle.module would otherwise fall back to, is moved aside while it runs. It runs after the tests, whatever
+      # they found, whenever the release build succeeded.
+      - name: App bundle
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
+        run: |
+          macos/Scribe/scripts/build-app.sh release
+          app=macos/Scribe/dist/Scribe.app
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict --verbose=2 "$app"
+          bin=$(swift build --package-path macos/Scribe -c release --show-bin-path)
+          mv "$bin/ScribeMac_Scribe.bundle" "$RUNNER_TEMP/ScribeMac_Scribe.bundle"
+          trap 'mv "$RUNNER_TEMP/ScribeMac_Scribe.bundle" "$bin/ScribeMac_Scribe.bundle"' EXIT
+          listing=$("$app/Contents/MacOS/Scribe" --list-dictionary-libraries)
+          echo "$listing"
+          expected=$(find macos/Scribe/Sources/Scribe/Resources/Libraries -name '*.csv' | wc -l | tr -d ' ')
+          if ! grep -qxF "$expected built-in dictionary librar(y/ies):" <<< "$listing"; then
+            echo "::error::The packaged app did not find its $expected dictionary libraries inside the bundle."
+            exit 1
+          fi
+
+      # The package builds without a single warning, so any warning fails the job. The step runs even after a failed
+      # build or test, so their warnings are listed too.
+      - name: Compiler warnings
         if: always()
         run: |
-          for log in build-debug.log build-release.log; do
+          total=0
+          for log in build-debug.log build-release.log test.log; do
             [ -f "$log" ] || continue
-            count=$(grep -c ": warning:" "$log" || true)
-            echo "$log: $count warning line(s)"
-            grep ": warning:" "$log" | sort -u | head -n 50 || true
+            count=$(grep -cE '\.swift:[0-9]+:[0-9]+: warning:' "$log" || true)
+            echo "$log: $count compiler warning line(s)"
+            grep -E '\.swift:[0-9]+:[0-9]+: warning:' "$log" | sort -u | head -n 50 || true
+            total=$((total + count))
           done
+          if [ "$total" -gt 0 ]; then
+            echo "::error::$total compiler warning line(s). The package builds without warnings, so fix each one."
+            exit 1
+          fi
 
-      # Serial on purpose: several suites share UserDefaults.standard and the login keychain, so
-      # parallel worker processes overwrite each other's provider settings and keychain items.
-      - name: Unit tests
-        run: swift test --package-path macos/Scribe
+      # A parallel run prints only the output of failing tests, so the scenarios' measurements go to
+      # files, which this prints and the next step uploads.
+      - name: Test count and scenario reports
+        if: always()
+        run: |
+          xunit="$RUNNER_TEMP/xunit.xml"
+          reports="$RUNNER_TEMP/scenario-reports"
+          tests=$(grep -oE '<testcase ' "$xunit" 2>/dev/null | wc -l | tr -d ' ' || true)
+          failures=$(grep -oE '<failure' "$xunit" 2>/dev/null | wc -l | tr -d ' ' || true)
+          echo "Tests run: ${tests:-0}, failed: ${failures:-0}"
+          {
+            echo "### Tests on ${{ matrix.runner }}"
+            echo "Tests run: ${tests:-0}, failed: ${failures:-0}"
+            if ls "$reports"/*.txt >/dev/null 2>&1; then
+              echo '```text'
+              cat "$reports"/*.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if ls "$reports"/*.txt >/dev/null 2>&1; then
+            cat "$reports"/*.txt
+          fi
+
+      - name: Upload the scenario reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scenario-reports-${{ matrix.runner }}
+          path: ${{ runner.temp }}/scenario-reports
+          if-no-files-found: ignore
 
   sanitizers:
     name: tests under ${{ matrix.sanitizer }} sanitizer
@@ -78,16 +164,58 @@ jobs:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Unit tests with the ${{ matrix.sanitizer }} sanitizer
-        run: swift test --package-path macos/Scribe --sanitize=${{ matrix.sanitizer }}
+      - name: Unit and scenario tests with the ${{ matrix.sanitizer }} sanitizer
+        env:
+          SCRIBE_SCENARIO_REPORT_DIR: ${{ runner.temp }}/scenario-reports
+        run: |
+          swift test --package-path macos/Scribe --parallel --sanitize=${{ matrix.sanitizer }} \
+            --xunit-output "$RUNNER_TEMP/xunit.xml" 2>&1 | tee test.log
+
+      - name: Test count and scenario reports
+        if: always()
+        run: |
+          xunit="$RUNNER_TEMP/xunit.xml"
+          reports="$RUNNER_TEMP/scenario-reports"
+          tests=$(grep -oE '<testcase ' "$xunit" 2>/dev/null | wc -l | tr -d ' ' || true)
+          failures=$(grep -oE '<failure' "$xunit" 2>/dev/null | wc -l | tr -d ' ' || true)
+          echo "Tests run: ${tests:-0}, failed: ${failures:-0}"
+          {
+            echo "### Tests under the ${{ matrix.sanitizer }} sanitizer"
+            echo "Tests run: ${tests:-0}, failed: ${failures:-0}"
+            if ls "$reports"/*.txt >/dev/null 2>&1; then
+              echo '```text'
+              cat "$reports"/*.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if ls "$reports"/*.txt >/dev/null 2>&1; then
+            cat "$reports"/*.txt
+          fi
+
+      - name: Upload the scenario reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scenario-reports-${{ matrix.sanitizer }}-sanitizer
+          path: ${{ runner.temp }}/scenario-reports
+          if-no-files-found: ignore
 
   style:
     name: style
     runs-on: macos-15
     timeout-minutes: 20
+    # swift-format ships with the toolchain, and another version can format the same code differently,
+    # so the lint runs the Swift 6.1 formatter that macos/Scribe/.swift-format was written for.
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Formatter
+        run: |
+          swift --version
+          swift format --version
 
       # The repository bans U+2014 and U+2013 everywhere (AGENTS.md, Code style).
       - name: No em or en dashes under macos/
@@ -97,14 +225,99 @@ jobs:
             exit 1
           fi
 
+      # Strict: any finding against macos/Scribe/.swift-format fails the job. `swift format format --in-place
+      # --recursive --configuration macos/Scribe/.swift-format macos/Scribe/Sources macos/Scribe/Tests`, run with
+      # the same toolchain, fixes everything but the few lint-only rules.
       - name: swift format lint
         if: always()
         run: |
-          config=macos/Scribe/.swift-format
-          if [ -f "$config" ]; then
-            swift format lint --strict --recursive --configuration "$config" macos/Scribe/Sources macos/Scribe/Tests
-          else
-            echo "No macos/Scribe/.swift-format yet; reporting against the default style only."
-            swift format lint --recursive macos/Scribe/Sources macos/Scribe/Tests 2>&1 | tee lint.log || true
-            echo "$(grep -c 'warning:' lint.log || true) lint warning(s)"
-          fi
+          swift format lint --strict --recursive --parallel --configuration macos/Scribe/.swift-format \
+            macos/Scribe/Sources macos/Scribe/Tests
+
+  # Optional and never required: it runs only when the workflow is dispatched by hand with real_asr,
+  # and its failure never fails the run. It installs Foundry Local with Homebrew, keeps the speech
+  # model in the Actions cache between runs, and transcribes the committed fixtures through the
+  # production TranscriptionEngine (ScribeScenarioTests.RealRecognizerScenarioTests), reporting cold
+  # and warm latency, word overlap, peak memory and disk. It fits a hosted runner: Foundry Local picks
+  # the model's 692 MB CPU variant there, and its processes peak at about 1.1 GB resident.
+  real-asr:
+    name: real speech recognition (optional)
+    if: github.event_name == 'workflow_dispatch' && inputs.real_asr
+    runs-on: macos-15
+    timeout-minutes: 60
+    continue-on-error: true
+    env:
+      SCRIBE_ASR_MODEL: parakeet-tdt-0.6b-v2
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Since Homebrew 6.0 a formula from a third-party tap loads only once it is trusted, and installing it
+      # by its fully qualified name trusts that one formula, which is also how the README installs it.
+      - name: Install Foundry Local
+        run: |
+          brew --version
+          brew install microsoft/foundrylocal/foundrylocal
+          foundry --version
+
+      - name: Find Foundry Local's model cache
+        id: models
+        run: |
+          foundry cache location 2>&1 | tee cache-location.txt || true
+          path=$(grep -oE '/[^[:space:]]+' cache-location.txt | tail -n 1 || true)
+          echo "path=${path:-$HOME/.foundry/cache/models}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the speech model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.models.outputs.path }}
+          key: foundry-local-${{ env.SCRIBE_ASR_MODEL }}-${{ runner.os }}-${{ runner.arch }}-v1
+
+      - name: Download the speech model
+        run: foundry model download "$SCRIBE_ASR_MODEL"
+
+      - name: Build the tests
+        run: swift build --package-path macos/Scribe --build-tests
+
+      - name: Transcribe the fixtures
+        env:
+          SCRIBE_REAL_ASR: '1'
+          SCRIBE_SCENARIO_REPORT_DIR: ${{ runner.temp }}/asr-report
+        run: |
+          # Foundry Local may do the work in a service of its own rather than in a child of the test,
+          # so every Foundry Local process is sampled, once a second, until the tests end.
+          peakFile="$RUNNER_TEMP/peak-rss-kb"
+          echo 0 > "$peakFile"
+          (
+            peak=0
+            while true; do
+              rss=$(ps -axo rss=,command= | awk 'tolower($0) ~ /foundry/ && !/awk/ { sum += $1 } END { print sum + 0 }')
+              if [ "$rss" -gt "$peak" ]; then
+                peak=$rss
+                echo "$peak" > "$peakFile"
+              fi
+              sleep 1
+            done
+          ) &
+          sampler=$!
+          status=0
+          swift test --package-path macos/Scribe --skip-build \
+            --filter 'ScribeScenarioTests.RealRecognizerScenarioTests' || status=$?
+          kill "$sampler" 2>/dev/null || true
+          echo "Peak resident memory of Foundry Local's processes: $(( $(cat "$peakFile") / 1024 )) MB"
+          exit "$status"
+
+      - name: Report
+        if: always()
+        run: |
+          peak=$(cat "$RUNNER_TEMP/peak-rss-kb" 2>/dev/null || echo 0)
+          cache=$(du -sh "${{ steps.models.outputs.path }}" 2>/dev/null | cut -f1 || echo unknown)
+          {
+            echo "### Real speech recognition (optional)"
+            echo "Model: $SCRIBE_ASR_MODEL, cached at ${{ steps.models.outputs.path }} ($cache)"
+            echo "Peak resident memory of Foundry Local's processes: $(( peak / 1024 )) MB"
+            echo '```text'
+            df -h / || true
+            cat "$RUNNER_TEMP"/asr-report/*.txt 2>/dev/null || echo "No report was written."
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
