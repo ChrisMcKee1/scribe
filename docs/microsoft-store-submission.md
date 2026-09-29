@@ -18,8 +18,8 @@ Last reviewed: September 29, 2026, for 0.5.1.
 | Restricted capability | Conditional | Explain `runFullTrust` in certification notes. Suggested copy is below. |
 | Generative AI declaration | Required | Select **This product incorporates generative AI features**. |
 | Automatic cloud backup | Required choice | Turn off automatic OneDrive backup because local history may contain sensitive dictated text. |
-| Listing text | Ready for 0.5.1 | The copy below uses the current feature names. It goes out with the next submission; see [Updating the listing](#updating-the-listing-automatically). |
-| Screenshots | Ready for 0.5.1 | Ten 1366 by 900 screenshots of the current Settings are in `docs/store/screenshots/`. |
+| Listing text | Prepared for 0.5.1 | Publishing this copy requires a listing update. `store.yml` currently submits packages only; see [Updating the listing](#updating-the-listing-automatically). |
+| Screenshots | Prepared for 0.5.1 | Ten 1366 by 900 screenshots of the current Settings are in `docs/store/screenshots/`. Like the listing text, they need a listing update to be published. |
 | Accessibility declaration | Not ready | Do not claim the Store accessibility declaration until a dedicated accessibility test pass is complete. |
 | Local-data security | Review | Transcript history and optional audio use Windows profile and device protections but are not separately application-encrypted. |
 | Final package validation | Not started | Run the Windows App Certification Kit against the final package before upload. |
@@ -249,8 +249,8 @@ Copilot+ PCs included.
 Writes your words your way. Teach Scribe how to write the names, acronyms and jargon you use, and
 turn on ready-made word packs for AI, Azure, Microsoft 365, GitHub, .NET, data and more, editing them
 word by word. Say a short phrase to type saved text, such as your signature. App profiles give each
-app its own line breaks and writing style, and in command windows line breaks become spaces, so a
-dictation never runs a command early.
+app its own line breaks and writing style. By default, Scribe turns line breaks into spaces in
+supported command windows, such as Windows Terminal.
 
 Optional AI cleanup. Turn it on to fix punctuation, drop filler words and keep only what you meant
 when you correct yourself. Run it on this PC with Foundry Local, fully offline, or use Microsoft
@@ -259,7 +259,7 @@ somewhere other than your PC, each request sends the text Scribe recognized, the
 instructions with your writing style, and the words from your dictionary and the word packs you let
 AI cleanup use. Audio is never sent, and you can turn AI cleanup off from the tray at any time.
 
-Always know what happened. The recording indicator appears the moment you press your shortcut, with
+Always know what happened. The recording indicator shows when Scribe is listening, with
 level bars that follow your voice, then says Typed, or what went wrong and what to do next. Try
 dictation shows what Scribe heard, what it changed and how long each step took. History keeps your
 recent dictations on your PC, and if a dictation can't be typed, Scribe keeps it ready to copy from

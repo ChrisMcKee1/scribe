@@ -26,9 +26,8 @@ Free · Signed by Microsoft · Updated by the Store · For Intel, AMD and Arm PC
   and no advertising.
 - **Offline.** The speech model, NVIDIA Parakeet, comes with Scribe and recognizes about 25 European
   languages without being told which one you're speaking. Dictation needs no internet connection.
-- **Fast.** On the desktop PC Scribe is benchmarked on, a four-second sentence is recognized in about an
-  eighth of a second, some 30 times faster than it took to say. Settings, Diagnostics shows how fast it is
-  on your own PC.
+- **Fast.** With the speech model already loaded, a four-second generated sample was recognized in about
+  0.12 seconds on our Ryzen 9 9900X test PC. Settings, Diagnostics shows the times on your PC.
 - **Types where you work.** The text goes into the app you're using: email, chat, documents, browsers,
   code editors, command windows, and Remote Desktop and virtual machine windows too. Apps running as
   administrator are the exception: Windows doesn't let Scribe type into them.
@@ -43,9 +42,9 @@ It's the version we recommend:
 - **The right build for your PC.** One listing covers Intel, AMD and Arm PCs, Copilot+ PCs included, and
   Windows downloads only the build your PC needs.
 
-Then hold **Page Down**, say a sentence, and let go. The recording indicator appears at once, and the text
-lands wherever your cursor is. **Page Up** dictates without AI cleanup, for when you've turned AI cleanup
-on. Everything else is in Settings, from the Scribe icon in the notification area.
+Then hold **Page Down**, wait for **Listening**, say a sentence, and let go. The text lands wherever your
+cursor is. **Page Up** dictates without AI cleanup, for when you've turned AI cleanup on. Everything else
+is in Settings, from the Scribe icon in the notification area.
 
 - No Page Down key? Many laptops put it on Fn with the Down arrow. You can also choose any key, two keys
   together or a spare mouse button in Settings, Dictation.
@@ -68,7 +67,7 @@ update themselves from GitHub. Not sure which PC you have? Windows Settings, Sys
   <img src="docs/screenshots/pill-states.png" alt="The recording indicator at three moments: Listening with five blue level bars and a blue edge, Recognizing speech with three dots, and Typed with a green check mark" width="840" />
 </p>
 
-**The recording indicator** appears the moment you press your shortcut. Its five bars rise and fall with
+**The recording indicator** shows when Scribe is listening. Its five bars rise and fall with
 your voice; then it says **Recognizing speech** (or **Running AI cleanup**) and **Typed**, or what went
 wrong and what to do next. Put it in any of nine places on screen, or turn it off.
 
@@ -106,7 +105,7 @@ wrong and what to do next. Put it in any of nine places on screen, or turn it of
 <tr>
 <td width="50%" valign="top">
 <a href="docs/screenshots/profiles.png"><img src="docs/screenshots/profiles.png" alt="The App profiles page: an Email profile for Outlook and New Outlook with its own writing style, 'Write in a friendly, professional email tone.', above a Chat profile for Teams" /></a><br />
-<b>App profiles.</b> Give an app its own line breaks and, with AI cleanup, its own writing style. In command windows, such as Terminal, line breaks become spaces, so a dictation never runs a command early.
+<b>App profiles.</b> Give an app its own line breaks and, with AI cleanup, its own writing style. By default, Scribe turns line breaks into spaces in supported command windows, such as Windows Terminal.
 </td>
 <td width="50%" valign="top">
 <a href="docs/screenshots/history.png"><img src="docs/screenshots/history.png" alt="The History page: demo dictations with when, the app each went to, the text and how long AI cleanup took, kept for 90 days, with search, Copy and Delete" /></a><br />
@@ -185,24 +184,31 @@ for permissions again after each rebuild.
 
 Measured on one desktop PC (AMD Ryzen 9 9900X, Windows 11) with Release builds.
 
-| Speech recognition in 0.5.1 | Time |
+| Speech recognition, model already loaded | Time |
 |---|---:|
 | A four-second sentence | about 0.12 s |
 | A 23-second passage | 0.64 s |
 
-0.5.1 does the same work as 0.5.0 with far less memory:
+These speech times are examples from one Release scenario run on this PC with eight CPU threads and
+generated speech. They time speech recognition after silence trimming, excluding model loading, AI
+cleanup and typing. Results vary by PC and recording. To run it yourself:
+`dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios --quick`.
+
+In the benchmark's tests, 0.5.1 uses far less memory than 0.5.0:
 
 | Measured against 0.5.0 on the same PC | 0.5.0 | 0.5.1 |
 |---|---:|---:|
-| Memory allocated for each 8-second dictation | 9.19 MB | 1.18 MB |
-| Full memory collections per 25 dictations, after the first 25 | 7 to 11 | 0 |
-| Memory Scribe keeps once it goes idle | 212.6 MiB | 54.1 MiB |
+| Managed allocation per synthetic 8-second capture, dictionary and history cycle | 9.19 MB | 1.18 MB |
+| Full memory collections per 25 such cycles, after the first 25 | 7 to 11 | 0 |
+| Private memory after collection in a synthetic idle-release test | 212.6 MiB | 54.1 MiB |
 | Your words and every word pack applied to a short dictation | 0.45 ms | 0.22 ms |
 
-The [local performance benchmark](docs/local-performance-benchmark.md) has the full results and how to
-reproduce them. The speech recognition times come from the scenario suite
-(`dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios --quick`), which runs generated
-speech through Scribe's own speech recognition code.
+These tests do not measure Scribe's total RAM use. The capture, dictionary and history test excludes
+speech recognition, AI cleanup and typing. The idle-release test uses a synthetic heap, not the running
+app.
+
+The [local performance benchmark](docs/local-performance-benchmark.md) has the full results, the speech
+samples included, and how to reproduce them.
 
 ## Privacy
 
@@ -225,8 +231,8 @@ speech through Scribe's own speech recognition code.
   Standard deployments; earlier models and provisioned deployments can't turn caching off, and Scribe
   can't clear what the cache already holds.
 - **Usage and Diagnostics are worked out on your PC.** The Usage page's optional AI summary runs only when
-  you ask for it, and sends totals and words already in your dictionary: never your dictations, audio,
-  app names or times.
+  you ask for it, and sends usage totals and recurring vocabulary from your dictionary and the word packs
+  you let AI cleanup use: never your dictations, audio, app names or dictation timestamps.
 
 The [privacy policy](PRIVACY.md) lists what Scribe stores, what each request carries, and how to delete it.
 

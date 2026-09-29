@@ -1,6 +1,7 @@
 # Local Performance Benchmark
 
-Updated September 28, 2026, for 0.5.1. The July 2026 run follows it.
+Updated September 28, 2026, for 0.5.1, with speech recognition examples from September 29. The July 2026
+run follows it.
 
 This report measures local CPU and managed allocation costs in Scribe's production code. It uses a
 dedicated BenchmarkDotNet 0.15.8 project, Release builds, out-of-process execution, and the memory
@@ -41,6 +42,30 @@ End to end:
 The same sitting also ran 0.5.1 on the .NET 11 release candidate (runtime 11.0.0-rc.1). Allocations were
 the same; most times moved within the noise above, and the one difference that repeated was a slower long
 dictation with snippets on (+20.8%, then +24.0%). Scribe stays on .NET 10, a long-term support release.
+
+### Speech recognition examples
+
+The README quotes these. They come from one quick run of the scenario suite on the same PC on September
+29, 2026, started at 01:17 local time (06:17 UTC): a Release build of 0.5.1 (`9cd88748`), .NET 10.0.12,
+Normal priority, eight speech recognition threads (the automatic choice on this CPU), Parakeet TDT 0.6b
+v3 (int8) through sherpa-onnx 1.13.8, and the generated English speech committed under
+`tests/fixtures/speech`. The model loaded once, in 2,083.8 ms, before the scenarios. Each time below is
+speech recognition alone (the report's `decodeMs`), after silence trimming, which is timed separately;
+neither includes model loading, dictionary processing, AI cleanup or typing. It is one run on a shared
+PC, so treat the times as examples rather than a distribution.
+
+```powershell
+dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios --quick
+```
+
+| Sample | Audio | Silence trimming | Speech recognition |
+|---|---:|---:|---:|
+| `A-clean-sentence` | 4.00 s | 15.5 ms | 112.0 ms |
+| `A-clean-dict-github-copilot` | 3.99 s | 12.5 ms | 118.5 ms |
+| `A-clean-dict-kubernetes` | 4.15 s | 15.8 ms | 121.4 ms |
+| `A-clean-greeting` | 4.16 s | 18.2 ms | 128.0 ms |
+| `A-clean-dict-scribe` | 3.97 s | 13.5 ms | 133.9 ms |
+| `A-clean-long-passage` | 23.26 s | 74.2 ms | 639.3 ms |
 
 ## July 2026 run
 
