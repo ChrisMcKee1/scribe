@@ -15,7 +15,7 @@ Speech recognition runs on your PC, and your audio never leaves it.
 
 Free · Signed by Microsoft · Updated by the Store · For Intel, AMD and Arm PCs
 
-<img src="docs/screenshots/pill.png" alt="The recording indicator while you speak: a dark rounded bar with five blue level bars and the word Listening" width="360" />
+<img src="docs/screenshots/pill.png" alt="The recording indicator while you speak: five blue level bars and the word Listening, on a dark rounded bar with a blue edge" width="420" />
 
 </div>
 
@@ -65,7 +65,7 @@ update themselves from GitHub. Not sure which PC you have? Windows Settings, Sys
 ## A quick tour
 
 <p align="center">
-  <img src="docs/screenshots/pill-states.png" alt="The recording indicator three times, side by side: Listening with five level bars, Recognizing speech with three dots, and Typed with a check mark" width="780" />
+  <img src="docs/screenshots/pill-states.png" alt="The recording indicator at three moments: Listening with five blue level bars and a blue edge, Recognizing speech with three dots, and Typed with a green check mark" width="840" />
 </p>
 
 **The recording indicator** appears the moment you press your shortcut. Its five bars rise and fall with
@@ -75,51 +75,51 @@ wrong and what to do next. Put it in any of nine places on screen, or turn it of
 <table>
 <tr>
 <td width="50%" valign="top">
-<a href="docs/screenshots/dictation.png"><img src="docs/screenshots/dictation.png" alt="The Dictation page in Settings: the microphone, and the dictation shortcut and the shortcut without AI cleanup, each with how it works" /></a><br />
+<a href="docs/screenshots/dictation.png"><img src="docs/screenshots/dictation.png" alt="The Dictation page in Settings: the microphone set to the Windows default, Page Down as the dictation shortcut and Page Up as the shortcut without AI cleanup, both Press and hold, and Stop when I stop talking" /></a><br />
 <b>Dictation.</b> Pick a microphone or follow the Windows default, and set your two shortcuts: Press and hold, or Press to start and stop, with Stop when I stop talking.
 </td>
 <td width="50%" valign="top">
-<a href="docs/screenshots/try-dictation.png"><img src="docs/screenshots/try-dictation.png" alt="Try dictation after a test: what Scribe heard, what it typed, the changes it made and how long each step took" /></a><br />
+<a href="docs/screenshots/try-dictation.png"><img src="docs/screenshots/try-dictation.png" alt="Try dictation after a test: Scribe heard 'please book a meeting with the azure open ai team about the q three roadmap for thursday' and typed 'Please book a meeting with the Azure OpenAI team about the Q3 roadmap for Thursday.', with its two changes listed" /></a><br />
 <b>Try dictation.</b> Dictate once with your shortcut and see what Scribe heard, what it typed, every change it made and how long each step took.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<a href="docs/screenshots/ai-cleanup.png"><img src="docs/screenshots/ai-cleanup.png" alt="The AI cleanup page: AI cleanup on, running on this PC with Foundry Local, with a model chosen" /></a><br />
-<b>AI cleanup.</b> Optional. Fixes punctuation, drops fillers and keeps only what you meant when you correct yourself, on this PC or with the AI service you choose.
+<a href="docs/screenshots/ai-cleanup.png"><img src="docs/screenshots/ai-cleanup.png" alt="The AI cleanup page: Use AI cleanup on but not set up yet, On this PC (Foundry Local) chosen from the four places it can run, and the recommended model, Qwen3 1.7B, ready to set up" /></a><br />
+<b>AI cleanup.</b> Optional. Fixes punctuation, drops fillers and keeps only what you meant when you correct yourself, on this PC or with the AI service you choose. Until it's ready, Scribe types what it hears.
 </td>
 <td width="50%" valign="top">
-<a href="docs/screenshots/dictionary.png"><img src="docs/screenshots/dictionary.png" alt="The Dictionary page's Your words tab: words as Scribe hears them and how it writes them" /></a><br />
+<a href="docs/screenshots/dictionary.png"><img src="docs/screenshots/dictionary.png" alt="The Dictionary page's Your words tab: 13 words, such as dot net written as .NET and cube control as kubectl, next to the Word packs tab showing 2 of 11 on" /></a><br />
 <b>Your words.</b> Teach Scribe how to write the names, acronyms and jargon you use. Import a CSV, or let Learn from history suggest words you say often.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<a href="docs/screenshots/word-packs.png"><img src="docs/screenshots/word-packs.png" alt="The Dictionary page's Word packs tab: word packs in an A to Z list, with one open in the editor" /></a><br />
+<a href="docs/screenshots/word-packs.png"><img src="docs/screenshots/word-packs.png" alt="The Dictionary page's Word packs tab: the eleven built-in word packs, two of them on, with AI and Machine Learning Terminology open: Use this word pack, Use in AI cleanup, and its 197 words" /></a><br />
 <b>Word packs.</b> Eleven ready-made packs, from AI model names to Azure, GitHub and .NET, plus your own. Edit any word, and choose which packs AI cleanup may use.
 </td>
 <td width="50%" valign="top">
-<a href="docs/screenshots/snippets.png"><img src="docs/screenshots/snippets.png" alt="The Voice snippets page: short phrases, and the saved text Scribe types for each" /></a><br />
-<b>Voice snippets.</b> Say a short phrase and Scribe types the saved text, such as your signature or a standup template.
+<a href="docs/screenshots/snippets.png"><img src="docs/screenshots/snippets.png" alt="The Voice snippets page: meeting link, my email address and sign off, with meeting link open: when you say 'meeting link', Scribe types 'Join the meeting:' and a link" /></a><br />
+<b>Voice snippets.</b> Say a short phrase and Scribe types the saved text, such as your email address, a sign-off or a meeting link.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<a href="docs/screenshots/profiles.png"><img src="docs/screenshots/profiles.png" alt="The App profiles page: a profile that gives one app its own writing style and line breaks" /></a><br />
+<a href="docs/screenshots/profiles.png"><img src="docs/screenshots/profiles.png" alt="The App profiles page: an Email profile for Outlook and New Outlook with its own writing style, 'Write in a friendly, professional email tone.', above a Chat profile for Teams" /></a><br />
 <b>App profiles.</b> Give an app its own line breaks and, with AI cleanup, its own writing style. In command windows, such as Terminal, line breaks become spaces, so a dictation never runs a command early.
 </td>
 <td width="50%" valign="top">
-<a href="docs/screenshots/history.png"><img src="docs/screenshots/history.png" alt="The History page: recent dictations with the app each went to" /></a><br />
-<b>History.</b> Your dictations stay on your PC, searchable and ready to copy. If one can't be typed, Scribe tells you and keeps it for you to copy from the tray.
+<a href="docs/screenshots/history.png"><img src="docs/screenshots/history.png" alt="The History page: demo dictations with when, the app each went to, the text and how long AI cleanup took, kept for 90 days, with search, Copy and Delete" /></a><br />
+<b>History.</b> Your dictations stay on your PC, for 90 days unless you choose otherwise, searchable and ready to copy. If one can't be typed, Scribe tells you and keeps it for you to copy from the tray.
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<a href="docs/screenshots/usage.png"><img src="docs/screenshots/usage.png" alt="The Usage page: how much you dictated, a trend chart, your top apps and the words you say most" /></a><br />
-<b>Usage.</b> How much you dictate, in which apps, and the words you say most, with one click to add a word to your dictionary. Worked out on your PC.
+<a href="docs/screenshots/usage.png"><img src="docs/screenshots/usage.png" alt="The Usage page for the last 30 days: 48 demo dictations, 915 words and 9.1 minutes of speaking over 16 active days, the top apps, a daily trend chart and the dictionary words that came up" /></a><br />
+<b>Usage.</b> How much you dictate, in which apps and on which days, with the dictionary words that came up and one click to add a new one. Worked out on your PC.
 </td>
 <td width="50%" valign="top">
-<a href="docs/screenshots/diagnostics.png"><img src="docs/screenshots/diagnostics.png" alt="The Diagnostics page: Save diagnostics, and how long speech recognition and AI cleanup take" /></a><br />
+<a href="docs/screenshots/diagnostics.png"><img src="docs/screenshots/diagnostics.png" alt="The Diagnostics page: Save diagnostics and Report a problem, the logs folder, no AI cleanup problems in the last 7 days, and how long each step takes with the Parakeet speech model" /></a><br />
 <b>Diagnostics.</b> How long speech recognition and AI cleanup take on your PC, typically and for 19 in 20 dictations, and Save diagnostics for a bug report.
 </td>
 </tr>

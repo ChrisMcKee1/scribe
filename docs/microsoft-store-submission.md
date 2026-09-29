@@ -343,20 +343,20 @@ because the Store may lay text over the bottom third, and ask for no added logos
 messages.
 
 The 0.5.1 set is in `docs/store/screenshots/`: ten PNG files at 1366 by 900 of the current Settings
-pages, rendered with synthetic demo data. The README's images in `docs/screenshots/` (1240 by 900, and
-the smaller recording indicator images) are below the Store's minimum width, so upload only the Store
-set. Upload it in this order, with these captions:
+pages, rendered with synthetic demo data. The README's images in `docs/screenshots/` are below the
+Store's minimum size (the pages are 1240 pixels wide, and the recording indicator images 340 and 300
+pixels tall), so upload only the Store set. Upload it in this order, with these captions:
 
-1. `01-dictation.png`: Hold a key, speak, let go. Choose your microphone and your shortcuts, including a spare mouse button.
+1. `01-dictation.png`: Hold a key, speak, let go. Choose your microphone and shortcuts: any key, two keys together or a spare mouse button.
 2. `02-ai-cleanup.png`: Optional AI cleanup, on this PC with Foundry Local, or with Microsoft Foundry, GitHub Copilot or another AI service.
-3. `03-dictionary.png`: Your words: teach Scribe how to write the names, acronyms and jargon you use.
+3. `03-dictionary.png`: Your words: teach Scribe how to write the names, acronyms and jargon you use, like "dot net" as .NET.
 4. `04-word-packs.png`: Word packs: ready-made vocabulary for AI, Azure, Microsoft 365, .NET and more, editable word by word.
 5. `05-try-dictation.png`: Try dictation: see what Scribe heard, what it typed, each change it made and how long each step took.
-6. `06-snippets.png`: Voice snippets: say a short phrase and Scribe types the saved text.
-7. `07-profiles.png`: App profiles: give each app its own line breaks and writing style.
-8. `08-history.png`: History: your recent dictations, kept on your PC, ready to copy or delete.
-9. `09-usage.png`: Usage: how much you dictate and in which apps, worked out on your PC.
-10. `10-diagnostics.png`: Diagnostics: how fast speech recognition and AI cleanup run on your PC.
+6. `06-snippets.png`: Voice snippets: say a short phrase, like "meeting link", and Scribe types the saved text.
+7. `07-profiles.png`: App profiles: give each app its own line breaks and writing style, like a friendly email tone in Outlook.
+8. `08-history.png`: History: your recent dictations, kept on your PC, ready to find, copy or delete.
+9. `09-usage.png`: Usage: how much you dictate, in which apps and on which days, worked out on your PC.
+10. `10-diagnostics.png`: Diagnostics: how fast speech recognition and AI cleanup run on your PC, and diagnostics to save for a report.
 
 Before upload, check every screenshot for real names, dictations, tenant IDs, service addresses,
 subscription names, API keys, or other personal information. A new set of screenshots replaces the
