@@ -948,14 +948,15 @@ more than "not digital silence" (a -60 dBFS bar). `CaptureSignalAnalyzer` now re
 shape of every capture (peak/RMS in dBFS, clipping, DC offset, and **per-channel levels taken before
 the downmix**) so the next report of this arrives answerable. Statistics only, never audio.
 
-Every channel count runs the one loop 0.5.0 shipped. 0.5.1 tried loops of their own for one and two channels
-(AUDIO-O-06, about 1 ms per stop at a 9.5 s dictation) and backed them out when `CaptureSignalAnalyzerDifferentialTests`
-failed on the windows-11-arm runner, on the RMS of an input holding NaNs with different payloads. The same test later
-failed on x64 with both sides running 0.5.0's own loop: which NaN payload an addition passes on depends on the operand
-order the JIT picks, which can differ between two compilations of the same source, so the test now matches a NaN with
-any NaN and compares every other value by bit pattern and `Describe()`. The faster loops can come back once that test
-passes on both architectures; SIMD, a reordered or parallel reduction, or pooling would change the sums and needs a
-decision (and probably a flag) of its own.
+One and two channels of 32-bit float or 16-bit PCM, nearly every capture, run loops of their own (AUDIO-O-06): every
+accumulator in a local, no delegate and no modulo per sample, the samples visited in the same order with the same
+float and double operations, so every statistic is the general loop's, bit for bit. That is the whole justification
+for having no flag: `CaptureSignalAnalyzerDifferentialTests` keeps the 0.5.0 loop as the oracle and compares every field
+by bit pattern and `Describe()`, on x64 and on the windows-11-arm runner, except that any NaN matches any NaN: which NaN
+payload an addition passes on depends on the operand order the JIT picks, which can differ between two compilations of
+the same source. 0.5.1 backed these loops out over exactly that (an Arm64 failure on a NaN-payload input) and fixed the
+test; they returned once it passed on both architectures. SIMD, a reordered or parallel reduction, or pooling would
+change the sums and needs a decision (and probably a flag) of its own.
 
 ## Transcription engine (one gate, cancellation, chunk seams)
 

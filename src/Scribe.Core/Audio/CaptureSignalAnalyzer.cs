@@ -142,15 +142,123 @@ public static class CaptureSignalAnalyzer
         var channels = Math.Max(1, format.Channels);
         if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         {
-            return Analyze(MemoryMarshal.Cast<byte, float>(raw), channels, format.SampleRate, static f => f);
+            var samples = MemoryMarshal.Cast<byte, float>(raw);
+            return channels switch
+            {
+                1 => AnalyzeMono<float, FloatSample>(samples, format.SampleRate),
+                2 => AnalyzeStereo<float, FloatSample>(samples, format.SampleRate),
+                _ => Analyze(samples, channels, format.SampleRate, static f => f),
+            };
         }
 
         if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 16)
         {
-            return Analyze(MemoryMarshal.Cast<byte, short>(raw), channels, format.SampleRate, static s => s / 32768f);
+            var samples = MemoryMarshal.Cast<byte, short>(raw);
+            return channels switch
+            {
+                1 => AnalyzeMono<short, Pcm16Sample>(samples, format.SampleRate),
+                2 => AnalyzeStereo<short, Pcm16Sample>(samples, format.SampleRate),
+                _ => Analyze(samples, channels, format.SampleRate, static s => s / 32768f),
+            };
         }
 
         return Empty(channels, format.SampleRate);
+    }
+
+    // One and two channels are nearly every capture, so they get loops of their own: every accumulator is a local, and
+    // there is no delegate call and no division per sample. They visit the samples in the same order and do the same float
+    // and double operations as the general loop below, so every statistic is bit-identical to it (see
+    // CaptureSignalAnalyzerDifferentialTests, which keeps the original loop as the oracle). Keep it that way: SIMD, a
+    // reordered or parallel reduction, or pooling would change the sums' order and need a decision of their own.
+    private static CaptureSignalReport AnalyzeMono<T, TSample>(ReadOnlySpan<T> samples, int sampleRate)
+        where T : struct
+        where TSample : ISampleValue<T>
+    {
+        if (samples.Length < 1)
+        {
+            return Empty(1, sampleRate);
+        }
+
+        float peak = 0;
+        double squares = 0;
+        double sum = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        foreach (var sample in samples)
+        {
+            var value = TSample.ToFloat(sample);
+            var magnitude = Math.Abs(value);
+
+            if (magnitude > peak) peak = magnitude;
+            squares += value * (double)value;
+            sum += value;
+
+            if (magnitude >= ClipThreshold) clipped++;
+            if (magnitude < NearSilenceThreshold) nearSilent++;
+        }
+
+        return Report(1, sampleRate, samples.Length, [peak], [squares], [samples.Length], sum, clipped, nearSilent);
+    }
+
+    private static CaptureSignalReport AnalyzeStereo<T, TSample>(ReadOnlySpan<T> samples, int sampleRate)
+        where T : struct
+        where TSample : ISampleValue<T>
+    {
+        if (samples.Length < 2)
+        {
+            return Empty(2, sampleRate);
+        }
+
+        float peak0 = 0, peak1 = 0;
+        double squares0 = 0, squares1 = 0;
+        double sum = 0;
+        long clipped = 0;
+        long nearSilent = 0;
+
+        var i = 0;
+        for (; i + 1 < samples.Length; i += 2)
+        {
+            var left = TSample.ToFloat(samples[i]);
+            var leftMagnitude = Math.Abs(left);
+
+            if (leftMagnitude > peak0) peak0 = leftMagnitude;
+            squares0 += left * (double)left;
+            sum += left;
+
+            if (leftMagnitude >= ClipThreshold) clipped++;
+            if (leftMagnitude < NearSilenceThreshold) nearSilent++;
+
+            var right = TSample.ToFloat(samples[i + 1]);
+            var rightMagnitude = Math.Abs(right);
+
+            if (rightMagnitude > peak1) peak1 = rightMagnitude;
+            squares1 += right * (double)right;
+            sum += right;
+
+            if (rightMagnitude >= ClipThreshold) clipped++;
+            if (rightMagnitude < NearSilenceThreshold) nearSilent++;
+        }
+
+        long count0 = i / 2;
+        long count1 = i / 2;
+
+        // An odd sample count leaves one sample, which the general loop's i % channels gives to the first channel.
+        if (i < samples.Length)
+        {
+            var left = TSample.ToFloat(samples[i]);
+            var leftMagnitude = Math.Abs(left);
+
+            if (leftMagnitude > peak0) peak0 = leftMagnitude;
+            squares0 += left * (double)left;
+            sum += left;
+            count0++;
+
+            if (leftMagnitude >= ClipThreshold) clipped++;
+            if (leftMagnitude < NearSilenceThreshold) nearSilent++;
+        }
+
+        return Report(2, sampleRate, samples.Length, [peak0, peak1], [squares0, squares1], [count0, count1], sum, clipped, nearSilent);
     }
 
     private static CaptureSignalReport Analyze<T>(
@@ -187,6 +295,22 @@ public static class CaptureSignalAnalyzer
             if (magnitude < NearSilenceThreshold) nearSilent++;
         }
 
+        return Report(channels, sampleRate, samples.Length, peaks, sumSquares, counts, sum, clipped, nearSilent);
+    }
+
+    // What every loop hands on: the per-channel and whole-capture statistics from the accumulated sums, computed the one
+    // way the report has always been computed.
+    private static CaptureSignalReport Report(
+        int channels,
+        int sampleRate,
+        int sampleCount,
+        float[] peaks,
+        double[] sumSquares,
+        long[] counts,
+        double sum,
+        long clipped,
+        long nearSilent)
+    {
         var perChannel = new List<ChannelLevel>(channels);
         for (var c = 0; c < channels; c++)
         {
@@ -195,16 +319,16 @@ public static class CaptureSignalAnalyzer
         }
 
         var totalSquares = sumSquares.Sum();
-        var overallRms = (float)Math.Sqrt(totalSquares / samples.Length);
+        var overallRms = (float)Math.Sqrt(totalSquares / sampleCount);
 
         return new CaptureSignalReport(
             channels,
             sampleRate,
             peaks.Max(),
             overallRms,
-            clipped / (double)samples.Length,
-            nearSilent / (double)samples.Length,
-            (float)(sum / samples.Length),
+            clipped / (double)sampleCount,
+            nearSilent / (double)sampleCount,
+            (float)(sum / sampleCount),
             perChannel);
     }
 
@@ -217,4 +341,22 @@ public static class CaptureSignalAnalyzer
         NearSilentFraction: 0,
         DcOffset: 0,
         PerChannel: []);
+
+    // How the specialized loops read a sample, as a static member of a struct so the JIT compiles one loop per format with
+    // the conversion inlined (the general loop's delegate cannot be).
+    private interface ISampleValue<T>
+        where T : struct
+    {
+        static abstract float ToFloat(T sample);
+    }
+
+    private readonly struct FloatSample : ISampleValue<float>
+    {
+        public static float ToFloat(float sample) => sample;
+    }
+
+    private readonly struct Pcm16Sample : ISampleValue<short>
+    {
+        public static float ToFloat(short sample) => sample / 32768f;
+    }
 }
