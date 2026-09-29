@@ -70,6 +70,8 @@ Scribe.slnx
   scripts/                   Helper scripts (model download, etc.).
   build/pack.ps1             Velopack installer + GitHub-release packaging (see below).
   docs/screenshots/          Images used by the README.
+  docs/store/screenshots/    The Microsoft Store listing's screenshots (1366 x 900).
+  macos/                     The native macOS preview (Swift; see macos/README.md).
   Directory.Build.props      Shared versioning + package metadata (semver lives here).
   Directory.Packages.props   Central NuGet version management (add versions here).
 ```

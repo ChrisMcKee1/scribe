@@ -4,7 +4,7 @@ This is the working submission guide for publishing Scribe AI as an MSIX app. It
 recommended Partner Center answers, listing copy, certification notes, and remaining engineering
 checks so a submission does not depend on memory.
 
-Last reviewed: July 27, 2026.
+Last reviewed: September 29, 2026, for 0.5.1.
 
 ## Readiness summary
 
@@ -14,10 +14,12 @@ Last reviewed: July 27, 2026.
 | Privacy policy | Ready | Use the public `PRIVACY.md` URL listed below and answer **Yes** for personal information. |
 | Store-managed updates | Ready | Packaged Store installs now bypass the Velopack/GitHub updater. |
 | Package build | Ready | Store identity, reserved display name, and public publisher are recorded in `Directory.Build.props`. |
+| Package submission | Automated | `store.yml` builds and submits the package after each release. It does not touch the listing. |
 | Restricted capability | Conditional | Explain `runFullTrust` in certification notes. Suggested copy is below. |
 | Generative AI declaration | Required | Select **This product incorporates generative AI features**. |
 | Automatic cloud backup | Required choice | Turn off automatic OneDrive backup because local history may contain sensitive dictated text. |
-| Screenshots | Refresh needed | Nine existing screenshots meet the Desktop size requirement, but they show an older build and navigation. Capture the final UI before upload. |
+| Listing text | Ready for 0.5.1 | The copy below uses the current feature names. It goes out with the next submission; see [Updating the listing](#updating-the-listing-automatically). |
+| Screenshots | Ready for 0.5.1 | Ten 1366 by 900 screenshots of the current Settings are in `docs/store/screenshots/`. |
 | Accessibility declaration | Not ready | Do not claim the Store accessibility declaration until a dedicated accessibility test pass is complete. |
 | Local-data security | Review | Transcript history and optional audio use Windows profile and device protections but are not separately application-encrypted. |
 | Final package validation | Not started | Run the Windows App Certification Kit against the final package before upload. |
@@ -54,10 +56,10 @@ The MSIX manifest declares `windows.startupTask`, with task ID `ScribeStartup` a
 registry writes from a packaged app can be virtualized and are not a startup registration.
 The direct-download build retains the per-user Run entry.
 
-The General settings switch applies the moment it is flipped: there is nothing to save, and Save
-never changes it. Scribe records the preference first, then asks Windows, and the switch then shows
-what Windows reports. If Windows refuses, the switch goes back and says why. For a packaged desktop
-app, `RequestEnableAsync` shows no consent dialog.
+The Start with Windows switch (Settings, Dictation, Startup) applies the moment it is flipped: there
+is nothing to save, and Save never changes it. Scribe records the preference first, then asks
+Windows, and the switch then shows what Windows reports. If Windows refuses, the switch goes back and
+says why. For a packaged desktop app, `RequestEnableAsync` shows no consent dialog.
 
 On the first launch after upgrading, an existing enabled Scribe preference enables the newly
 declared task. Beyond that, startup never changes the task: a task disabled in Windows Settings or
@@ -135,7 +137,7 @@ cloud-hosted, or supplied by a third party.
 - Microphone: required
 - Keyboard: required for the default push-to-talk workflow
 - Internet connection: not required for dictation
-- Internet connection: required only for downloads, updates, and optional remote AI providers
+- Internet connection: required only for downloads, updates, and optional AI cleanup through an online AI service
 
 The package declares Windows Desktop build `10.0.22000.0` (Windows 11) as its minimum, matching
 `SupportedOSPlatformVersion` in `Scribe.App.csproj` and the Windows 11 promise in the listing. The
@@ -176,8 +178,10 @@ Before upload:
    Every package in a bundle must be identical apart from `Identity/ProcessorArchitecture`.
 4. Run the Windows App Certification Kit.
 5. Install and test the package using an appropriate local test-signing workflow.
-6. Verify microphone capture, global hotkey handling, text injection, the tray, the overlay process,
-   settings, restart, and uninstall.
+6. Verify microphone capture, the dictation shortcuts, typing into apps, the tray, the recording
+   indicator's process, settings, restart, and uninstall.
+7. Verify Settings reports that updates are managed by Microsoft Store.
+8. Confirm no GitHub update is downloaded or applied by a Store-installed build.
 
 ### What changes in Partner Center when Arm64 is added
 
@@ -199,8 +203,6 @@ packages you upload, so the work is upload-side, not settings-side:
   (generative AI, backup, alternate drives) as they are.
 
 Nothing about the reserved name, identity, publisher, age rating, or pricing changes.
-7. Verify Settings reports that updates are managed by Microsoft Store.
-8. Confirm no GitHub update is downloaded or applied by a Store-installed build.
 
 The package declares:
 
@@ -226,103 +228,161 @@ Scribe AI
 
 ### Short description
 
-Private push-to-talk voice dictation for Windows. Speech recognition runs on your PC, works
-offline, and types polished text into any app.
+Private push-to-talk dictation for Windows 11. Hold a key, speak, and let go: punctuated text is typed
+into the app you're using. Speech recognition runs on your PC and works offline, and your audio never
+leaves it.
 
 ### Description
 
-Scribe AI turns your voice into text anywhere on Windows. Hold your chosen key, speak, and release.
-Punctuated text appears in the application that already has focus.
+Scribe AI turns your voice into text in the apps you use every day. Hold a key, speak, and let go:
+punctuated text is typed into the app you're using, whether that's email, chat, a document, a browser,
+a code editor or a command window.
 
-Speech recognition runs locally on your CPU. No account or subscription is required, and
-microphone audio never leaves your device. Scribe can work without an internet connection.
+Private by design. Speech recognition runs on your PC, with a speech model that comes with Scribe.
+Your audio is recognized and then discarded: it is never uploaded, and it is kept only if you turn on
+audio history, on your PC. There's no Scribe account, no subscription and no advertising.
 
-Build a personal dictionary for names and technical terms, save reusable voice snippets, and use
-per-application profiles to change writing style and line-break behavior. Local history keeps
-recent dictations recoverable and powers private usage insights.
+Works offline. Dictation needs no internet connection, and about 25 European languages are
+recognized automatically, with nothing to choose. Scribe runs natively on Intel, AMD and Arm PCs,
+Copilot+ PCs included.
 
-AI cleanup is optional. Use an on-device Foundry Local model, your own Microsoft Foundry
-deployment, or an OpenAI-compatible endpoint that you configure. Remote providers receive the
-transcribed text, the cleanup instructions and your enabled vocabulary, never microphone audio.
-Turn AI cleanup off at any time to keep the complete dictation pipeline local.
+Writes your words your way. Teach Scribe how to write the names, acronyms and jargon you use, and
+turn on ready-made word packs for AI, Azure, Microsoft 365, GitHub, .NET, data and more, editing them
+word by word. Say a short phrase to type saved text, such as your signature. App profiles give each
+app its own line breaks and writing style, and in command windows line breaks become spaces, so a
+dictation never runs a command early.
+
+Optional AI cleanup. Turn it on to fix punctuation, drop filler words and keep only what you meant
+when you correct yourself. Run it on this PC with Foundry Local, fully offline, or use Microsoft
+Foundry, your GitHub Copilot subscription or another AI service you set up. When AI cleanup runs
+somewhere other than your PC, each request sends the text Scribe recognized, the cleanup
+instructions with your writing style, and the words from your dictionary and the word packs you let
+AI cleanup use. Audio is never sent, and you can turn AI cleanup off from the tray at any time.
+
+Always know what happened. The recording indicator appears the moment you press your shortcut, with
+level bars that follow your voice, then says Typed, or what went wrong and what to do next. Try
+dictation shows what Scribe heard, what it changed and how long each step took. History keeps your
+recent dictations on your PC, and if a dictation can't be typed, Scribe keeps it ready to copy from
+the tray. Usage and Diagnostics show how much you dictate and how fast Scribe runs, worked out on
+your PC.
+
+Made for the way you work. Use any key, two keys together, or the middle, Back or Forward mouse
+button as your shortcut, and press and hold or press to start and stop. Text going into Remote
+Desktop and virtual machine windows is typed in small batches instead of pasted. Settings and the
+recording indicator follow your Windows text size and contrast theme.
+
+Scribe is free and open source under the MIT License.
 
 ### Product features
 
-Enter these as separate features without adding bullet characters:
+Enter these as separate features without adding bullet characters (up to 20, at most 200 characters
+each):
 
-1. Offline speech recognition with no Scribe account
-2. Push-to-talk and hands-free toggle modes
-3. Types into your current Windows application
-4. Multilingual dictation with automatic language handling
-5. Personal dictionary and vocabulary libraries
-6. Voice-triggered reusable snippets
-7. Per-application writing profiles
-8. Optional local or bring-your-own AI cleanup
-9. Local dictation history and recovery
-10. Private local usage and performance insights
-11. Configurable recording overlay
-12. Microphone audio never leaves your device
+1. Speech recognition on your PC: your audio never leaves it
+2. Works offline, with no account or subscription
+3. Hold a key, speak, let go: text is typed into the app you're using
+4. About 25 European languages, recognized automatically
+5. Any key, two keys together, or a middle, Back or Forward mouse button as your shortcut
+6. Press and hold, or press to start and stop, with Stop when I stop talking
+7. A recording indicator with live level bars that tells you what each dictation did
+8. Your words: teach Scribe how to write names, acronyms and jargon
+9. Eleven ready-made word packs, editable word by word
+10. Voice snippets: say a short phrase to type saved text
+11. App profiles: line breaks and writing style for each app
+12. Optional AI cleanup on this PC with Foundry Local, or with Microsoft Foundry, GitHub Copilot or another AI service
+13. Try dictation: see what Scribe heard, what it typed and how long each step took
+14. History on your PC, and recovery for a dictation that couldn't be typed
+15. Usage and Diagnostics, worked out on your PC
+16. Paced typing into Remote Desktop and virtual machine windows
+17. Native on Intel, AMD and Arm PCs, Copilot+ PCs included
+18. Follows your Windows text size and contrast theme
 
 ### Search terms
 
-Microsoft Store policy permits no more than seven relevant terms or phrases:
+Microsoft Store policy 10.1.3 allows no more than seven unique terms or phrases, relevant to the
+product, with no pricing terms and no other companies' product names:
 
 1. voice dictation
 2. speech to text
 3. voice typing
-4. offline dictation
-5. push to talk
-6. transcription
-7. productivity
+4. voice to text
+5. offline dictation
+6. speech recognition
+7. push to talk
 
-### What's new
+### What's new in 0.5.1
 
-Leave this blank for the first submission. Use it for subsequent Store updates.
+Paste this into **What's new in this version** (plain text, at most 1,500 characters; this is about
+1,170):
+
+```text
+The recording indicator's level bars now rise and fall with your voice.
+
+Text that was hard or impossible to read is fixed: word pack names on the Dictionary page's Word packs tab, and the descriptions in the App profiles menu in the dark theme.
+
+The Dictionary page's Your words and Word packs tabs are easier to tell apart, each with an icon, a live summary and a line that says what it holds.
+
+In Windows contrast themes, status colors, menu separators and greyed-out menu items no longer show as red, and the tray menu follows a theme change.
+
+New for Microsoft Foundry: Let Microsoft Foundry cache what Scribe sends, in Settings, AI cleanup. It's on, which is how AI cleanup already worked. Turning it off asks Microsoft Foundry not to use its prompt cache for new cleanup requests. That works on GPT-5.6 and later models on Standard deployments; earlier models and provisioned deployments can't turn caching off, so there AI cleanup stops and Scribe types what it hears until you turn the switch back on.
+
+Scribe uses much less memory for each dictation and gives more memory back to Windows when it goes idle.
+
+Everything you set up in 0.5.0 carries over.
+```
+
+For a later release, write this from that release's notes in `docs/release-notes-<version>.md`, in the
+words Settings uses.
 
 ## Screenshots
 
-Desktop screenshots must be PNG files at least 1366 by 768 pixels and no larger than 50 MB.
-Microsoft requires one and recommends at least four. The README's 0.5.0 screenshots
-(`docs/screenshots/*.png`, rendered with synthetic demo data) are 1240 by 900, **below the Store's
-width minimum**, so render the Store set from the same pages at 1366 by 900 or larger (the Settings
-redesign's off-screen harness takes a size) before a listing update. `pill.png` is too small to
-submit by itself. The listing can only be edited when no API submission is pending (see
-"Submitting to the Store" in AGENTS.md).
+Desktop screenshots must be PNG files at least 1366 by 768 pixels and no larger than 50 MB. The Store
+takes up to 10, requires one and recommends at least four, and each can have a caption of up to 200
+characters. Microsoft's guidelines keep the important content in the top two-thirds of an image,
+because the Store may lay text over the bottom third, and ask for no added logos, icons or marketing
+messages.
 
-Recommended order and captions (file names as in `docs/screenshots/`):
+The 0.5.1 set is in `docs/store/screenshots/`: ten PNG files at 1366 by 900 of the current Settings
+pages, rendered with synthetic demo data. The README's images in `docs/screenshots/` (1240 by 900, and
+the smaller recording indicator images) are below the Store's minimum width, so upload only the Store
+set. Upload it in this order, with these captions:
 
-1. `dictation.png`: Choose your microphone and push-to-talk shortcuts, and see how each one works.
-2. `ai-cleanup.png`: Keep optional AI cleanup on your PC with Foundry Local, or bring your own model.
-3. `dictionary.png`: Teach Scribe names, acronyms, and technical vocabulary.
-4. `word-packs.png`: Turn on ready-made word packs for your field, and edit them word by word.
-5. `try-dictation.png`: See what Scribe heard, what it typed, and each change it made.
-6. `snippets.png`: Expand a spoken trigger into a reusable block of text.
-7. `profiles.png`: Adapt writing style and line breaks to each application.
-8. `history.png`: Review, recover, copy, or delete recent dictations stored locally.
-9. `usage.png`: Understand local usage trends without surveillance.
-10. `diagnostics.png`: Verify recognition and cleanup performance on your own hardware.
+1. `01-dictation.png`: Hold a key, speak, let go. Choose your microphone and your shortcuts, including a spare mouse button.
+2. `02-ai-cleanup.png`: Optional AI cleanup, on this PC with Foundry Local, or with Microsoft Foundry, GitHub Copilot or another AI service.
+3. `03-dictionary.png`: Your words: teach Scribe how to write the names, acronyms and jargon you use.
+4. `04-word-packs.png`: Word packs: ready-made vocabulary for AI, Azure, Microsoft 365, .NET and more, editable word by word.
+5. `05-try-dictation.png`: Try dictation: see what Scribe heard, what it typed, each change it made and how long each step took.
+6. `06-snippets.png`: Voice snippets: say a short phrase and Scribe types the saved text.
+7. `07-profiles.png`: App profiles: give each app its own line breaks and writing style.
+8. `08-history.png`: History: your recent dictations, kept on your PC, ready to copy or delete.
+9. `09-usage.png`: Usage: how much you dictate and in which apps, worked out on your PC.
+10. `10-diagnostics.png`: Diagnostics: how fast speech recognition and AI cleanup run on your PC.
 
-Before upload, inspect every screenshot for real names, transcripts, tenant IDs, endpoints,
-subscription names, API keys, or other personal information.
+Before upload, check every screenshot for real names, dictations, tenant IDs, service addresses,
+subscription names, API keys, or other personal information. A new set of screenshots replaces the
+old one only through a submission, like the listing text: see
+[Updating the listing](#updating-the-listing-automatically).
 
 ## Suggested certification notes
 
 Paste and adjust the following text. Keep the date current:
 
-> July 27, 2026. Scribe AI is a Windows tray application and requires no account or network
-> connection for its primary dictation workflow. After launch, open the Scribe microphone icon in
-> the notification area and choose Settings. Hold Page Down, speak, and release to test dictation
+> September 29, 2026. Scribe AI is a Windows tray application and requires no account or network
+> connection for its primary dictation workflow. After launch, select the Scribe icon in the
+> notification area and choose Settings. Hold Page Down, speak, and release to test dictation
 > (Page Up does the same without AI cleanup; on a keyboard without those keys, hold Fn with the
-> Down arrow). The keys can be changed in Settings. Speech recognition runs locally and audio is never
-> transmitted. Optional AI cleanup is off by default and is not required for certification.
+> Down arrow). The keys can be changed in Settings, Dictation. Speech recognition runs locally and
+> audio is never transmitted. Optional AI cleanup is off by default and is not required for
+> certification.
 >
 > The package declares microphone access for user-initiated dictation. It declares runFullTrust
 > because Scribe is a packaged WPF/Win32 desktop application that installs a user-configured global
-> push-to-talk hook, captures microphone input, inserts Unicode text into the foreground desktop
-> application, maintains a tray icon, and launches its separate recording-overlay process. It does
-> not request elevation or install a service or driver.
+> push-to-talk keyboard hook (and a mouse hook only while a shortcut uses a mouse button), captures
+> microphone input, types Unicode text into the foreground desktop application, maintains a tray
+> icon, and launches a separate process that shows its recording indicator. It does not request
+> elevation or install a service or driver.
 >
-> To quit, open the tray menu and select Quit. Privacy policy:
+> To quit, open the tray menu and select Quit Scribe. Privacy policy:
 > https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md
 
 ## Final submission sequence
@@ -343,9 +403,8 @@ Paste and adjust the following text. Keep the date current:
 
 After the first manual submission, every later release can go to the Store on its own. The
 `Store submission` workflow builds the MSIX and submits it, and `release.yml` hands off to it
-automatically when a `v*` tag finishes publishing. **The only thing standing between you and that
-is five repository secrets**; the workflow has existed since 0.2.x and has never run because they
-were never created.
+automatically when a `v*` tag finishes publishing. It needs five repository secrets, set up once as
+described below.
 
 **No personal access token is involved.** The Store submission API authenticates with an Entra ID
 app registration associated with your Partner Center account.
@@ -388,10 +447,11 @@ Then add all five under repository **Settings > Secrets and variables > Actions*
 | `STORE_PRODUCT_ID` | Product management > Product identity (12-character Store ID) |
 
 Verify with a dry run before trusting it, which creates or updates the draft without sending it for
-certification:
+certification. Use the tag of the release you mean to submit, and run it only while no submission is
+in certification (see [Updating the listing](#updating-the-listing-automatically)):
 
 ```
-gh workflow run store.yml -f tag=v0.3.11 -f draft_only=true
+gh workflow run store.yml -f tag=v<version> -f draft_only=true
 ```
 
 Constraints worth knowing before you rely on this:
@@ -420,12 +480,93 @@ Constraints worth knowing before you rely on this:
 - The app needs **one completed manual submission** first, including the age rating questionnaire.
 - Certification still takes as long as it takes. The workflow submits; it does not shorten review.
 
+## Updating the listing automatically
+
+### What is automated today
+
+**`store.yml` submits packages only.** After each release it builds the `.msixbundle` and runs
+`msstore publish` with it (`-nc` for a draft), which creates a submission and uploads the bundle. It
+never changes the description, product features, search terms, What's new, screenshots, captions or
+certification notes. The submission API starts each new submission as "a copy of your last published
+submission", so all of those stay as they were last published until a submission changes them. The
+0.5.1 text and screenshots on this page reach the Store only when a submission sends them.
+
+### What the submission API can change
+
+A submission's `listings` hold one listing per language, and each listing's `baseListing` carries
+`description`, `features` (up to 20), `keywords` (the search terms), `releaseNotes` (What's new) and
+`images`. Each image gives its file name in the upload (`fileName`), its `imageType` (`Screenshot` for
+a desktop screenshot), its caption (`description`) and a `fileStatus`: Microsoft's sample marks an
+image to remove as `PendingDelete` and adds a new one as `PendingUpload`. The submission also carries
+`notesForCertification`. Microsoft's steps
+([Manage app submissions](https://learn.microsoft.com/windows/uwp/monetize/manage-app-submissions)):
+
+1. Create the submission, or get the one in progress.
+2. Change its JSON and send it back with the update call.
+3. Put every new file, packages and images alike, in one ZIP, and upload it to the submission's
+   `fileUploadUrl`, the Azure Blob Storage address (a shared access signature URL) the API returns for
+   that submission.
+4. Commit the submission, then check its status until it moves from `CommitStarted` to
+   `PreProcessing` (or `CommitFailed`, with the reasons in `statusDetails`).
+
+The privacy policy, website and support contact can't be changed this way: those fields are obsolete in
+the API, and the Properties page in Partner Center sets them.
+
+Two Microsoft tools do this:
+
+- **[StoreBroker](https://github.com/microsoft/StoreBroker)**, an open-source PowerShell module over the
+  API that Microsoft describes as "actively used within Microsoft as the primary way that many
+  first-party applications are submitted to the Store". `New-SubmissionPackage` builds the JSON and
+  the ZIP from the packages, listing files and screenshots, and `Update-ApplicationSubmission
+  -UpdateListings` replaces the listing, deleting the existing screenshots along the way, so the ZIP
+  has to carry every screenshot the listing should keep. It uploads the ZIP and, with `-AutoCommit`,
+  commits.
+- **msstore**, the Microsoft Store Developer CLI that `store.yml` already runs
+  ([commands](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/commands)).
+  `msstore submission get` returns the submission JSON and `msstore submission updateMetadata` sends a
+  changed copy back. For MSIX apps, `updateMetadata` and `submission update` are equivalent: both send
+  the complete submission JSON, so either can change listing text and packages together. The CLI
+  documents no command that uploads listing images, and `msstore publish` uploads its own ZIP holding
+  the bundle, so adding screenshots to the same submission means uploading one ZIP that holds both;
+  try that on a draft before trusting it. Order matters as well: when the app has a published
+  submission, `msstore publish` deletes the pending draft and makes a new one from the last published
+  submission, discarding metadata already staged in the draft, so listing changes go in after
+  `msstore publish --noCommit` and before `msstore submission publish` commits. This follows
+  Microsoft's current CLI documentation; `store.yml` pins v0.3.9, so check that version's behavior
+  before relying on it.
+
+### When a listing update can go out
+
+- **An API submission is never edited in Partner Center.** Microsoft: if you use Partner Center to
+  change a submission you created with the API, "you will no longer be able to change or commit that
+  submission by using the API", and it can be left in an error state that only deleting it clears.
+  Every submission `store.yml` makes is an API submission, so its listing changes go through the API
+  too. Editing the listing by hand in Partner Center means a submission created there, which the
+  workflow then can't touch (see the constraints above).
+- **One submission at a time.** StoreBroker's documentation says "You can only have one 'pending'
+  (e.g. in-progress) submission at any given time", and the API refuses to create a submission (HTTP
+  409) when "the current state of the app" doesn't allow it. So while one submission is in
+  certification, no second one can start, and the listing update rides the next submission: for
+  0.5.1, a listing-only submission once 0.5.1 is published, or the next release's package submission.
+  A listing-only submission still goes through certification.
+
+### Wiring it into store.yml (not done yet)
+
+1. Keep the listing copy from this page in a checked-in file, for example
+   `docs/store/listing.en-us.json`, beside the screenshots in `docs/store/screenshots/`.
+2. Either replace the `msstore publish` step with StoreBroker's `Update-ApplicationSubmission` with
+   `-ReplacePackages -UpdateListings -AutoCommit`, so one ZIP carries the bundle and the screenshots,
+   or keep `msstore publish --noCommit` and add a step that patches `listings.en-us.baseListing` with
+   `msstore submission updateMetadata` before `msstore submission publish`. The second changes the
+   text only, until the combined ZIP upload is proven.
+3. Run it first with `draft_only`, and check the draft's listing in Partner Center without editing it.
+
 ## After publication
 
-- Add the Microsoft Store product URL to the in-app About page.
-- Make the Store button the primary installation path in the README.
+- The About page links the Store listing and its rating page (`ScribeLinks`), and the README leads
+  with the Store.
 - Keep GitHub visible for source, stars, issues, releases, and the privacy policy.
-- Preserve the direct GitHub installer for users who deliberately choose that channel.
+- Keep the direct GitHub installer for people who can't use the Store, such as on managed PCs.
 - Monitor Partner Center acquisition, health, ratings, reviews, and certification reports.
 
 ## Microsoft references
@@ -441,3 +582,6 @@ Constraints worth knowing before you rely on this:
 - [Screenshots and images](https://learn.microsoft.com/windows/apps/publish/publish-your-app/msix/screenshots-and-images)
 - [Submission options and certification notes](https://learn.microsoft.com/windows/apps/publish/publish-your-app/msix/manage-submission-options)
 - [Microsoft Store policies](https://learn.microsoft.com/windows/apps/publish/store-policies)
+- [Manage app submissions with the submission API](https://learn.microsoft.com/windows/uwp/monetize/manage-app-submissions)
+- [Microsoft Store Developer CLI commands](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/commands)
+- [StoreBroker usage](https://github.com/microsoft/StoreBroker/blob/master/Documentation/USAGE.md)
