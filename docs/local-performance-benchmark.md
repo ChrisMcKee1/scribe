@@ -1,12 +1,52 @@
 # Local Performance Benchmark
 
-Updated July 10, 2026.
+Updated September 28, 2026, for 0.5.1. The July 2026 run follows it.
 
 This report measures local CPU and managed allocation costs in Scribe's production code. It uses a
-dedicated BenchmarkDotNet 0.15.8 project, .NET 10.0.9, Release builds, out-of-process execution,
-and the memory diagnoser. The benchmark project is `tools/Scribe.Benchmarks`.
+dedicated BenchmarkDotNet 0.15.8 project, Release builds, out-of-process execution, and the memory
+diagnoser. The benchmark project is `tools/Scribe.Benchmarks`.
 
-## Result
+## 0.5.1 against 0.5.0
+
+Release 0.5.0 (`10c9a0b`) and 0.5.1 were built and run back to back in one sitting on one PC: AMD Ryzen 9
+9900X (12 cores, 24 logical), 95.4 GB RAM, Windows 11 25H2 (10.0.26200), .NET SDK 10.0.401 and runtime
+10.0.12, High performance power plan (BenchmarkDotNet processes at High priority, the soak and the scenario
+suite at Normal). Times are BenchmarkDotNet's default job (capped at 40 iterations and 12 warmups), mean and
+error; allocations are exact. The PC was shared: a control benchmark whose code is identical in both builds
+moved 20.8%, so treat a time difference smaller than that as noise.
+
+| Production path | 0.5.0 | 0.5.1 | Time | Allocation |
+|---|---:|---:|---:|---:|
+| Capture of 25 s at 48 kHz stereo (`CaptureAssemblyBenchmarks`) | 19.40 ± 0.71 ms, 39.29 MB | 17.74 ± 1.07 ms, 1.91 MB | -8.6% | **-95.1%** |
+| Capture of 40 s | 35.27 ± 1.02 ms, 119.18 MB | 32.22 ± 0.69 ms, 24.82 MB | -8.6% | **-79.2%** |
+| Dictionary and every word pack, short dictation, snippets on (`ProcessDetailed`) | 454.2 ± 11.8 us, 921.65 KB | 220.6 ± 7.0 us, 10.02 KB | **-51.4%** | **-98.9%** |
+| The same, long dictation (about 550 words) | 1.055 ± 0.086 ms, 1.06 MB | 0.770 ± 0.040 ms, 134.58 KB | **-27.0%** | **-87.6%** |
+| 100-rule dictionary processing (`ProcessDictionary`) | 225.2 ± 13.6 us, 285.03 KB | 129.7 ± 8.1 us, 154.39 KB | **-42.4%** | **-45.8%** |
+| Word packs' first status, 1,549 terms (`LibraryCompositionBenchmarks`) | 792.1 ± 44.7 us, 2.24 MB | 666.3 ± 48.0 us, 1.16 MB | -15.9% | **-48.1%** |
+| Sorting a 10,000-term word pack (`LibrarySearchBenchmarks`) | 8.127 ± 0.605 ms, 578.91 KB | 6.894 ± 0.330 ms, 165.27 KB | -15.2% | **-71.5%** |
+
+End to end:
+
+- **Soak** (100 dictations of 8 s at 48 kHz stereo, a large dictionary, snippets and audio history on,
+  `--soak`): 9.19 MB allocated per dictation in 0.5.0, 1.18 MB in 0.5.1 (-87.2%). After the first 25
+  dictations 0.5.0 ran 7 to 11 generation 2 collections per 25 dictations and 0.5.1 none; private bytes at
+  the window ends swung between 64 and 137 MB in 0.5.0 and stayed between 69 and 79 MB in 0.5.1.
+- **Full scenario suite** (real speech through the production recognizer, `--scenarios`): the recognized
+  and final text are identical in all 59 scenarios that produce text, and the pipeline allocates 269.4 MB
+  against 361.8 MB (-25.5%).
+- **Idle release** (`--idle-release`, six fresh processes each): 0.5.1's Aggressive collection leaves
+  54.1 MiB private bytes against 212.6 MiB for 0.5.0's Forced collection (`ForcedIdleGc`), for a longer
+  one-off pause, 18.9 ms against 6.6 ms, taken while nobody dictates.
+
+The same sitting also ran 0.5.1 on the .NET 11 release candidate (runtime 11.0.0-rc.1). Allocations were
+the same; most times moved within the noise above, and the one difference that repeated was a slower long
+dictation with snippets on (+20.8%, then +24.0%). Scribe stays on .NET 10, a long-term support release.
+
+## July 2026 run
+
+Measured on .NET 10.0.9.
+
+### Result
 
 | Production path | Baseline mean | Optimized mean | Time change | Baseline allocation | Optimized allocation | Allocation change |
 |---|---:|---:|---:|---:|---:|---:|
@@ -19,7 +59,7 @@ Short-run timing has wider confidence intervals than a publication benchmark, so
 results and repeated focused runs are the primary evidence. The two optimized methods produced large,
 repeatable improvements; movement in the two unchanged controls is ordinary run-to-run variance.
 
-## Changes Adopted
+### Changes Adopted
 
 `AudioCaptureService.ReadAll` previously appended each provider read to a dynamically growing
 `List<float>` and then copied the list into the returned array. A 160,000-sample capture allocated
@@ -33,7 +73,7 @@ boundary search, then allocated substring and trim results for returned chunks. 
 trims `ReadOnlySpan<char>` windows and creates each final chunk string once. All punctuation,
 whitespace fallback, and hard-split tests remain unchanged.
 
-## Changes Rejected
+### Changes Rejected
 
 Audio serialization was not changed. The benchmark deliberately performs a byte-array to float-array
 round trip, so its 1.25 MB allocation is the expected pair of 625 KB payloads. Production persistence
