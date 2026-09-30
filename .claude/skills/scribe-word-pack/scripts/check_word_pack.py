@@ -156,6 +156,23 @@ def is_vocabulary_replacement(written: str) -> bool:
     )
 
 
+def spacing_problems(spoken: str) -> List[str]:
+    """What keeps a spoken form out of commit form, in words, for the finding that reports it."""
+    problems = []
+    if spoken and is_white_space(spoken[0]):
+        problems.append("starts with a space")
+    if spoken and is_white_space(spoken[-1]):
+        problems.append("ends with a space")
+    inner = trim(spoken)
+    if "  " in inner:
+        problems.append("has two spaces in a row")
+    if "\t" in inner:
+        problems.append("has a tab")
+    if any(is_white_space(ch) and ch not in " \t" for ch in inner):
+        problems.append("has a no-break space or another unusual space")
+    return problems
+
+
 # ---- Reading, as LibraryCsvCodec.ReadImport reads ------------------------------------------------------------------
 
 
@@ -627,9 +644,10 @@ def check(document: Document) -> List[Finding]:
                 % (_quote(trimmed_spoken), earlier.line, earlier.line))
 
         if not is_in_commit_form(spoken):
-            add("ERROR", term.line, "%s has a space at its start or end, two spaces in a row, a tab or a no-break "
-                "space, so it can miss what you dictate or swallow the space before it. Use single spaces between "
-                "words, and none at the ends." % _quote(spoken))
+            problems = spacing_problems(spoken) or ["has irregular spacing"]
+            described = problems[0] if len(problems) == 1 else ", ".join(problems[:-1]) + " and " + problems[-1]
+            add("ERROR", term.line, "%s %s, so it can miss what you dictate or swallow the space before it. Use "
+                "single spaces between words, and none at the ends." % (_quote(spoken), described))
 
         if key in COMMON_WORDS:
             add("WARNING", term.line, "%s is an everyday word, so this row also changes it in ordinary sentences. "
