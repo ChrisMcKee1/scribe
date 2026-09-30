@@ -22,10 +22,21 @@ namespace Scribe.Core.Cleanup;
 /// permanent loss of acceleration. It runs once, guarded by a flag, so a user whose GPU really is
 /// broken is not re-probed on every launch.
 /// </para>
+/// <para>
+/// Since 0.5.2 (Foundry Local 2.x) it covers the 2.x file, <see cref="FileName"/>. The 1.x file,
+/// <see cref="LegacyFileName"/>, is never applied by a 2.x build and never deleted here: TextCleanupService
+/// sets each of its entries aside and starts that model on the build Foundry Local would pick on a new
+/// install until a conclusive start settles it, and the file stays for a rollback to the 1.x build it
+/// describes.
+/// </para>
 /// </summary>
 public static class FoundryDemotionReset
 {
-    internal const string FileName = "foundry-local-demotions.json";
+    /// <summary>The GPU demotions Foundry Local 2.x builds remember (0.5.2 and later).</summary>
+    internal const string FileName = "foundry-local-demotions-v2.json";
+
+    /// <summary>The GPU demotions Foundry Local 1.x builds remembered (0.5.1 and earlier).</summary>
+    internal const string LegacyFileName = "foundry-local-demotions.json";
 
     /// <summary>True when markers were actually cleared on this launch.</summary>
     public static bool Apply(ISettingsRepository settings, AppPaths paths, ILogger? log = null)

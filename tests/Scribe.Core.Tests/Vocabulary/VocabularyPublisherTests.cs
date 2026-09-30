@@ -525,11 +525,11 @@ public sealed class VocabularyPublisherTests
             var hint = GlossaryHint.Describe(new GlossaryHint.Input(rows, generation.Libraries.AiEntries, true, true, provider, style));
 
             Assert.Equal(["- KESTREL (transcribed as \"kes trel\")", "- Lantern", "- Harbour (transcribed as \"har bour\")"], sent);
-            Assert.Contains($"receives all {sent.Count} words as vocabulary", hint, StringComparison.Ordinal);
+            Assert.Contains($"receives whichever of these {sent.Count} words a dictation appears to mention", hint, StringComparison.Ordinal);
 
             // The control: the hint handed every enabled library's entries would count the excluded library too.
             var wrong = GlossaryHint.Describe(new GlossaryHint.Input(rows, generation.Libraries.Entries, true, true, provider, style));
-            Assert.Contains($"receives all {sent.Count + 1} words as vocabulary", wrong, StringComparison.Ordinal);
+            Assert.Contains($"receives whichever of these {sent.Count + 1} words a dictation appears to mention", wrong, StringComparison.Ordinal);
         }
     }
 

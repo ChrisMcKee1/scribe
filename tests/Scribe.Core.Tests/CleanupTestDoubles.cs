@@ -81,12 +81,17 @@ internal sealed class FakeFoundryModel : IModel
 {
     private readonly FakeFoundryState _state;
     private readonly List<FakeFoundryModel> _variants = [];
+    private readonly ModelInfo _info;
     private FakeFoundryModel _selected;
+
+    // Whether Info is the selected variant's, as the SDK's Model reports it; set for FamilyOn only, so every other family
+    // keeps the first variant's.
+    private bool _infoFollowsSelection;
 
     private FakeFoundryModel(FakeFoundryState state, string id, string alias, string executionProvider)
     {
         _state = state;
-        Info = new ModelInfo
+        _info = new ModelInfo
         {
             Id = id,
             Name = id,
@@ -111,11 +116,28 @@ internal sealed class FakeFoundryModel : IModel
         return family;
     }
 
+    /// <summary>
+    /// A family whose variants name their execution providers, in the order Foundry Local ranks them; the first is the
+    /// SDK's choice when none is downloaded. Like the SDK's Model, its <see cref="Info"/> is the selected variant's.
+    /// </summary>
+    public static FakeFoundryModel FamilyOn(FakeFoundryState state, string alias, params (string Id, string Provider)[] variants)
+    {
+        var family = new FakeFoundryModel(state, variants[0].Id, alias, variants[0].Provider);
+        foreach (var (id, provider) in variants)
+        {
+            family._variants.Add(new FakeFoundryModel(state, id, alias, provider));
+        }
+
+        family._selected = family._variants[0];
+        family._infoFollowsSelection = true;
+        return family;
+    }
+
     public string Id => _variants.Count == 0 ? Info.Id : _selected.Info.Id;
 
     public string Alias => Info.Alias;
 
-    public ModelInfo Info { get; }
+    public ModelInfo Info => _infoFollowsSelection ? _selected._info : _info;
 
     public IReadOnlyList<IModel> Variants => _variants.Count == 0 ? [this] : _variants;
 
@@ -139,13 +161,28 @@ internal sealed class FakeFoundryModel : IModel
 
     public Task<bool> IsLoadedAsync(CancellationToken? ct = null) => Task.FromResult(_state.IsLoaded(Id));
 
-    public Task DownloadAsync(Action<float>? downloadProgress = null, CancellationToken? ct = null)
+    public async Task DownloadAsync(Action<float>? downloadProgress = null, CancellationToken? ct = null)
     {
         _state.Record("download:" + Id);
+        if (DownloadGate is { } gate)
+        {
+            await gate.Task.WaitAsync(ct ?? CancellationToken.None).ConfigureAwait(false);
+        }
+
+        if (DownloadFailure is { } failure)
+        {
+            throw failure;
+        }
+
         downloadProgress?.Invoke(100f);
         _state.SetCached(Id, true);
-        return Task.CompletedTask;
     }
+
+    /// <summary>When set, a download throws this and caches nothing, as one does while offline.</summary>
+    public Exception? DownloadFailure { get; set; }
+
+    /// <summary>When set, a download waits for it, honouring cancellation.</summary>
+    public TaskCompletionSource? DownloadGate { get; set; }
 
     public Task<string> GetPathAsync(CancellationToken? ct = null) =>
         Task.FromResult(_state.ModelRoot is { } root ? Path.Combine(root, SafeName(Id)) : string.Empty);
@@ -165,12 +202,20 @@ internal sealed class FakeFoundryModel : IModel
             throw failure;
         }
 
+        if (LoadFailureById?.Invoke(Id) is { } variantFailure)
+        {
+            throw variantFailure;
+        }
+
         _state.Record("load:" + Id);
         _state.SetLoaded(Id, true);
     }
 
     /// <summary>When set, a load throws this.</summary>
     public Exception? LoadFailure { get; set; }
+
+    /// <summary>When set, a load of the variant it names throws what it returns, so one build can fail where another loads.</summary>
+    public Func<string, Exception?>? LoadFailureById { get; set; }
 
     public Task RemoveFromCacheAsync(CancellationToken? ct = null) => RemoveCoreAsync(ct ?? CancellationToken.None);
 
@@ -207,11 +252,18 @@ internal sealed class FakeFoundryModel : IModel
         return Task.CompletedTask;
     }
 
+    // The SDK's in-process OpenAI-style clients (obsolete since 2.0); Scribe talks to the local web service instead.
+#pragma warning disable CS0618
     public Task<OpenAIChatClient> GetChatClientAsync(CancellationToken? ct = null) => throw new NotSupportedException();
 
     public Task<OpenAIAudioClient> GetAudioClientAsync(CancellationToken? ct = null) => throw new NotSupportedException();
 
     public Task<OpenAIEmbeddingClient> GetEmbeddingClientAsync(CancellationToken? ct = null) => throw new NotSupportedException();
+#pragma warning restore CS0618
+
+    public string? GetStringProperty(string key) => null;
+
+    public long GetIntProperty(string key, long defaultValue) => defaultValue;
 
     public void SelectVariant(IModel variant) =>
         _selected = _variants.First(v => string.Equals(v.Info.Id, variant.Id, StringComparison.OrdinalIgnoreCase));
@@ -244,6 +296,14 @@ internal sealed class FakeFoundryCatalog(FakeFoundryState state, IReadOnlyList<F
         Task.FromResult(AllVariants.Where(v => state.IsLoaded(v.Id)).Cast<IModel>().ToList());
 
     public Task<IModel> GetLatestVersionAsync(IModel model, CancellationToken? ct = null) => Task.FromResult(model);
+
+    public Task<List<IModel>> GetModelVersionsAsync(string modelAlias, string? variant = null, int limit = 0, CancellationToken? ct = null) =>
+        throw new NotSupportedException();
+
+    public Task<IModel> RegisterModelAsync(string path, string modelId, ModelInfoBuilder metadata, CancellationToken? ct = null) =>
+        throw new NotSupportedException();
+
+    public Task UnregisterModelAsync(string modelId, CancellationToken? ct = null) => throw new NotSupportedException();
 }
 
 /// <summary>
@@ -287,7 +347,17 @@ internal sealed class FakeFoundryRuntime(FakeFoundryState state, ICatalog catalo
     /// <summary>True if <see cref="Dispose"/> ever ran while one of this runtime's calls was still active.</summary>
     public bool DisposedWhileInUse => _disposedWhileInUse;
 
-    public EpInfo[] DiscoverEps() => [new EpInfo { Name = "CPUExecutionProvider", IsRegistered = true }];
+    /// <summary>Execution providers this fake PC registers besides the CPU, as Foundry Local names them.</summary>
+    public string[] ExtraEps { get; set; } = [];
+
+    /// <summary>Execution providers whose download or registration fails, as one does while offline at a first start.</summary>
+    public string[] FailedEps { get; set; } = [];
+
+    public EpInfo[] DiscoverEps() =>
+    [
+        new EpInfo { Name = "CPUExecutionProvider", IsRegistered = true },
+        .. ExtraEps.Select(name => new EpInfo { Name = name, IsRegistered = true }),
+    ];
 
     public async Task<EpDownloadResult> DownloadAndRegisterEpsAsync(CancellationToken cancellationToken)
     {
@@ -307,7 +377,13 @@ internal sealed class FakeFoundryRuntime(FakeFoundryState state, ICatalog catalo
                 throw failure;
             }
 
-            return new EpDownloadResult { Success = true, Status = "Completed", RegisteredEps = [], FailedEps = [] };
+            return new EpDownloadResult
+            {
+                Success = FailedEps.Length == 0,
+                Status = FailedEps.Length == 0 ? "Completed" : "Failed",
+                RegisteredEps = [],
+                FailedEps = FailedEps,
+            };
         }
         finally
         {

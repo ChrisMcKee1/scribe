@@ -166,17 +166,20 @@ AI cleanup runs on Microsoft Agent Framework (`AIAgent`) with one code path for 
 Local and cloud Microsoft Foundry. These four rules are each written down because getting one wrong
 already shipped a bug.
 
-- **The WinML package, not the cross-platform one.** `Microsoft.AI.Foundry.Local.WinML`
-  (`Directory.Packages.props:47`, referenced at `src/Scribe.Core/Scribe.Core.csproj:65`). Same API
-  surface, but the EP plugins come from the OS and Windows Update with driver compatibility
-  negotiation, which is what reaches an NPU at all, and the cross-platform package carries Linux and
-  macOS payloads Scribe can never run. A diff swapping to the cross-platform package is 🔴.
+- **The unified 2.x package, WinML built in.** `Microsoft.AI.Foundry.Local` 2.x (`Directory.Packages.props`,
+  referenced at `src/Scribe.Core/Scribe.Core.csproj`). 2.x folded the old `.WinML` package in: it bundles the reg-free
+  WinML runtime, so EP plugins still come from the OS and Windows Update with driver compatibility negotiation, which is
+  what reaches an NPU at all. A diff going back to `Microsoft.AI.Foundry.Local.WinML` (1.2.x, no longer released) or
+  dropping the EP registration before the first catalog read is 🔴. Its `Microsoft.ML.OnnxRuntime` also serves speech
+  recognition (AGENTS.md dependency rules), so a Foundry Local bump without `Scribe.AsrCheck` evidence is 🟡.
 - **The SDK owns hardware selection, so Scribe reports it and never offers it.** Microsoft's
   architecture reference is explicit that the Core API identifies available hardware and chooses the
   execution provider for each model, and there is no supported override.
   `FoundryExecutionProviders` (`src/Scribe.Core/Cleanup/FoundryExecutionProviders.cs:14`) is
   presentation only, and its doc comment says so. A new setting, dropdown, or environment variable
   that lets the user or the code pick an execution provider is 🔴 tagged `[architecture-shortcut]`.
+  `FoundryRuntimeEnvironment`'s `ORT_ENABLE_CUDNN_FLASH_ATTENTION=0` is not one: it chooses ONNX Runtime's attention
+  kernel inside the CUDA provider, measured necessary on RTX 50 cards (AGENTS.md, Foundry Local).
 - **Read the provider from the SDK, never from the alias text.** The source is
   `model.Info.Runtime.ExecutionProvider`, surfaced onto `FoundryModelOption`
   (`src/Scribe.Core/Cleanup/CleanupModel.cs:70-85`). Alias suffixes only ever spell `cpu` or `gpu`,
@@ -308,8 +311,8 @@ Do not flag any of these.
   most PCs and is never an error.
 - **Anything AGENTS.md already closed.** A language picker for the transducer model, NPU speech
   decoding, `DefaultAzureCredential`, or lowering `SupportedOSPlatformVersion`. Re-opening one of
-  these is drift, not review. Note that the `Microsoft.AI.Foundry.Local.WinML` package needs build
-  18362 or later, which is one of the reasons the tree targets Windows 11.
+  these is drift, not review. Note that Foundry Local's WinML runtime needs build 18362 or later, which is one of the
+  reasons the tree targets Windows 11.
 - **Prose above the generated section of `docs/model-leaderboard.md`.** The prompt revision notes,
   TL;DR and key findings are hand written and meant to be edited. Only the auto-generated report body
   is machine owned.

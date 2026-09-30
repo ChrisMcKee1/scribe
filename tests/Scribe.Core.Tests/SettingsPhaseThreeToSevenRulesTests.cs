@@ -127,7 +127,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(CleanupStatus.Disabled, "On, but not set up yet. Until it's ready, Scribe types what it hears.", AiCleanupStatusKind.Warning, "Set up")]
     [InlineData(CleanupStatus.Initializing, "On. Getting ready...", AiCleanupStatusKind.Busy, null)]
     [InlineData(CleanupStatus.Downloading, "On. Getting ready...", AiCleanupStatusKind.Busy, null)]
-    [InlineData(CleanupStatus.Ready, "On. Using Qwen3 1.7B on this PC.", AiCleanupStatusKind.Success, "Unload")]
+    [InlineData(CleanupStatus.Ready, "On. Using Qwen3 1.7B on this PC.", AiCleanupStatusKind.Success, "Free memory")]
     [InlineData(CleanupStatus.Unavailable, "On, but not ready. Until it's ready, Scribe types what it hears.", AiCleanupStatusKind.Error, "Try again")]
     public void Ai_cleanup_foundry_state_table(CleanupStatus status, string line, AiCleanupStatusKind kind, string? action)
     {
@@ -158,9 +158,9 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(FoundryLocalSetupStage.SettingUp, AiCleanupStatusKind.Busy, null, false)]
     [InlineData(FoundryLocalSetupStage.RuntimeReady, AiCleanupStatusKind.Info, "Download and load", false)]
     [InlineData(FoundryLocalSetupStage.CachedUnloaded, AiCleanupStatusKind.Info, "Load", false)]
-    [InlineData(FoundryLocalSetupStage.Checking, AiCleanupStatusKind.Info, "Unload", false)]
+    [InlineData(FoundryLocalSetupStage.Checking, AiCleanupStatusKind.Info, null, false)]
     [InlineData(FoundryLocalSetupStage.DownloadingOrLoading, AiCleanupStatusKind.Busy, null, false)]
-    [InlineData(FoundryLocalSetupStage.Loaded, AiCleanupStatusKind.Success, "Unload", true)]
+    [InlineData(FoundryLocalSetupStage.Loaded, AiCleanupStatusKind.Success, "Free memory", true)]
     [InlineData(FoundryLocalSetupStage.Failed, AiCleanupStatusKind.Error, "Try again", false)]
     [InlineData(FoundryLocalSetupStage.ModelFailed, AiCleanupStatusKind.Error, "Try again", false)]
     public void Foundry_setup_describes_one_next_action(
@@ -207,18 +207,45 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     public void Foundry_model_choices_use_catalog_facts_only()
     {
         var choices = FoundryModelChoices.Build(
-            "mistral-nemo-12b-instruct",
+            "phi-4-mini",
             CleanupModelCatalog.Curated,
-            [new FoundryModelOption("qwen3-1.7b", Cached: true, Loaded: false)]);
+            [
+                new FoundryModelOption("qwen2.5-1.5b", Cached: true, Loaded: false),
+                new FoundryModelOption("qwen3-1.7b", Cached: true, Loaded: false),
+            ]);
 
         Assert.Contains(choices, choice =>
-            choice.Alias == "qwen3-1.7b" &&
-            choice.Label == "Qwen3 1.7B, about 1.3 GB (recommended), downloaded" &&
-            choice.Hint == "About 1.3 GB. Scribe's recommended default.");
+            choice.Alias == "qwen2.5-1.5b" &&
+            choice.Label == "Qwen2.5 1.5B, about 1.5 GB, downloaded" &&
+            choice.Hint == "About 1.5 GB. Quick on any PC, with or without a graphics card.");
         Assert.Contains(choices, choice =>
-            choice.Alias == "mistral-nemo-12b-instruct" &&
-            choice.Label == "Mistral NeMo 12B, about 7 GB, large download" &&
+            choice.Alias == "qwen3-1.7b" &&
+            choice.Label == "Qwen3 1.7B, about 1.3 GB, downloaded" &&
+            choice.Hint == "About 1.3 GB. Scribe's default before version 0.5.2.");
+        Assert.Contains(choices, choice =>
+            choice.Alias == "phi-4-mini" &&
+            choice.Label == "Phi-4 Mini, about 3.7 GB" &&
             choice.IsSelected);
+
+        // Settings recommends no model: the benchmark ranks them (docs/local-model-benchmark.md).
+        Assert.DoesNotContain(choices, choice =>
+            choice.Label.Contains("recommend", StringComparison.OrdinalIgnoreCase) ||
+            choice.Hint.Contains("recommend", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void A_model_that_left_the_curated_list_stays_selectable_from_the_catalog()
+    {
+        // Mistral NeMo 12B and Phi-4 were curated until 0.5.1; a saved choice of either keeps working.
+        var choices = FoundryModelChoices.Build(
+            "mistral-nemo-12b-instruct",
+            CleanupModelCatalog.Curated,
+            [new FoundryModelOption("mistral-nemo-12b-instruct", Cached: true, Loaded: true)]);
+
+        var selected = Assert.Single(choices, choice => choice.IsSelected);
+        Assert.Equal("mistral-nemo-12b-instruct", selected.Alias);
+        Assert.Equal("mistral-nemo-12b-instruct (downloaded)", selected.Label);
+        Assert.True(selected.IsLoaded);
     }
 
     [Fact]
@@ -1356,8 +1383,18 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         var first = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, savedSetupState: setup, providerSummary: summary);
         var second = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, savedSetupState: setup, providerSummary: summary);
 
-        Assert.Equal("Set up to use Another AI service (synthetic-model).", first.OffHelperText);
+        Assert.Equal("Set up to use On this PC (Ollama, synthetic-model).", first.OffHelperText);
         Assert.Equal(first, second);
+
+        // Anything but Ollama's or LM Studio's own address stays another AI service.
+        saved.AiCleanupCustomEndpoint = "https://ai.example.invalid/v1";
+        Assert.Equal("Another AI service (synthetic-model)", AiCleanupPageState.ProviderSetupSummary(saved));
+        saved.AiCleanupCustomEndpoint = "http://localhost:1234/v1";
+        Assert.Equal("On this PC (LM Studio, synthetic-model)", AiCleanupPageState.ProviderSetupSummary(saved));
+
+        // An app's address saved with a key is shown, and summed up, as another AI service.
+        saved.AiCleanupCustomApiKey = "lm-studio-token";
+        Assert.Equal("Another AI service (synthetic-model)", AiCleanupPageState.ProviderSetupSummary(saved));
     }
     private static AiCleanupPageDescription ActiveAzure(AzureAiSetupState setup, CleanupStatus status = CleanupStatus.Ready, string? safeReason = null)
     {
@@ -1399,7 +1436,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         {
             (CleanupStatus.Disabled, false, FoundryLocalSetupStage.CachedUnloaded, "On. Getting ready...", "Load"),
             (CleanupStatus.Downloading, false, FoundryLocalSetupStage.DownloadingOrLoading, "On. Getting ready...", null),
-            (CleanupStatus.Ready, true, FoundryLocalSetupStage.Loaded, "On. Using Qwen3 1.7B on this PC.", "Unload"),
+            (CleanupStatus.Ready, true, FoundryLocalSetupStage.Loaded, "On. Using Qwen3 1.7B on this PC.", "Free memory"),
             (CleanupStatus.Unavailable, false, FoundryLocalSetupStage.CachedUnloaded, "On. Getting ready...", "Load"),
         };
 

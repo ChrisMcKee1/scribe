@@ -316,16 +316,19 @@ different. That helps the model spell your terms your way, including when speech
 exact.
 
 - **Where the words go.** When AI cleanup runs on your PC, they stay on your PC. With Microsoft Foundry, GitHub
-  Copilot or another AI service, they go to that service with your cleanup requests.
+  Copilot or another AI service, the words a dictation appears to mention go to that service with its cleanup
+  request, and the rest stay on your PC.
   [Privacy](../PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly what each request carries.
 - **Off until you choose.** Word packs you make or import start with Use in AI cleanup off. Built-in ones start
   with it on.
 - **Confidential terms.** Keep unreleased product names, customer names and other confidential terms out of AI
-  cleanup unless AI cleanup runs on your PC or with a service your organization approves. The word pack still
-  fixes them on your PC.
-- **Room.** AI cleanup's vocabulary holds up to 5,000 words and 24,000 characters, or 80 words with the short
-  instructions, your words first. A word that doesn't fit is still fixed on your PC, and its details say the
-  vocabulary is full. Keep the word packs you use with AI cleanup focused.
+  cleanup unless AI cleanup runs on your PC or with a service your organization approves. A dictation that
+  mentions such a term would send it. The word pack still fixes them on your PC.
+- **Room.** Each cleanup request holds up to 5,000 words and 24,000 characters of vocabulary, or 80 words with
+  the short instructions, your words first, picked from the ones the dictation appears to mention. A word that
+  doesn't fit is still fixed on your PC. Since Scribe 0.5.2 a large word pack no longer crowds out the words a
+  dictation needs, because each request carries the words that dictation mentions rather than the start of the
+  whole list.
 
 ## Check a word pack before you share it
 

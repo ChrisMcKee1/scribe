@@ -57,11 +57,15 @@
     <!-- Fluent (Windows 11) design system for WPF: themed controls, FluentWindow, Mica. -->
     <PackageVersion Include="WPF-UI" Version="4.3.0" />
 
-    <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
-         client). The WinML variant is the Windows package: same API surface, but execution provider
-         plugins are sourced from the OS and Windows Update with driver compatibility negotiation,
-         which is what reaches NPUs (Qualcomm QNN, AMD Vitis) rather than only CPU and WebGPU. -->
-    <PackageVersion Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.4" />
+    <!-- Optional offline AI cleanup via Foundry Local (SDK + OpenAI-compatible local web service).
+         2.x is one package for every platform: on Windows it bundles the reg-free WinML runtime
+         (Microsoft.Windows.AI.MachineLearning.dll) and registers execution providers through
+         DiscoverEps/DownloadAndRegisterEpsAsync, as the 1.2.x .WinML package did, which is what
+         reaches NPUs (Qualcomm QNN, AMD Vitis) and, since 2.x, the CUDA EP on NVIDIA. It brings
+         Microsoft.ML.OnnxRuntime 1.30.0, whose onnxruntime.dll outranks the one sherpa-onnx bundles
+         (1.28.2) on file version, so speech recognition runs on ONNX Runtime 1.30.0 too: move this
+         only with Scribe.AsrCheck and the scenario suite green on both architectures. -->
+    <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="2.1.0" />
     <!-- OpenAI client and provider-neutral chat abstractions used by Agent Framework. -->
     <!-- OpenAI moves in lockstep with Microsoft.Extensions.AI.OpenAI and Microsoft.Agents.AI.OpenAI:
          both are compiled against one OpenAI build and bind to its members at runtime, so an OpenAI

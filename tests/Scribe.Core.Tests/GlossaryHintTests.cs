@@ -61,8 +61,7 @@ public sealed class GlossaryHintTests
         // And AI cleanup still receives the vocabulary, as the post-processing switch itself says.
         Assert.Equal(
             "1 of 1 words are on. Your dictionary and snippets are turned off, so it is not applied on this PC. " +
-            "Your AI service receives that word as vocabulary with every cleanup request, whether or not the " +
-            "dictation mentions it.",
+            "Your AI service receives that word as vocabulary whenever a dictation appears to mention it.",
             Describe([Row("azure", "Azure")], [], postProcessingOn: false));
     }
 
@@ -75,8 +74,8 @@ public sealed class GlossaryHintTests
 
         Assert.Equal(
             "2 of 2 words are on, plus 2 from word packs that are on. All of them are applied on this PC. Your AI " +
-            "service receives all 4 words as vocabulary with every cleanup request, whether or not the dictation " +
-            "mentions them.",
+            "service receives whichever of these 4 words a dictation appears to mention, as vocabulary with its cleanup " +
+            "request.",
             text);
     }
 
@@ -96,7 +95,7 @@ public sealed class GlossaryHintTests
 
         Assert.Equal(
             "1 of 1 words are on, plus 1 from word packs that are on. All of them are applied on this PC. " +
-            "Your AI service receives that word as vocabulary with every cleanup request, whether or not the dictation mentions it.",
+            "Your AI service receives that word as vocabulary whenever a dictation appears to mention it.",
             text);
     }
 
@@ -111,7 +110,7 @@ public sealed class GlossaryHintTests
             [Row("azure", "Azure")], local, true, true, CleanupProvider.AzureFoundry, CleanupPromptStyle.Auto, local));
 
         Assert.Equal(oldText, newText);
-        Assert.Contains("receives all 2 words", newText, StringComparison.Ordinal);
+        Assert.Contains("receives whichever of these 2 words", newText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -123,11 +122,10 @@ public sealed class GlossaryHintTests
         var text = Describe(rows, [library], CleanupProvider.FoundryLocal);
 
         Assert.Contains(
-            $"The AI model on this PC receives the first {CleanupPrompt.MaxGlossaryTermsLocal} of 550 words as vocabulary",
+            "The AI model on this PC receives whichever of these 550 words a dictation appears to mention",
             text, StringComparison.Ordinal);
-        Assert.Contains("Your own words come first.", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"With the short instructions, the list stops at {CleanupPrompt.MaxGlossaryTermsLocal} words or phrases so a small model can take it in.",
+            $"With the short instructions, a request holds up to {CleanupPrompt.MaxGlossaryTermsLocal} words or phrases so a small model can take them in, your own words first.",
             text, StringComparison.Ordinal);
     }
 
@@ -145,9 +143,13 @@ public sealed class GlossaryHintTests
         var sent = SentByDictation(rows, []);
         var gridOrder = CleanupPrompt.CountGlossary(DictionaryEntryBuilder.Build(rows).Entries).Included;
         Assert.True(sent > gridOrder * 2, $"The fixture must separate the orders ({sent} against {gridOrder}), or it proves nothing.");
-        Assert.Contains($"Your AI service receives the first {N(sent)} of 3,100 words", text, StringComparison.Ordinal);
+
+        // Each request carries the mentioned words, up to the budget in dictation's order: the page names every word that
+        // can go, and says a request is capped, because dictation's own selection cuts this list.
+        Assert.True(sent < 3100);
+        Assert.Contains("Your AI service receives whichever of these 3,100 words a dictation appears to mention", text, StringComparison.Ordinal);
         Assert.EndsWith(
-            $"The list stops at {N(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at {N(CleanupPrompt.MaxGlossaryChars)} characters.",
+            $"A request holds up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or {N(CleanupPrompt.MaxGlossaryChars)} characters, your own words first.",
             text, StringComparison.Ordinal);
     }
 
@@ -178,7 +180,9 @@ public sealed class GlossaryHintTests
         var inPageOrderAsGiven = DictionaryLibraryComposer.Merge(inPageOrder.SelectMany(l => l.EnabledEntries), []);
         Assert.NotEqual(sent, CleanupPrompt.CountGlossary(inPageOrderAsGiven).Included);
         Assert.Equal(DictionaryLibraryComposer.ComposeLibraries(loaded), DictionaryLibraryComposer.ComposeLibraries(inPageOrder));
-        Assert.Contains($"receives the first {N(sent)} of 1,200 words", text, StringComparison.Ordinal);
+        Assert.True(sent < 1200);
+        Assert.Contains("receives whichever of these 1,200 words a dictation appears to mention", text, StringComparison.Ordinal);
+        Assert.Contains("A request holds up to", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -197,7 +201,11 @@ public sealed class GlossaryHintTests
         var asGiven = CleanupPrompt.CountGlossary(entries, budget).Included;
         var sorted = CleanupPrompt.CountGlossary([.. entries.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance)], budget).Included;
         Assert.True(sorted > asGiven * 2, $"The fixture must separate the orders ({sorted} against {asGiven}), or it proves nothing.");
-        Assert.Contains($"receives the first {N(asGiven)} of 3,100 words", text, StringComparison.Ordinal);
+
+        // Counted as given, the size budget cuts the list, so the page says a request is capped.
+        Assert.True(asGiven < 3100);
+        Assert.Contains("receives whichever of these 3,100 words a dictation appears to mention", text, StringComparison.Ordinal);
+        Assert.Contains("A request holds up to", text, StringComparison.Ordinal);
     }
 
     [Fact]

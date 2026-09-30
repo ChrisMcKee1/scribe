@@ -126,6 +126,13 @@ dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 ```
 
+To compare models on this PC for quality and speed, the same tool runs the frozen dictations of
+the [local model benchmark](docs/local-model-benchmark.md) through Ollama, LM Studio or Foundry
+Local, then has a model grade the answers blind through the GitHub Copilot command-line tool
+(`--benchmark`, `--blind-judge`; the report's Reproduce section has the commands). If you change
+how Scribe cleans up a model's answer, `--resanitize` applies your change to answers already
+recorded and lists every one it changed.
+
 ---
 
 ## Pull request workflow

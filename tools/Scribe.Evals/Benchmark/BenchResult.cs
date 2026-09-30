@@ -18,6 +18,10 @@ internal sealed record BenchTokenUsage(
     long? CacheWriteTokens = null);
 
 /// <summary>One case's outcome for a model (the aggregate lives on <see cref="BenchResult"/>).</summary>
+/// <param name="Output">The last timed run's text: what the Azure judge grades, kept for older readers.</param>
+/// <param name="Outputs">Every timed run's text, in order, so a sampling model is graded on all of them.</param>
+/// <param name="Outcomes">Every timed run's <c>CleanupOutcome</c>: <c>Failed</c> means the guards rejected the answer or the
+/// call failed and the raw transcript came back, which is what a user would have received.</param>
 internal sealed record BenchCaseResult(
     string CaseId,
     double MedianMs,
@@ -28,7 +32,9 @@ internal sealed record BenchCaseResult(
     string? Rationale,
     bool Changed,
     string? Output,
-    BenchTokenUsage?[]? Usage = null);
+    BenchTokenUsage?[]? Usage = null,
+    string[]? Outputs = null,
+    string[]? Outcomes = null);
 
 /// <summary>
 /// A single model's benchmark outcome. Serialized to <c>results.json</c> after every model so a long
@@ -38,7 +44,7 @@ internal sealed record BenchResult
 {
     public required string Group { get; init; }            // "Cloud" | "Local"
     public required string Id { get; init; }               // display id (model/alias)
-    public required string Provider { get; init; }         // "AzureFoundry" | "FoundryLocal"
+    public required string Provider { get; init; }         // "AzureFoundry" | "FoundryLocal" | "OpenAiCompatible"
     public string? Endpoint { get; init; }
     public required string Target { get; init; }           // deployment or alias actually called
     public string? ModelName { get; init; }
@@ -68,6 +74,18 @@ internal sealed record BenchResult
 
     public required string LoadedAtUtc { get; init; }
     public double LoadSeconds { get; init; }               // time from Configure to Ready (download+load)
+
+    /// <summary>The prompt style the service resolved for this model (Local or Frontier).</summary>
+    public string? PromptStyle { get; init; }
+
+    /// <summary>How many glossary terms the system prompt carried, at the budget the app applies to this provider.</summary>
+    public int GlossaryTerms { get; init; }
+
+    /// <summary>Length of the system prompt the model saw, the dominant part of every request's input.</summary>
+    public int SystemPromptChars { get; init; }
+
+    /// <summary>The first timed request's latency: what a dictation pays right after the model became ready.</summary>
+    public double? WarmupMs { get; init; }
 
     /// <summary>Letter grade from a 0 to 100 score using a conventional US scale.</summary>
     public static string GradeFor(int score) => score switch

@@ -34,6 +34,7 @@ public sealed class SettingsSearchIndexTests
         ["WordDetailsSpokenBox"] = "A row editor for the selected word; the Word packs entry covers it.",
         ["WordDetailsWrittenBox"] = "A row editor for the selected word; the Word packs entry covers it.",
         ["WordDetailsWholeWordCheck"] = "A row editor for the selected word; the Word packs entry covers it.",
+        ["LocalAppModelBox"] = "Lists the models of the app chosen under On this PC; the Ollama and LM Studio entries land beside it.",
     };
 
     private static readonly IReadOnlyDictionary<string, string> LabelExceptions = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -108,7 +109,8 @@ public sealed class SettingsSearchIndexTests
     }
 
     [Theory]
-    [InlineData("AiModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio")]
+    [InlineData("AiModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio", "Radio:LocalAppScribeRadio")]
+    [InlineData("LocalAppOllamaRadio", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio")]
     [InlineData("AzureModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "Radio:AzureCliRadio", "Action:AzureSignInStatusRow")]
     [InlineData("AzureEndpointBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "View:AzureManualToggleButton")]
     [InlineData("AzureDeploymentBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "View:AzureManualToggleButton")]

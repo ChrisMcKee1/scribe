@@ -112,7 +112,7 @@ internal sealed class OverlayIpcServer : IDisposable
                 _window.ShowRecordingWarning(arg);
                 break;
             case "PROCESSING":
-                _window.ShowProcessing(arg.Trim() == "1");
+                _window.ShowProcessing(arg.Trim() switch { "2" => 2, "1" => 1, _ => 0 });
                 break;
             case "TYPED":
                 _window.ShowOutcome(OverlayState.Typed, null);

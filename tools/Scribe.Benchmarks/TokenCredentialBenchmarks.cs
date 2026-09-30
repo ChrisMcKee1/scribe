@@ -7,8 +7,9 @@ namespace Scribe.Benchmarks;
 /// <summary>
 /// D2 (PLAT-O-01 with PLAT-A-02): the credential call every cleanup request makes. Today's path is the serialized Azure CLI
 /// credential through the process-wide Azure CLI gate, over a fake az that answers at once, so its numbers are the
-/// in-process overhead only: the az process itself is what <see cref="Scribe.Core.Diagnostics.PerfFlags.CliAccessTokenCache"/>
-/// removes (752 to 802 ms warm for the az chain against an empty profile in round 1's O-M2; the signed-in path was not
+/// in-process overhead only: the az process itself is what the access-token cache removes (on by default since 0.5.2;
+/// <see cref="Scribe.Core.Diagnostics.PerfFlags.CliTokenEveryRequest"/> brings back the old path)
+/// (752 to 802 ms warm for the az chain against an empty profile in round 1's O-M2; the signed-in path was not
 /// measured, and no benchmark may run az). The cached path is a hit within the token's life, with its own gate held by
 /// another caller for the whole run: a hit never waits for it.
 /// </summary>

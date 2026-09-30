@@ -211,8 +211,8 @@ public sealed class FoundryStoragePolicyTests
     [Theory]
     [InlineData("qwen3-1.7b", "QWEN3-1.7B")]
     [InlineData("qwen3-1.7b", "  qwen3-1.7b  ")]
-    [InlineData(null, "qwen3-1.7b")]
-    [InlineData("", "qwen3-1.7b")]
+    [InlineData(null, CleanupModelCatalog.DefaultAlias)]
+    [InlineData("", CleanupModelCatalog.DefaultAlias)]
     public void The_same_model_spelled_differently_is_not_a_switch(string? before, string after)
     {
         // Blank means the default alias, which is what the service itself resolves it to.

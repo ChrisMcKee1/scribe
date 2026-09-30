@@ -63,14 +63,13 @@ public static class FoundryModelChoices
     private static string BuildCuratedLabel(CleanupModel model, FoundryModelOption? live)
     {
         var size = SizePhrase(model);
-        var name = model.DisplayName.Replace(" (recommended)", string.Empty, StringComparison.Ordinal);
-        var parts = new List<string> { name };
+        var parts = new List<string> { model.DisplayName };
         if (size.Length > 0)
         {
             parts.Add(size);
         }
 
-        if (ModelSizeBytes(model) >= 7_000_000_000 && !string.Equals(model.Alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase))
+        if (ModelSizeBytes(model) >= 7_000_000_000)
         {
             parts.Add("large download");
         }
@@ -80,19 +79,11 @@ public static class FoundryModelChoices
             parts.Add("downloaded");
         }
 
-        var label = $"{parts[0]}, {string.Join(", ", parts.Skip(1))}";
-        return string.Equals(model.Alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase)
-            ? label.Replace("about 1.3 GB", "about 1.3 GB (recommended)", StringComparison.Ordinal)
-            : label;
+        return string.Join(", ", parts);
     }
 
-    private static string CleanHint(CleanupModel model)
-    {
-        var size = SizePhrase(model);
-        return string.Equals(model.Alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase)
-            ? $"{Capitalize(size)}. Scribe's recommended default."
-            : $"{Capitalize(size)}.";
-    }
+    // What each model is like, in the curated hint's own words; Settings names no model as the one to pick.
+    private static string CleanHint(CleanupModel model) => model.Hint;
 
     private static string SizePhrase(CleanupModel model)
     {
@@ -107,18 +98,15 @@ public static class FoundryModelChoices
             : $"about {bytes / 1_000_000d:0.#} MB";
     }
 
+    // What Foundry Local downloads for each curated model, rounded. Qwen2.5 1.5B is 1.2 GB for NVIDIA RTX graphics,
+    // 1.5 GB for other GPUs and 1.8 GB for the CPU; Phi-4 Mini 3.7 GB for NVIDIA graphics (Foundry Local 2.1.0).
     private static long ModelSizeBytes(CleanupModel model) => model.Alias switch
     {
+        "qwen2.5-1.5b" => 1_500_000_000,
+        "qwen2.5-7b" => 4_700_000_000,
         "qwen3-1.7b" => 1_300_000_000,
-        "qwen2.5-1.5b" => 1_300_000_000,
-        "qwen3.5-2b-text" => 1_400_000_000,
         "qwen3-4b" => 2_700_000_000,
-        "phi-4-mini" => 3_600_000_000,
-        "mistral-nemo-12b-instruct" => 7_000_000_000,
-        "phi-4" => 9_000_000_000,
+        "phi-4-mini" => 3_700_000_000,
         _ => 0,
     };
-
-    private static string Capitalize(string value) =>
-        value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..];
 }

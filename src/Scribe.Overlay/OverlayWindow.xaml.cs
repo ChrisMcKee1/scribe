@@ -318,11 +318,17 @@ public sealed partial class OverlayWindow : Window
         OverlayLog.Write($"OverlayWindow.ShowRecordingWarning hold={RecordingWarningHold.TotalMilliseconds:0}ms reasonLength={ReasonLength(reason)}");
     });
 
-    /// <summary>Processing: three dots, and the words say whether it is recognizing speech or running AI cleanup.</summary>
-    public void ShowProcessing(bool aiPolishing) => RunOnUi(() =>
+    /// <summary>
+    /// Processing: three dots, and the words say whether it is recognizing speech (<paramref name="kind"/> 0), running AI
+    /// cleanup (1), or waiting for AI cleanup's model on this PC to start (2), which can take a while and says so.
+    /// </summary>
+    public void ShowProcessing(int kind) => RunOnUi(() =>
     {
         ClearOutcomeHold();
-        ProcessingText.Text = aiPolishing ? "Running AI cleanup…" : "Recognizing speech…";
+        var starting = kind == 2;
+        ProcessingText.Text = starting ? "Starting local model…" : kind == 1 ? "Running AI cleanup…" : "Recognizing speech…";
+        ProcessingDetail.Text = starting ? "This can take time" : string.Empty;
+        ProcessingDetail.Visibility = VisibleIf(starting);
         ShowState(OverlayState.Processing);
     });
 

@@ -14,9 +14,9 @@ namespace Scribe.Core.Libraries;
 /// <param name="MaxTerms">The most terms the glossary may carry.</param>
 public readonly record struct GlossaryBudget(int MaxTerms)
 {
-    /// <summary>The budget dictation uses for this prompt style and provider.</summary>
-    public static GlossaryBudget For(CleanupPromptStyle style, CleanupProvider provider) =>
-        new(CleanupPrompt.GlossaryTermBudget(style, provider));
+    /// <summary>The budget dictation uses for this prompt style and provider, and for a server's address.</summary>
+    public static GlossaryBudget For(CleanupPromptStyle style, CleanupProvider provider, string? customEndpoint = null) =>
+        new(CleanupPrompt.GlossaryTermBudget(style, provider, customEndpoint));
 }
 
 /// <summary>Decision 1's tiers: which kind of library term a rule is.</summary>

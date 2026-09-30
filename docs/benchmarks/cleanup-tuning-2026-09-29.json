@@ -1,0 +1,2735 @@
+{
+ "schema_version": 1,
+ "measured": "2026-09-29",
+ "hardware": "NVIDIA GeForce RTX 5080 16 GB (driver 617.14), AMD Ryzen 9 9900X, 95 GB, Windows 11 build 26200",
+ "runtimes": {
+  "ollama": "0.34.4 and 0.35.0",
+  "lm_studio": "0.4.25 (llama.cpp CUDA 12 2.47.0)",
+  "foundry_local": "SDK 1.2.4 (WinML)"
+ },
+ "cloud": "Microsoft Foundry, South Central US, DataZoneStandard deployments, Azure CLI sign-in with the token cache flag",
+ "judge": "claude-opus-5.5 through the GitHub Copilot command-line tool, identity-blind packets, reference rewrite shown",
+ "calibration_spread_mean_points": {
+  "standard_rubric": [
+   9.1,
+   9.7,
+   10.0
+  ],
+  "lists_rubric": [
+   3.4,
+   4.6
+  ]
+ },
+ "cases": "docs/benchmarks/gpt6-astra-2026-09-04.json fixtures (25); round two adds 8 structure and guard cases, synthesized with Windows TTS and recognized by Parakeet",
+ "vocabulary_accuracy": "Of the word-pack written forms the reference uses (30 uses over 7 cases), how many the output keeps exactly",
+ "standard_rubric": [
+  {
+   "arm": "L-base",
+   "description": "Local, 0.5.2 phase-one prompts: short instructions, full writing style, the first 80 vocabulary terms",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 89.4,
+     "interval": [
+      85.7,
+      92.7
+     ],
+     "fidelity": 88.1,
+     "instruction": 88.3,
+     "disfluency": 92.1,
+     "mechanics": 92.7,
+     "median_ms": 615,
+     "input_tokens": 2068,
+     "cached_input_tokens": 2037,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 40,
+      "uses": 60,
+      "percent": 66.7
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 84.0,
+     "interval": [
+      78.3,
+      88.9
+     ],
+     "fidelity": 82.9,
+     "instruction": 82.9,
+     "disfluency": 85.6,
+     "mechanics": 88.0,
+     "median_ms": 305,
+     "input_tokens": 2068,
+     "cached_input_tokens": 2037,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 60,
+      "percent": 50.0
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 82.1,
+     "interval": [
+      76.4,
+      87.3
+     ],
+     "fidelity": 81.8,
+     "instruction": 81.0,
+     "disfluency": 81.7,
+     "mechanics": 87.1,
+     "median_ms": 559,
+     "input_tokens": 2070,
+     "cached_input_tokens": 2039,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 81.8,
+     "interval": [
+      76.1,
+      87.3
+     ],
+     "fidelity": 79.9,
+     "instruction": 80.2,
+     "disfluency": 84.8,
+     "mechanics": 88.1,
+     "median_ms": 356,
+     "input_tokens": 2007,
+     "cached_input_tokens": 1975,
+     "output_tokens": 61,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 80.2,
+     "interval": [
+      74.7,
+      85.5
+     ],
+     "fidelity": 77.1,
+     "instruction": 79.5,
+     "disfluency": 84.6,
+     "mechanics": 87.8,
+     "median_ms": 292,
+     "input_tokens": 1993,
+     "cached_input_tokens": 1963,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 79.1,
+     "interval": [
+      72.1,
+      85.4
+     ],
+     "fidelity": 79.7,
+     "instruction": 75.7,
+     "disfluency": 79.9,
+     "mechanics": 82.8,
+     "median_ms": 319,
+     "input_tokens": 1969,
+     "cached_input_tokens": 1941,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 67.2,
+     "interval": [
+      60.8,
+      73.5
+     ],
+     "fidelity": 59.0,
+     "instruction": 67.1,
+     "disfluency": 77.8,
+     "mechanics": 83.4,
+     "median_ms": 159,
+     "input_tokens": 2003,
+     "cached_input_tokens": 1971,
+     "output_tokens": 54,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "L-cw",
+   "description": "Local, compact writing style (about 290 tokens against 646)",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 88.5,
+     "interval": [
+      84.4,
+      92.0
+     ],
+     "fidelity": 86.6,
+     "instruction": 88.0,
+     "disfluency": 91.8,
+     "mechanics": 91.6,
+     "median_ms": 499,
+     "input_tokens": 1745,
+     "cached_input_tokens": 1714,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 42,
+      "uses": 60,
+      "percent": 70.0
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 83.8,
+     "interval": [
+      78.1,
+      89.2
+     ],
+     "fidelity": 83.2,
+     "instruction": 82.5,
+     "disfluency": 85.2,
+     "mechanics": 87.1,
+     "median_ms": 428,
+     "input_tokens": 1747,
+     "cached_input_tokens": 1716,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 82.0,
+     "interval": [
+      76.0,
+      87.4
+     ],
+     "fidelity": 81.3,
+     "instruction": 80.1,
+     "disfluency": 84.5,
+     "mechanics": 85.3,
+     "median_ms": 297,
+     "input_tokens": 1745,
+     "cached_input_tokens": 1714,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 81.8,
+     "interval": [
+      75.2,
+      87.8
+     ],
+     "fidelity": 79.1,
+     "instruction": 81.2,
+     "disfluency": 84.7,
+     "mechanics": 89.9,
+     "median_ms": 345,
+     "input_tokens": 1682,
+     "cached_input_tokens": 1650,
+     "output_tokens": 61,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 78.4,
+     "interval": [
+      70.9,
+      85.5
+     ],
+     "fidelity": 78.7,
+     "instruction": 75.4,
+     "disfluency": 79.8,
+     "mechanics": 81.8,
+     "median_ms": 309,
+     "input_tokens": 1647,
+     "cached_input_tokens": 1619,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 78.3,
+     "interval": [
+      70.9,
+      84.8
+     ],
+     "fidelity": 73.6,
+     "instruction": 78.5,
+     "disfluency": 84.5,
+     "mechanics": 86.8,
+     "median_ms": 287,
+     "input_tokens": 1668,
+     "cached_input_tokens": 1638,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 66.9,
+     "interval": [
+      59.5,
+      74.3
+     ],
+     "fidelity": 58.2,
+     "instruction": 65.5,
+     "disfluency": 79.6,
+     "mechanics": 84.5,
+     "median_ms": 157,
+     "input_tokens": 1678,
+     "cached_input_tokens": 1646,
+     "output_tokens": 53,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "L-cwcl",
+   "description": "Local, compact writing style and compact short instructions",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 85.5,
+     "interval": [
+      80.2,
+      90.2
+     ],
+     "fidelity": 83.7,
+     "instruction": 85.1,
+     "disfluency": 87.6,
+     "mechanics": 90.5,
+     "median_ms": 428,
+     "input_tokens": 1583,
+     "cached_input_tokens": 1552,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 40,
+      "uses": 60,
+      "percent": 66.7
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 82.6,
+     "interval": [
+      76.2,
+      88.3
+     ],
+     "fidelity": 86.5,
+     "instruction": 78.2,
+     "disfluency": 79.1,
+     "mechanics": 83.2,
+     "median_ms": 420,
+     "input_tokens": 1585,
+     "cached_input_tokens": 1554,
+     "output_tokens": 63,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 82.3,
+     "interval": [
+      76.0,
+      88.0
+     ],
+     "fidelity": 81.2,
+     "instruction": 80.4,
+     "disfluency": 85.6,
+     "mechanics": 85.4,
+     "median_ms": 307,
+     "input_tokens": 1583,
+     "cached_input_tokens": 1552,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 81.7,
+     "interval": [
+      74.2,
+      88.2
+     ],
+     "fidelity": 80.2,
+     "instruction": 80.2,
+     "disfluency": 84.3,
+     "mechanics": 87.1,
+     "median_ms": 352,
+     "input_tokens": 1527,
+     "cached_input_tokens": 1495,
+     "output_tokens": 61,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 78.4,
+     "interval": [
+      70.5,
+      85.6
+     ],
+     "fidelity": 80.0,
+     "instruction": 74.8,
+     "disfluency": 78.4,
+     "mechanics": 80.1,
+     "median_ms": 296,
+     "input_tokens": 1494,
+     "cached_input_tokens": 1466,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 77.2,
+     "interval": [
+      70.3,
+      83.7
+     ],
+     "fidelity": 71.6,
+     "instruction": 76.6,
+     "disfluency": 86.0,
+     "mechanics": 86.6,
+     "median_ms": 301,
+     "input_tokens": 1513,
+     "cached_input_tokens": 1483,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 68.0,
+     "interval": [
+      60.5,
+      75.2
+     ],
+     "fidelity": 60.0,
+     "instruction": 67.2,
+     "disfluency": 78.7,
+     "mechanics": 84.1,
+     "median_ms": 177,
+     "input_tokens": 1523,
+     "cached_input_tokens": 1491,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "L-cwcl-g0",
+   "description": "Local, compact writing style and instructions, no vocabulary",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 88.3,
+     "interval": [
+      84.2,
+      92.0
+     ],
+     "fidelity": 87.0,
+     "instruction": 87.7,
+     "disfluency": 90.7,
+     "mechanics": 90.7,
+     "median_ms": 419,
+     "input_tokens": 563,
+     "cached_input_tokens": 344,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 38,
+      "uses": 60,
+      "percent": 63.3
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 84.5,
+     "interval": [
+      78.0,
+      90.1
+     ],
+     "fidelity": 83.6,
+     "instruction": 82.3,
+     "disfluency": 86.3,
+     "mechanics": 89.7,
+     "median_ms": 310,
+     "input_tokens": 573,
+     "cached_input_tokens": 541,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 38,
+      "uses": 60,
+      "percent": 63.3
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 82.4,
+     "interval": [
+      76.1,
+      88.0
+     ],
+     "fidelity": 81.3,
+     "instruction": 80.8,
+     "disfluency": 84.8,
+     "mechanics": 86.7,
+     "median_ms": 281,
+     "input_tokens": 563,
+     "cached_input_tokens": 344,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 80.6,
+     "interval": [
+      74.5,
+      86.0
+     ],
+     "fidelity": 79.5,
+     "instruction": 79.0,
+     "disfluency": 81.7,
+     "mechanics": 87.5,
+     "median_ms": 402,
+     "input_tokens": 565,
+     "cached_input_tokens": 344,
+     "output_tokens": 63,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 79.7,
+     "interval": [
+      75.0,
+      84.2
+     ],
+     "fidelity": 74.0,
+     "instruction": 80.1,
+     "disfluency": 87.5,
+     "mechanics": 88.8,
+     "median_ms": 252,
+     "input_tokens": 562,
+     "cached_input_tokens": 532,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 78.0,
+     "interval": [
+      70.5,
+      84.8
+     ],
+     "fidelity": 76.1,
+     "instruction": 76.1,
+     "disfluency": 81.7,
+     "mechanics": 83.7,
+     "median_ms": 284,
+     "input_tokens": 546,
+     "cached_input_tokens": 518,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 69.9,
+     "interval": [
+      63.0,
+      76.8
+     ],
+     "fidelity": 63.5,
+     "instruction": 69.5,
+     "disfluency": 77.6,
+     "mechanics": 84.2,
+     "median_ms": 156,
+     "input_tokens": 569,
+     "cached_input_tokens": 537,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "L-cfcw-80",
+   "description": "Local, compact detailed instructions and compact style, 80 terms",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 83.9,
+     "interval": [
+      78.2,
+      89.0
+     ],
+     "fidelity": 84.6,
+     "instruction": 82.1,
+     "disfluency": 82.1,
+     "mechanics": 88.3,
+     "median_ms": 468,
+     "input_tokens": 1625,
+     "cached_input_tokens": 1594,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 39,
+      "uses": 60,
+      "percent": 65.0
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 81.6,
+     "interval": [
+      75.4,
+      87.2
+     ],
+     "fidelity": 84.6,
+     "instruction": 78.0,
+     "disfluency": 78.0,
+     "mechanics": 83.9,
+     "median_ms": 416,
+     "input_tokens": 1627,
+     "cached_input_tokens": 1596,
+     "output_tokens": 65,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 36,
+      "uses": 60,
+      "percent": 60.0
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 80.4,
+     "interval": [
+      73.3,
+      86.8
+     ],
+     "fidelity": 82.3,
+     "instruction": 77.0,
+     "disfluency": 79.5,
+     "mechanics": 81.9,
+     "median_ms": 461,
+     "input_tokens": 1625,
+     "cached_input_tokens": 1594,
+     "output_tokens": 61,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 80.3,
+     "interval": [
+      72.6,
+      87.3
+     ],
+     "fidelity": 79.2,
+     "instruction": 78.9,
+     "disfluency": 81.2,
+     "mechanics": 87.5,
+     "median_ms": 363,
+     "input_tokens": 1567,
+     "cached_input_tokens": 1535,
+     "output_tokens": 64,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 78.3,
+     "interval": [
+      71.8,
+      84.6
+     ],
+     "fidelity": 78.5,
+     "instruction": 75.6,
+     "disfluency": 79.2,
+     "mechanics": 82.5,
+     "median_ms": 313,
+     "input_tokens": 1553,
+     "cached_input_tokens": 1523,
+     "output_tokens": 63,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 73.1,
+     "interval": [
+      64.7,
+      81.2
+     ],
+     "fidelity": 78.8,
+     "instruction": 65.4,
+     "disfluency": 70.7,
+     "mechanics": 71.4,
+     "median_ms": 305,
+     "input_tokens": 1536,
+     "cached_input_tokens": 1508,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 64.8,
+     "interval": [
+      57.7,
+      71.9
+     ],
+     "fidelity": 55.9,
+     "instruction": 62.2,
+     "disfluency": 78.1,
+     "mechanics": 84.5,
+     "median_ms": 257,
+     "input_tokens": 1563,
+     "cached_input_tokens": 1531,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 35,
+      "uses": 60,
+      "percent": 58.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "L-base-gm",
+   "description": "Local, phase-one prompts, vocabulary the dictation appears to mention",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 90.2,
+     "interval": [
+      86.4,
+      93.7
+     ],
+     "fidelity": 88.1,
+     "instruction": 90.0,
+     "disfluency": 93.5,
+     "mechanics": 93.6,
+     "median_ms": 455,
+     "input_tokens": 1429,
+     "cached_input_tokens": 1227,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 58,
+      "uses": 60,
+      "percent": 96.7
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 84.4,
+     "interval": [
+      79.3,
+      88.8
+     ],
+     "fidelity": 82.3,
+     "instruction": 84.8,
+     "disfluency": 87.0,
+     "mechanics": 87.8,
+     "median_ms": 291,
+     "input_tokens": 1429,
+     "cached_input_tokens": 1227,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 50,
+      "uses": 60,
+      "percent": 83.3
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 81.9,
+     "interval": [
+      75.4,
+      87.9
+     ],
+     "fidelity": 79.8,
+     "instruction": 81.3,
+     "disfluency": 83.9,
+     "mechanics": 89.0,
+     "median_ms": 346,
+     "input_tokens": 1425,
+     "cached_input_tokens": 1249,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 54,
+      "uses": 60,
+      "percent": 90.0
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 79.1,
+     "interval": [
+      72.4,
+      85.4
+     ],
+     "fidelity": 76.3,
+     "instruction": 80.1,
+     "disfluency": 80.9,
+     "mechanics": 85.8,
+     "median_ms": 406,
+     "input_tokens": 1431,
+     "cached_input_tokens": 1203,
+     "output_tokens": 63,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 52,
+      "uses": 60,
+      "percent": 86.7
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 78.4,
+     "interval": [
+      72.6,
+      83.8
+     ],
+     "fidelity": 73.2,
+     "instruction": 78.8,
+     "disfluency": 85.4,
+     "mechanics": 87.1,
+     "median_ms": 308,
+     "input_tokens": 1414,
+     "cached_input_tokens": 1240,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 44,
+      "uses": 60,
+      "percent": 73.3
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 76.6,
+     "interval": [
+      69.3,
+      83.5
+     ],
+     "fidelity": 74.9,
+     "instruction": 74.6,
+     "disfluency": 79.8,
+     "mechanics": 82.3,
+     "median_ms": 286,
+     "input_tokens": 1385,
+     "cached_input_tokens": 1219,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 40,
+      "uses": 60,
+      "percent": 66.7
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 66.6,
+     "interval": [
+      59.5,
+      73.5
+     ],
+     "fidelity": 58.3,
+     "instruction": 66.9,
+     "disfluency": 76.8,
+     "mechanics": 83.3,
+     "median_ms": 154,
+     "input_tokens": 1421,
+     "cached_input_tokens": 1247,
+     "output_tokens": 55,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 38,
+      "uses": 60,
+      "percent": 63.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "L-cwcl-gm",
+   "description": "Local, compact prompts, vocabulary the dictation appears to mention",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 87.7,
+     "interval": [
+      83.1,
+      92.1
+     ],
+     "fidelity": 86.3,
+     "instruction": 87.2,
+     "disfluency": 90.2,
+     "mechanics": 90.5,
+     "median_ms": 445,
+     "input_tokens": 944,
+     "cached_input_tokens": 716,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 58,
+      "uses": 60,
+      "percent": 96.7
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 81.2,
+     "interval": [
+      74.6,
+      87.4
+     ],
+     "fidelity": 79.8,
+     "instruction": 80.3,
+     "disfluency": 82.5,
+     "mechanics": 87.5,
+     "median_ms": 339,
+     "input_tokens": 945,
+     "cached_input_tokens": 769,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 54,
+      "uses": 60,
+      "percent": 90.0
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 80.2,
+     "interval": [
+      73.1,
+      86.6
+     ],
+     "fidelity": 77.2,
+     "instruction": 79.8,
+     "disfluency": 84.2,
+     "mechanics": 86.4,
+     "median_ms": 302,
+     "input_tokens": 944,
+     "cached_input_tokens": 716,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 48,
+      "uses": 60,
+      "percent": 80.0
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 77.2,
+     "interval": [
+      71.0,
+      82.9
+     ],
+     "fidelity": 73.0,
+     "instruction": 76.4,
+     "disfluency": 83.7,
+     "mechanics": 85.4,
+     "median_ms": 298,
+     "input_tokens": 934,
+     "cached_input_tokens": 760,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 43,
+      "uses": 60,
+      "percent": 71.7
+     }
+    },
+    "ollama:phi4-mini:3.8b": {
+     "score": 76.7,
+     "interval": [
+      68.5,
+      84.0
+     ],
+     "fidelity": 77.1,
+     "instruction": 73.4,
+     "disfluency": 78.5,
+     "mechanics": 79.9,
+     "median_ms": 293,
+     "input_tokens": 910,
+     "cached_input_tokens": 744,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 44,
+      "uses": 60,
+      "percent": 73.3
+     }
+    },
+    "ollama:gemma3:4b": {
+     "score": 75.5,
+     "interval": [
+      67.6,
+      82.9
+     ],
+     "fidelity": 75.8,
+     "instruction": 73.0,
+     "disfluency": 75.4,
+     "mechanics": 80.7,
+     "median_ms": 434,
+     "input_tokens": 946,
+     "cached_input_tokens": 678,
+     "output_tokens": 63,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 48,
+      "uses": 60,
+      "percent": 80.0
+     }
+    },
+    "ollama:qwen2.5:1.5b": {
+     "score": 68.2,
+     "interval": [
+      61.8,
+      74.7
+     ],
+     "fidelity": 62.4,
+     "instruction": 67.7,
+     "disfluency": 75.5,
+     "mechanics": 81.1,
+     "median_ms": 174,
+     "input_tokens": 941,
+     "cached_input_tokens": 767,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 38,
+      "uses": 60,
+      "percent": 63.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "F-gpu-base",
+   "description": "Foundry Local on the GPU (TensorRT-RTX), phase-one prompts",
+   "models": {
+    "foundry:qwen2.5-7b": {
+     "score": 83.0,
+     "interval": [
+      77.4,
+      88.2
+     ],
+     "fidelity": 81.7,
+     "instruction": 81.4,
+     "disfluency": 84.9,
+     "mechanics": 89.6,
+     "median_ms": 738,
+     "input_tokens": 2003,
+     "cached_input_tokens": 0,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "foundry:qwen2.5-1.5b": {
+     "score": 70.6,
+     "interval": [
+      63.1,
+      77.7
+     ],
+     "fidelity": 66.1,
+     "instruction": 70.4,
+     "disfluency": 74.6,
+     "mechanics": 83.2,
+     "median_ms": 390,
+     "input_tokens": 2003,
+     "cached_input_tokens": 0,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 31,
+      "uses": 60,
+      "percent": 51.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "F-gpu-cwcl",
+   "description": "Foundry Local on the GPU, compact prompts",
+   "models": {
+    "foundry:qwen2.5-7b": {
+     "score": 77.5,
+     "interval": [
+      71.1,
+      83.6
+     ],
+     "fidelity": 74.1,
+     "instruction": 75.9,
+     "disfluency": 83.1,
+     "mechanics": 85.3,
+     "median_ms": 672,
+     "input_tokens": 1523,
+     "cached_input_tokens": 0,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "foundry:qwen2.5-1.5b": {
+     "score": 68.2,
+     "interval": [
+      61.1,
+      75.0
+     ],
+     "fidelity": 64.8,
+     "instruction": 64.7,
+     "disfluency": 73.9,
+     "mechanics": 80.7,
+     "median_ms": 350,
+     "input_tokens": 1523,
+     "cached_input_tokens": 0,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "F-cpu-base",
+   "description": "Foundry Local on the CPU, phase-one prompts, one run",
+   "models": {
+    "foundry:Phi-4-mini-instruct-generic-cpu:5": {
+     "score": 77.9,
+     "interval": [
+      69.8,
+      85.2
+     ],
+     "fidelity": 78.0,
+     "instruction": 74.7,
+     "disfluency": 78.6,
+     "mechanics": 84.2,
+     "median_ms": 15478,
+     "input_tokens": 1970,
+     "cached_input_tokens": 0,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 16,
+      "uses": 30,
+      "percent": 53.3
+     }
+    },
+    "foundry:qwen3.5-2b-text-generic-cpu:1": {
+     "score": 70.0,
+     "interval": [
+      60.8,
+      78.8
+     ],
+     "fidelity": 64.2,
+     "instruction": 70.3,
+     "disfluency": 75.9,
+     "mechanics": 83.4,
+     "median_ms": 8061,
+     "input_tokens": 2088,
+     "cached_input_tokens": 0,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 18,
+      "uses": 30,
+      "percent": 60.0
+     }
+    },
+    "foundry:qwen2.5-1.5b-instruct-generic-cpu:4": {
+     "score": 62.9,
+     "interval": [
+      56.8,
+      69.1
+     ],
+     "fidelity": 56.4,
+     "instruction": 60.0,
+     "disfluency": 72.0,
+     "mechanics": 81.0,
+     "median_ms": 6433,
+     "input_tokens": 2003,
+     "cached_input_tokens": 0,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 16,
+      "uses": 30,
+      "percent": 53.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "F-cpu-cwcl",
+   "description": "Foundry Local on the CPU, compact prompts, one run",
+   "models": {
+    "foundry:Phi-4-mini-instruct-generic-cpu:5": {
+     "score": 77.9,
+     "interval": [
+      69.7,
+      85.3
+     ],
+     "fidelity": 79.3,
+     "instruction": 74.0,
+     "disfluency": 78.0,
+     "mechanics": 81.0,
+     "median_ms": 13604,
+     "input_tokens": 1495,
+     "cached_input_tokens": 0,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 17,
+      "uses": 30,
+      "percent": 56.7
+     }
+    },
+    "foundry:qwen3.5-2b-text-generic-cpu:1": {
+     "score": 71.5,
+     "interval": [
+      64.0,
+      78.8
+     ],
+     "fidelity": 71.1,
+     "instruction": 66.4,
+     "disfluency": 75.4,
+     "mechanics": 77.8,
+     "median_ms": 8274,
+     "input_tokens": 1599,
+     "cached_input_tokens": 0,
+     "output_tokens": 63,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 16,
+      "uses": 30,
+      "percent": 53.3
+     }
+    },
+    "foundry:qwen2.5-1.5b-instruct-generic-cpu:4": {
+     "score": 54.7,
+     "interval": [
+      48.0,
+      61.5
+     ],
+     "fidelity": 42.1,
+     "instruction": 51.2,
+     "disfluency": 73.8,
+     "mechanics": 82.4,
+     "median_ms": 5605,
+     "input_tokens": 1523,
+     "cached_input_tokens": 0,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 17,
+      "uses": 30,
+      "percent": 56.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "F-cpu-cwcl-gm",
+   "description": "Foundry Local on the CPU, compact prompts, mentioned vocabulary, one run",
+   "models": {
+    "foundry:Phi-4-mini-instruct-generic-cpu:5": {
+     "score": 77.6,
+     "interval": [
+      69.6,
+      85.2
+     ],
+     "fidelity": 77.4,
+     "instruction": 75.8,
+     "disfluency": 78.2,
+     "mechanics": 81.3,
+     "median_ms": 12151,
+     "input_tokens": 911,
+     "cached_input_tokens": 0,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 19,
+      "uses": 30,
+      "percent": 63.3
+     }
+    },
+    "foundry:qwen3.5-2b-text-generic-cpu:1": {
+     "score": 73.8,
+     "interval": [
+      65.5,
+      81.6
+     ],
+     "fidelity": 74.4,
+     "instruction": 70.4,
+     "disfluency": 74.0,
+     "mechanics": 79.0,
+     "median_ms": 5672,
+     "input_tokens": 972,
+     "cached_input_tokens": 0,
+     "output_tokens": 62,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 21,
+      "uses": 30,
+      "percent": 70.0
+     }
+    },
+    "foundry:qwen2.5-1.5b-instruct-generic-cpu:4": {
+     "score": 63.0,
+     "interval": [
+      56.2,
+      70.1
+     ],
+     "fidelity": 54.9,
+     "instruction": 60.3,
+     "disfluency": 74.7,
+     "mechanics": 82.8,
+     "median_ms": 3055,
+     "input_tokens": 941,
+     "cached_input_tokens": 0,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 17,
+      "uses": 30,
+      "percent": 56.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-default-s6",
+   "description": "Microsoft Foundry s6: model's default reasoning effort, every vocabulary term",
+   "models": {
+    "gpt-6-sol": {
+     "score": 93.9,
+     "interval": [
+      92.0,
+      95.7
+     ],
+     "fidelity": 92.1,
+     "instruction": 94.0,
+     "disfluency": 96.0,
+     "mechanics": 97.1,
+     "median_ms": 2040,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7498,
+     "output_tokens": 163,
+     "reasoning_tokens": 102,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-s6",
+   "description": "Microsoft Foundry s6: reasoning effort none",
+   "models": {
+    "gpt-6-sol": {
+     "score": 93.9,
+     "interval": [
+      92.1,
+      95.6
+     ],
+     "fidelity": 92.2,
+     "instruction": 94.0,
+     "disfluency": 95.9,
+     "mechanics": 96.9,
+     "median_ms": 1340,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7494,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-low-s6",
+   "description": "Microsoft Foundry s6: reasoning effort low",
+   "models": {
+    "gpt-6-sol": {
+     "score": 94.0,
+     "interval": [
+      92.3,
+      95.6
+     ],
+     "fidelity": 92.2,
+     "instruction": 94.4,
+     "disfluency": 96.4,
+     "mechanics": 96.6,
+     "median_ms": 1914,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7493,
+     "output_tokens": 87,
+     "reasoning_tokens": 26,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 59,
+      "uses": 60,
+      "percent": 98.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-medium-s6",
+   "description": "Microsoft Foundry s6: reasoning effort medium",
+   "models": {
+    "gpt-6-sol": {
+     "score": 93.7,
+     "interval": [
+      91.9,
+      95.4
+     ],
+     "fidelity": 92.1,
+     "instruction": 93.7,
+     "disfluency": 95.8,
+     "mechanics": 96.8,
+     "median_ms": 1934,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7524,
+     "output_tokens": 144,
+     "reasoning_tokens": 83,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-gm-s6",
+   "description": "Microsoft Foundry s6: none, mentioned vocabulary",
+   "models": {
+    "gpt-6-sol": {
+     "score": 94.1,
+     "interval": [
+      92.0,
+      96.0
+     ],
+     "fidelity": 92.4,
+     "instruction": 94.0,
+     "disfluency": 96.7,
+     "mechanics": 97.2,
+     "median_ms": 1294,
+     "input_tokens": 1412,
+     "cached_input_tokens": 759,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-cfcs-s6",
+   "description": "Microsoft Foundry s6: none, compact detailed instructions and style",
+   "models": {
+    "gpt-6-sol": {
+     "score": 94.9,
+     "interval": [
+      92.9,
+      96.7
+     ],
+     "fidelity": 93.4,
+     "instruction": 95.0,
+     "disfluency": 96.8,
+     "mechanics": 97.5,
+     "median_ms": 1334,
+     "input_tokens": 7095,
+     "cached_input_tokens": 7061,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-cfcs-gm-s6",
+   "description": "Microsoft Foundry s6: none, compact prompts, mentioned vocabulary",
+   "models": {
+    "gpt-6-sol": {
+     "score": 94.6,
+     "interval": [
+      92.7,
+      96.4
+     ],
+     "fidelity": 93.6,
+     "instruction": 94.6,
+     "disfluency": 95.9,
+     "mechanics": 96.7,
+     "median_ms": 1271,
+     "input_tokens": 980,
+     "cached_input_tokens": 260,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-default-s61",
+   "description": "Microsoft Foundry s61: model's default reasoning effort, every vocabulary term",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 96.1,
+     "interval": [
+      94.5,
+      97.4
+     ],
+     "fidelity": 96.3,
+     "instruction": 94.8,
+     "disfluency": 96.9,
+     "mechanics": 96.3,
+     "median_ms": 1961,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7496,
+     "output_tokens": 94,
+     "reasoning_tokens": 33,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-low-s61",
+   "description": "Microsoft Foundry s61: reasoning effort low",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 96.5,
+     "interval": [
+      95.1,
+      97.7
+     ],
+     "fidelity": 96.7,
+     "instruction": 95.9,
+     "disfluency": 96.8,
+     "mechanics": 96.6,
+     "median_ms": 1605,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7493,
+     "output_tokens": 75,
+     "reasoning_tokens": 13,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-medium-s61",
+   "description": "Microsoft Foundry s61: reasoning effort medium",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 95.9,
+     "interval": [
+      94.4,
+      97.3
+     ],
+     "fidelity": 95.9,
+     "instruction": 95.1,
+     "disfluency": 96.9,
+     "mechanics": 96.1,
+     "median_ms": 1849,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7524,
+     "output_tokens": 96,
+     "reasoning_tokens": 34,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-low-gm-s61",
+   "description": "Microsoft Foundry s61: low, mentioned vocabulary",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 95.6,
+     "interval": [
+      93.9,
+      97.1
+     ],
+     "fidelity": 95.5,
+     "instruction": 95.0,
+     "disfluency": 96.4,
+     "mechanics": 96.1,
+     "median_ms": 1567,
+     "input_tokens": 1412,
+     "cached_input_tokens": 759,
+     "output_tokens": 75,
+     "reasoning_tokens": 14,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-low-cfcs-s61",
+   "description": "Microsoft Foundry s61: low, compact prompts",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 96.2,
+     "interval": [
+      94.5,
+      97.7
+     ],
+     "fidelity": 96.6,
+     "instruction": 95.4,
+     "disfluency": 96.4,
+     "mechanics": 96.1,
+     "median_ms": 1768,
+     "input_tokens": 7095,
+     "cached_input_tokens": 7061,
+     "output_tokens": 74,
+     "reasoning_tokens": 13,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-low-cfcs-gm-s61",
+   "description": "Microsoft Foundry s61: low, compact prompts, mentioned vocabulary",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 95.9,
+     "interval": [
+      93.7,
+      97.6
+     ],
+     "fidelity": 95.7,
+     "instruction": 95.6,
+     "disfluency": 96.5,
+     "mechanics": 96.0,
+     "median_ms": 1638,
+     "input_tokens": 980,
+     "cached_input_tokens": 260,
+     "output_tokens": 76,
+     "reasoning_tokens": 15,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-default-terra",
+   "description": "Microsoft Foundry terra: model's default reasoning effort, every vocabulary term",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 95.0,
+     "interval": [
+      93.1,
+      96.7
+     ],
+     "fidelity": 94.0,
+     "instruction": 94.9,
+     "disfluency": 96.4,
+     "mechanics": 97.2,
+     "median_ms": 1333,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7524,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-terra",
+   "description": "Microsoft Foundry terra: reasoning effort none",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 94.7,
+     "interval": [
+      92.6,
+      96.5
+     ],
+     "fidelity": 94.2,
+     "instruction": 94.4,
+     "disfluency": 95.3,
+     "mechanics": 96.6,
+     "median_ms": 1278,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7493,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-low-terra",
+   "description": "Microsoft Foundry terra: reasoning effort low",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 95.0,
+     "interval": [
+      92.8,
+      96.9
+     ],
+     "fidelity": 93.9,
+     "instruction": 94.8,
+     "disfluency": 96.7,
+     "mechanics": 96.7,
+     "median_ms": 1438,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7493,
+     "output_tokens": 63,
+     "reasoning_tokens": 3,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-medium-terra",
+   "description": "Microsoft Foundry terra: reasoning effort medium",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 94.8,
+     "interval": [
+      92.4,
+      96.8
+     ],
+     "fidelity": 93.7,
+     "instruction": 95.0,
+     "disfluency": 96.4,
+     "mechanics": 96.3,
+     "median_ms": 1310,
+     "input_tokens": 7527,
+     "cached_input_tokens": 7493,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-gm-terra",
+   "description": "Microsoft Foundry terra: none, mentioned vocabulary",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 94.9,
+     "interval": [
+      92.9,
+      96.7
+     ],
+     "fidelity": 94.5,
+     "instruction": 94.7,
+     "disfluency": 95.2,
+     "mechanics": 96.4,
+     "median_ms": 1273,
+     "input_tokens": 1412,
+     "cached_input_tokens": 759,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-cfcs-terra",
+   "description": "Microsoft Foundry terra: none, compact detailed instructions and style",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 95.3,
+     "interval": [
+      93.6,
+      96.9
+     ],
+     "fidelity": 94.8,
+     "instruction": 95.1,
+     "disfluency": 96.1,
+     "mechanics": 96.8,
+     "median_ms": 1287,
+     "input_tokens": 7095,
+     "cached_input_tokens": 7061,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "C-none-cfcs-gm-terra",
+   "description": "Microsoft Foundry terra: none, compact prompts, mentioned vocabulary",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 95.3,
+     "interval": [
+      93.5,
+      96.9
+     ],
+     "fidelity": 94.9,
+     "instruction": 94.9,
+     "disfluency": 95.7,
+     "mechanics": 97.0,
+     "median_ms": 1261,
+     "input_tokens": 980,
+     "cached_input_tokens": 260,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 60,
+      "uses": 60,
+      "percent": 100.0
+     }
+    }
+   }
+  }
+ ],
+ "lists_rubric": [
+  {
+   "arm": "S-default",
+   "description": "33 cases (25 plus 8 structure cases), 0.5.1's writing style",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 88.7,
+     "interval": [
+      85.1,
+      91.8
+     ],
+     "fidelity": 87.1,
+     "instruction": 86.5,
+     "disfluency": 93.0,
+     "mechanics": 92.5,
+     "median_ms": 445,
+     "input_tokens": 2065,
+     "cached_input_tokens": 2035,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 39,
+      "uses": 60,
+      "percent": 65.0
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 83.9,
+     "interval": [
+      79.1,
+      88.4
+     ],
+     "fidelity": 82.2,
+     "instruction": 81.7,
+     "disfluency": 87.7,
+     "mechanics": 89.2,
+     "median_ms": 347,
+     "input_tokens": 2004,
+     "cached_input_tokens": 1973,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 83.8,
+     "interval": [
+      78.6,
+      88.5
+     ],
+     "fidelity": 82.7,
+     "instruction": 80.7,
+     "disfluency": 88.2,
+     "mechanics": 87.5,
+     "median_ms": 287,
+     "input_tokens": 2065,
+     "cached_input_tokens": 2035,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 60,
+      "percent": 50.0
+     }
+    },
+    "foundry:qwen2.5-7b": {
+     "score": 82.9,
+     "interval": [
+      77.9,
+      87.6
+     ],
+     "fidelity": 79.5,
+     "instruction": 81.4,
+     "disfluency": 89.1,
+     "mechanics": 90.0,
+     "median_ms": 720,
+     "input_tokens": 2000,
+     "cached_input_tokens": 0,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "foundry:qwen2.5-1.5b": {
+     "score": 72.4,
+     "interval": [
+      65.4,
+      78.8
+     ],
+     "fidelity": 67.3,
+     "instruction": 69.9,
+     "disfluency": 81.4,
+     "mechanics": 83.2,
+     "median_ms": 385,
+     "input_tokens": 2000,
+     "cached_input_tokens": 0,
+     "output_tokens": 55,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 31,
+      "uses": 60,
+      "percent": 51.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "S-structure",
+   "description": "33 cases, the writing style with lists (0.5.2's default)",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 88.0,
+     "interval": [
+      84.5,
+      91.2
+     ],
+     "fidelity": 86.7,
+     "instruction": 85.9,
+     "disfluency": 92.2,
+     "mechanics": 91.2,
+     "median_ms": 513,
+     "input_tokens": 2167,
+     "cached_input_tokens": 2137,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 40,
+      "uses": 60,
+      "percent": 66.7
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 84.4,
+     "interval": [
+      79.4,
+      89.0
+     ],
+     "fidelity": 82.4,
+     "instruction": 82.8,
+     "disfluency": 87.7,
+     "mechanics": 90.3,
+     "median_ms": 364,
+     "input_tokens": 2106,
+     "cached_input_tokens": 2075,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "foundry:qwen2.5-7b": {
+     "score": 82.7,
+     "interval": [
+      77.6,
+      87.3
+     ],
+     "fidelity": 79.3,
+     "instruction": 81.6,
+     "disfluency": 88.2,
+     "mechanics": 89.5,
+     "median_ms": 782,
+     "input_tokens": 2102,
+     "cached_input_tokens": 0,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 32,
+      "uses": 60,
+      "percent": 53.3
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 82.6,
+     "interval": [
+      77.4,
+      87.4
+     ],
+     "fidelity": 80.7,
+     "instruction": 80.3,
+     "disfluency": 87.8,
+     "mechanics": 86.8,
+     "median_ms": 288,
+     "input_tokens": 2167,
+     "cached_input_tokens": 2137,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 31,
+      "uses": 60,
+      "percent": 51.7
+     }
+    },
+    "foundry:qwen2.5-1.5b": {
+     "score": 70.4,
+     "interval": [
+      63.7,
+      77.0
+     ],
+     "fidelity": 63.8,
+     "instruction": 69.0,
+     "disfluency": 81.1,
+     "mechanics": 81.9,
+     "median_ms": 370,
+     "input_tokens": 2102,
+     "cached_input_tokens": 0,
+     "output_tokens": 54,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 60,
+      "percent": 50.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "S-structure-l",
+   "description": "33 cases, lists in the style and in the short instructions (not adopted)",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 87.4,
+     "interval": [
+      83.8,
+      90.8
+     ],
+     "fidelity": 85.4,
+     "instruction": 85.3,
+     "disfluency": 92.1,
+     "mechanics": 92.2,
+     "median_ms": 469,
+     "input_tokens": 2252,
+     "cached_input_tokens": 2222,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 40,
+      "uses": 60,
+      "percent": 66.7
+     }
+    },
+    "foundry:qwen2.5-7b": {
+     "score": 83.2,
+     "interval": [
+      78.1,
+      87.8
+     ],
+     "fidelity": 80.3,
+     "instruction": 81.0,
+     "disfluency": 89.7,
+     "mechanics": 88.7,
+     "median_ms": 740,
+     "input_tokens": 2170,
+     "cached_input_tokens": 0,
+     "output_tokens": 55,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 60,
+      "percent": 50.0
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 83.1,
+     "interval": [
+      78.0,
+      87.9
+     ],
+     "fidelity": 81.4,
+     "instruction": 80.7,
+     "disfluency": 87.8,
+     "mechanics": 87.1,
+     "median_ms": 370,
+     "input_tokens": 2174,
+     "cached_input_tokens": 2143,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 34,
+      "uses": 60,
+      "percent": 56.7
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 82.4,
+     "interval": [
+      76.9,
+      87.5
+     ],
+     "fidelity": 81.5,
+     "instruction": 79.5,
+     "disfluency": 86.5,
+     "mechanics": 85.4,
+     "median_ms": 315,
+     "input_tokens": 2252,
+     "cached_input_tokens": 2222,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 31,
+      "uses": 60,
+      "percent": 51.7
+     }
+    },
+    "foundry:qwen2.5-1.5b": {
+     "score": 72.3,
+     "interval": [
+      66.0,
+      78.4
+     ],
+     "fidelity": 67.7,
+     "instruction": 69.3,
+     "disfluency": 81.5,
+     "mechanics": 81.6,
+     "median_ms": 387,
+     "input_tokens": 2170,
+     "cached_input_tokens": 0,
+     "output_tokens": 55,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 60,
+      "percent": 50.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "S-default-cloud",
+   "description": "33 cases, gpt-6-sol, reasoning none, 0.5.1's writing style",
+   "models": {
+    "gpt-6-sol": {
+     "score": 93.9,
+     "interval": [
+      92.6,
+      95.2
+     ],
+     "fidelity": 92.9,
+     "instruction": 92.3,
+     "disfluency": 96.8,
+     "mechanics": 97.0,
+     "median_ms": 1514,
+     "input_tokens": 7525,
+     "cached_input_tokens": 7461,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 29,
+      "uses": 30,
+      "percent": 96.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "S-structure-cloud",
+   "description": "33 cases, gpt-6-sol, reasoning none, the writing style with lists",
+   "models": {
+    "gpt-6-sol": {
+     "score": 94.8,
+     "interval": [
+      93.3,
+      96.2
+     ],
+     "fidelity": 93.2,
+     "instruction": 94.7,
+     "disfluency": 97.1,
+     "mechanics": 97.6,
+     "median_ms": 1353,
+     "input_tokens": 7627,
+     "cached_input_tokens": 7563,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 30,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-ollama",
+   "description": "Shipped configuration: lists style, mentioned vocabulary, Ollama on the GPU",
+   "models": {
+    "ollama:gemma4:e4b": {
+     "score": 90.1,
+     "interval": [
+      87.0,
+      93.0
+     ],
+     "fidelity": 88.8,
+     "instruction": 88.3,
+     "disfluency": 93.5,
+     "mechanics": 93.4,
+     "median_ms": 512,
+     "input_tokens": 1464,
+     "cached_input_tokens": 1291,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 58,
+      "uses": 60,
+      "percent": 96.7
+     }
+    },
+    "ollama:qwen3:4b-instruct": {
+     "score": 85.5,
+     "interval": [
+      80.1,
+      90.6
+     ],
+     "fidelity": 83.6,
+     "instruction": 85.0,
+     "disfluency": 87.9,
+     "mechanics": 90.2,
+     "median_ms": 449,
+     "input_tokens": 1461,
+     "cached_input_tokens": 1313,
+     "output_tokens": 60,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 54,
+      "uses": 60,
+      "percent": 90.0
+     }
+    },
+    "ollama:gemma4:e2b": {
+     "score": 84.6,
+     "interval": [
+      79.5,
+      89.1
+     ],
+     "fidelity": 82.5,
+     "instruction": 82.9,
+     "disfluency": 89.7,
+     "mechanics": 88.0,
+     "median_ms": 321,
+     "input_tokens": 1464,
+     "cached_input_tokens": 1291,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 50,
+      "uses": 60,
+      "percent": 83.3
+     }
+    },
+    "ollama:granite4:3b": {
+     "score": 82.2,
+     "interval": [
+      76.8,
+      87.3
+     ],
+     "fidelity": 79.3,
+     "instruction": 80.8,
+     "disfluency": 87.6,
+     "mechanics": 88.0,
+     "median_ms": 336,
+     "input_tokens": 1450,
+     "cached_input_tokens": 1305,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 44,
+      "uses": 60,
+      "percent": 73.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-lmstudio",
+   "description": "Shipped configuration, LM Studio on the GPU",
+   "models": {
+    "lmstudio:qwen/qwen3-4b-2507": {
+     "score": 85.1,
+     "interval": [
+      80.1,
+      89.5
+     ],
+     "fidelity": 83.4,
+     "instruction": 84.0,
+     "disfluency": 88.3,
+     "mechanics": 89.0,
+     "median_ms": 403,
+     "input_tokens": 1457,
+     "cached_input_tokens": 0,
+     "output_tokens": 59,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 55,
+      "uses": 60,
+      "percent": 91.7
+     }
+    },
+    "lmstudio:google/gemma-4-e2b": {
+     "score": 84.1,
+     "interval": [
+      79.1,
+      88.6
+     ],
+     "fidelity": 81.0,
+     "instruction": 83.4,
+     "disfluency": 89.6,
+     "mechanics": 89.0,
+     "median_ms": 385,
+     "input_tokens": 1464,
+     "cached_input_tokens": 0,
+     "output_tokens": 57,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 50,
+      "uses": 60,
+      "percent": 83.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-foundry",
+   "description": "Shipped configuration, Foundry Local on the GPU",
+   "models": {
+    "foundry:qwen2.5-7b": {
+     "score": 85.7,
+     "interval": [
+      81.2,
+      89.7
+     ],
+     "fidelity": 84.8,
+     "instruction": 82.9,
+     "disfluency": 89.7,
+     "mechanics": 88.7,
+     "median_ms": 731,
+     "input_tokens": 1457,
+     "cached_input_tokens": 0,
+     "output_tokens": 56,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 52,
+      "uses": 60,
+      "percent": 86.7
+     }
+    },
+    "foundry:qwen2.5-1.5b": {
+     "score": 73.5,
+     "interval": [
+      66.8,
+      80.0
+     ],
+     "fidelity": 69.5,
+     "instruction": 71.0,
+     "disfluency": 80.9,
+     "mechanics": 83.4,
+     "median_ms": 369,
+     "input_tokens": 1457,
+     "cached_input_tokens": 0,
+     "output_tokens": 55,
+     "reasoning_tokens": 0,
+     "runs": 2,
+     "vocabulary_accuracy": {
+      "hits": 38,
+      "uses": 60,
+      "percent": 63.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-cpu",
+   "description": "Shipped configuration, Foundry Local on the CPU, one run",
+   "models": {
+    "foundry:qwen2.5-1.5b-instruct-generic-cpu:4": {
+     "score": 69.2,
+     "interval": [
+      62.9,
+      75.4
+     ],
+     "fidelity": 62.4,
+     "instruction": 66.9,
+     "disfluency": 80.4,
+     "mechanics": 82.8,
+     "median_ms": 6181,
+     "input_tokens": 1457,
+     "cached_input_tokens": 0,
+     "output_tokens": 55,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 19,
+      "uses": 30,
+      "percent": 63.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-s6",
+   "description": "Shipped configuration, gpt-6-sol (reasoning none by negotiation)",
+   "models": {
+    "gpt-6-sol": {
+     "score": 94.9,
+     "interval": [
+      93.7,
+      96.1
+     ],
+     "fidelity": 93.6,
+     "instruction": 94.5,
+     "disfluency": 97.2,
+     "mechanics": 96.7,
+     "median_ms": 1265,
+     "input_tokens": 1445,
+     "cached_input_tokens": 221,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 30,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-s61",
+   "description": "Shipped configuration, gpt-6.1-sol (refused none, low by negotiation)",
+   "models": {
+    "gpt-6.1-sol": {
+     "score": 96.0,
+     "interval": [
+      94.5,
+      97.3
+     ],
+     "fidelity": 96.1,
+     "instruction": 94.9,
+     "disfluency": 97.2,
+     "mechanics": 96.2,
+     "median_ms": 1536,
+     "input_tokens": 1445,
+     "cached_input_tokens": 221,
+     "output_tokens": 68,
+     "reasoning_tokens": 9,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 30,
+      "percent": 100.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "V-terra",
+   "description": "Shipped configuration, gpt-5.6-terra (reasoning none by negotiation)",
+   "models": {
+    "gpt-5.6-terra": {
+     "score": 95.5,
+     "interval": [
+      93.7,
+      97.2
+     ],
+     "fidelity": 94.7,
+     "instruction": 95.5,
+     "disfluency": 96.9,
+     "mechanics": 96.6,
+     "median_ms": 1404,
+     "input_tokens": 1445,
+     "cached_input_tokens": 221,
+     "output_tokens": 58,
+     "reasoning_tokens": 0,
+     "runs": 1,
+     "vocabulary_accuracy": {
+      "hits": 30,
+      "uses": 30,
+      "percent": 100.0
+     }
+    }
+   }
+  }
+ ]
+}

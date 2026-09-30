@@ -307,6 +307,10 @@ internal sealed class VocabularyCleanupHarness : IAsyncDisposable
 
             // No retries unless a test asks for them, as the other cleanup harness has it; the transport is left alone.
             OpenAIClientOptionsOverride = options => options.RetryPolicy = RetryPolicy ?? new ClientRetryPolicy(0),
+
+            // Never the real Ollama or LM Studio a developer's PC may run, and no wait for a start, as the other harness.
+            LocalServers = new FakeLocalServerClient(),
+            LocalModelStartWait = TimeSpan.Zero,
         };
     }
 

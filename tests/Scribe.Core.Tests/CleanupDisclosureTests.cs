@@ -40,7 +40,12 @@ public sealed class CleanupDisclosureTests
         // The limits count entries, and an entry can be a phrase: a limit given in bare words would understate what goes.
         Assert.DoesNotContain($"{N(CleanupPrompt.MaxGlossaryTermsCloud)} words and", text, StringComparison.Ordinal);
         Assert.DoesNotContain($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} words with", text, StringComparison.Ordinal);
-        Assert.Contains("whether or not the dictation mentions them", text, StringComparison.Ordinal);
+
+        // Each request carries the vocabulary its dictation appears to mention (CleanupVocabularyMode.Mentioned), including
+        // words heard slightly differently; the card must not promise more precision than the matcher has, nor say that
+        // everything goes.
+        Assert.Contains("that the dictation appears to mention, including ones Scribe heard slightly differently", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("whether or not the dictation mentions", text, StringComparison.Ordinal);
         // About dictionary and word pack words, never the dictation: a dictation that spans lines is sent.
         Assert.Contains(
             "A word from your dictionary or a word pack is not vocabulary, and is not sent, when what Scribe writes " +
@@ -66,11 +71,21 @@ public sealed class CleanupDisclosureTests
 
     [Theory]
     [InlineData(CleanupProvider.FoundryLocal, "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.")]
-    [InlineData(CleanupProvider.AzureFoundry, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to your Microsoft Foundry deployment. Audio never leaves this PC.")]
-    [InlineData(CleanupProvider.OpenAiCompatible, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to the address you enter. Audio never leaves this PC.")]
-    [InlineData(CleanupProvider.GitHubCopilot, "Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to GitHub. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.AzureFoundry, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to your Microsoft Foundry deployment. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.OpenAiCompatible, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to the address you enter. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.GitHubCopilot, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to GitHub. Audio never leaves this PC.")]
     public void Provider_summary_names_the_destination_and_never_audio(CleanupProvider provider, string expected) =>
         Assert.Equal(expected, CleanupDisclosure.SummaryFor(provider));
+
+    [Theory]
+    [InlineData("http://localhost:11434/v1", true)]
+    [InlineData("http://localhost:1234/v1", true)]
+    [InlineData("http://localhost:8080/v1", false)]
+    [InlineData("https://openrouter.ai/api/v1", false)]
+    public void Ollama_and_LM_Studio_on_this_PC_are_summarized_as_staying_on_this_PC(string endpoint, bool onThisPc) =>
+        Assert.Equal(
+            onThisPc ? CleanupDisclosure.SummaryFor(CleanupProvider.FoundryLocal) : CleanupDisclosure.SummaryFor(CleanupProvider.OpenAiCompatible),
+            CleanupDisclosure.SummaryFor(CleanupProvider.OpenAiCompatible, endpoint));
 
     [Theory]
     [InlineData(CleanupProvider.AzureFoundry, "to your Microsoft Foundry deployment.")]
@@ -205,8 +220,10 @@ public sealed class CleanupDisclosureTests
 
         Assert.Contains("every cleanup request sends that provider", policy, StringComparison.Ordinal);
         Assert.Contains("the word packs you let AI cleanup use", policy, StringComparison.Ordinal);
-        Assert.Contains("whether or not the dictation mentions any of it", policy, StringComparison.Ordinal);
-        Assert.Contains("whether or not \"Apply your dictionary and snippets\" is turned on", policy, StringComparison.Ordinal);
+        Assert.Contains("that the dictation appears to mention", policy, StringComparison.Ordinal);
+        Assert.Contains("including words it heard slightly differently, so an entry the dictation does not mention is not sent with it", policy, StringComparison.Ordinal);
+        Assert.Contains("Versions before 0.5.2 sent every entry with every request, whether or not the dictation mentioned it.", policy, StringComparison.Ordinal);
+        Assert.Contains("This does not depend on whether \"Apply your dictionary and snippets\" is turned on", policy, StringComparison.Ordinal);
         Assert.Contains(
             $"up to {N(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {N(CleanupPrompt.MaxGlossaryChars)} characters " +
             $"({N(CleanupPrompt.MaxGlossaryTermsLocal)} terms when AI cleanup uses the short instructions)",

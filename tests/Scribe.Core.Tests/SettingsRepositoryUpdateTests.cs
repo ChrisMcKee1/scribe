@@ -72,6 +72,25 @@ public sealed class SettingsRepositoryUpdateTests : IDisposable
     }
 
     [Fact]
+    public void The_key_remembered_for_another_AI_service_is_encrypted_at_rest_like_the_others()
+    {
+        using var db = _folder.Open();
+        var repository = new SettingsRepository(db);
+        var settings = AppSettings.CreateDefault();
+        settings.AiCleanupOtherServiceEndpoint = "https://openrouter.ai/api/v1";
+        settings.AiCleanupOtherServiceModel = "openai/gpt-5-mini";
+        settings.AiCleanupOtherServiceApiKey = "remembered-test-key";
+        repository.Save(settings);
+
+        var loaded = repository.Load();
+
+        Assert.Equal("https://openrouter.ai/api/v1", loaded.AiCleanupOtherServiceEndpoint);
+        Assert.Equal("openai/gpt-5-mini", loaded.AiCleanupOtherServiceModel);
+        Assert.Equal("remembered-test-key", loaded.AiCleanupOtherServiceApiKey);
+        Assert.DoesNotContain("remembered-test-key", repository.Get("app_settings"));
+    }
+
+    [Fact]
     public async Task Update_never_waits_for_the_storage_maintenance_write_gate()
     {
         using var db = _folder.Open();

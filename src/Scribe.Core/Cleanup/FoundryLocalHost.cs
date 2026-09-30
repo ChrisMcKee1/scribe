@@ -55,6 +55,12 @@ internal sealed class FoundryLocalSdkHost : IFoundryLocalHost
     {
         if (!FoundryLocalManager.IsInitialized)
         {
+            // Read by ONNX Runtime when a model's CUDA kernels are built, so it is set before the runtime exists.
+            if (FoundryRuntimeEnvironment.PreferPortableAttention(Environment.GetEnvironmentVariable, Environment.SetEnvironmentVariable))
+            {
+                logger.LogDebug("Foundry Local: cuDNN attention is off for CUDA builds, as ONNX Runtime allows.");
+            }
+
             try
             {
                 await FoundryLocalManager.CreateAsync(configuration, logger, cancellationToken).ConfigureAwait(false);
@@ -89,5 +95,37 @@ internal sealed class FoundryLocalSdkHost : IFoundryLocalHost
             manager.StopWebServiceAsync(cancellationToken);
 
         public void Dispose() => manager.Dispose();
+    }
+}
+
+/// <summary>
+/// Process settings the ONNX Runtime inside Foundry Local reads, applied before the runtime exists.
+/// </summary>
+/// <remarks>
+/// On a graphics card of compute capability 9.0 or later (an RTX 50 series card, for example) ONNX Runtime prefers
+/// cuDNN's attention kernel for GroupQueryAttention unless a kernel is chosen. With Foundry Local 2.1.0 on an RTX 5080
+/// (0.5.2) that kernel failed every request to Qwen3 4B's CUDA build ("Non-zero status code returned while running
+/// GroupQueryAttention node ... cudnn_flash_attention.cc"), and Gemma 4 E2B's first request took 16 s against 1.3 s
+/// without it, and later ones 0.57 s against 0.5 s. ONNX Runtime documents ORT_ENABLE_CUDNN_FLASH_ATTENTION=0 as turning
+/// that kernel off, preference included, so its own Flash Attention and XQA kernels run instead
+/// (onnxruntime docs/contrib_ops/cuda/gqa.md, "Selecting a Kernel"). A card older than 9.0 never prefers cuDNN, so it
+/// changes nothing there, and a value the user set is left alone.
+/// </remarks>
+internal static class FoundryRuntimeEnvironment
+{
+    public const string CudnnAttentionVariable = "ORT_ENABLE_CUDNN_FLASH_ATTENTION";
+
+    /// <summary>Turns cuDNN attention off unless the variable is already set. True when it set it.</summary>
+    public static bool PreferPortableAttention(Func<string, string?> read, Action<string, string?> write)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        ArgumentNullException.ThrowIfNull(write);
+        if (read(CudnnAttentionVariable) is not null)
+        {
+            return false;
+        }
+
+        write(CudnnAttentionVariable, "0");
+        return true;
     }
 }

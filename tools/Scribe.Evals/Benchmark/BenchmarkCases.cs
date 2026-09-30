@@ -392,6 +392,92 @@ internal static class BenchmarkCases
                 "device, then the cloud path hitting GPT-5.4-mini through Microsoft Foundry. The whole point " +
                 "is that the audio never leaves the machine. Latency was about 800 milliseconds on device " +
                 "versus 2.1 seconds for the cloud round trip, which is still under our budget."),
+
+        // Structure: dictation that lists steps, items or options reads better as a list, and a long update as a
+        // paragraph per topic. Each golden is one good structured answer; the short cases stay prose.
+        new BenchCase(
+            "structure-steps",
+            Spoken:
+                "okay so to set up the demo machine first install the latest windows updates then download scribe " +
+                "from the store after that sign in with the demo account and turn on ai cleanup and finally run a " +
+                "test dictation to make sure the microphone works",
+            Golden:
+                "To set up the demo machine:\n\n1. Install the latest Windows updates.\n2. Download Scribe from the " +
+                "Store.\n3. Sign in with the demo account and turn on AI cleanup.\n4. Run a test dictation to make " +
+                "sure the microphone works."),
+
+        new BenchCase(
+            "structure-action-items",
+            Spoken:
+                "um quick recap of today's meeting uh the action items are priya is going to update the pricing page " +
+                "jordan will send the contract to legal by thursday and i'll uh set up the follow up call with the " +
+                "customer for next week oh and we still need someone to own the onboarding doc",
+            Golden:
+                "Quick recap of today's meeting. The action items are:\n\n- Priya will update the pricing page.\n" +
+                "- Jordan will send the contract to legal by Thursday.\n- I'll set up the follow-up call with the " +
+                "customer for next week.\n- We still need someone to own the onboarding doc."),
+
+        new BenchCase(
+            "structure-email",
+            Spoken:
+                "hi team just a couple of updates first the release is on track for the twelfth and q a signed off " +
+                "on the last build yesterday second we're moving the retro to friday at two because half the team " +
+                "is out on wednesday and lastly please remember to submit your expense reports before the end of " +
+                "the month thanks",
+            Golden:
+                "Hi team, just a couple of updates.\n\nFirst, the release is on track for the 12th, and QA signed off " +
+                "on the last build yesterday.\n\nSecond, we're moving the retro to Friday at 2 because half the team " +
+                "is out on Wednesday.\n\nLastly, please remember to submit your expense reports before the end of " +
+                "the month. Thanks."),
+
+        new BenchCase(
+            "structure-pros-cons",
+            Spoken:
+                "so comparing the two options the cloud option is faster to set up and needs no hardware but it " +
+                "costs more every month and the data leaves our network the on prem option is cheaper long term " +
+                "and keeps everything local but it needs a server and someone to maintain it",
+            Golden:
+                "Comparing the two options:\n\n- The cloud option is faster to set up and needs no hardware, but it " +
+                "costs more every month and the data leaves our network.\n- The on-premises option is cheaper in the " +
+                "long term and keeps everything local, but it needs a server and someone to maintain it."),
+
+        new BenchCase(
+            "structure-long-update",
+            Spoken:
+                "okay so status update on the mobile app uh the login bug is fixed and it shipped in yesterday's " +
+                "build so users should stop seeing the error um on the performance side we cut startup time by " +
+                "about a third mostly by lazy loading the image cache and then the next big thing is the offline " +
+                "mode which is going to take probably two more sprints because we need to redesign how sync works " +
+                "and we're going to need help from the backend team for that",
+            Golden:
+                "Status update on the mobile app:\n\nThe login bug is fixed, and the fix shipped in yesterday's build, " +
+                "so users should stop seeing the error.\n\nOn the performance side, we cut startup time by about a " +
+                "third, mostly by lazy loading the image cache.\n\nThe next big thing is offline mode, which will " +
+                "probably take two more sprints because we need to redesign how sync works. We'll need help from " +
+                "the backend team for that."),
+
+        // Guards: short messages that mention a few things in passing stay ordinary sentences.
+        new BenchCase(
+            "structure-short-message",
+            Spoken:
+                "hey can you grab milk eggs and bread on your way home and maybe some coffee if they have the good kind",
+            Golden:
+                "Hey, can you grab milk, eggs and bread on your way home, and maybe some coffee if they have the " +
+                "good kind?"),
+
+        new BenchCase(
+            "guard-three-actions",
+            Spoken:
+                "the engineer opened the laptop checked the microphone and started dictating a message to the team",
+            Golden:
+                "The engineer opened the laptop, checked the microphone, and started dictating a message to the team."),
+
+        new BenchCase(
+            "guard-request",
+            Spoken:
+                "please send the report to the team before friday afternoon and copy me on it",
+            Golden:
+                "Please send the report to the team before Friday afternoon and copy me on it."),
     ];
 
     /// <summary>

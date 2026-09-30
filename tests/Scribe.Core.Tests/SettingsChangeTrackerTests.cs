@@ -52,6 +52,19 @@ public sealed class SettingsChangeTrackerTests
         Assert.Equal("Unsaved changes: Dictation", SettingsChangeTracker.Describe(changes));
     }
 
+    [Theory]
+    [InlineData(nameof(AppSettings.AiCleanupOtherServiceEndpoint))]
+    [InlineData(nameof(AppSettings.AiCleanupOtherServiceModel))]
+    [InlineData(nameof(AppSettings.AiCleanupOtherServiceApiKey))]
+    public void Another_AI_service_remembered_beside_an_app_is_an_AI_cleanup_change(string property)
+    {
+        var baseline = AppSettings.CreateDefault();
+        var draft = baseline.Clone();
+        typeof(AppSettings).GetProperty(property)!.SetValue(draft, "changed");
+
+        Assert.Equal([SettingsPage.AiCleanup], SettingsChangeTracker.Compare(baseline, draft).Pages);
+    }
+
     [Fact]
     public void Compares_multiple_settings_pages_in_navigation_order()
     {

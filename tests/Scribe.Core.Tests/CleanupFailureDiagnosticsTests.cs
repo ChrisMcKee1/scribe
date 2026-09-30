@@ -149,6 +149,38 @@ public sealed class CleanupFailureDiagnosticsTests
         Assert.Equal(expected, TextCleanupService.MentionsGpuShaderIncompatibility(text));
     }
 
+    // Foundry Local 2.1.0's web service on an RTX 5080 (0.5.2), each after "Inference failed: onnx_chat_generator.cc:431
+    // fl::OnnxChatGenerator::CreatePrepared".
+    [Theory]
+    [InlineData("failed to create generator: Non-zero status code returned while running GroupQueryAttention node. Name:'/model/layers.0/attn/GroupQueryAttention_qknorm'", true)]
+    [InlineData("failed to create generator: Invalid rank for input: position_ids Got: 3 Expected: 2", true)]
+    [InlineData("NON-ZERO STATUS CODE RETURNED WHILE RUNNING MatMulNBits node", true)]
+    [InlineData("Inference failed: Unknown method: replace at row 23, column 48", false)]
+    [InlineData("Model 'qwen3-4b-cuda-gpu:2' is not loaded", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void A_graphics_card_build_that_cannot_run_is_recognized_by_onnx_runtime_s_words(string? text, bool expected)
+    {
+        Assert.Equal(expected, TextCleanupService.MentionsGpuBuildFailure(text));
+    }
+
+    [Fact]
+    public void Cudnn_attention_is_turned_off_before_foundry_local_starts_unless_the_user_chose()
+    {
+        var environment = new Dictionary<string, string?>();
+        string? Read(string name) => environment.GetValueOrDefault(name);
+        void Write(string name, string? value) => environment[name] = value;
+
+        Assert.True(FoundryRuntimeEnvironment.PreferPortableAttention(Read, Write));
+        Assert.Equal("0", environment[FoundryRuntimeEnvironment.CudnnAttentionVariable]);
+
+        // Set once: a second start, or a value the user chose, is left as it is.
+        Assert.False(FoundryRuntimeEnvironment.PreferPortableAttention(Read, Write));
+        environment[FoundryRuntimeEnvironment.CudnnAttentionVariable] = "1";
+        Assert.False(FoundryRuntimeEnvironment.PreferPortableAttention(Read, Write));
+        Assert.Equal("1", environment[FoundryRuntimeEnvironment.CudnnAttentionVariable]);
+    }
+
     [Fact]
     public void Server_message_is_unwrapped_from_the_error_envelope_rather_than_shown_as_json()
     {

@@ -56,6 +56,22 @@ internal static class Program
         using var cancel = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
 
+        if (opts.PrefetchFoundry is { Count: > 0 } prefetch)
+        {
+            return await Benchmark.FoundryPrefetch.RunAsync(prefetch, cancel.Token);
+        }
+
+        if (opts.ResanitizeResults.Count > 0)
+        {
+            return Benchmark.Resanitize.Run(opts.ResanitizeResults);
+        }
+
+        if (opts.BlindJudge)
+        {
+            var judgeConfig = opts.ToBlindJudgeConfig();
+            return await new Benchmark.BlindJudge(judgeConfig).RunAsync(cancel.Token);
+        }
+
         if (opts.Benchmark)
         {
             var cfg = opts.ToBenchmarkConfig();

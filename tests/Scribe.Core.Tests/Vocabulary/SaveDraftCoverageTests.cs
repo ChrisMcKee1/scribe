@@ -28,6 +28,15 @@ public sealed class SaveDraftCoverageTests
         ["DictationOnlyHotkey"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
         ["EnableAiCleanup"] = "_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true)",
         ["AiCleanupModel"] = "SelectedFoundryModelAlias",
+        // Ollama and LM Studio under "On this PC" store their own address and the model from their list; another AI
+        // service stores its boxes. One property decides both, for the draft and the save alike.
+        ["AiCleanupCustomEndpoint"] = "ShownCustomService",
+        ["AiCleanupCustomModel"] = "ShownCustomService",
+        ["AiCleanupCustomApiKey"] = "ShownCustomService",
+        // Another AI service, remembered beside Ollama or LM Studio (CustomServiceFields), read the same way.
+        ["AiCleanupOtherServiceEndpoint"] = "ShownRememberedService",
+        ["AiCleanupOtherServiceModel"] = "ShownRememberedService",
+        ["AiCleanupOtherServiceApiKey"] = "ShownRememberedService",
         ["AiCleanupAzureSubscriptionId"] = Subscription,
         ["AiCleanupAzureSubscriptionName"] = Subscription,
         ["AiCleanupAzureSubscriptionTenantId"] = Subscription,

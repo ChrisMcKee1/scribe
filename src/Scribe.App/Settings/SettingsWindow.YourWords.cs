@@ -508,7 +508,8 @@ public partial class SettingsWindow
             PostProcessingOn: PostCheck.IsChecked == true,
             SelectedProvider,
             SelectedPromptStyle,
-            aiEntries));
+            aiEntries,
+            SelectedCustomEndpoint));
     }
 
     private LibraryComposition? CurrentLibraryComposition()
@@ -531,7 +532,7 @@ public partial class SettingsWindow
                 _wordPackWorkspace.Draft,
                 _wordPackCatalog,
                 personal,
-                GlossaryBudget.For(SelectedPromptStyle, SelectedProvider));
+                GlossaryBudget.For(SelectedPromptStyle, SelectedProvider, SelectedCustomEndpoint));
         }
         catch (Exception ex)
         {

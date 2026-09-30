@@ -99,6 +99,38 @@ public sealed class TextCleanupServiceTests
         Assert.Null(resolved);
     }
 
+    // Foundry Local 2.1.0's catalog on an RTX 5080: TensorRT-RTX, CUDA and WebGPU builds all fall back to one CPU build.
+    [Theory]
+    [InlineData("qwen2.5-1.5b-instruct-trtrtx-gpu:2", "qwen2.5-1.5b-instruct-generic-cpu:4")]
+    [InlineData("qwen2.5-1.5b-instruct-cuda-gpu:4", "qwen2.5-1.5b-instruct-generic-cpu:4")]
+    [InlineData("qwen3-1.7b-cuda-gpu:2", "qwen3-1.7b-generic-cpu:2")]
+    [InlineData("qwen3-1.7b-generic-gpu:2", "qwen3-1.7b-generic-cpu:2")]
+    public void Every_graphics_card_build_falls_back_to_its_family_s_generic_cpu_build(string gpu, string expected)
+    {
+        string[] catalog =
+        [
+            "qwen2.5-1.5b-instruct-trtrtx-gpu:2",
+            "qwen2.5-1.5b-instruct-cuda-gpu:4",
+            "qwen2.5-1.5b-instruct-generic-cpu:4",
+            "qwen3-1.7b-cuda-gpu:2",
+            "qwen3-1.7b-generic-gpu:2",
+            "qwen3-1.7b-generic-cpu:2",
+        ];
+
+        Assert.Equal(expected, FoundryModelVariant.ResolveCpuCounterpartAlias(gpu, catalog));
+    }
+
+    [Fact]
+    public void A_name_without_a_provider_segment_keeps_the_model_s_own_name()
+    {
+        // "4" is part of the model's name, not a provider, so this must not fall back to another family's CPU build.
+        var resolved = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            "phi-4-gpu",
+            ["phi-4-gpu", "phi-4-cpu", "phi-generic-cpu"]);
+
+        Assert.Equal("phi-4-cpu", resolved);
+    }
+
     [Theory]
     [InlineData("Cannot load model 'qwen3-1.7b-cuda-gpu:2': it requires the 'CUDAExecutionProvider' execution provider, which is not available. Available EPs: [CPUExecutionProvider, WebGpuExecutionProvider].", true)]
     [InlineData("Cannot load model 'qwen3': the file is corrupt.", false)]

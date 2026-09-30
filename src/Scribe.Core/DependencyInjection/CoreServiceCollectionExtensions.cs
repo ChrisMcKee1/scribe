@@ -119,6 +119,7 @@ public static class CoreServiceCollectionExtensions
         // Optional AI cleanup (Foundry Local on-device, or a Microsoft Foundry deployment via the
         // user's Azure sign-in). Registered unconditionally; it stays inert until enabled in
         // settings, and degrades to raw text whenever it is not ready.
+        services.AddSingleton<ILocalServerClient, LocalServerClient>();
         services.AddSingleton<ITextCleanupService, TextCleanupService>();
         services.AddSingleton<IAzureFoundryDiscovery, AzureFoundryDiscovery>();
 

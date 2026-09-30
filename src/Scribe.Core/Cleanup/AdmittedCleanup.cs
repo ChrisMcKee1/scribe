@@ -10,13 +10,18 @@ namespace Scribe.Core.Cleanup;
 public sealed class AdmittedCleanup
 {
     private readonly Func<string, CancellationToken, string?, Task<CleanupResult>> _clean;
+    private readonly Action<string?>? _prewarm;
 
-    internal AdmittedCleanup(CleanupVocabulary vocabulary, Func<string, CancellationToken, string?, Task<CleanupResult>> clean)
+    internal AdmittedCleanup(
+        CleanupVocabulary vocabulary,
+        Func<string, CancellationToken, string?, Task<CleanupResult>> clean,
+        Action<string?>? prewarm = null)
     {
         ArgumentNullException.ThrowIfNull(vocabulary);
         ArgumentNullException.ThrowIfNull(clean);
         Vocabulary = vocabulary;
         _clean = clean;
+        _prewarm = prewarm;
     }
 
     /// <summary>The vocabulary every request of this cleanup carries and is judged by.</summary>
@@ -29,4 +34,13 @@ public sealed class AdmittedCleanup
     public Task<CleanupResult> CleanAsync(
         string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null) =>
         _clean(text, cancellationToken, writingStyleOverride);
+
+    /// <summary>
+    /// Readies the model for this dictation while it is still being spoken, when AI cleanup runs on a server on this PC
+    /// (Ollama, LM Studio): the dictation's own instructions and vocabulary go out with no text and a one-token ceiling,
+    /// so a model the server unloaded while idle is loaded, and those instructions cached, before the words arrive.
+    /// Returns at once and never throws; does nothing for any other provider, while cleanup is not ready, or when the model
+    /// answered moments ago. <paramref name="writingStyleOverride"/> is the style the dictation will be cleaned with.
+    /// </summary>
+    public void Prewarm(string? writingStyleOverride = null) => _prewarm?.Invoke(writingStyleOverride);
 }

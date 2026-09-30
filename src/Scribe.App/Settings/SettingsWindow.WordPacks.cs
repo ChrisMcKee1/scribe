@@ -1848,7 +1848,7 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
                 _wordPackWorkspace.Draft,
                 _wordPackCatalog,
                 BuildDictionaryEntries(_rows.ToList(), out _),
-                GlossaryBudget.For(_settings.AiCleanupPromptStyle, _settings.AiCleanupProvider));
+                GlossaryBudget.For(_settings.AiCleanupPromptStyle, _settings.AiCleanupProvider, _settings.AiCleanupCustomEndpoint));
         }
         catch (Exception)
         {

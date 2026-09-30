@@ -27,8 +27,11 @@ public interface IOverlayController
     /// <summary>Brief warning text while the recording indicator and live level bars remain active.</summary>
     void ShowRecordingWarning(string? reason);
 
-    /// <summary>Processing: three dots, and words that say whether it is transcribing or AI cleanup.</summary>
-    void ShowProcessing(bool aiPolishing);
+    /// <summary>
+    /// Processing: three dots, and words that say whether it is transcribing, running AI cleanup, or waiting for AI
+    /// cleanup's model on this PC to start (<paramref name="startingLocalModel"/>, with "This can take time").
+    /// </summary>
+    void ShowProcessing(bool aiPolishing, bool startingLocalModel = false);
 
     /// <summary>
     /// A finished dictation's outcome (<see cref="PillOutcome"/>): a check and "Typed" briefly, or a notice with its

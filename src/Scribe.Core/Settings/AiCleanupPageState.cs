@@ -237,10 +237,16 @@ public static class AiCleanupPageState
 
         return settings.AiCleanupProvider switch
         {
-            CleanupProvider.FoundryLocal => "On this PC (Foundry Local)",
+            CleanupProvider.FoundryLocal => "On this PC",
             CleanupProvider.AzureFoundry when !string.IsNullOrWhiteSpace(settings.AiCleanupAzureDeployment) =>
                 $"Microsoft Foundry ({settings.AiCleanupAzureDeployment})",
             CleanupProvider.AzureFoundry => "Microsoft Foundry",
+            // Ollama or LM Studio as Settings shows it under "On this PC": at its own address, saved without a key.
+            CleanupProvider.OpenAiCompatible when CustomServiceFields.SavedApp(settings) is var app &&
+                                                  app != LocalServerApp.None =>
+                string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel)
+                    ? $"On this PC ({LocalAppName(app)})"
+                    : $"On this PC ({LocalAppName(app)}, {settings.AiCleanupCustomModel})",
             CleanupProvider.OpenAiCompatible when !string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel) =>
                 $"Another AI service ({settings.AiCleanupCustomModel})",
             CleanupProvider.OpenAiCompatible => "Another AI service",
@@ -250,6 +256,14 @@ public static class AiCleanupPageState
             _ => "AI cleanup",
         };
     }
+
+    /// <summary>What Settings calls an app on this PC that serves AI models.</summary>
+    public static string LocalAppName(LocalServerApp app) => app switch
+    {
+        LocalServerApp.Ollama => "Ollama",
+        LocalServerApp.LmStudio => "LM Studio",
+        _ => "Scribe",
+    };
 
     public static bool HasProviderConfiguration(AppSettings settings, CleanupProvider provider)
     {
@@ -297,7 +311,7 @@ public static class AiCleanupPageState
                 new(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new(AiCleanupActionId.SetUp, "Set up"))),
             CleanupStatus.Initializing => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, "Setting up. The first time can take a while.")),
             CleanupStatus.Downloading => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, progressText ?? "Loading the model...")),
-            CleanupStatus.Ready => new(true, $"On. Using {model} on this PC.", null, new(AiCleanupStatusKind.Success, $"{model} is ready.", new(AiCleanupActionId.Unload, "Unload"))),
+            CleanupStatus.Ready => new(true, $"On. Using {model} on this PC.", null, new(AiCleanupStatusKind.Success, $"{model} is ready.", new(AiCleanupActionId.Unload, FoundryLocalSetup.FreeMemoryAction))),
             CleanupStatus.Unavailable => new(
                 true,
                 "On, but not ready. Until it's ready, Scribe types what it hears.",
@@ -311,7 +325,7 @@ public static class AiCleanupPageState
     {
         var row = setup is null
             ? new AiCleanupStatusRow(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new(AiCleanupActionId.SetUp, "Set up"))
-            : new AiCleanupStatusRow(setup.Kind, setup.Text, setup.ActionText is null ? null : ActionFor(setup.ActionText, setup.CanUnload || setup.ActionText != "Unload"));
+            : new AiCleanupStatusRow(setup.Kind, setup.Text, setup.ActionText is null ? null : ActionFor(setup.ActionText, setup.CanUnload || setup.ActionText != FoundryLocalSetup.FreeMemoryAction));
         var model = string.IsNullOrWhiteSpace(modelName) ? "the selected model" : modelName;
 
         // The top card follows the setup stage (the 6.2.1 rows), not the row's color: "Ready to download" is an Info row
@@ -383,7 +397,7 @@ public static class AiCleanupPageState
         CopilotSetupState? copilot,
         CustomEndpointSetupState? custom) => provider switch
     {
-        CleanupProvider.FoundryLocal when foundry is not null => new(foundry.Kind, foundry.Text, foundry.ActionText is null ? null : ActionFor(foundry.ActionText, foundry.CanUnload || foundry.ActionText != "Unload")),
+        CleanupProvider.FoundryLocal when foundry is not null => new(foundry.Kind, foundry.Text, foundry.ActionText is null ? null : ActionFor(foundry.ActionText, foundry.CanUnload || foundry.ActionText != FoundryLocalSetup.FreeMemoryAction)),
         CleanupProvider.FoundryLocal => new(AiCleanupStatusKind.Warning, "Not set up yet. Setup downloads the AI runtime for this PC, which can take several GB.", new(AiCleanupActionId.SetUp, "Set up")),
         CleanupProvider.AzureFoundry => AzureRow(azure ?? new(AzureSetupResult.NotChecked)),
         CleanupProvider.OpenAiCompatible => CustomRow(custom ?? new(CustomEndpointTestResult.NotTested)),
@@ -457,7 +471,7 @@ public static class AiCleanupPageState
         "Set up" => new(AiCleanupActionId.SetUp, text, enabled),
         "Download and load" => new(AiCleanupActionId.DownloadAndLoad, text, enabled),
         "Load" => new(AiCleanupActionId.Load, text, enabled),
-        "Unload" => new(AiCleanupActionId.Unload, text, enabled),
+        FoundryLocalSetup.FreeMemoryAction => new(AiCleanupActionId.Unload, text, enabled),
         "Try again" => new(AiCleanupActionId.TryAgain, text, enabled),
         "Check sign-in" => new(AiCleanupActionId.CheckSignIn, text, enabled),
         "Sign in" => new(AiCleanupActionId.SignIn, text, enabled),
@@ -469,7 +483,7 @@ public static class AiCleanupPageState
 
     private static string ProviderName(CleanupProvider provider) => provider switch
     {
-        CleanupProvider.FoundryLocal => "On this PC (Foundry Local)",
+        CleanupProvider.FoundryLocal => "On this PC",
         CleanupProvider.AzureFoundry => "Microsoft Foundry",
         CleanupProvider.OpenAiCompatible => "Another AI service",
         CleanupProvider.GitHubCopilot => "GitHub Copilot",

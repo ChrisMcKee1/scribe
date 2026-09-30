@@ -4,7 +4,7 @@ Scribe transcribes on your own machine and works completely offline. **AI cleanu
 extra: a language model tidies punctuation, capitalization, spoken self-corrections and repeated
 points before the text is typed out. Scribe never sends audio. Each cleanup request sends the
 transcribed *text* of that dictation, Scribe's cleanup instructions with your writing style, and
-your enabled dictionary and library terms, whether or not the dictation mentions them, and only to
+your enabled dictionary and library terms that the dictation appears to mention, and only to
 an endpoint you configure. [PRIVACY.md](../PRIVACY.md#optional-ai-features-and-data-transmission)
 lists exactly what each request carries.
 

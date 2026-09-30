@@ -23,7 +23,10 @@ public static class OverlayPipeProtocol
     /// <summary>A warning shown over a live recording, with its text; the recording state stays.</summary>
     public const string Warning = "WARNING";
 
-    /// <summary>Processing, with <c>1</c> when AI cleanup runs and <c>0</c> when only transcription does.</summary>
+    /// <summary>
+    /// Processing, with <c>0</c> when only speech recognition runs, <c>1</c> when AI cleanup runs, and <c>2</c> when AI
+    /// cleanup waits for its model on this PC to start.
+    /// </summary>
     public const string Processing = "PROCESSING";
 
     /// <summary>The outcome <see cref="PillOutcomeKind.Typed"/>.</summary>
@@ -77,8 +80,12 @@ public static class OverlayPipeProtocol
     /// <summary>A warning over the live recording.</summary>
     public static string WarningLine(string? reason) => Line(Warning, reason);
 
-    /// <summary>Processing, saying whether AI cleanup runs for this capture.</summary>
-    public static string ProcessingLine(bool aiCleanup) => Processing + (aiCleanup ? " 1" : " 0");
+    /// <summary>
+    /// Processing, saying whether AI cleanup runs for this capture and whether it waits for its model on this PC to start
+    /// (only with AI cleanup).
+    /// </summary>
+    public static string ProcessingLine(bool aiCleanup, bool startingLocalModel = false) =>
+        Processing + (!aiCleanup ? " 0" : startingLocalModel ? " 2" : " 1");
 
     /// <summary>The live input level, scaled to 0 to 1000.</summary>
     public static string MeterLine(int level) =>

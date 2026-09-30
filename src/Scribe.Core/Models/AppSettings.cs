@@ -228,7 +228,7 @@ public sealed class AppSettings
     /// </summary>
     public string? AiCleanupCustomEndpoint { get; set; }
 
-    /// <summary>Model name to request from the custom endpoint (e.g. <c>qwen3:4b</c>).</summary>
+    /// <summary>Model name to request from the custom endpoint (e.g. <c>gemma4:e2b</c>).</summary>
     public string? AiCleanupCustomModel { get; set; }
 
     /// <summary>
@@ -273,6 +273,27 @@ public sealed class AppSettings
     /// </summary>
     [JsonConverter(typeof(DpapiProtectedStringConverter))]
     public string? AiCleanupCustomApiKey { get; set; }
+
+    /// <summary>
+    /// Another AI service's server address, remembered while "On this PC" runs the AI with Ollama or LM Studio, whose
+    /// address and model <see cref="AiCleanupCustomEndpoint"/> and <see cref="AiCleanupCustomModel"/> then hold. Choosing
+    /// Another AI service again brings it back (<see cref="Settings.CustomServiceFields"/>). Null otherwise.
+    /// </summary>
+    /// <remarks>
+    /// The custom fields keep the app's own address, so an older build reads the choice as that server on this PC and keeps
+    /// working; it ignores these and leaves them out of a document it saves, which only forgets what was remembered.
+    /// </remarks>
+    public string? AiCleanupOtherServiceEndpoint { get; set; }
+
+    /// <summary>The model name remembered with <see cref="AiCleanupOtherServiceEndpoint"/>.</summary>
+    public string? AiCleanupOtherServiceModel { get; set; }
+
+    /// <summary>
+    /// The API key remembered with <see cref="AiCleanupOtherServiceEndpoint"/>. DPAPI-encrypted at rest, same as
+    /// <see cref="AiCleanupCustomApiKey"/>.
+    /// </summary>
+    [JsonConverter(typeof(DpapiProtectedStringConverter))]
+    public string? AiCleanupOtherServiceApiKey { get; set; }
 
     /// <summary>
     /// How decoded text is placed into the focused app. Unicode typing is the default because it

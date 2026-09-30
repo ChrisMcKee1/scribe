@@ -4,9 +4,9 @@ using Xunit;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// Guards the curated catalog metadata that the settings UI surfaces. The recommendation strings
-/// are pinned to the golden-suite benchmark winners in docs/model-leaderboard.md, so a stray edit
-/// that mislabels a model (or drops a winner from the list) fails here rather than in the UI.
+/// Guards the curated catalog metadata that the settings UI surfaces. The recommendation is pinned to
+/// the local benchmark's best balance in docs/local-model-benchmark.md, so a stray edit that
+/// mislabels a model (or drops the default from the list) fails here rather than in the UI.
 /// </summary>
 public sealed class CleanupModelCatalogTests
 {
@@ -78,54 +78,71 @@ public sealed class CleanupModelCatalogTests
     }
 
     [Fact]
-    public void Only_the_leaderboard_winners_carry_a_recommendation()
+    public void No_curated_model_is_labelled_as_recommended()
     {
-        var recommended = CleanupModelCatalog.Curated
-            .Where(m => m.Recommendation is not null)
-            .Select(m => m.Alias)
-            .ToArray();
+        // Settings names no model as the one to pick; the benchmark ranks them (docs/local-model-benchmark.md).
+        Assert.DoesNotContain(CleanupModelCatalog.Curated, m =>
+            m.DisplayName.Contains("recommend", System.StringComparison.OrdinalIgnoreCase) ||
+            m.Hint.Contains("recommend", System.StringComparison.OrdinalIgnoreCase));
+    }
 
-        Assert.Equal(new[] { "mistral-nemo-12b-instruct", "phi-4" }, recommended);
+    [Fact]
+    public void The_default_is_first_and_the_smallest_quick_model()
+    {
+        // Resolve(null) returns the first curated model, which must be the default.
+        Assert.Equal(CleanupModelCatalog.DefaultAlias, CleanupModelCatalog.Curated[0].Alias);
+        Assert.Equal("qwen2.5-1.5b", CleanupModelCatalog.DefaultAlias);
+        Assert.Equal("Qwen2.5 1.5B", CleanupModelCatalog.Resolve(null).DisplayName);
     }
 
     [Theory]
-    [InlineData("mistral-nemo-12b-instruct", "Best balance on this PC")]
-    [InlineData("phi-4", "Best quality on this PC")]
-    public void Winners_carry_the_expected_recommendation_text(string alias, string recommendation)
+    [InlineData("NVIDIA GeForce RTX 5080", 16L, "qwen2.5-7b")]
+    [InlineData("NVIDIA GeForce RTX 4060 Laptop GPU", 8L, "qwen2.5-7b")]
+    [InlineData("NVIDIA GeForce RTX 3050", 6L, "qwen2.5-1.5b")]
+    [InlineData("NVIDIA GeForce GTX 1080", 8L, "qwen2.5-1.5b")]
+    [InlineData("AMD Radeon RX 7900 XTX", 24L, "qwen2.5-1.5b")]
+    [InlineData("AMD Radeon(TM) Graphics", 2L, "qwen2.5-1.5b")]
+    public void The_first_setup_starts_from_the_model_this_PC_s_graphics_card_runs_well(string adapter, long gib, string expected)
     {
-        var model = CleanupModelCatalog.Curated.Single(m => m.Alias == alias);
-        Assert.Equal(recommendation, model.Recommendation);
+        // Only an NVIDIA RTX card runs Foundry Local's Qwen2.5 7B on the graphics card (TensorRT for RTX), and it needs
+        // room for it; anywhere else it would run on the processor, several times slower than Qwen2.5 1.5B.
+        var adapters = new[] { new Scribe.Core.Diagnostics.GraphicsAdapter(adapter, gib * 1024 * 1024 * 1024) };
+        Assert.Equal(expected, CleanupModelCatalog.DefaultAliasFor(adapters));
+        Assert.Contains(CleanupModelCatalog.Curated, m => m.Alias == expected);
     }
 
     [Fact]
-    public void Non_winners_leave_recommendation_null()
+    public void A_PC_without_a_readable_graphics_card_starts_from_the_default()
     {
-        foreach (var model in CleanupModelCatalog.Curated)
-        {
-            if (model.Alias is "mistral-nemo-12b-instruct" or "phi-4")
-            {
-                continue;
-            }
-
-            Assert.Null(model.Recommendation);
-        }
+        Assert.Equal(CleanupModelCatalog.DefaultAlias, CleanupModelCatalog.DefaultAliasFor([]));
+        Assert.All(Scribe.Core.Diagnostics.GraphicsAdapters.Detect(), adapter => Assert.False(string.IsNullOrWhiteSpace(adapter.Name)));
     }
 
     [Fact]
-    public void Resolve_returns_the_curated_descriptor_with_its_recommendation()
+    public void Models_the_local_benchmark_could_not_run_on_a_gpu_are_no_longer_curated()
     {
-        var model = CleanupModelCatalog.Resolve("phi-4");
-
-        Assert.Equal("phi-4", model.Alias);
-        Assert.Equal("Best quality on this PC", model.Recommendation);
+        // Measured with Foundry Local 1.2.4 on an RTX 5080 (docs/local-model-benchmark.md): Mistral NeMo 12B's only GPU
+        // build failed to start and Phi-4's TensorRT-RTX engine failed to load, so both fell back to the CPU with a 7 to
+        // 10 GB download. With 2.1.0 every build of Qwen3.5 2B fails ("Invalid rank for input: position_ids"). They stay
+        // available from the live catalog.
+        Assert.DoesNotContain(CleanupModelCatalog.Curated, m => m.Alias is "mistral-nemo-12b-instruct" or "phi-4" or "qwen3.5-2b-text");
     }
 
     [Fact]
-    public void Resolve_of_an_unknown_alias_has_no_recommendation()
+    public void Resolve_returns_the_curated_descriptor()
+    {
+        var model = CleanupModelCatalog.Resolve("QWEN2.5-1.5B");
+
+        Assert.Equal("qwen2.5-1.5b", model.Alias);
+        Assert.Equal("Qwen2.5 1.5B", model.DisplayName);
+    }
+
+    [Fact]
+    public void Resolve_of_an_unknown_alias_describes_it_as_a_custom_model()
     {
         var model = CleanupModelCatalog.Resolve("some-uncurated-model");
 
         Assert.Equal("some-uncurated-model", model.Alias);
-        Assert.Null(model.Recommendation);
+        Assert.Equal("Custom Foundry Local model.", model.Hint);
     }
 }

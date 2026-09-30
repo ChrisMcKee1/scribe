@@ -12,8 +12,8 @@ speak, release: punctuated text is typed into whatever app has focus. Audio is c
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
-text, the cleanup instructions and the vocabulary glossary (your dictionary and the word packs you let
-AI cleanup use, within its budget), whether or not the dictation mentions them; see
+text, the cleanup instructions and the vocabulary glossary (the terms from your dictionary and the word packs
+you let AI cleanup use that the dictation appears to mention, within its budget); see
 [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
@@ -161,10 +161,11 @@ not the current macOS effort described here.
   [Overlay architecture](#overlay-architecture-read-before-touching-the-pill); it is not
   a normal window.
 - **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.8**
-  (Apache‑2.0, bundling ONNX Runtime 1.28.2) on CPU. **VAD:** Silero (MIT). Native runtime is
+  (Apache‑2.0) on CPU, running on the ONNX Runtime 1.30.0 that Foundry Local brings (it outranks the 1.28.2
+  sherpa-onnx bundles; see the dependency rules). **VAD:** Silero (MIT). Native runtime is
   per-architecture; see [Architecture support](#architecture-support-x64-and-arm64).
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`), one code path for on‑device
-  **Foundry Local** (`Microsoft.AI.Foundry.Local.WinML`) and cloud **Microsoft Foundry**.
+  **Foundry Local** (`Microsoft.AI.Foundry.Local` 2.x, WinML built in) and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Hosting and platform libraries:** the .NET 10.0.12 servicing builds of `Microsoft.Extensions.*`,
   `Microsoft.Data.Sqlite` and `System.Security.Cryptography.ProtectedData`.
@@ -203,10 +204,13 @@ not the current macOS effort described here.
   quarter smaller. Move the four together to the set the next metapackage lists. **Adding a Windows
   App SDK feature means adding its component package**, or the feature is missing at runtime while
   the build stays green.
-- **The sherpa-onnx packages move together, and they move on-device cleanup too.** The managed wrapper
-  and both natives come from one release, and the `onnxruntime.dll` they bundle is also the one
-  Foundry Local's GenAI runtime loads in-process, so a sherpa-onnx bump changes the ONNX Runtime that
-  on-device cleanup runs on.
+- **The sherpa-onnx packages move together, and one `onnxruntime.dll` serves speech and on-device cleanup.** The
+  managed wrapper and both natives come from one release. Speech recognition and Foundry Local's GenAI runtime load the
+  same `onnxruntime.dll` in-process, and the build keeps whichever copy has the higher file version: since Foundry Local
+  2.x (0.5.2) that is `Microsoft.ML.OnnxRuntime` 1.30.0 from Foundry Local, not the 1.28.2 sherpa-onnx bundles, so a
+  Foundry Local bump changes the ONNX Runtime speech runs on, and a sherpa-onnx bump that brings a newer one changes
+  cleanup's. Either move needs `tools/Scribe.AsrCheck`, the scenario suite and a Foundry Local cleanup on both
+  architectures.
 - **`Azure.Core`, not `Azure.Identity`, decides how the credentials behave.** `Azure.Identity`
   type-forwards `AzureCliCredential` and `ClientSecretCredential` to `Azure.Core`, whose version the
   `Azure.ResourceManager` packages lift transitively.
@@ -263,9 +267,16 @@ them. Until this was fixed the AI cleanup page said remote providers get only th
 dictation, while every request carried the whole glossary and the readiness probe carried it too, before
 anything was dictated.
 
-- **Every cleanup request carries the glossary**: every enabled dictionary term and every term of the word packs
-  AI cleanup may receive, merged personal first, up to 5,000 terms and 24,000 characters (80 terms under the
-  Local prompt style), whether or not the dictation mentions them. It comes from the vocabulary generation the
+- **Every cleanup request carries the glossary of the terms its dictation appears to mention** (0.5.2,
+  `CleanupVocabularyMode.Mentioned`, which `DictationController.BuildCleanupOptions` sets for every provider):
+  `VocabularyMentions.Select` picks, from every enabled dictionary term and every term of the word packs AI cleanup
+  may receive, merged personal first, the ones whose spoken or written words appear in the recognized text, exactly
+  or heard slightly differently (sound keys and small slips, see the class), then the usual budget applies: up to
+  5,000 terms and 24,000 characters (80 terms under the Local prompt style). Measured on the frozen 25 cases
+  (docs/local-model-benchmark.md): the blind judge's score did not drop, the right word pack term reached the output
+  in 97% of uses on Gemma 4 E4B against 67% with the whole list (whose first 80 terms under the Local style often
+  left out the one a dictation needed), and a cloud request's input fell from about 7,500 to 1,400 tokens. It comes
+  from the vocabulary generation the
   dictation was admitted with (`VocabularyGeneration.GlossaryEntries`, `CleanupPrompt.ComposeVocabulary` of the
   personal dictionary and the committed `LibraryVocabulary.AiEntries`), never from a fresh read of the stored
   document (see "The library vocabulary is the committed one" below, and "Library vocabulary admission"). A word
@@ -273,13 +284,26 @@ anything was dictated.
   form spanning lines or past 100 characters, judged before trimming) is not vocabulary and stays out,
   by `CleanupPrompt.IsVocabularyReplacement`, the one rule the usage insight's labels follow too
   (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
-  glossaries are unchanged). There is no relevance filter; do not describe one until there is one, and
-  do not add one without the eval harness showing it does not hurt cleanup.
+  glossaries are unchanged). `CleanupVocabularyMode.All`, every release before 0.5.2, stays for the harness
+  (`--vocabulary all`); change the selector only with the harness's vocabulary accuracy (`p2\vocab_accuracy.py` in
+  the benchmark evidence) and judge showing it does not hurt cleanup.
 - **The readiness probe carries no vocabulary.** `ProbeAgentAsync` builds its own agent from the factory
   the initialization connected, with `BuildProbeSystemPrompt` (the real guardrails and writing style,
   without the glossary), so it still reasons like a cleanup call. Never hand it the serving agent.
   `CleanupProbeVocabularyTests` pins this from the wire for custom endpoints, Foundry Local, Azure
   Responses and the Chat Completions fallback, and through the factory for Copilot.
+- **The readying request carries no vocabulary, and goes only to a server on this PC.** When a recording
+  starts, `AdmittedCleanup.Prewarm` sends a server at a loopback address (`LocalAiServer.Serves`) the
+  dictation's own instructions and writing style (built with `CleanupVocabularyMode.None`) with an empty
+  transcript and a one-token limit, through the
+  dictation's admission (`CleanupRequestKind.Prewarm`), unless the model answered in the last
+  `LocalAiServer.PrewarmAfterIdleSeconds`. They are exactly the start of every dictation's prompt
+  (`PromptParts.Build` appends the glossary after them), so the server's cached prefix is the part each dictation
+  shares. `CleanupDisclosure.ReadiesALocalServer` and PRIVACY.md say so, and
+  `LocalAiServerTests` pins both the wire and that no other destination is readied. Never extend it to a remote
+  service. For Ollama or LM Studio at its own address (`LocalAiServer.AppAt`), the readying request first asks the
+  app whether it holds the model (`LocalServerClient.ReadAsync`), which is what the recording indicator's
+  "Starting local model" means; `CleanupDisclosure.ManagesALocalApp` and PRIVACY.md disclose those requests.
 - **The wording lives in Core.** `CleanupDisclosure` holds the AI cleanup page card and the dictionary
   suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
   glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
@@ -412,6 +436,15 @@ dotnet run -c Release --project tools/Scribe.Benchmarks -- --startup-probe warmu
 # Offline AI-cleanup quality eval (no network, no judge model)
 dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
+
+# Local model benchmark (docs/local-model-benchmark.md): the frozen 25 dictations through the real cleanup service,
+# on Ollama, LM Studio or Foundry Local (runtime prefix ollama:, lmstudio:, foundry:, or openai:<url>|<model>), then a
+# blind grade through the GitHub Copilot command-line tool (default judge claude-opus-5.5) with cloud answers as anchors.
+# Set SCRIBE_DATA_DIR to a scratch folder first, as for any dev instance.
+dotnet run -c Release --project tools/Scribe.Evals -- --benchmark --no-cloud --runs 3 --no-judge --local-models "ollama:gemma4:e2b,lmstudio:google/gemma-4-e2b,foundry:qwen2.5-1.5b" --cases-from docs/benchmarks/gpt6-astra-2026-09-04.json --glossary-libraries default --out <dir>
+dotnet run -c Release --project tools/Scribe.Evals -- --blind-judge --judge-results <dir>/results.json --judge-anchors docs/benchmarks/gpt6-astra-2026-09-04.json:gpt-5.6-terra@1 --out <judge dir>
+# After changing TextCleanupService.TrySanitize: apply it to recorded answers (writes <dir>-resanitized, lists every change)
+dotnet run -c Release --project tools/Scribe.Evals -- --resanitize <dir>/results.json
 
 # Auxiliary prompt evals (UsageInsight + AiDictionarySuggester, deterministic checks)
 dotnet run --project tools/Scribe.Evals -- --suite auxiliary
@@ -873,7 +906,7 @@ matter are intermittent and hardware‑specific.
   unfinished; shared token wait N ms over N wait(s), N without the token; tokens in N, cached N, out N, reasoning N.`,
   from a timing record the operation's admission carries (`CleanupPhaseTimings`). Each phase is recorded when it ends,
   however it ends (a wait for the Azure CLI gate by admission or by cancellation, a call with a token or not, a wait on
-  another request's token acquisition under `CliAccessTokenCache`), and counted, so a phase that never ran reads `over
+  another request's token acquisition under the Azure CLI access-token cache), and counted, so a phase that never ran reads `over
   0`, never as a measured 0 ms; a count the service did not report is `unset`, never 0. Under
   `PerfFlags.CleanupPhaseTelemetry` the line adds the send path's `headers N ms over N response(s); last body bytes read
   at N ms over N body(ies), N empty, N unfinished`, through a read-through response content that buffers and keeps
@@ -2635,8 +2668,10 @@ builds the `TokenCredential`; everything else goes through it.
   request and every retry (1.15.0, and 1.16.0 unchanged; unlike Azure.Core's caching `BearerTokenAuthenticationPolicy`,
   which Settings' ARM discovery uses). So with Azure CLI sign-in every cleanup request starts an `az` process and waits
   for the CLI gate below; the cleanup log's attempt line reports that gate wait and the token call, numbers only.
-- **`PerfFlags.CliAccessTokenCache` (off by default) keeps the Azure CLI access token in memory for cleanup only.**
-  `AzureCredentialFactory.Create(request, cacheCliTokens)` wraps an Azure CLI credential in `CachingCliTokenCredential`
+- **The Azure CLI access token is kept in memory for cleanup, on by default since 0.5.2** (the maintainer approved it
+  after measuring 1.2 to 7 s of `az` per request); `PerfFlags.CliTokenEveryRequest`, named for the old behaviour, brings
+  back one `az` process per request for this release, then goes. `AzureCredentialFactory.Create(request, cacheCliTokens)`
+  wraps an Azure CLI credential in `CachingCliTokenCredential`
   for the two serving clients (Responses and the Chat Completions fallback); Settings discovery and Test connection keep
   `Create(request)`, the uncached instance, and a service principal is never wrapped. A token is served from memory until
   its refresh hint or five minutes before its expiry, whichever comes first (expiry is a ceiling), keyed by scopes, tenant
@@ -2644,7 +2679,7 @@ builds the `TokenCredential`; everything else goes through it.
   when its last waiter leaves; an abandoned or failed acquisition stores nothing. `AzureCredentialInvalidation.Invalidate()`
   moves a version every call reads, so a client that already holds the instance acquires again on its next request, and an
   acquisition in flight answers the callers admitted before the change but is never stored. No timer, no background
-  refresh, nothing on disk. What needs the maintainer's approval: an account change made outside Scribe (`az login` as
+  refresh, nothing on disk. What the maintainer approved with the default: an account change made outside Scribe (`az login` as
   another account of the same tenant or subscription, or `az logout`) is seen at the next refresh, up to the token's
   remaining life less five minutes later, instead of at the next request. Entra's default access-token lifetime is "a
   random value ranging between 60-90 minutes" and "varies depending on the client application requesting the token, the
@@ -3045,7 +3080,9 @@ Arm64 build.
 **The SDK owns hardware selection. Do not try to take it back.** Microsoft's architecture reference
 is explicit: "The Core API automatically identifies available hardware and chooses the best
 execution provider for each model." There is no supported override, so Scribe *reports* the choice
-rather than offering one. Supported providers and their device types:
+rather than offering one. The one exception is a model a 1.x build moved to its CPU build (see "A fallback
+remembered by a 1.x build" below): Scribe then asks for the build the SDK itself ranks first for this hardware,
+setting aside only its preference for a build already downloaded. Supported providers and their device types:
 
 | Execution provider | Device |
 | --- | --- |
@@ -3054,11 +3091,40 @@ rather than offering one. Supported providers and their device types:
 | Qualcomm QNN, AMD Vitis AI | **NPU** |
 | CPU | always available as fallback |
 
-**Use `Microsoft.AI.Foundry.Local.WinML`, not the cross-platform package.** Same API surface, but EP
-plugins are sourced from the OS and Windows Update with driver compatibility negotiation, which is
-what reaches an NPU at all. The cross-platform package also carries Linux and macOS payloads Scribe
-can never run. The WinML package requires build 18362 or later, which is why the tree targets
-Windows 11; `net10.0-windows` on its own silently means `net10.0-windows7.0` and will not resolve it.
+**Foundry Local 2.x is one package, `Microsoft.AI.Foundry.Local`, with WinML built in.** Until 1.2.4 Windows needed
+the separate `.WinML` package; 2.x folded it in (the release notes' migration table says "Remove `.WinML`"), bundling
+the reg-free WinML runtime (`Microsoft.Windows.AI.MachineLearning.dll`), so execution-provider plugins still come from
+the OS and Windows Update with driver negotiation, which is what reaches an NPU. Scribe still registers them itself
+(`DiscoverEps`, `DownloadAndRegisterEpsAsync`) before the first catalog read; on an RTX 5080 that is TensorRT-RTX, CUDA
+(new with 2.x) and WebGPU. The in-process OpenAI-style clients are obsolete (removal at the end of 2026); Scribe uses the
+local web service, whose OpenAI contract 2.x keeps. The package brings `Microsoft.ML.OnnxRuntime` 1.30.0 and GenAI 0.17.1,
+and that `onnxruntime.dll` is now the one speech recognition runs on too (see the dependency rules). The tree targets
+Windows 11; `net10.0-windows` on its own silently means `net10.0-windows7.0`.
+
+**What 2.1.0 does with a request, measured (0.5.2, RTX 5080).** It honors `max_completion_tokens`, so no legacy
+`max_tokens` is patched in, and `reasoning_effort: "none"` turns thinking off: Qwen3.5 4B spent all 2,048 output tokens
+thinking (33 s) on a one-sentence edit without it and answered in 0.58 s with it, so `ApplyOnThisPcGeneration` sends it
+to Foundry Local as it does to Ollama. The first request after a load pays a one-time cost (4.4 s for Qwen2.5 1.5B on
+TensorRT-RTX); the readiness probe absorbs it at setup.
+
+**RTX 50 series cards need cuDNN attention off.** On compute capability 9.0 and later, ONNX Runtime prefers cuDNN's
+attention kernel for GroupQueryAttention unless one is chosen, and with 2.1.0 on an RTX 5080 it failed every request to
+Qwen3 4B's CUDA build ("Non-zero status code returned while running GroupQueryAttention node ...
+cudnn_flash_attention.cc") and gave Gemma 4 E2B a 16 s first request (1.3 s without). `FoundryRuntimeEnvironment` sets
+`ORT_ENABLE_CUDNN_FLASH_ATTENTION=0`, which ONNX Runtime documents as turning that kernel and its preference off, before
+the manager exists, unless the user set the variable. It chooses ONNX Runtime's attention kernel inside the CUDA
+provider, not a provider, so the rule that the SDK picks the provider stands.
+
+**A graphics card build that fails its first request falls back to its CPU build, for the session.** ONNX Runtime's
+"failed to create generator" or "Non-zero status code returned while running" in the probe's failure
+(`MentionsGpuBuildFailure`) demotes it, and the failed build is unloaded first, since it shares the family alias the
+single-model rule keeps. That fallback is kept in memory only (`_sessionFoundryDemotions`): ONNX Runtime words every
+failure inside a model step that way, running out of graphics memory and a driver reset included, so saving it would
+move a model to the CPU for good over a busy graphics card; the next start tries the graphics card build again. Every
+build Foundry Local names `<model>-<provider>-gpu` (`generic-gpu` for WebGPU, `cuda-gpu`, `trtrtx-gpu` for
+TensorRT-RTX) falls back to `<model>-generic-cpu` (`FoundryModelVariant`). 2.1.0's catalog bugs on this PC: Qwen3.5
+2B's CUDA build ("Invalid rank for input: position_ids") and SmolLM3 3B's chat template ("Unknown method: replace",
+every build).
 
 **Read the execution provider from the SDK (`model.Info.Runtime.ExecutionProvider`), never from the
 alias text.** `FoundryExecutionProviders` maps a provider to a device type for display. Alias
@@ -3070,10 +3136,43 @@ failed to load and the SDK's answer is unavailable.
 as `qwen3-1.7b-generic-gpu:2`. Anything matching on the configured alias will miss every real user,
 which is exactly how the first GPU fallback shipped broken.
 
-**The WebGPU shader crash is real and not vendor specific.** A `QuickGelu` / "Failed to create a
-WebGPU compute pipeline" failure reproduced on Snapdragon Adreno and on Intel Lunar Lake with
-different models. Scribe demotes to the CPU build automatically, on both the shader failure at
-inference and the provider-unavailable failure at load, and remembers it.
+**The WebGPU shader crash is real and not vendor specific, at least on 1.x.** A `QuickGelu` / "Failed to create a
+WebGPU compute pipeline" failure reproduced on Snapdragon Adreno, on Intel Lunar Lake and (0.5.2's
+local benchmark, SDK 1.2.4) on an NVIDIA RTX 5080, for every Qwen3, Qwen3.5, Phi-4 Mini and Mistral NeMo build.
+With 2.1.0 on the same RTX 5080, Qwen3 1.7B's WebGPU build ran without it (three dictations, about 78 tokens a second
+against its CUDA build's 110); the other WebGPU builds were not retested. Scribe demotes to the CPU build
+automatically and remembers it in `foundry-local-demotions-v2.json` (`FoundryDemotionReset.FileName`) on the shader
+failure and on the provider-unavailable failure at load; a build ONNX Runtime cannot run at inference falls back for
+the session only (above).
+
+**A fallback remembered by a 1.x build is not applied.** 1.x builds kept theirs in `foundry-local-demotions.json`
+(`FoundryDemotionReset.LegacyFileName`); on an NVIDIA card 0.5.1 moved every Qwen3 and Phi-4 Mini model there after the
+WebGPU shader failure. The file is left in place for a rollback, whose SDK it describes. Setting the entry aside alone
+would not help: the SDK prefers a build already downloaded, so the model would resolve straight back to its cached
+WebGPU or CPU build (and on 2.1.0 the WebGPU build now answers its probe, so nothing would demote it). So while a model
+has a 1.x entry, `ChooseFoundryBuild` selects the build Foundry Local would pick on a new install: the first of the
+family's variants, in Foundry Local's own order, whose execution provider is registered here, other than the CPU (on
+the RTX 5080, `qwen3-1.7b-cuda-gpu:2`, 0.70 s against 12.6 s on the CPU), downloading it if it has to. It works out the
+fallback, the CPU build 1.x chose, whatever is selected now (the SDK keeps one model object per family for the process,
+and the chosen build is its own choice at later starts once downloaded). If the chosen build cannot be downloaded or
+loaded, or fails its first request for any reason (`TryFoundryReselectFallbackAsync`, which runs before
+`TryDemoteFoundryGpuAsync`), the fallback serves until Scribe restarts and the next start tries again. The entry is
+settled, with a blank 2.x entry that hands the model back to Foundry Local's own choice, only by a conclusive start
+(`FoundryOutcomeConclusive`): every execution provider registered (`EpDownloadResult` reported success and no failed
+provider; the catalog lists builds only for the providers that registered) and the chosen build served. A WebGPU shader
+failure of the chosen build on a conclusive start is remembered, which settles it too; any other outcome waits for a
+later start. An exact variant id is never reselected; its entry is settled by any start on which every provider
+registered.
+
+**The default model is chosen for the GPU paths that actually run.** On NVIDIA RTX, Foundry Local's
+TensorRT-RTX builds are the fastest (the catalog has them for the Qwen2.5 family and Phi-3.5 Mini); since 2.x the
+CUDA builds run too, which brought Qwen3 4B and Phi-4 Mini from 16 s on the CPU to under 0.8 s. So
+`CleanupModelCatalog.DefaultAlias` is `qwen2.5-1.5b` (0.37 s on the GPU, 6.7 s on the CPU) and a first setup on an
+RTX card with 8 GB or more starts from `qwen2.5-7b` (85.4 at 0.74 s), still the best model in Foundry Local's catalog
+for cleanup. Re-measure with the local benchmark before moving either, and change `FoundryModelChoices`' size table
+and the catalog tests with it. The SDK prefers a build already downloaded: once a family's CPU build is cached, its
+alias resolves to it even where a GPU build could run (measured with Qwen3.5 0.8B on 2.1.0). Scribe sets that
+preference aside only for a model a 1.x build demoted (above).
 
 **Nothing downloads by browsing.** Opening the AI page or picking Foundry Local in the provider list
 starts nothing. Only Set up Foundry Local, Load, or saving with cleanup on may initialize the runtime,
@@ -3124,6 +3223,90 @@ thread, only when something was freed, with the reason (`ProviderIsNotFoundryLoc
 or `RuntimeWithoutModel`), the bytes freed and counts. The app subscribes before `_controller.Start()`,
 because the startup reclaim runs with the first configuration, and marshals to the dispatcher to show
 the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the reason code only.
+
+## AI cleanup on a server on this PC (read before touching OpenAI-compatible requests)
+
+`LocalAiServer.IsOnThisPc` counts an http or https address at `localhost`, `127.0.0.0/8`, `[::1]` or a
+`*.localhost` name as a model on this PC, which is how most people run Ollama and LM Studio. Each rule below was
+measured in the 0.5.2 local benchmark (docs/local-model-benchmark.md), where 0.5.1's behavior cost nine models 26
+points on average:
+
+- **Automatic picks the short instructions and the 80-term budget** (`CleanupPrompt.ResolvePromptStyle` and
+  `GlossaryTermBudget` take the endpoint, and so does `GlossaryHint`). The detailed instructions with a fresh
+  install's two word packs came to 7,745 tokens; Ollama's default 4,096-token context silently kept the last 2,050,
+  so the model never saw an instruction.
+- **Generation settings match Foundry Local** (`ApplyOnThisPcGeneration`): temperature 0.1, `reasoning_effort:
+  none` (Ollama turns thinking on by default and ignores `/no_think`), and the output ceiling also as `max_tokens`
+  through the options' JSON patch, because Ollama ignores the `max_completion_tokens` the OpenAI package sends and a
+  looping model ran to 19,711 tokens. A remote service gets none of these; `LocalAiServerTests` pins both sides from
+  the wire. A server on this PC that answers the readiness probe with a 400 gets one plain probe without the two
+  extra fields, and if that passes, plain requests for that server and model (a strict validator such as vLLM's may
+  allow only low, medium or high for `reasoning_effort`); if it fails too, the first failure stands.
+- **A recording readies the model** (`AdmittedCleanup.Prewarm`, above): Ollama unloads an idle model after 5
+  minutes unless a request's `keep_alive` asks for longer (its OpenAI-compatible address honors the field, measured on
+  0.34.4), which made the next dictation wait 3 to 5 s on the GPU. One readying request at a time, skipped while the
+  model answered in the last 30 s, never throwing.
+- **What small models wrap around an answer is removed** in `TrySanitize`: a leading bare think tag, a first line
+  announcing a rewrite and the separator under it (kept when the dictation itself says "here" or "below" in its
+  first words), and wrapper tags the dictation did not contain.
+
+## Models on this PC: memory, starting, Ollama and LM Studio (read before touching the release path or LocalServerClient)
+
+The maintainer's rules (0.5.2): a model's memory comes back when AI cleanup no longer needs it, freeing it is one click,
+nothing keeps a model loaded while cleanup is off, and the first dictation after a release waits for the model with the
+recording indicator saying so, rather than being typed without cleanup.
+
+- **Ollama and LM Studio are recognized only at their exact default addresses** (`LocalAiServer.AppAt`: http, this
+  PC's own name, port 11434 or 1234, path `/v1`), **saved without an API key** (`CustomServiceFields.SavedApp`).
+  Settings shows them under "On this PC" and saves them as `CleanupProvider.OpenAiCompatible` at
+  `LocalAiServer.OllamaAddress` or `LmStudioAddress` (or the spelling it was saved at, such as `127.0.0.1`), so an older
+  build reads the same settings as another AI service and keeps working. Any other address stays "Another AI service",
+  and so does an app's address saved with a key (LM Studio can require one, and "On this PC" has no box for it): a Save
+  must never drop a key it did not show. A port alone does not prove which app listens.
+- **Another AI service is remembered beside an app.** The custom fields hold the app's address and model, so the service
+  the user had set up goes to `AppSettings.AiCleanupOtherService{Endpoint,Model,ApiKey}` (the key DPAPI-encrypted like
+  the others) and comes back in the boxes when Settings opens (`CustomServiceFields.ForSave` and `OtherService`, one
+  projection for the Save, both drafts and the change tracker). Older builds ignore those fields.
+- **The model list belongs to the selected app.** Choosing Ollama or LM Studio resets the list to what was chosen for
+  that app in this window, or saved for it, so one app's model is never stored with the other's address. A chosen or
+  saved model stays chosen, spelled as saved, whether or not the app lists it (`LocalAppSetup.ModelChoices`: Ollama's
+  `:latest`, an LM Studio instance name, a model since deleted); only with nothing chosen does Scribe preselect, and a
+  model the app does not list shows a warning instead of being swapped. The page reads the app when it opens, whatever
+  the switch, and again when AI cleanup is turned on if nothing was read.
+- **`LocalServerClient` is the only code that talks to their management APIs**: Ollama's `/api/tags` (chat models
+  only: capabilities include "completion"), `/api/ps` and `/api/generate` with `keep_alive: 0`; LM Studio's
+  `/api/v1/models` (`type: llm`, `loaded_instances`, whose ids count as loaded names too) and `/api/v1/models/unload` by
+  instance id. Loopback only, never anything the user said, only the key saved for that same address as a bearer token
+  (a 401 or 403 reads as `LocalServerReach.NeedsKey`), and the callers log counts and enum names.
+  `CleanupDisclosure.ManagesALocalApp` and PRIVACY.md disclose it; change them with it.
+- **When memory comes back.** `ConfigureCore` asks the app to unload the model the previous configuration used when
+  the next one no longer uses it (cleanup off, from Settings or the tray, or another model or place:
+  `LocalServerModelNoLongerUsed`). The idle release (`DictationController.ReleaseIdleModels`, on the idle countdown and
+  on a pause) calls `ITextCleanupService.ReleaseModelMemory`, which unloads Foundry Local's model or asks Ollama or LM
+  Studio to. Each request to those apps also carries `keep_alive` (Ollama) or `ttl` in seconds (LM Studio) equal to
+  `AppSettings.ReleaseModelsAfterIdleMinutes` (`CleanupOptions.LocalModelKeepAliveMinutes`, applied in
+  `WithLocalServerFields`, and set by the controller only for those two apps, so an idle-time change never restarts
+  another provider's setup), so the app frees it on its own if Scribe closes; Never (0) sends nothing and leaves the
+  app's own policy, so nothing is pinned after Scribe exits.
+- **A released Foundry Local model is not a failure.** An unload of the configured model while Ready (Free memory, or
+  the idle release) is decided as `ResidentChangeKind.Released`: the agent and Ready status stay, `_foundryReleased`
+  is set, and the next dictation's start reloads it (`TryStartReleasedModelReload`, one reload at a time, leased).
+  A one-off completion (AI dictionary suggestions, the usage insight) waits for that reload too, since Foundry Local
+  refuses a request for a model it does not hold. Loading a different model is still an eviction that makes cleanup
+  Unavailable. A new configuration, and any initialization that publishes Ready, clears the flag.
+- **A dictation waits for a model that is starting** (`WaitForLocalModelStartAsync`, at most
+  `LocalModelStartWait`, 30 s; tests set it to zero in the harnesses): an initialization for a model on this PC that
+  is loading it, or a released model's reload. Foundry Local counts only once its runtime is up in this process
+  (`_managerReady`): the first setup downloads several GB of runtime, and neither that nor a model download (the
+  setup's own or a Load's, `_foundryDownloading`) is a start to wait for. Past the bound it is typed as
+  heard, as before. `ITextCleanupService.IsLocalModelStarting` (also true while a readying request loads a model
+  Ollama or LM Studio did not hold) is read once when a dictation stops and rides the processing change
+  (`DictationStateChange.StartingLocalModel`) to the overlay's `PROCESSING 2`: "Starting local model…" and "This can
+  take time".
+- **Microsoft Foundry asks for the least reasoning a deployment accepts** (`AzureReasoningEffortFor`): none, then low
+  when the probe's 400 names the effort (gpt-6.1-sol: "'none' is not supported ... Supported values are: 'low', ..."),
+  then no effort field. Measured for 0.5.2: no quality change and about a third less time on gpt-6-sol, and the same on
+  gpt-6.1-sol at low (docs/local-model-benchmark.md). `AzureReasoningEffortTests` pins it on the wire.
 
 ## AI cleanup service state (read before touching TextCleanupService)
 

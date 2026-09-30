@@ -1,5 +1,22 @@
 # Scribe AI Cleanup: Model Leaderboard (Golden Suite)
 
+> **September 29, round two:** the [local AI cleanup benchmark](local-model-benchmark.md#round-two-vocabulary-instructions-lists-and-reasoning)
+> also measures what every request carries. With 0.5.2's requests (the vocabulary each dictation mentions, the
+> least reasoning a Microsoft Foundry deployment accepts, and a writing style that writes lists), graded on 33
+> dictations: **gpt-6.1-sol 96.0** (low reasoning, 1.5 s), **gpt-5.6-terra 95.5** (1.4 s), **gpt-6-sol 94.9**
+> (1.3 s), and on this PC **Gemma 4 E4B 90.1** in 0.51 s, Foundry Local's **Qwen2.5 7B 85.7** in 0.73 s on an
+> NVIDIA RTX card, and **Gemma 4 E2B 84.6** in 0.32 s. Settings recommends no model; this page and the report
+> rank them.
+
+> **September 29 update, models on this PC:** the [local AI cleanup benchmark](local-model-benchmark.md)
+> grades 39 open models in Ollama, LM Studio and Foundry Local, on the GPU and on the CPU alone, blind
+> and against the same 25 dictations as the September 4 run, with cloud answers graded in the same
+> packets. **Gemma 4 E2B** (`gemma4:e2b`) is the recommended balance (83.5 in 0.33 s on an RTX 5080),
+> **Gemma 4 E4B** scored level with `gpt-5.4-mini` (89.2 against 88.3) in half a second, and Foundry
+> Local's default moves to **Qwen2.5 1.5B**. It supersedes the offline picks below: on Foundry Local
+> 1.2.4, neither `phi-4` nor `mistral-nemo-12b-instruct` can run on that GPU any more, and both fall back
+> to the CPU. The report also covers the Scribe 0.5.1 bugs that made local servers score 26 points lower.
+
 > **September 4 update:** [GPT-6-Astra benchmark](gpt6-astra-benchmark.md) reruns the current
 > 25-case suite twice across Astra, the 5.6 trio and Mini, with 750 timed calls and a second
 > blinded judge. **Keep Terra as the responsive cloud recommendation:** Astra's 5.53 s median

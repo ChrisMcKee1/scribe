@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Scribe.App.Infrastructure;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -527,6 +528,11 @@ public partial class SettingsWindow
             case ValidationCode.CustomEndpointInvalid:
                 ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
                 CustomEndpointBox.Focus();
+                break;
+            case ValidationCode.CustomModelEmpty when SelectedLocalApp != LocalServerApp.None:
+                // Ollama or LM Studio under "On this PC": the model comes from the app's list, not a box.
+                ShowInfo(SettingsDraftValidator.LocalAppModelEmptyMessage, Wpf.Ui.Controls.InfoBarSeverity.Error);
+                LocalAppModelBox.Focus();
                 break;
             case ValidationCode.CustomModelEmpty:
                 ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);

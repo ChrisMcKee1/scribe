@@ -1,6 +1,8 @@
 using Scribe.Core.Cleanup;
 using Scribe.Core.PostProcessing;
 using Microsoft.Extensions.AI;
+using BenchEndpoints = Scribe.Evals.Benchmark.LocalEndpoints;
+using BenchJudge = Scribe.Evals.Benchmark.BlindJudge;
 
 namespace Scribe.Evals;
 
@@ -49,15 +51,49 @@ internal sealed class CliOptions
     public CleanupPromptStyle PromptStyle { get; private set; } = CleanupPromptStyle.Auto;
     public string? BenchWritingStyleFile { get; private set; }
     public string? BenchFrontierPromptFile { get; private set; }
+    public string? BenchLocalPromptFile { get; private set; }
     public string[]? BenchGlossaryLibraries { get; private set; }
+    public int? BenchGlossaryMaxTerms { get; private set; }
+    public CleanupVocabularyMode BenchVocabularyMode { get; private set; } = CleanupVocabularyMode.All;
+    public int BenchPaceMs { get; private set; }
+    public string? BenchCasesFrom { get; private set; }
+    public string OllamaEndpoint { get; private set; } = BenchEndpoints.DefaultOllama;
+    public string LmStudioEndpoint { get; private set; } = BenchEndpoints.DefaultLmStudio;
+    public bool KeepServerModelsLoaded { get; private set; }
+
+    // Blind judging of retained outputs (see Benchmark.BlindJudge).
+    public bool BlindJudge { get; private set; }
+    public IReadOnlyList<string>? PrefetchFoundry { get; private set; }
+    public IReadOnlyList<string> ResanitizeResults { get; private set; } = [];
+    public IReadOnlyList<string> BlindJudgeResults { get; private set; } = [];
+    public IReadOnlyList<string> BlindJudgeAnchors { get; private set; } = [];
+    public int BlindJudgePacketSize { get; private set; } = 12;
+    public int BlindJudgeConcurrency { get; private set; } = 2;
+    public string? BlindJudgeReasoningEffort { get; private set; }
     public ReasoningEffort? BenchReasoningEffort { get; private set; }
     public int? BenchMaxOutputTokens { get; private set; }
+    public float? BenchTemperature { get; private set; }
     public bool BenchDisableRetries { get; private set; }
     public bool BenchDirectResponses { get; private set; }
     public bool Force { get; private set; }
     public int LocalLoadTimeout { get; private set; } = 1800;
     public int CloudReadyTimeout { get; private set; } = 120;
     public int CleanTimeout { get; private set; } = 180;
+
+    /// <summary>Builds the blind-judge configuration from the parsed flags.</summary>
+    public Benchmark.BlindJudgeConfig ToBlindJudgeConfig() => new()
+    {
+        OutDir = BenchOut ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ScribeData", "bench", "blind-judge"),
+        ResultsFiles = BlindJudgeResults,
+        Anchors = BlindJudgeAnchors,
+        JudgeModel = string.IsNullOrWhiteSpace(JudgeModel) ? BenchJudge.DefaultModel : JudgeModel!,
+        ReasoningEffort = BlindJudgeReasoningEffort,
+        PacketSize = BlindJudgePacketSize,
+        Concurrency = BlindJudgeConcurrency,
+        CaseOnly = CaseOnly,
+        WritingStyle = ReadPromptFile(BenchWritingStyleFile),
+    };
 
     /// <summary>Builds the benchmark configuration from the parsed flags.</summary>
     public Benchmark.BenchmarkConfig ToBenchmarkConfig()
@@ -91,9 +127,17 @@ internal sealed class CliOptions
             PromptStyle = PromptStyle,
             WritingStyle = ReadPromptFile(BenchWritingStyleFile),
             FrontierPrompt = ReadPromptFile(BenchFrontierPromptFile),
-            Glossary = BuildGlossary(BenchGlossaryLibraries),
+            LocalPrompt = ReadPromptFile(BenchLocalPromptFile),
+            GlossaryEntries = GlossaryEntries(BenchGlossaryLibraries),
+            GlossaryMaxTerms = BenchGlossaryMaxTerms,
+            VocabularyMode = BenchVocabularyMode,
+            PaceMs = BenchPaceMs,
+            LocalEndpoints = new BenchEndpoints(OllamaEndpoint, LmStudioEndpoint),
+            KeepServerModelsLoaded = KeepServerModelsLoaded,
+            CasesFrom = BenchCasesFrom,
             ReasoningEffort = BenchReasoningEffort,
             MaxOutputTokens = BenchMaxOutputTokens,
+            Temperature = BenchTemperature,
             DisableRetries = BenchDisableRetries,
             DirectResponses = BenchDirectResponses,
             CloudReadyTimeoutSeconds = CloudReadyTimeout,
@@ -128,6 +172,18 @@ internal sealed class CliOptions
             AzureDeployment: null,
             WritingStyle: writingStyle,
             CopilotModel: string.Equals(model, "default", StringComparison.OrdinalIgnoreCase) ? null : model),
+        // A local server (Ollama, LM Studio) or any OpenAI-compatible endpoint, configured the way
+        // Settings configures "Another AI service": --endpoint is the /v1 address, --model its model.
+        CleanupProvider.OpenAiCompatible => new CleanupOptions(
+            Enabled: true,
+            Provider: CleanupProvider.OpenAiCompatible,
+            FoundryModelAlias: CleanupModelCatalog.DefaultAlias,
+            AzureEndpoint: null,
+            AzureDeployment: null,
+            WritingStyle: writingStyle,
+            CustomEndpoint: string.IsNullOrWhiteSpace(AzureEndpoint) ? BenchEndpoints.DefaultOllama : AzureEndpoint,
+            CustomModel: model,
+            PromptStyle: PromptStyle),
         _ => new CleanupOptions(
             Enabled: true,
             Provider: CleanupProvider.FoundryLocal,
@@ -163,6 +219,7 @@ internal sealed class CliOptions
                     {
                         "azure" or "azurefoundry" or "cloud" => CleanupProvider.AzureFoundry,
                         "copilot" or "githubcopilot" or "github" => CleanupProvider.GitHubCopilot,
+                        "openai" or "openaicompatible" or "custom" or "ollama" or "lmstudio" => CleanupProvider.OpenAiCompatible,
                         _ => CleanupProvider.FoundryLocal,
                     };
                     break;
@@ -283,6 +340,80 @@ internal sealed class CliOptions
                     o.BenchGlossaryLibraries = Next()
                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                     break;
+                case "--glossary-budget":
+                    var budget = Next().Trim().ToLowerInvariant();
+                    o.BenchGlossaryMaxTerms = budget switch
+                    {
+                        "auto" or "" => null,
+                        "cloud" or "frontier" => CleanupPrompt.MaxGlossaryTermsCloud,
+                        "local" => CleanupPrompt.MaxGlossaryTermsLocal,
+                        _ when int.TryParse(budget, out var terms) && terms > 0 => terms,
+                        _ => throw new ArgumentException("--glossary-budget takes auto, cloud, local or a positive term count."),
+                    };
+                    break;
+                case "--vocabulary":
+                    o.BenchVocabularyMode = Next().Trim().ToLowerInvariant() switch
+                    {
+                        "all" => CleanupVocabularyMode.All,
+                        "mentioned" => CleanupVocabularyMode.Mentioned,
+                        "none" => CleanupVocabularyMode.None,
+                        _ => throw new ArgumentException("--vocabulary takes all, mentioned or none."),
+                    };
+                    break;
+                case "--pace-ms":
+                    o.BenchPaceMs = int.TryParse(Next(), out var pace) && pace >= 0
+                        ? pace
+                        : throw new ArgumentException("--pace-ms takes a non-negative number of milliseconds.");
+                    break;
+                case "--local-prompt-file":
+                    o.BenchLocalPromptFile = Next();
+                    break;
+                case "--cases-from":
+                    o.BenchCasesFrom = Next();
+                    break;
+                case "--ollama-endpoint":
+                    o.OllamaEndpoint = RequireValue(Next(), "--ollama-endpoint");
+                    break;
+                case "--lmstudio-endpoint":
+                    o.LmStudioEndpoint = RequireValue(Next(), "--lmstudio-endpoint");
+                    break;
+                case "--keep-loaded":
+                    o.KeepServerModelsLoaded = true;
+                    break;
+                case "--blind-judge":
+                    o.BlindJudge = true;
+                    break;
+                case "--prefetch-foundry":
+                    o.PrefetchFoundry = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
+                case "--resanitize":
+                    o.ResanitizeResults = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
+                case "--judge-results":
+                    o.BlindJudgeResults = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
+                case "--judge-anchors":
+                    o.BlindJudgeAnchors = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
+                case "--judge-packet-size":
+                    if (int.TryParse(Next(), out var packet) && packet > 0)
+                    {
+                        o.BlindJudgePacketSize = packet;
+                    }
+                    break;
+                case "--judge-concurrency":
+                    if (int.TryParse(Next(), out var concurrency) && concurrency > 0)
+                    {
+                        o.BlindJudgeConcurrency = concurrency;
+                    }
+                    break;
+                case "--judge-reasoning-effort":
+                    o.BlindJudgeReasoningEffort = RequireValue(Next(), "--judge-reasoning-effort");
+                    break;
                 case "--reasoning-effort":
                     o.BenchReasoningEffort = Next().ToLowerInvariant() switch
                     {
@@ -299,6 +430,15 @@ internal sealed class CliOptions
                     {
                         o.BenchMaxOutputTokens = maxOutputTokens;
                     }
+                    break;
+                case "--temperature":
+                    var temperature = Next().Trim();
+                    o.BenchTemperature = string.Equals(temperature, "default", StringComparison.OrdinalIgnoreCase)
+                        ? -1f
+                        : float.TryParse(temperature, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out var t) && t >= 0
+                            ? t
+                            : throw new ArgumentException("--temperature takes a non-negative number or 'default'.");
                     break;
                 case "--no-retries":
                     o.BenchDisableRetries = true;
@@ -341,19 +481,25 @@ internal sealed class CliOptions
     }
 
     /// <summary>
-    /// Renders the shipped dictionary libraries into the same glossary block the app appends to the
-    /// cleanup system prompt, so a benchmark arm can measure the glossary's contribution rather than
-    /// assuming it. Unknown ids fail loudly: silently benchmarking an empty glossary would produce a
-    /// plausible-looking "no effect" result.
+    /// The shipped dictionary libraries' entries for a glossary arm, so a benchmark can measure the
+    /// glossary's contribution rather than assuming it. <c>default</c> names the libraries a fresh
+    /// install switches on. The block is rendered per model, at the budget the app applies to that
+    /// model's provider and prompt style unless <c>--glossary-budget</c> pins one (see
+    /// <see cref="Benchmark.BenchmarkConfig.GlossaryFor"/>). Unknown ids fail loudly: silently
+    /// benchmarking an empty glossary would produce a plausible-looking "no effect" result.
     /// </summary>
-    private static string? BuildGlossary(string[]? libraryIds)
+    private static IReadOnlyList<Scribe.Core.Models.DictionaryEntry>? GlossaryEntries(string[]? libraryIds)
     {
         if (libraryIds is null || libraryIds.Length == 0)
         {
             return null;
         }
 
-        var wanted = new HashSet<string>(libraryIds, StringComparer.OrdinalIgnoreCase);
+        var wanted = new HashSet<string>(
+            libraryIds.SelectMany(id => string.Equals(id, "default", StringComparison.OrdinalIgnoreCase)
+                ? Scribe.Core.Models.AppSettings.DefaultLibraryIds
+                : [id]),
+            StringComparer.OrdinalIgnoreCase);
         var known = BuiltInDictionaryLibraries.All.ToDictionary(l => l.Id, StringComparer.OrdinalIgnoreCase);
         var missing = wanted.Where(id => !known.ContainsKey(id)).ToList();
         if (missing.Count > 0)
@@ -363,17 +509,16 @@ internal sealed class CliOptions
                 $"Available: {string.Join(", ", known.Keys.Order())}");
         }
 
-        var entries = BuiltInDictionaryLibraries.All
+        return BuiltInDictionaryLibraries.All
             .Where(l => wanted.Contains(l.Id))
             .SelectMany(l => l.Entries)
             .ToList();
-
-        // Pinned to the cloud budget rather than the default, so this measures what a cloud arm
-        // actually sends. Leaving it implicit would let a change to the default silently move the
-        // benchmark's baseline, which is exactly how an earlier run measured the wrong thing.
-        var glossary = CleanupPrompt.BuildGlossary(entries, CleanupPrompt.MaxGlossaryTermsCloud);
-        return string.IsNullOrEmpty(glossary) ? null : glossary;
     }
+
+    private static string RequireValue(string value, string flag) =>
+        string.IsNullOrWhiteSpace(value) || value.StartsWith("--", StringComparison.Ordinal)
+            ? throw new ArgumentException($"{flag} requires a value.")
+            : value.Trim();
 
     private static string? ReadPromptFile(string? path)
     {
@@ -404,7 +549,9 @@ internal sealed class CliOptions
               dotnet run --project tools/Scribe.Evals -- [options]
 
             Options:
-              --provider <foundrylocal|azure>   Cleanup backend (default: foundrylocal).
+              --provider <foundrylocal|azure|copilot|openai>
+                                                Cleanup backend (default: foundrylocal). openai runs
+                                                --model against --endpoint as an OpenAI-compatible server.
               --suite <style|auxiliary|all>     Scenario suite (default: style). "auxiliary" evals
                                                 the usage-insight and AI dictionary-suggestion
                                                 prompts; "all" runs both suites.
@@ -440,14 +587,59 @@ internal sealed class CliOptions
               --writing-style-file <path>       Benchmark-only writing-style override.
               --frontier-prompt-file <path>     Benchmark-only frontier-prompt override.
               --glossary-libraries <a,b>        Append these built-in dictionary libraries to the
-                                                prompt as a glossary (e.g. ai-model-names,ai-terminology).
+                                                prompt as a glossary (e.g. ai-model-names,ai-terminology;
+                                                "default" names the libraries a fresh install turns on).
+              --glossary-budget <auto|cloud|local|n>
+                                                Glossary term budget. auto (default) applies the app's own
+                                                budget for each model's provider and prompt style.
+              --vocabulary <all|mentioned|none> How much of the glossary each dictation carries: all of it
+                                                (default), only the entries it appears to mention, or none.
+              --pace-ms <n>                     At least n ms between the starts of two requests to a model,
+                                                so a small quota is measured instead of throttled.
+              --local-prompt-file <path>        Benchmark-only local-prompt override.
+              --cases-from <path>               Frozen transcripts: a cases.json array or benchmark
+                                                evidence with a "fixtures" array (docs/benchmarks/*.json).
+              --ollama-endpoint <url>           Ollama's /v1 address for ollama:<model> entries
+                                                (default: http://127.0.0.1:11434/v1).
+              --lmstudio-endpoint <url>         LM Studio's /v1 address for lmstudio:<model> entries
+                                                (default: http://127.0.0.1:1234/v1).
+              --keep-loaded                     Leave local servers' models loaded between entries (for
+                                                instances loaded by hand, such as a CPU-only load).
               --reasoning-effort <level>        default, none, low, medium, high, or xhigh.
               --max-output-tokens <n>           Benchmark-only output/reasoning token cap.
+              --temperature <value|default>     Temperature for a model on this PC (default: Scribe's 0.1);
+                                                "default" sends none, leaving the server's own.
               --no-retries                      Disable Azure SDK retries for latency diagnosis.
               --direct-responses                Call Azure Responses directly, bypassing Agent Framework.
               --force                           Re-run models already present in results.json.
               --local-load-timeout <seconds>    Max wait for a local model to download+load (default: 1800).
               --clean-timeout <seconds>         Per-call cleanup timeout override (default: 180).
+
+              Local roster entries (--local-models) take a runtime prefix: a bare name or foundry:<alias>
+              is Foundry Local, ollama:<model> and lmstudio:<model> go through the OpenAI-compatible
+              provider exactly as Settings configures those servers, and openai:<url>|<model> names any
+              other server.
+
+            Blind judging (grades retained outputs; no model is run):
+              --blind-judge                     Grade every distinct output in the given results files
+                                                with an identity-blind judge through the GitHub Copilot CLI.
+              --judge-results <a.json,b.json>   results.json files to grade (cases come from the first
+                                                file's cases.json).
+              --judge-model <id>                Copilot model id (default: claude-opus-5.5).
+              --judge-anchors <file:model[@n]>  Reference outputs from benchmark evidence, e.g.
+                                                docs/benchmarks/gpt6-astra-2026-09-04.json:gpt-5.6-terra@1.
+              --judge-packet-size <n>           Candidates graded together per request (default: 12).
+              --judge-concurrency <n>           Parallel judge sessions (default: 2).
+              --judge-reasoning-effort <level>  Reasoning effort for the judge model, when it takes one.
+              --out <dir>                       Where grades and the summary are written.
+
+            Foundry Local downloads:
+              --prefetch-foundry <a,b>          Download these aliases or variant ids into the folder the
+                                                cleanup service reads, without loading them.
+
+            Answer cleanup:
+              --resanitize <a.json,b.json>      Apply today's answer cleanup to recorded answers and write
+                                                each arm again as <folder>-resanitized, listing every change.
 
             Examples:
               dotnet run --project tools/Scribe.Evals

@@ -15,6 +15,12 @@ internal enum CleanupRequestKind
 
     /// <summary>A one-off completion: the dictionary suggester or the usage insight.</summary>
     Completion,
+
+    /// <summary>
+    /// A dictation's instructions and vocabulary sent with no text as its recording starts, to a server on this PC only,
+    /// so a model the server unloaded while idle is loaded again by the time the words arrive.
+    /// </summary>
+    Prewarm,
 }
 
 /// <summary>Why a cleanup request was not handed over; logged by name, never with any content.</summary>

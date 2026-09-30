@@ -10,7 +10,8 @@ using Scribe.Core.Settings;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// PerfFlags.CliAccessTokenCache (PLAT-O-01 with PLAT-A-02): an in-memory access-token cache for Azure CLI sign-in only.
+/// The Azure CLI access-token cache (PLAT-O-01 with PLAT-A-02), on by default since 0.5.2 with PerfFlags.CliTokenEveryRequest
+/// bringing back the old path: an in-memory access-token cache for Azure CLI sign-in only.
 /// Every credential here is synthetic: no test runs az, reaches Entra, or asks a credential the factory built for a token.
 /// </summary>
 /// <remarks>
@@ -511,8 +512,10 @@ public sealed class CachingCliTokenCredentialTests
     public void Only_the_two_serving_clients_ask_for_the_cache()
     {
         var service = ReadSource("src", "Scribe.Core", "Cleanup", "TextCleanupService.cs");
+
+        // On by default since 0.5.2; the flag named for the old behaviour turns it off.
         Assert.Contains(
-            "private bool CachesCliTokens => _perfFlags.IsOn(Diagnostics.PerfFlags.CliAccessTokenCache);", service, StringComparison.Ordinal);
+            "private bool CachesCliTokens => !_perfFlags.IsOn(Diagnostics.PerfFlags.CliTokenEveryRequest);", service, StringComparison.Ordinal);
         Assert.Equal(2, Regex.Matches(service, @"options\.AzureClientSecret\),\s*CachesCliTokens\)").Count);
 
         // Test connection keeps the uncached credential, so it always asks az, as before.

@@ -208,22 +208,37 @@ public sealed class CleanupRecoveryTests
     }
 
     [Fact]
-    public async Task An_unload_overtaken_by_a_new_initialization_of_the_same_model_leaves_it_ready()
+    public async Task An_unload_of_the_configured_model_keeps_cleanup_ready_through_a_save_of_the_same_model()
     {
         await using var harness = NewHarness();
         var svc = harness.Service;
         svc.Configure(CleanupHarness.FoundryOn());
         await AssertServingAsync(harness);
 
-        // The unload is decided as an eviction and drops the agent. Before it is reported, the user
-        // saves again, and that save's initialization loads the model back and becomes Ready.
-        var reachedReady = LandNewerConfigurationWhenLoadHasDecided(harness, CleanupHarness.FoundryOn());
+        // Freeing the configured model's memory is a release, not an eviction: the agent stays and cleanup stays Ready. A
+        // save of the same configuration that lands before the release is reported changes nothing, and the next
+        // dictation's start loads the model again.
         var statuses = new CleanupStatusRecorder(svc);
+        var saved = RunOnceWhenLoadHasDecided(harness, () =>
+        {
+            svc.Configure(CleanupHarness.FoundryOn());
+            return Task.FromResult(true);
+        });
 
         Assert.True(await svc.UnloadFoundryModelAsync(CleanupHarness.FoundryAlias).WaitAsync(Bound));
+        Assert.True(await saved().WaitAsync(Bound));
 
-        Assert.True(reachedReady(), "The new initialization became Ready before the unload reported its change.");
         Assert.DoesNotContain(statuses.Snapshot(), s => s.Status == CleanupStatus.Unavailable);
+        Assert.Equal(CleanupStatus.Ready, svc.Status);
+        Assert.True(svc.IsLocalModelStarting);
+
+        svc.Admit(CleanupVocabulary.None).Prewarm();
+        var deadline = DateTime.UtcNow + Bound;
+        while (svc.IsLocalModelStarting && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
         await AssertServingAsync(harness);
         Assert.Equal(CleanupHarness.FoundryAlias, await svc.GetLoadedFoundryModelAsync());
     }

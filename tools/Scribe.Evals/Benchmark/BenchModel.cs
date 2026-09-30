@@ -10,8 +10,10 @@ internal enum BenchGroup
 
 /// <summary>
 /// One model under test in the benchmark. For cloud models <see cref="Target"/> is the Azure
-/// deployment name and <see cref="Endpoint"/> is its account host; for local models
-/// <see cref="Target"/> is the Foundry Local alias and <see cref="Endpoint"/> is null.
+/// deployment name and <see cref="Endpoint"/> is its account host. For a Foundry Local model
+/// <see cref="Target"/> is the catalog alias and <see cref="Endpoint"/> is null; for a local server
+/// reached through the OpenAI-compatible provider (Ollama, LM Studio) <see cref="Target"/> is the
+/// model name that server lists and <see cref="Endpoint"/> is its <c>/v1</c> address.
 /// </summary>
 internal sealed record BenchModel(
     BenchGroup Group,

@@ -321,6 +321,11 @@ internal sealed class DictationController : IDisposable
                     {
                         TryLog(log => log.LogDebug("Released {Bytes} bytes of idle capture buffers.", bytes));
                     }
+
+                    // AI cleanup's model on this PC goes too, on every claimed release, whether or not the speech models
+                    // were still loaded (Settings' Load can load it on its own); it comes back with them at the next
+                    // dictation, and the recording indicator says it is starting. Returns at once.
+                    _cleanup.ReleaseModelMemory();
                 });
 
             // Whenever the collection ran, the released and the raced release alike: its pause is what a raced release is
@@ -597,7 +602,17 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureClientId,
         settings.AiCleanupAzureClientSecret,
         settings.AiCleanupCopilotModel,
-        settings.AiCleanupPromptCaching);
+        settings.AiCleanupPromptCaching,
+        // Each dictation carries the vocabulary it appears to mention (VocabularyMentions), measured in the 0.5.2 benchmark:
+        // no loss of quality, the right word pack term far more often on a model on this PC, and about a fifth of the
+        // input on a cloud model (docs/local-model-benchmark.md).
+        VocabularyMode: CleanupVocabularyMode.Mentioned,
+        // Only Ollama and LM Studio at their own address read it, so a change of the idle time never touches another
+        // provider's setup (a Foundry Local download, or GitHub Copilot's start).
+        LocalModelKeepAliveMinutes:
+            LocalAiServer.AppServing(settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint) == LocalServerApp.None
+                ? null
+                : settings.ReleaseModelsAfterIdleMinutes);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -758,6 +773,14 @@ internal sealed class DictationController : IDisposable
                 (long)open.OpenDuration.TotalMilliseconds);
 
             Raise(shown);
+
+            // A model on a server on this PC may have been unloaded while idle; ready it while the user speaks, with the
+            // instructions and vocabulary this dictation will be cleaned with (AdmittedCleanup.Prewarm). Returns at once,
+            // and does nothing for any other place AI cleanup runs.
+            if (settings.EnableAiCleanup)
+            {
+                _cleanup.Admit(capture.Vocabulary.Cleanup).Prewarm(CleanupWritingStyleFor(settings, capture.TargetApp));
+            }
 
             // A chosen microphone that is unplugged, disabled or gone records from the Windows default instead (the
             // capture service falls back by itself). Announced after the Recording change, so the pill can show it.
@@ -1017,9 +1040,12 @@ internal sealed class DictationController : IDisposable
 
         // Announced before the processing starts, which can queue its failure flash at once: the shell's one queue then
         // keeps Processing ahead of that flash, and showing Processing after it would clear the flash's hold (see
-        // ProcessingHandOff). Raising never waits for the UI thread, so the processing is never held up by it.
+        // ProcessingHandOff). Raising never waits for the UI thread, so the processing is never held up by it. A model on
+        // this PC that is still starting (IsLocalModelStarting) is named on the indicator, since its dictation waits for it.
+        var aiCleanup = capture.Settings.EnableAiCleanup;
+        var startingLocalModel = aiCleanup && _cleanup.IsLocalModelStarting;
         ProcessingHandOff.Run(
-            announce: () => Raise(stop.Presentation, capture.Settings.EnableAiCleanup),
+            announce: () => Raise(stop.Presentation, aiCleanup, startingLocalModel: startingLocalModel),
             start: () => _ = Task.Run(() => RunProcessingAsync(session, admission)));
     }
 
@@ -1188,9 +1214,7 @@ internal sealed class DictationController : IDisposable
             var targetApp = session.TargetApp;
             var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
             var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
-            var requireSingleLine = InjectionTextFormatter.ShouldFlatten(newlineMode, targetApp);
-            var cleanupWritingStyle = CleanupPrompt.ResolveWritingStyleOverride(
-                settings.AiCleanupWritingStyle, profile?.WritingStyle, requireSingleLine);
+            var cleanupWritingStyle = CleanupWritingStyleFor(settings, targetApp);
             if (profile is not null)
             {
                 _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
@@ -1724,7 +1748,8 @@ internal sealed class DictationController : IDisposable
     // gate gave the change: the shell keeps the newest, whatever order two raises arrive in. The handlers never wait for the
     // UI thread, which matters most on the audio capture thread: at shutdown the UI thread joins it. Once shutdown has begun
     // nobody needs the state any more, so nothing is raised.
-    private void Raise(DictationPresentation shown, bool aiPolishing = false, PillOutcome? outcome = null)
+    private void Raise(
+        DictationPresentation shown, bool aiPolishing = false, PillOutcome? outcome = null, bool startingLocalModel = false)
     {
         if (shown.Revision <= 0 || _lifecycle.IsClosing)
         {
@@ -1740,7 +1765,7 @@ internal sealed class DictationController : IDisposable
 
         ResilientEvent.InvokeAll(
             StateChanged,
-            new DictationStateChange(state, shown.Revision, aiPolishing, outcome),
+            new DictationStateChange(state, shown.Revision, aiPolishing, outcome, startingLocalModel),
             ex => TryLog(log => log.LogWarning("A StateChanged handler threw: {Failure}", FailureShape.DescribeWithStack(ex))));
     }
 
@@ -1873,6 +1898,19 @@ internal sealed class DictationController : IDisposable
         HotkeyBinding? Shortcut,
         VocabularyGeneration Vocabulary);
 
+    // The writing style a dictation is cleaned with: the app profile's or the global one, plus the one-line rule when the
+    // target would treat a line break as Enter. Worked out the same way when the recording starts, to ready the model with
+    // it, and when the dictation is processed, to clean with it.
+    private static string? CleanupWritingStyleFor(AppSettings settings, string? targetApp)
+    {
+        var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
+        var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
+        return CleanupPrompt.ResolveWritingStyleOverride(
+            settings.AiCleanupWritingStyle,
+            profile?.WritingStyle,
+            InjectionTextFormatter.ShouldFlatten(newlineMode, targetApp));
+    }
+
     // Everything a recording needs to remember from the moment it started, captured under the lifecycle's gate
     // atomically with the phase change. Settings already carry the per-trigger overrides. HotkeyActivation is the press
     // that started it, the only one a stop Scribe makes itself may release (see DictationStopPolicy.BeginStop).
@@ -1909,7 +1947,12 @@ internal sealed class DictationController : IDisposable
 /// place of the hide. It carries this change's revision, so a late outcome never covers a newer recording. Null for every
 /// other change, and for a dictation discarded quietly.
 /// </param>
-internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing, PillOutcome? Outcome = null);
+/// <param name="StartingLocalModel">
+/// For Processing with AI cleanup: its model on this PC was still starting when the dictation stopped
+/// (<see cref="Scribe.Core.Cleanup.ITextCleanupService.IsLocalModelStarting"/>), so the dictation waits for it and the
+/// recording indicator says so.
+/// </param>
+internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing, PillOutcome? Outcome = null, bool StartingLocalModel = false);
 
 internal sealed class DictationPipelineReport(
     nint targetWindow,

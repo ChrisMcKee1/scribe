@@ -24,6 +24,9 @@ public sealed record FoundryLocalSetupDescription(
 
 public static class FoundryLocalSetup
 {
+    /// <summary>The action that frees the loaded model's memory; the model loads again at the next dictation.</summary>
+    public const string FreeMemoryAction = "Free memory";
+
     public static FoundryLocalSetupDescription Describe(
         FoundryLocalSetupStage stage,
         string modelName,
@@ -41,10 +44,10 @@ public static class FoundryLocalSetup
                 CanUnload: false),
             FoundryLocalSetupStage.SettingUp => new(AiCleanupStatusKind.Busy, "Setting up. The first time can take a while.", null, false),
             FoundryLocalSetupStage.RuntimeReady => new(AiCleanupStatusKind.Info, $"Ready to download {modelName} ({size}).", "Download and load", false),
-            FoundryLocalSetupStage.CachedUnloaded => new(AiCleanupStatusKind.Info, "No model is loaded.", "Load", false),
-            FoundryLocalSetupStage.Checking => new(AiCleanupStatusKind.Info, "Checking...", "Unload", false),
+            FoundryLocalSetupStage.CachedUnloaded => new(AiCleanupStatusKind.Info, "Not using memory now. It loads when you dictate.", "Load", false),
+            FoundryLocalSetupStage.Checking => new(AiCleanupStatusKind.Info, "Checking...", null, false),
             FoundryLocalSetupStage.DownloadingOrLoading => new(AiCleanupStatusKind.Busy, progressText ?? $"Loading {modelName}...", null, false),
-            FoundryLocalSetupStage.Loaded => new(AiCleanupStatusKind.Success, $"{modelName} is ready.", "Unload", true),
+            FoundryLocalSetupStage.Loaded => new(AiCleanupStatusKind.Success, $"{modelName} is ready.", FreeMemoryAction, true),
             FoundryLocalSetupStage.Failed => new(
                 AiCleanupStatusKind.Error,
                 "Couldn't start the AI runtime for this PC. Try again, or choose another AI service.",

@@ -149,6 +149,94 @@ public sealed class SanitizeTests
         Assert.Equal("raw", text);
     }
 
+    // What small models on this PC wrapped around their rewrites in the 0.5.2 local benchmark (Foundry Local's Qwen3 1.7B,
+    // Llama 3.2 3B on Ollama), each of which was typed into the document before.
+    [Theory]
+    [InlineData("<think>\n\nWe need to ship the build by Thursday.")]
+    [InlineData("</think>\n\nWe need to ship the build by Thursday.")]
+    [InlineData("Here is the rewritten transcript:\n\nWe need to ship the build by Thursday.")]
+    [InlineData("Here is the rewritten text:\nWe need to ship the build by Thursday.")]
+    [InlineData("Here's the rewritten transcript, following the rules and style guide:\n\n---\n\n<transcript>\nWe need to ship the build by Thursday.\n</transcript>")]
+    [InlineData("<think>\n\nHere is the rewritten transcript, following the instructions:\n\n---\n\n**<transcript>**\n\nWe need to ship the build by Thursday.")]
+    [InlineData("<think>\n\n<rewritten_transcript>\n\nWe need to ship the build by Thursday.\n\n</rewritten_transcript>")]
+    [InlineData("Sure! Here is the cleaned-up version:\n\nWe need to ship the build by Thursday.")]
+    [InlineData("**Here is the corrected text:**\n\nWe need to ship the build by Thursday.")]
+    [InlineData("**Transcript Rewritten:**\n\nWe need to ship the build by Thursday.")]
+    [InlineData("Rewritten transcript:\nWe need to ship the build by Thursday.")]
+    [InlineData("**Transcript:**\n\nWe need to ship the build by Thursday.")]
+    [InlineData("Here's the rewritten version of the transcript, following the specified instructions:\n\n**Revised Transcript:**\n\nWe need to ship the build by Thursday.")]
+    [InlineData("We need to ship the build by Thursday.\n\n---\n\nThis version maintains the original meaning while removing filler words.")]
+    [InlineData("We need to ship the build by Thursday.\n</transcript>\n\n---\n\n**Note:** The original transcript contained a self-correction.")]
+    [InlineData("We need to ship the build by Thursday.\n\n---\n\nThis rewritten transcript follows the rules:\n- No fillers\n- Dates as written")]
+    [InlineData("We need to ship the build by Thursday.\n\n---\n\nLet me know if you need a more formal version.")]
+    public void What_a_small_model_wraps_around_its_rewrite_is_removed(string answer)
+    {
+        const string raw = "um so we need to uh ship the build by friday no thursday";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal("We need to ship the build by Thursday.", text);
+    }
+
+    [Fact]
+    public void A_dictation_that_opens_like_an_announcement_keeps_its_first_line()
+    {
+        const string raw = "here's the rewritten text for the release notes we need to ship it thursday";
+        const string answer = "Here's the rewritten text for the release notes:\nWe need to ship it Thursday.";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(answer, text);
+    }
+
+    [Fact]
+    public void A_dictation_that_says_here_after_a_few_filler_words_keeps_its_first_line()
+    {
+        const string raw = "um so here's the revised text for the email hi bob we ship thursday";
+        const string answer = "Here's the revised text for the email:\nHi Bob, we ship Thursday.";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(answer, text);
+    }
+
+    [Fact]
+    public void A_tag_the_dictation_itself_contains_is_kept()
+    {
+        const string raw = "wrap the value in an output tag like <output>done</output>";
+        const string answer = "<output>Done</output>";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(answer, text);
+    }
+
+    [Fact]
+    public void A_label_the_dictation_itself_says_is_kept()
+    {
+        const string raw = "corrected version we ship on thursday";
+        const string answer = "Corrected version:\nWe ship on Thursday.";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(answer, text);
+    }
+
+    [Fact]
+    public void Paragraphs_a_model_separates_with_a_rule_are_kept_when_they_are_the_dictation()
+    {
+        const string raw = "first the release update the desktop build passed validation second customer feedback three teams asked for a simpler guide";
+        const string answer = "First, the release update: the desktop build passed validation.\n\n---\n\nSecond, customer feedback: three teams asked for a simpler guide.";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(answer, text);
+    }
+
+    [Fact]
+    public void A_first_line_that_announces_something_else_is_kept()
+    {
+        const string raw = "the plan is ship on thursday then review on friday";
+        const string answer = "Here is the plan:\nShip on Thursday, then review on Friday.";
+
+        Assert.True(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(answer, text);
+    }
+
     [Fact]
     public void User_message_wraps_the_chunk_in_transcript_tags()
     {

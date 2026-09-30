@@ -1035,8 +1035,9 @@ public partial class App : Application
                             break;
                         case DictationState.Processing:
                             // The dictation-only hotkey overrides AI cleanup for its capture without changing the global
-                            // setting, so this comes from the capture that was admitted, carried with the change.
-                            _overlay?.ShowProcessing(change.AiPolishing);
+                            // setting, so this comes from the capture that was admitted, carried with the change, as does
+                            // whether its model on this PC was still starting when it stopped.
+                            _overlay?.ShowProcessing(change.AiPolishing, change.StartingLocalModel);
                             break;
                         default:
                             // What the finished dictation did ("Typed", or a notice), held by the overlay and then hidden;

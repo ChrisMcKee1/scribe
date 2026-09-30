@@ -9,8 +9,8 @@ namespace Scribe.Core.Settings;
 
 /// <summary>
 /// The status line under the dictionary grid: how many entries are on, whether they are applied on this
-/// PC and, while AI cleanup is on, how many terms every cleanup request carries as vocabulary and who
-/// receives them.
+/// PC and, while AI cleanup is on, which of them a cleanup request carries as vocabulary and who
+/// receives them: the ones its dictation appears to mention (<see cref="CleanupVocabularyMode.Mentioned"/>).
 /// <para>
 /// The number is the one dictation sends. The page's rows are built the way Save builds them
 /// (<see cref="DictionaryEntryBuilder.Build"/>) and put in the order dictation reads the saved dictionary
@@ -42,7 +42,8 @@ public static class GlossaryHint
         bool PostProcessingOn,
         CleanupProvider Provider,
         CleanupPromptStyle PromptStyle,
-        IReadOnlyList<DictionaryEntry>? AiLibraryEntries = null);
+        IReadOnlyList<DictionaryEntry>? AiLibraryEntries = null,
+        string? CustomEndpoint = null);
 
     public static string Describe(Input input)
     {
@@ -78,9 +79,10 @@ public static class GlossaryHint
         text.Append('.');
         AppendLocalUse(text, localVocabulary.Count, input.PostProcessingOn, onlyWhenOff: false);
 
-        var local = CleanupPrompt.ResolvePromptStyle(input.PromptStyle, input.Provider) == CleanupPromptStyle.Local;
+        var local = CleanupPrompt.ResolvePromptStyle(input.PromptStyle, input.Provider, input.CustomEndpoint) ==
+            CleanupPromptStyle.Local;
         var glossary = CleanupPrompt.CountGlossary(
-            aiVocabulary, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider));
+            aiVocabulary, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider, input.CustomEndpoint));
         var templates = aiVocabulary.Count(e => e.Enabled && !string.IsNullOrWhiteSpace(e.Replacement) &&
                                              !CleanupPrompt.IsVocabularyReplacement(e.Replacement));
 
@@ -90,27 +92,28 @@ public static class GlossaryHint
         }
         else
         {
-            var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The AI model on this PC" : "Your AI service";
-            if (glossary.Included == glossary.Eligible)
+            // Each request carries the ones its dictation appears to mention (CleanupVocabularyMode.Mentioned), in this
+            // order, up to the budget.
+            var onThisPc = input.Provider == CleanupProvider.FoundryLocal ||
+                LocalAiServer.Serves(input.Provider, input.CustomEndpoint);
+            var receiver = onThisPc ? "The AI model on this PC" : "Your AI service";
+            if (glossary.Eligible == 1)
             {
-                var (terms, them) = glossary.Eligible == 1
-                    ? ("that word", "it")
-                    : ($"all {Count(glossary.Eligible)} words", "them");
-                text.Append(
-                    $" {receiver} receives {terms} as vocabulary with every cleanup request, whether or not the " +
-                    $"dictation mentions {them}.");
+                text.Append($" {receiver} receives that word as vocabulary whenever a dictation appears to mention it.");
             }
             else
             {
                 text.Append(
-                    $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} words " +
-                    "as vocabulary with every cleanup request, whether or not the dictation mentions them. Your own " +
-                    "words come first.");
-                text.Append(local
-                    ? $" With the short instructions, the list stops at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} " +
-                      "words or phrases so a small model can take it in."
-                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or at " +
-                      $"{Count(CleanupPrompt.MaxGlossaryChars)} characters.");
+                    $" {receiver} receives whichever of these {Count(glossary.Eligible)} words a dictation appears to " +
+                    "mention, as vocabulary with its cleanup request.");
+                if (glossary.Included < glossary.Eligible)
+                {
+                    text.Append(local
+                        ? $" With the short instructions, a request holds up to {Count(CleanupPrompt.MaxGlossaryTermsLocal)} " +
+                          "words or phrases so a small model can take them in, your own words first."
+                        : $" A request holds up to {Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases, or " +
+                          $"{Count(CleanupPrompt.MaxGlossaryChars)} characters, your own words first.");
+                }
             }
         }
 

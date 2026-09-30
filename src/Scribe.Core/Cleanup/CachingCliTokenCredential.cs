@@ -3,8 +3,9 @@ using Azure.Core;
 namespace Scribe.Core.Cleanup;
 
 /// <summary>
-/// PerfFlags.CliAccessTokenCache: an in-memory access-token cache for Azure CLI sign-in only, around the serialized CLI
-/// credential. Without it every cleanup request, retries included, runs <c>az account get-access-token</c>, because the
+/// An in-memory access-token cache for Azure CLI sign-in only, around the serialized CLI credential, on by default since
+/// 0.5.2 (PerfFlags.CliTokenEveryRequest brings back the old path for one release). Without it every cleanup request,
+/// retries included, runs <c>az account get-access-token</c> (1.2 to 7 s each, measured for 0.5.2), because the
 /// cleanup clients' System.ClientModel <c>BearerTokenPolicy</c> asks the credential on every request and
 /// <c>AzureCliCredential</c> caches nothing. The service principal keeps MSAL's own cache and never comes here, and
 /// neither do Test connection and Settings discovery, which keep the uncached instance.
@@ -19,7 +20,7 @@ namespace Scribe.Core.Cleanup;
 /// possession bypasses the cache entirely. Nothing is shared across scopes or tenants. The key cannot tell two accounts
 /// of one tenant or subscription apart, because the settings cannot either: an account change made outside Scribe
 /// (<c>az login</c> as someone else, <c>az logout</c>) is seen at the next refresh instead of the next request. That
-/// window is what the maintainer approves with the flag.</item>
+/// window is what the maintainer approved with the default (0.5.2).</item>
 /// <item>One acquisition per key at a time (single flight), through the inner credential and so through the Azure CLI
 /// gate. A waiter's cancellation ends only its own wait; the acquisition is cancelled when its last waiter leaves, and an
 /// acquisition abandoned that way stores nothing, whatever it returns. A failure reaches every waiter still waiting and

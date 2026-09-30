@@ -18,14 +18,18 @@ internal sealed class CleanupHarness : IAsyncDisposable
     public const string ThirdAlias = "mistral-nemo-12b-instruct";
     public const string ThirdVariant = "mistral-nemo-12b-instruct-generic-cpu:1";
 
-    public CleanupHarness(bool armStorage = false, HttpMessageHandler? http = null, FakeFoundryState? state = null)
+    public CleanupHarness(
+        bool armStorage = false,
+        HttpMessageHandler? http = null,
+        FakeFoundryState? state = null,
+        Func<FakeFoundryState, IReadOnlyList<FakeFoundryModel>>? extraFamilies = null)
     {
         Temp = new TempDirectory();
         State = state ?? new FakeFoundryState();
         Qwen = FakeFoundryModel.Family(State, FoundryAlias, FoundryVariant);
         Phi = FakeFoundryModel.Family(State, OtherAlias, OtherVariant);
         Mistral = FakeFoundryModel.Family(State, ThirdAlias, ThirdVariant);
-        Catalog = new FakeFoundryCatalog(State, [Qwen, Phi, Mistral]);
+        Catalog = new FakeFoundryCatalog(State, [Qwen, Phi, Mistral, .. extraFamilies?.Invoke(State) ?? []]);
         Runtime = new FakeFoundryRuntime(State, Catalog);
         Host = new FakeFoundryHost(() => Runtime);
         Http = http ?? new ScriptedHttpHandler((_, _) => Task.FromResult(ScriptedHttpHandler.ChatCompletion("ok")));
@@ -36,8 +40,17 @@ internal sealed class CleanupHarness : IAsyncDisposable
         Service = new TextCleanupService(Log, Paths, Host, Storage)
         {
             OpenAIClientOptionsOverride = ScriptedHttpHandler.Install(Http),
+
+            // Never the real Ollama or LM Studio a developer's PC may run.
+            LocalServers = LocalServers,
+
+            // As before the wait existed: a dictation during a start is typed as heard at once. Tests of the wait set it.
+            LocalModelStartWait = TimeSpan.Zero,
         };
     }
+
+    /// <summary>What Ollama and LM Studio answer, scripted; it records every model it is asked to free.</summary>
+    public FakeLocalServerClient LocalServers { get; } = new();
 
     public TempDirectory Temp { get; }
 
@@ -425,7 +438,7 @@ public sealed class CleanupDiagnosticsPrivacyTests
     [InlineData("_log.LogWarning(ex, \"Resource Graph account discovery failed; falling back to per-subscription enumeration.\");")] // AzureFoundryDiscovery.cs:248
     [InlineData("_log.LogWarning(\"AI cleanup initialization probe failed ({Provider}): {Message}\", options.Provider, probeFailure.Message);")] // TextCleanupService.cs:1814
     [InlineData("_log.LogDebug(\n                    \"Chat Completions fallback also failed for {Deployment}: {Message}\",\n                    options.AzureDeployment,\n                    stillFailing.Message);")] // TextCleanupService.cs:1931
-    [InlineData("log?.LogDebug(ex, \"Could not clear the Foundry Local demotion markers.\");")] // FoundryDemotionReset.cs:75
+    [InlineData("log?.LogDebug(ex, \"Could not clear the Foundry Local demotion markers.\");")] // FoundryDemotionReset.cs:83
     [InlineData("_log.LogDebug(\"Failed: {Error}\", ex.ToString());")]
     [InlineData("_log.LogDebug(\"Failed: {Error}\", exception);")]
     [InlineData("_log.LogDebug(\"Failed: {Error}\", result.Exception);")]

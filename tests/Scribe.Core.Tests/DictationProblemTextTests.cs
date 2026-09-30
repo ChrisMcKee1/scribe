@@ -132,17 +132,25 @@ public sealed class DictationProblemTextTests
         var fallback = System.Text.RegularExpressions.Regex.Match(element.Value, "Text=\"(?<text>[^\"]+)\"").Groups["text"].Value;
 
         var chosen = System.Text.RegularExpressions.Regex.Match(
-            code, "ProcessingText\\.Text = aiPolishing \\? \"(?<ai>[^\"]+)\" : \"(?<plain>[^\"]+)\";");
+            code,
+            "ProcessingText\\.Text = starting \\? \"(?<starting>[^\"]+)\" : kind == 1 \\? \"(?<ai>[^\"]+)\" : \"(?<plain>[^\"]+)\";");
         Assert.True(chosen.Success, "OverlayWindow.ShowProcessing no longer chooses its words the way this test reads them.");
         Assert.Equal("Recognizing speech\u2026", chosen.Groups["plain"].Value);
         Assert.Equal("Running AI cleanup\u2026", chosen.Groups["ai"].Value);
+        Assert.Equal("Starting local model\u2026", chosen.Groups["starting"].Value);
         Assert.Equal(chosen.Groups["plain"].Value, fallback);
 
-        foreach (var words in new[] { chosen.Groups["plain"].Value, chosen.Groups["ai"].Value })
+        foreach (var words in new[] { chosen.Groups["plain"].Value, chosen.Groups["ai"].Value, chosen.Groups["starting"].Value })
         {
             var width = Measure(words, FontWeights.SemiBold);
             Assert.True(width <= 130, $"{width:F1} DIP > 130 DIP: {words}");
         }
+
+        // The second line, only while the model starts, in the notice's regular weight: well inside the same column.
+        var detail = System.Text.RegularExpressions.Regex.Match(code, "ProcessingDetail\\.Text = starting \\? \"(?<detail>[^\"]+)\"");
+        Assert.True(detail.Success, "OverlayWindow.ShowProcessing no longer sets its second line the way this test reads it.");
+        Assert.Equal("This can take time", detail.Groups["detail"].Value);
+        Assert.True(Measure(detail.Groups["detail"].Value, FontWeights.Normal) <= 130);
     }
 
     [Fact]

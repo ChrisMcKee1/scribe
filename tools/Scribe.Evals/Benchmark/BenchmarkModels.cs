@@ -3,6 +3,18 @@ using Scribe.Core.Cleanup;
 
 namespace Scribe.Evals.Benchmark;
 
+/// <summary>
+/// Where the local servers a roster entry can name are listening. The defaults are the ports Ollama
+/// and LM Studio use out of the box, the same addresses Settings suggests.
+/// </summary>
+internal sealed record LocalEndpoints(string Ollama, string LmStudio)
+{
+    public const string DefaultOllama = "http://127.0.0.1:11434/v1";
+    public const string DefaultLmStudio = "http://127.0.0.1:1234/v1";
+
+    public static LocalEndpoints Default { get; } = new(DefaultOllama, DefaultLmStudio);
+}
+
 /// <summary>Builds the model roster: cloud via live Azure discovery, local via a curated alias set.</summary>
 internal static class BenchmarkModels
 {
@@ -163,15 +175,16 @@ internal static class BenchmarkModels
         return models;
     }
 
-    public static IReadOnlyList<BenchModel> BuildLocal(IReadOnlyList<string>? overrideAliases, int max)
+    public static IReadOnlyList<BenchModel> BuildLocal(
+        IReadOnlyList<string>? overrideAliases, int max, LocalEndpoints? endpoints = null)
     {
+        var servers = endpoints ?? LocalEndpoints.Default;
         var source = overrideAliases is { Count: > 0 }
             ? overrideAliases.Select(a => (Alias: a, Note: (string?)null)).ToArray()
             : DefaultLocal;
 
         var models = source
-            .Select(x => new BenchModel(
-                BenchGroup.Local, x.Alias, CleanupProvider.FoundryLocal, null, x.Alias, null, x.Note))
+            .Select(x => ParseLocal(x.Alias, x.Note, servers))
             .ToList();
 
         if (max > 0 && models.Count > max)
@@ -180,6 +193,63 @@ internal static class BenchmarkModels
         }
 
         return models;
+    }
+
+    /// <summary>
+    /// Reads one local roster entry. A bare name is a Foundry Local alias, as it always was, so an
+    /// existing <c>results.json</c> keeps its keys. A runtime prefix selects a local server reached
+    /// through the OpenAI-compatible provider, exactly as a user configures Ollama or LM Studio in
+    /// Settings: <c>ollama:qwen3:1.7b</c>, <c>lmstudio:google/gemma-3-1b</c>, or
+    /// <c>openai:http://host:port/v1|model</c> for any other server. The prefix stays in the id, so the
+    /// same model on two runtimes is two rows rather than one overwriting the other.
+    /// </summary>
+    internal static BenchModel ParseLocal(string spec, string? note, LocalEndpoints endpoints)
+    {
+        var trimmed = spec.Trim();
+        if (TryStripPrefix(trimmed, "foundry:", out var alias))
+        {
+            return new BenchModel(BenchGroup.Local, trimmed, CleanupProvider.FoundryLocal, null, alias, null, note);
+        }
+
+        if (TryStripPrefix(trimmed, "ollama:", out var ollamaModel))
+        {
+            return new BenchModel(
+                BenchGroup.Local, trimmed, CleanupProvider.OpenAiCompatible, endpoints.Ollama, ollamaModel, ollamaModel, note);
+        }
+
+        if (TryStripPrefix(trimmed, "lmstudio:", out var lmStudioModel))
+        {
+            return new BenchModel(
+                BenchGroup.Local, trimmed, CleanupProvider.OpenAiCompatible, endpoints.LmStudio, lmStudioModel, lmStudioModel, note);
+        }
+
+        if (TryStripPrefix(trimmed, "openai:", out var rest))
+        {
+            var bar = rest.LastIndexOf('|');
+            if (bar <= 0 || bar == rest.Length - 1)
+            {
+                throw new ArgumentException(
+                    $"'{trimmed}' needs the form openai:<endpoint>|<model>, for example openai:http://127.0.0.1:8080/v1|my-model.");
+            }
+
+            var endpoint = rest[..bar].Trim();
+            var model = rest[(bar + 1)..].Trim();
+            return new BenchModel(BenchGroup.Local, trimmed, CleanupProvider.OpenAiCompatible, endpoint, model, model, note);
+        }
+
+        return new BenchModel(BenchGroup.Local, trimmed, CleanupProvider.FoundryLocal, null, trimmed, null, note);
+    }
+
+    private static bool TryStripPrefix(string value, string prefix, out string rest)
+    {
+        if (value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && value.Length > prefix.Length)
+        {
+            rest = value[prefix.Length..].Trim();
+            return rest.Length > 0;
+        }
+
+        rest = string.Empty;
+        return false;
     }
 
     // First host label of an endpoint, which is the Cognitive Services account name and is shared by

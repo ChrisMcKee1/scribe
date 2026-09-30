@@ -189,11 +189,16 @@ public partial class SettingsWindow
         draft.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
         draft.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
         draft.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
-        draft.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
-        draft.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
+        var customService = ShownCustomService;
+        draft.AiCleanupCustomEndpoint = customService.Endpoint;
+        draft.AiCleanupCustomModel = customService.Model;
+        var rememberedService = ShownRememberedService;
+        draft.AiCleanupOtherServiceEndpoint = rememberedService.Endpoint;
+        draft.AiCleanupOtherServiceModel = rememberedService.Model;
+        draft.AiCleanupOtherServiceApiKey = rememberedService.ApiKey;
         draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
         draft.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
-        draft.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
+        draft.AiCleanupCustomApiKey = customService.ApiKey;
         var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
         draft.AiCleanupWritingStyle = writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
             ? string.Empty

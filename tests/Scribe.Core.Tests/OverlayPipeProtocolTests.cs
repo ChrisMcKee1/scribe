@@ -90,7 +90,11 @@ public sealed class OverlayPipeProtocolTests
     {
         Assert.Equal("PROCESSING 1", OverlayPipeProtocol.ProcessingLine(aiCleanup: true));
         Assert.Equal("PROCESSING 0", OverlayPipeProtocol.ProcessingLine(aiCleanup: false));
-        Assert.Contains("_window.ShowProcessing(arg.Trim() == \"1\");", Dispatch(), StringComparison.Ordinal);
+        Assert.Equal("PROCESSING 2", OverlayPipeProtocol.ProcessingLine(aiCleanup: true, startingLocalModel: true));
+        // A model starting only matters to AI cleanup; without it the line stays the speech-only one.
+        Assert.Equal("PROCESSING 0", OverlayPipeProtocol.ProcessingLine(aiCleanup: false, startingLocalModel: true));
+        Assert.Contains(
+            "_window.ShowProcessing(arg.Trim() switch { \"2\" => 2, \"1\" => 1, _ => 0 });", Dispatch(), StringComparison.Ordinal);
 
         Assert.Equal("METER 0", OverlayPipeProtocol.MeterLine(0));
         Assert.Equal("METER 1000", OverlayPipeProtocol.MeterLine(1000));
@@ -161,7 +165,7 @@ public sealed class OverlayPipeProtocolTests
         foreach (var (method, published) in new[]
                  {
                      ("public void ShowRecording()", "var desired = DesiredState.Recording();"),
-                     ("public void ShowProcessing(bool aiPolishing)", "var desired = DesiredState.Processing(aiPolishing);"),
+                     ("public void ShowProcessing(bool aiPolishing, bool startingLocalModel = false)", "var desired = DesiredState.Processing(aiPolishing, startingLocalModel);"),
                      ("public void ShowOutcome(PillOutcome outcome)", "var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);"),
                      ("public void HideOverlay()", "var desired = DesiredState.Hidden();"),
                      // A warning goes out for the live recording's state, and goes with it once a newer state replaces it.

@@ -554,6 +554,9 @@ public sealed class CleanupPromptRebuildTests
             [nameof(CleanupOptions.CopilotModel)] = baseline with { CopilotModel = "other" },
             // Changes what every Microsoft Foundry request carries, so it reconnects and probes again.
             [nameof(CleanupOptions.PromptCaching)] = baseline with { PromptCaching = false },
+            [nameof(CleanupOptions.VocabularyMode)] = baseline with { VocabularyMode = CleanupVocabularyMode.Mentioned },
+            // Asked of each request to Ollama or LM Studio, so it changes nothing an agent is connected to.
+            [nameof(CleanupOptions.LocalModelKeepAliveMinutes)] = baseline with { LocalModelKeepAliveMinutes = 30 },
         };
         string[] promptFields =
         [
@@ -562,6 +565,8 @@ public sealed class CleanupPromptRebuildTests
             nameof(CleanupOptions.PromptStyle),
             nameof(CleanupOptions.FrontierPrompt),
             nameof(CleanupOptions.LocalPrompt),
+            nameof(CleanupOptions.VocabularyMode),
+            nameof(CleanupOptions.LocalModelKeepAliveMinutes),
         ];
 
         // A field added later has to be classified here: treated as part of the connection until it is.

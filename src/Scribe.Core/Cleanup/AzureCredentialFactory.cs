@@ -42,8 +42,8 @@ internal static class AzureCredentialFactory
     private static AzureCredentialRequest _cachedRequest;
     private static TokenCredential? _cached;
 
-    // PerfFlags.CliAccessTokenCache's instance, kept apart so Settings discovery (no flag) and cleanup (flag) never evict
-    // each other's credential.
+    // The access-token cache's instance for cleanup (on unless PerfFlags.CliTokenEveryRequest), kept apart so Settings
+    // discovery (never cached) and cleanup never evict each other's credential.
     private static AzureCredentialRequest _cachedCachingRequest;
     private static TokenCredential? _cachedCaching;
     private static int _invalidationVersion;
@@ -55,15 +55,16 @@ internal static class AzureCredentialFactory
     internal static int InvalidationVersion => Volatile.Read(ref _invalidationVersion);
 
     /// <summary>
-    /// The credential without the access-token cache: Settings discovery, Test connection, and cleanup while
-    /// PerfFlags.CliAccessTokenCache is off.
+    /// The credential without the access-token cache: Settings discovery, Test connection, and cleanup under
+    /// PerfFlags.CliTokenEveryRequest.
     /// </summary>
     internal static TokenCredential Create(AzureCredentialRequest request) => Create(request, cacheCliTokens: false);
 
     /// <param name="request">The identity to present.</param>
     /// <param name="cacheCliTokens">
-    /// PerfFlags.CliAccessTokenCache: wrap an Azure CLI credential in the in-memory token cache. A service principal is
-    /// returned as it always is (MSAL caches its tokens), whatever this says.
+    /// Wrap an Azure CLI credential in the in-memory token cache: cleanup's two serving clients, unless
+    /// PerfFlags.CliTokenEveryRequest. A service principal is returned as it always is (MSAL caches its tokens), whatever
+    /// this says.
     /// </param>
     internal static TokenCredential Create(AzureCredentialRequest request, bool cacheCliTokens)
     {

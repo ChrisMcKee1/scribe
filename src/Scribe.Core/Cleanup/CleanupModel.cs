@@ -4,12 +4,10 @@ namespace Scribe.Core.Cleanup;
 /// A Foundry Local model offered for AI text cleanup. <see cref="Alias"/> is the Foundry catalog
 /// alias used to download and load the model; <see cref="DisplayName"/> and <see cref="Hint"/> are
 /// for the settings UI. The list is deliberately small and curated to text-only instruct models
-/// that are fast and obedient at "rewrite, don't answer" tasks.
-/// <see cref="Recommendation"/> is set only on the models the golden-suite benchmark named as
-/// on-device winners (see docs/model-leaderboard.md); it is null for everything else so the UI can
-/// flag the picks worth defaulting to without editorialising the rest of the list.
+/// that are fast and obedient at "rewrite, don't answer" tasks. Settings recommends none of them: the hints say what
+/// each is like, and the benchmark (docs/local-model-benchmark.md) ranks them.
 /// </summary>
-public sealed record CleanupModel(string Alias, string DisplayName, string Hint, string? Recommendation = null);
+public sealed record CleanupModel(string Alias, string DisplayName, string Hint);
 
 /// <summary>
 /// Curated set of Foundry Local models suitable for low-latency grammar/punctuation cleanup,
@@ -19,23 +17,39 @@ public sealed record CleanupModel(string Alias, string DisplayName, string Hint,
 public static class CleanupModelCatalog
 {
     /// <summary>
-    /// Default model. Qwen3 1.7B: newest-generation, ~1.3 GB, chat+tools, and honours the
-    /// <c>/no_think</c> directive so it returns corrected text directly with no reasoning preamble.
+    /// Default model. Qwen2.5 1.5B, measured in the 0.5.2 local benchmark (docs/local-model-benchmark.md): the only
+    /// small model in the catalog with a TensorRT-RTX build, so on an NVIDIA RTX GPU it cleaned a dictation in about
+    /// 0.4 s, where every Qwen3 build fell back to the processor after Foundry Local's WebGPU build failed to start. On
+    /// the processor it was also faster than Qwen3 1.7B, the default until 0.5.1 (6.3 s against 9.2 s typically).
     /// </summary>
-    public const string DefaultAlias = "qwen3-1.7b";
+    public const string DefaultAlias = "qwen2.5-1.5b";
+
+    /// <summary>
+    /// The first choice on a PC with an NVIDIA RTX graphics card and 8 GB or more of its own memory. Measured on an
+    /// RTX 5080 in the 0.5.2 local benchmark: 83.0 against Qwen2.5 1.5B's 70.6 from the blind judge, in 0.74 s against
+    /// 0.39 s typically, and a 4.7 GB download against 3.3 GB for the RTX builds. Without such a card it would run on
+    /// the processor, several times slower than Qwen2.5 1.5B, so it is never the choice there.
+    /// </summary>
+    public const string LargeGpuAlias = "qwen2.5-7b";
+
+    /// <summary>The model Settings starts a first setup with on this PC's hardware (<paramref name="adapters"/>).</summary>
+    public static string DefaultAliasFor(IReadOnlyList<Diagnostics.GraphicsAdapter> adapters)
+    {
+        ArgumentNullException.ThrowIfNull(adapters);
+        return adapters.Any(adapter => adapter.IsNvidiaRtx && adapter.HasAtLeast(8)) ? LargeGpuAlias : DefaultAlias;
+    }
 
     public static IReadOnlyList<CleanupModel> Curated { get; } = new[]
     {
-        new CleanupModel("qwen3-1.7b", "Qwen3 1.7B (recommended)", "About 1.3 GB. Scribe's recommended default."),
-        new CleanupModel("qwen2.5-1.5b", "Qwen2.5 1.5B", "About 1.3 GB. Proven and very fast. A safe lightweight choice."),
-        new CleanupModel("qwen3.5-2b-text", "Qwen3.5 2B", "About 1.4 GB. Slightly better writing, a little slower."),
-        new CleanupModel("qwen3-4b", "Qwen3 4B", "About 2.7 GB. Higher quality. Slower."),
-        new CleanupModel("phi-4-mini", "Phi-4 Mini", "About 3.6 GB. Strong grammar."),
-        // Golden-suite winners (docs/model-leaderboard.md). Larger downloads than the lightweight
-        // defaults, but they top the on-device board: mistral-nemo-12b at ~1.0 s median is the
-        // fastest usable local model, and phi-4 earns the best offline quality grade.
-        new CleanupModel("mistral-nemo-12b-instruct", "Mistral NeMo 12B", "About 7 GB, large download. The fastest usable model that runs on this PC. Real-time feel with solid quality.", "Best balance on this PC"),
-        new CleanupModel("phi-4", "Phi-4", "About 9 GB, large download. Best offline quality. Slower and a larger download.", "Best quality on this PC"),
+        new CleanupModel("qwen2.5-1.5b", "Qwen2.5 1.5B", "About 1.5 GB. Quick on any PC, with or without a graphics card."),
+        new CleanupModel("qwen2.5-7b", "Qwen2.5 7B", "About 4.7 GB. Fast on an NVIDIA RTX graphics card with 8 GB or more. Slow without one."),
+        new CleanupModel("qwen3-1.7b", "Qwen3 1.7B", "About 1.3 GB. Scribe's default before version 0.5.2."),
+
+        // Foundry Local 2.x runs these on an NVIDIA graphics card through its CUDA builds (0.5.2 benchmark, RTX 5080:
+        // Qwen3 4B 0.72 s, Phi-4 Mini 0.79 s, where 1.2.4 had them on the processor at 16 s). Qwen3.5 2B left the list:
+        // every build of it fails with 2.1.0 ("Invalid rank for input: position_ids"), and a saved choice of it says so.
+        new CleanupModel("qwen3-4b", "Qwen3 4B", "About 2.7 GB. Fast on an NVIDIA graphics card. Slow without one."),
+        new CleanupModel("phi-4-mini", "Phi-4 Mini", "About 3.7 GB. Fast on an NVIDIA graphics card. Slow without one."),
     };
 
     /// <summary>Resolves an alias to its descriptor, falling back to the default when unknown.</summary>

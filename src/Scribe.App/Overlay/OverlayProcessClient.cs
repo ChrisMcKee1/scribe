@@ -153,11 +153,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue(OverlayPipeProtocol.WarningLine(reason), desired, ensureAlive: true);
     }
 
-    public void ShowProcessing(bool aiPolishing)
+    public void ShowProcessing(bool aiPolishing, bool startingLocalModel = false)
     {
         CancelPreview();
         Unsubscribe();
-        var desired = DesiredState.Processing(aiPolishing);
+        var desired = DesiredState.Processing(aiPolishing, startingLocalModel);
         _desired = desired;
         Enqueue(desired.Line, desired, ensureAlive: true);
     }
@@ -1360,7 +1360,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         public static DesiredState Recording() => new(OverlayPipeProtocol.Recording, OverlayDemand.Sustained);
 
-        public static DesiredState Processing(bool aiCleanup) => new(OverlayPipeProtocol.ProcessingLine(aiCleanup), OverlayDemand.Sustained);
+        public static DesiredState Processing(bool aiCleanup, bool startingLocalModel) =>
+            new(OverlayPipeProtocol.ProcessingLine(aiCleanup, startingLocalModel), OverlayDemand.Sustained);
 
         /// <summary>
         /// What a relaunched helper, or one being moved, is told to show: the state itself, unless it hides itself (a

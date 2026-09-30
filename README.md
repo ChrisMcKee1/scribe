@@ -84,8 +84,8 @@ wrong and what to do next. Put it in any of nine places on screen, or turn it of
 </tr>
 <tr>
 <td width="50%" valign="top">
-<a href="docs/screenshots/ai-cleanup.png"><img src="docs/screenshots/ai-cleanup.png" alt="The AI cleanup page: Use AI cleanup on but not set up yet, On this PC (Foundry Local) chosen from the four places it can run, and the recommended model, Qwen3 1.7B, ready to set up" /></a><br />
-<b>AI cleanup.</b> Optional. Fixes punctuation, drops fillers and keeps only what you meant when you correct yourself, on this PC or with the AI service you choose. Until it's ready, Scribe types what it hears.
+<a href="docs/screenshots/ai-cleanup.png"><img src="docs/screenshots/ai-cleanup.png" alt="The AI cleanup page: Use AI cleanup on, On this PC chosen from the four places it can run, and How to run it with Let Scribe manage it chosen over Ollama and LM Studio, with Scribe's model list below" /></a><br />
+<b>AI cleanup.</b> Optional. Fixes punctuation, drops fillers, keeps only what you meant when you correct yourself and writes lists as lists, on this PC with Scribe, Ollama or LM Studio, or with the AI service you choose. Until it's ready, Scribe types what it hears.
 </td>
 <td width="50%" valign="top">
 <a href="docs/screenshots/dictionary.png"><img src="docs/screenshots/dictionary.png" alt="The Dictionary page's Your words tab: 13 words, such as dot net written as .NET and cube control as kubectl, next to the Word packs tab showing 2 of 11 on" /></a><br />
@@ -95,7 +95,7 @@ wrong and what to do next. Put it in any of nine places on screen, or turn it of
 <tr>
 <td width="50%" valign="top">
 <a href="docs/screenshots/word-packs.png"><img src="docs/screenshots/word-packs.png" alt="The Dictionary page's Word packs tab: the eleven built-in word packs, two of them on, with AI and Machine Learning Terminology open: Use this word pack, Use in AI cleanup, and its 197 words" /></a><br />
-<b>Word packs.</b> Eleven ready-made packs, from AI model names to Azure, GitHub and .NET, plus your own. Edit any word, and choose which packs AI cleanup may use.
+<b>Word packs.</b> Eleven ready-made packs, from AI model names to Azure, GitHub and .NET. Make your own for your team's acronyms, product names or industry terms, share it as a CSV, or ask an AI assistant to build one. <a href="docs/word-packs.md">Learn more about word packs</a>.
 </td>
 <td width="50%" valign="top">
 <a href="docs/screenshots/snippets.png"><img src="docs/screenshots/snippets.png" alt="The Voice snippets page: meeting link, my email address and sign off, with meeting link open: when you say 'meeting link', Scribe types 'Join the meeting:' and a link" /></a><br />
@@ -143,18 +143,32 @@ And a few more things:
 ## AI cleanup, if you want it
 
 AI cleanup is off until you turn it on. It fixes punctuation and capitalization, drops fillers such as
-"um", and keeps only what you meant when you correct yourself, before the text is typed. You choose where
-it runs:
+"um", keeps only what you meant when you correct yourself, and writes a list when you list things, before
+the text is typed. You choose where it runs:
 
-- **On this PC, with [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/).** Fully
-  offline. Setting it up downloads the AI runtime for your PC and the model you pick, which can take
-  several GB, and Scribe removes them if you move AI cleanup elsewhere.
+- **On this PC.** Fully offline. Choose how to run it:
+  - **Let Scribe manage it,** with [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/).
+    Setting it up downloads the AI runtime for your PC and the model you pick, which can take several GB,
+    and Scribe removes them if you move AI cleanup elsewhere.
+  - **Ollama** or **LM Studio**, if you already have one. Scribe lists the models you downloaded in it, shows
+    how much memory the model uses, and frees that memory when AI cleanup stops using it, when you choose
+    **Free memory**, and when Scribe frees its own memory after the time you set. A small open model does the
+    job: Gemma 4 E2B cleans a dictation in about a third of a second on a recent NVIDIA graphics card. If
+    you set LM Studio to require an API key, choose **Another AI service** instead and enter its address
+    and key there.
+  - The first dictation after the model was freed waits for it to load, and the recording indicator says
+    **Starting local model** while it does.
 - **Microsoft Foundry,** with your Azure CLI sign-in or an app registration. [Set up a Foundry
-  resource](docs/foundry-setup.md) or [use a service principal](docs/service-principal-setup.md). Turning
+  resource](docs/foundry-setup.md) or [use a service principal](docs/service-principal-setup.md). Scribe asks
+  the model not to spend time reasoning, which cleans a dictation faster at the same quality. Turning
   off **Let Microsoft Foundry cache what Scribe sends** asks Microsoft Foundry not to use its prompt cache
   for new cleanup requests (see [Privacy](#privacy)).
 - **GitHub Copilot,** with your own Copilot subscription, through the GitHub Copilot command-line tool.
-- **Another AI service** that works like the OpenAI API, such as Ollama, LM Studio or OpenRouter.
+- **Another AI service** that works like the OpenAI API, such as OpenRouter, OpenAI, or a server on another
+  computer.
+
+Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares 39
+open models across Foundry Local, Ollama and LM Studio, and the cloud models, on quality and time.
 
 Test connection checks Microsoft Foundry or another AI service before you save. If the model isn't ready
 or doesn't answer, Scribe types what it heard, and you can turn AI cleanup on or off from the tray at any
@@ -216,12 +230,16 @@ samples included, and how to reproduce them.
   history, which keeps recordings on your PC for at most 7 days and 250 MB.
 - **Speech recognition is local:** Parakeet runs on your CPU through
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
-- **AI cleanup is optional, and goes where you choose.** Foundry Local keeps everything on your PC. With
-  Microsoft Foundry, GitHub Copilot or another AI service, each cleanup request sends the text Scribe
-  recognized for that dictation (never audio), Scribe's cleanup instructions with your writing style, and
-  your dictionary plus the word packs you let AI cleanup use (up to 5,000 words or phrases), whether or not
-  the dictation mentions them. A word whose written text spans more than one line or runs past 100
-  characters, such as a signature, stays out. It goes only to the service you set up.
+- **AI cleanup is optional, and goes where you choose.** On this PC, with Scribe's own model, Ollama or LM
+  Studio, everything stays on your PC. With Microsoft Foundry, GitHub Copilot or another AI service, each
+  cleanup request sends the text Scribe recognized for that dictation (never audio), Scribe's cleanup
+  instructions with your writing style, and the words from your dictionary plus the word packs you let AI
+  cleanup use that the dictation appears to mention (up to 5,000 words or phrases, or 80 with the short
+  instructions, which a server on your PC such as Ollama or LM Studio gets unless you choose otherwise). A
+  word whose written text spans more than one line or runs past 100 characters, such as a signature, stays
+  out. It goes only to the service you set up. With a server on your PC, starting a dictation also sends it
+  the instructions with no dictated text and none of your vocabulary, so a model it unloaded while idle is
+  ready by the time you stop talking.
 - **Microsoft Foundry.** Scribe asks Microsoft Foundry not to store the response, though Microsoft's abuse
   monitoring can still keep a sample of flagged prompts and responses for review, as its
   [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)

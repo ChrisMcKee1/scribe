@@ -105,6 +105,7 @@ public static class SettingsDraftValidator
     public const string FoundryEndpointInvalidMessage = "Enter the address of your Microsoft Foundry resource. It starts with https://.";
     public const string CustomEndpointInvalidMessage = "Enter the service's address, such as http://localhost:11434/v1.";
     public const string CustomModelEmptyMessage = "Enter the name of the model.";
+    public const string LocalAppModelEmptyMessage = "Choose a model from the list.";
     public const string DeploymentEmptyMessage = "Enter the name of the model deployment.";
     public const string TenantEmptyMessage = "Enter the tenant ID.";
     public const string ClientIdEmptyMessage = "Enter the client ID.";

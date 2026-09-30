@@ -114,10 +114,17 @@
                             </Ellipse>
                         </StackPanel>
 
-                        <TextBlock x:Name="ProcessingText" Grid.Column="1" Margin="13,0,0,0" VerticalAlignment="Center"
-                                   Text="Recognizing speech…" Foreground="{ThemeResource PillTextBrush}"
-                                   FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                   IsTextScaleFactorEnabled="False"/>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="ProcessingText" Margin="13,0,0,0" VerticalAlignment="Center"
+                                       Text="Recognizing speech…" Foreground="{ThemeResource PillTextBrush}"
+                                       FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                       IsTextScaleFactorEnabled="False"/>
+                            <!-- Only while AI cleanup's model on this PC is starting: "This can take time". -->
+                            <TextBlock x:Name="ProcessingDetail" Margin="13,2,0,0" Visibility="Collapsed"
+                                       Foreground="{ThemeResource PillSecondaryTextBrush}"
+                                       FontSize="12" TextTrimming="CharacterEllipsis"
+                                       IsTextScaleFactorEnabled="False"/>
+                        </StackPanel>
                     </Grid>
 
                     <!-- Typed: all of the text arrived, the space after it included. A check, briefly. -->

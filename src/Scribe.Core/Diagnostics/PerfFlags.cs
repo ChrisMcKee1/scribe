@@ -5,8 +5,8 @@ namespace Scribe.Core.Diagnostics;
 /// environment variable, read once at startup: names separated by commas, semicolons or white space, compared without
 /// regard to case. Off is the old path, so a process without the variable runs exactly what the release before ran; a
 /// flag's default flips only in a later release, once its field evidence is in. The one exception is a change the
-/// maintainer approved as the new default: it ships on, and its flag, named for the old behaviour (<see cref="ForcedIdleGc"/>),
-/// brings the old path back for one release, for comparison.
+/// maintainer approved as the new default: it ships on, and its flag, named for the old behaviour (<see cref="ForcedIdleGc"/>,
+/// <see cref="CliTokenEveryRequest"/>), brings the old path back for one release, for comparison.
 /// </summary>
 /// <remarks>
 /// An environment variable, not a setting or an AppContext switch, because it reaches both installs the same way (the
@@ -31,7 +31,7 @@ public sealed class PerfFlags
         CachedRowSearchText,
         CaptureTimingDiagnostics,
         CleanupPhaseTelemetry,
-        CliAccessTokenCache,
+        CliTokenEveryRequest,
         CoalesceDictionaryStatus,
         DataLayerWarmUp,
         DeduplicateOverlayMeter,
@@ -72,7 +72,10 @@ public sealed class PerfFlags
     public const string CachedRowSearchText = nameof(CachedRowSearchText);
     public const string CaptureTimingDiagnostics = nameof(CaptureTimingDiagnostics);
     public const string CleanupPhaseTelemetry = nameof(CleanupPhaseTelemetry);
-    public const string CliAccessTokenCache = nameof(CliAccessTokenCache);
+
+    // Named for the old behaviour (0.5.2): the Azure CLI access token cache ships on, and this brings back one az process
+    // per cleanup request for one release (CachingCliTokenCredential).
+    public const string CliTokenEveryRequest = nameof(CliTokenEveryRequest);
     public const string CoalesceDictionaryStatus = nameof(CoalesceDictionaryStatus);
     public const string DataLayerWarmUp = nameof(DataLayerWarmUp);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);

@@ -51,4 +51,29 @@ public sealed class CleanupVocabulary
             return string.IsNullOrEmpty(glossary) ? null : glossary;
         },
         GlossaryEntries);
+
+    /// <summary>
+    /// The glossary block a request for <paramref name="dictation"/> carries under <paramref name="mode"/>: all of it
+    /// (<see cref="GlossaryFor(int)"/>), only the entries the dictation appears to mention
+    /// (<see cref="VocabularyMentions"/>, within the same budget), or none. Null when there is nothing to add, which is
+    /// always the case for <see cref="CleanupVocabularyMode.Mentioned"/> without a dictation (a readying request).
+    /// </summary>
+    public string? GlossaryFor(int maxTerms, CleanupVocabularyMode mode, string? dictation)
+    {
+        switch (mode)
+        {
+            case CleanupVocabularyMode.None:
+                return null;
+            case CleanupVocabularyMode.Mentioned:
+                if (string.IsNullOrWhiteSpace(dictation) || GlossaryEntries.Count == 0)
+                {
+                    return null;
+                }
+
+                var glossary = CleanupPrompt.BuildGlossary(VocabularyMentions.Select(GlossaryEntries, dictation), maxTerms);
+                return string.IsNullOrEmpty(glossary) ? null : glossary;
+            default:
+                return GlossaryFor(maxTerms);
+        }
+    }
 }

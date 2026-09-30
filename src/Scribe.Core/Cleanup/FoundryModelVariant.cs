@@ -21,9 +21,7 @@ internal readonly record struct FoundryModelVariantCandidate(string Alias, strin
 /// </summary>
 internal static class FoundryModelVariant
 {
-    private const string GenericGpuSuffix = "-generic-gpu";
     private const string GenericCpuSuffix = "-generic-cpu";
-    private const string CudaGpuSuffix = "-cuda-gpu";
     private const string GpuSuffix = "-gpu";
     private const string CpuSuffix = "-cpu";
     private const string CpuExecutionProvider = "CPUExecutionProvider";
@@ -87,22 +85,25 @@ internal static class FoundryModelVariant
     public static bool IsCpuExecutionProvider(string? executionProvider) =>
         string.Equals(executionProvider?.Trim(), CpuExecutionProvider, StringComparison.OrdinalIgnoreCase);
 
+    // Foundry Local names a build <model>-<provider>-<device>: generic-gpu (WebGPU), cuda-gpu, trtrtx-gpu (TensorRT-RTX)
+    // and so on, and a family's CPU build is <model>-generic-cpu whichever of those its graphics card builds are. Only a
+    // segment of letters counts as the provider, so a name without one ("phi-4-gpu") never loses part of the model's own
+    // name; it keeps the older <model>-gpu to <model>-cpu shape.
     private static IEnumerable<string> CandidateCpuAliases(string gpuAlias)
     {
-        if (gpuAlias.EndsWith(GenericGpuSuffix, StringComparison.OrdinalIgnoreCase))
+        if (!gpuAlias.EndsWith(GpuSuffix, StringComparison.OrdinalIgnoreCase))
         {
-            yield return gpuAlias[..^GenericGpuSuffix.Length] + GenericCpuSuffix;
+            yield break;
         }
 
-        if (gpuAlias.EndsWith(CudaGpuSuffix, StringComparison.OrdinalIgnoreCase))
+        var stem = gpuAlias[..^GpuSuffix.Length];
+        var provider = stem.LastIndexOf('-');
+        if (provider > 0 && provider < stem.Length - 1 && stem[(provider + 1)..].All(char.IsAsciiLetter))
         {
-            yield return gpuAlias[..^CudaGpuSuffix.Length] + GenericCpuSuffix;
+            yield return stem[..provider] + GenericCpuSuffix;
         }
 
-        if (gpuAlias.EndsWith(GpuSuffix, StringComparison.OrdinalIgnoreCase))
-        {
-            yield return gpuAlias[..^GpuSuffix.Length] + CpuSuffix;
-        }
+        yield return stem + CpuSuffix;
     }
 
     private static string PreferCpuExecutionProvider(IReadOnlyList<FoundryModelVariantCandidate> candidates)

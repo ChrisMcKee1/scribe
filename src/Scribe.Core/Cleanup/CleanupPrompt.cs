@@ -63,14 +63,19 @@ public static class CleanupPrompt
     /// instructions to the model.
     /// </summary>
     public const string DefaultWritingStyle =
-        "Write in the speaker's language using clear, natural, well-structured prose. Never " +
+        "Write in the speaker's language using clear, natural, well-structured text. Never " +
         "translate the dictation unless I explicitly ask you to. Use correct punctuation, meaning " +
         "commas, periods, semicolons, colons, question marks, and parentheses, according to " +
         "sentence structure. Do not use dash punctuation to join clauses; use a comma, colon, " +
         "semicolon, or period instead. That governs the punctuation you are choosing: never delete " +
         "an em or en dash that was already in the text you were given. " +
         "Break long run-on speech into properly formed sentences, and start a new " +
-        "paragraph when the topic shifts. Separate paragraphs with one blank line. Remove filler " +
+        "paragraph when the topic shifts. Separate paragraphs with one blank line. When I list " +
+        "several items, steps, or options, write them as a list with one item per line, starting " +
+        "each line with \"- \", or with \"1.\", \"2.\" and so on when the order matters, and keep the " +
+        "sentence I said before the list as its introduction. Keep a short message, a single " +
+        "request, or a sentence that only mentions a few things in passing as ordinary sentences. " +
+        "Never add headings, bold text, or labels I did not say, and keep every point I made. Remove filler " +
         "words and false starts (such as \"um\", " +
         "\"uh\", \"you know\", and \"like\") and fix small grammar slips, while keeping my " +
         "meaning, intent, and vocabulary. When I correct myself mid-speech (for example \"I " +
@@ -136,17 +141,20 @@ public static class CleanupPrompt
     /// <summary>
     /// Resolves the effective prompt style. An explicit <see cref="CleanupPromptStyle.Frontier"/> or
     /// <see cref="CleanupPromptStyle.Local"/> is honored as-is; <see cref="CleanupPromptStyle.Auto"/>
-    /// maps to the terse local prompt for the on-device Foundry Local provider and to the frontier
-    /// prompt for cloud/bring-your-own providers (a BYO endpoint may be a frontier model, so Auto stays
-    /// conservative and only assumes "local" for Foundry Local; small local servers can opt in
-    /// explicitly).
+    /// maps to the terse local prompt for a model on this PC (the on-device Foundry Local provider, or an
+    /// OpenAI-compatible server on this PC such as Ollama or LM Studio, see <see cref="LocalAiServer"/>)
+    /// and to the frontier prompt for cloud providers and servers elsewhere, which may run a frontier model.
     /// </summary>
-    public static CleanupPromptStyle ResolvePromptStyle(CleanupPromptStyle style, CleanupProvider provider) =>
+    /// <param name="customEndpoint">The OpenAI-compatible provider's address; ignored for every other provider.</param>
+    public static CleanupPromptStyle ResolvePromptStyle(
+        CleanupPromptStyle style, CleanupProvider provider, string? customEndpoint = null) =>
         style switch
         {
             CleanupPromptStyle.Frontier => CleanupPromptStyle.Frontier,
             CleanupPromptStyle.Local => CleanupPromptStyle.Local,
-            _ => provider == CleanupProvider.FoundryLocal ? CleanupPromptStyle.Local : CleanupPromptStyle.Frontier,
+            _ => provider == CleanupProvider.FoundryLocal || LocalAiServer.Serves(provider, customEndpoint)
+                ? CleanupPromptStyle.Local
+                : CleanupPromptStyle.Frontier,
         };
 
     // ---- Guardrail preambles ------------------------------------------------------------------
@@ -219,8 +227,11 @@ public static class CleanupPrompt
     /// when the style resolves to Local, otherwise <see cref="MaxGlossaryTermsCloud"/>. Dictation and the
     /// dictionary page both ask here, so the page cannot quote a budget dictation does not use.
     /// </summary>
-    public static int GlossaryTermBudget(CleanupPromptStyle style, CleanupProvider provider) =>
-        ResolvePromptStyle(style, provider) == CleanupPromptStyle.Local ? MaxGlossaryTermsLocal : MaxGlossaryTermsCloud;
+    /// <param name="customEndpoint">The OpenAI-compatible provider's address; ignored for every other provider.</param>
+    public static int GlossaryTermBudget(CleanupPromptStyle style, CleanupProvider provider, string? customEndpoint = null) =>
+        ResolvePromptStyle(style, provider, customEndpoint) == CleanupPromptStyle.Local
+            ? MaxGlossaryTermsLocal
+            : MaxGlossaryTermsCloud;
 
     /// <summary>
     /// The vocabulary AI cleanup is given, in priority order: the enabled dictionary

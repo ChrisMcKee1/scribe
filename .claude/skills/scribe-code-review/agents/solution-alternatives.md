@@ -109,7 +109,7 @@ capability looks like here.
 plus the two per-architecture native runtimes, `Microsoft.Data.Sqlite` with the deliberate
 `SQLitePCLRaw.bundle_e_sqlite3` pin, the Hosting/DI/Logging/Options set, `H.NotifyIcon.Wpf` and
 `WPF-UI` for the shell, `Microsoft.Extensions.AI` plus `Microsoft.Agents.AI*` plus
-`Microsoft.AI.Foundry.Local.WinML` for cleanup, `Azure.Identity` and the two Resource Manager
+`Microsoft.AI.Foundry.Local` (2.x, WinML built in) for cleanup, `Azure.Identity` and the two Resource Manager
 packages, Velopack, the three OpenTelemetry packages, and
 `System.Security.Cryptography.ProtectedData` for DPAPI. **Read it before you accept a new package as
 necessary, and read it before you propose one.**

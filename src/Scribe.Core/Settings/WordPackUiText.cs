@@ -58,11 +58,14 @@ public static class WordPackUiText
         _ => string.Empty,
     };
 
+    // Each cleanup request carries the words its dictation appears to mention (CleanupVocabularyMode.Mentioned), chosen from
+    // every word here that AI cleanup may use, so a word past the whole list's budget is still sent when a dictation
+    // mentions it: the budget now binds only a request that mentions more words than it holds.
     public static string GlossaryLine(GlossaryInclusion inclusion) => inclusion switch
     {
-        GlossaryInclusion.Included => "Sent to AI cleanup as vocabulary.",
+        GlossaryInclusion.Included or GlossaryInclusion.OverBudget =>
+            "Sent to AI cleanup as vocabulary when a dictation mentions it.",
         GlossaryInclusion.NotPermitted => "Not sent to AI cleanup: this word pack isn't used in AI cleanup.",
-        GlossaryInclusion.OverBudget => "Not sent to AI cleanup: the vocabulary is full.",
         _ => "Not sent to AI cleanup: this word is not included in vocabulary.",
     };
 

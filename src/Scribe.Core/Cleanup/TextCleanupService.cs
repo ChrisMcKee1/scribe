@@ -1,5 +1,6 @@
 ﻿using System.ClientModel;
 using System.ClientModel.Primitives;
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -193,6 +194,73 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     [GeneratedRegex("<think>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
     private static partial Regex ThinkBlock { get; }
 
+    /*
+     * What small models on this PC wrap around a rewrite, measured in this release's local benchmark: Foundry Local's
+     * Qwen3 1.7B opened 15 of its 25 answers with a bare "<think>" whose closing tag the runtime had consumed, 19 with a
+     * line such as "Here's the rewritten transcript, following the rules and style guide:" and a "---" under it, and
+     * wrapped the text in <transcript> or <rewritten_transcript>; Llama 3.2 3B opened 14 of 25 answers with a line such
+     * as "Here is the rewritten text:" under 0.5.1's requests, and 3 of 75 with the short instructions. Each of them was
+     * typed into the user's document. Only a whole first line that announces a rewrite and ends in a colon counts, and
+     * only when the dictation itself does not say "here" or "below" in its first few words.
+     */
+    [GeneratedRegex(@"^\s*</?think>\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex LeadingThinkTag { get; }
+
+    [GeneratedRegex(
+        @"\A[ \t]*(?:\*\*)?(?:(?:sure|okay|ok|certainly|of course)[,!.]?[ \t]+)?(?:here(?:'s|’s|[ \t]+is|[ \t]+are)|below[ \t]+is)\b[^\r\n]{0,120}?\b(?:rewrit\w*|revis\w*|clean\w*|correct\w*|edit\w*|polish\w*|version|transcript\w*|text|dictation)\b[^\r\n]{0,120}:[ \t]*(?:\*\*)?[ \t]*(?:\r?\n|\z)",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex RewriteAnnouncement { get; }
+
+    [GeneratedRegex(@"\A(?:[ \t]*(?:-{3,}|\*{3,}|_{3,})?[ \t]*\r?\n)+", RegexOptions.None)]
+    private static partial Regex LeadingSeparators { get; }
+
+    // A first line that is only a label for the rewrite ("**Transcript Rewritten:**", "Rewritten transcript:", "The
+    // corrected version:", "**Transcript:**"), as Foundry Local's Qwen3 1.7B wrote after the announcements above were
+    // removed.
+    [GeneratedRegex(
+        @"\A[ \t]*(?:\*\*)?(?:[\w-]+[ \t]+){0,2}?(?:(?:rewrit|revis|clean|correct|edit|polish)[\w-]*[ \t]+(?:[\w-]+[ \t]+)??(?:transcript|text|version|dictation)\w*|(?:transcript|text|version|dictation)\w*[ \t]+(?:[\w-]+[ \t]+)??(?:rewrit|revis|clean|correct|edit|polish)[\w-]*|transcript)[ \t]*(?:\*\*)?[ \t]*:[ \t]*(?:\*\*)?[ \t]*(?:\r?\n|\z)",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex RewriteLabel { get; }
+
+    [GeneratedRegex(@"\A\W*(?:\w+\W+){0,6}?(?:rewrit|revis|clean|correct|edit|polish|transcript)", RegexOptions.IgnoreCase)]
+    private static partial Regex LabelOpening { get; }
+
+    /*
+     * Commentary appended under a separator line: "---" and then "This version maintains the original meaning...",
+     * "**Note:** The original transcript contained...", "This rewritten transcript follows the rules...", "Let me know if
+     * you need...". In the roughly 8,000 answers of the local benchmark, every block of this kind under a separator was
+     * the model's; the dictation's own paragraphs under a separator started with its own words.
+     */
+    [GeneratedRegex(
+        @"\r?\n[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*\r?\n\s*(?:\*\*)?(?:notes?\b|explanation\b|key (?:changes|corrections)\b|changes(?: made)?\b|summary of changes\b|corrections\b|this (?:is the (?:final|cleaned|rewritten|revised|corrected) )?(?:version|rewrite|rewritten|revision|revised|text|transcript)\b|i(?:'ve| have)? (?:made|kept|removed|corrected|fixed|changed|rewrote|preserved|maintained)\b|let me know\b|if (?:you|this) (?:need|want|still)\b)[\s\S]*\z",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex TrailingCommentary { get; }
+
+    [GeneratedRegex(@"(?:^|\n)[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*(?:\r?\n|\z)", RegexOptions.None)]
+    private static partial Regex SeparatorLine { get; }
+
+    [GeneratedRegex(
+        @"\A\s*(?:\*\*)?<(transcript|rewritten_transcript|rewritten_text|rewritten|text|output|answer|result|corrected|cleaned|cleaned_text)>(?:\*\*)?\s*",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex LeadingWrapperTag { get; }
+
+    [GeneratedRegex(
+        @"\s*(?:\*\*)?</(transcript|rewritten_transcript|rewritten_text|rewritten|text|output|answer|result|corrected|cleaned|cleaned_text)>(?:\*\*)?\s*\z",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex TrailingWrapperTag { get; }
+
+    [GeneratedRegex(@"\A\W*(?:\w+\W+){0,6}?(?:here|below)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex AnnouncementOpening { get; }
+
+    // A dictation that itself says "here's..." or "below is..." in its first few words ("um so here's the revised text
+    // for the email") keeps its first line, whatever the model does with it.
+    private static bool DictationOpensLikeAnAnnouncement(string original) => AnnouncementOpening.IsMatch(original);
+
+    // A wrapper tag is the model's only when the dictation did not say it: text dictated with such a tag keeps it.
+    private static bool IsModelWrapperTag(Match tag, string original) =>
+        !original.Contains($"<{tag.Groups[1].Value}", StringComparison.OrdinalIgnoreCase) &&
+        !original.Contains($"</{tag.Groups[1].Value}", StringComparison.OrdinalIgnoreCase);
+
     // A model sometimes declines the rewrite and answers with a canned safety refusal ("I'm sorry, but
     // I cannot assist with that request.") instead of the cleaned text. Two intent families detect it:
     // an apology / AI-identity preamble at the very start, or an inability verb paired with a help
@@ -254,7 +322,29 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // What the Foundry Local SDK logs through: _log, with the user profile folded out of the SDK's
     // own raw exception text. See FoundrySdkLogger.
     private readonly FoundrySdkLogger _foundrySdkLog;
+
+    // Graphics card builds this PC moved to their CPU build: the demotions 2.x remembers (FoundryDemotionReset.FileName),
+    // and those a 1.x build remembered, which are never applied (FoundryDemotionReset.LegacyFileName; ApplyFoundryDemotion).
     private readonly string _foundryDemotionsPath;
+    private readonly string _legacyFoundryDemotionsPath;
+
+    // Configured alias to the build this session moved it to: its CPU build after a graphics card build failed its first
+    // request with an ONNX Runtime error (MentionsGpuBuildFailure), which also means a busy graphics card or a driver reset,
+    // or the build it ran on before when the one chosen for a 1.x demotion could not be downloaded or loaded.
+    private readonly ConcurrentDictionary<string, string> _sessionFoundryDemotions = new(StringComparer.OrdinalIgnoreCase);
+
+    // Configured alias to the CPU build a 1.x build demoted it to, until a conclusive start has run the build Foundry Local
+    // would pick on a new install (ApplyFoundryDemotion, ChooseFoundryBuild, FoundryOutcomeConclusive).
+    private readonly ConcurrentDictionary<string, string> _foundryReselect = new(StringComparer.OrdinalIgnoreCase);
+
+    // The current initialization's choice for a model a 1.x build demoted, under _initLock; null when it made none.
+    private FoundryReselectAttempt? _foundryReselectAttempt;
+
+    // Whether every execution provider Foundry Local set up this session registered. Until they have, a start cannot tell
+    // which graphics card build is best here (the catalog lists builds only for the providers that registered), so its
+    // outcome settles no 1.x demotion.
+    private volatile bool _foundryEpSetupComplete;
+
     private readonly object _gate = new();
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
@@ -279,11 +369,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private readonly ILibraryVocabularySource? _vocabularySource;
 
     // The startup snapshot of the performance flags: CleanupPhaseTelemetry times the send path of each dictation's cleanup,
-    // and CliAccessTokenCache lets an Azure CLI sign-in reuse its access token (CachingCliTokenCredential).
+    // and CliTokenEveryRequest brings back one az process per request for an Azure CLI sign-in.
     private readonly Diagnostics.PerfFlags _perfFlags;
 
-    // Off (the default) keeps one az process per token request, as every release did.
-    private bool CachesCliTokens => _perfFlags.IsOn(Diagnostics.PerfFlags.CliAccessTokenCache);
+    // On by default (0.5.2, approved by the maintainer): an Azure CLI sign-in reuses its access token
+    // (CachingCliTokenCredential) instead of running az for every request, which took 1.2 to 7 s each.
+    private bool CachesCliTokens => !_perfFlags.IsOn(Diagnostics.PerfFlags.CliTokenEveryRequest);
 
     // The agents built for an admitted vocabulary's glossary (AdmittedCleanup), by the system prompt they carry, so every
     // dictation of one generation shares one. Bounded, because each new generation brings a new glossary. Guarded by
@@ -441,6 +532,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal bool DisableRetries { get; set; }
     internal Action<UsageDetails>? UsageObserver { get; set; }
 
+    // Benchmark-only: replaces the temperature a model on this PC is sent; a negative value sends none, which is how
+    // the harness measures a server's own default against the one Scribe sets.
+    internal float? TemperatureOverride { get; set; }
+
     // Test-only: lets a test put a fake transport under every OpenAI client this service builds (the
     // custom endpoint, Foundry Local's loopback client, and both Azure surfaces), so the privacy,
     // lifetime and storage paths run against the real OpenAI client and agent without any network.
@@ -451,6 +546,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // Test-only: the network under the vocabulary hand-off handler, in place of the HttpClientHandler every client
     // shares in production, so the canary tests run the production transport, admission point included, end to end.
     internal HttpMessageHandler? InnerHttpHandlerForTesting { get; set; }
+
+    // How Scribe asks Ollama or LM Studio which model they hold and frees its memory (LocalServerClient). Settable so a
+    // test can script the app's answers.
+    internal ILocalServerClient LocalServers { get; set; }
 
     // Test-only: stands in for the provider-specific half of initialization (the Copilot CLI handshake,
     // the Azure client construction) and returns the agent factory it would have built. Everything
@@ -546,14 +645,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         ILogger<TextCleanupService> log,
         AppPaths? paths = null,
         ILibraryVocabularySource? vocabularySource = null,
-        Diagnostics.PerfFlags? perfFlags = null)
+        Diagnostics.PerfFlags? perfFlags = null,
+        ILocalServerClient? localServers = null)
         : this(
             log,
             paths,
             new FoundryLocalSdkHost(),
             paths is null ? null : FoundryLocalStorage.For(paths),
             vocabularySource,
-            perfFlags)
+            perfFlags,
+            localServers)
     {
     }
 
@@ -562,22 +663,26 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// Null only where no library vocabulary can reach the service (tests, tools): then there is no permission to check.
     /// </param>
     /// <param name="perfFlags">The startup snapshot of the performance flags; <see cref="Diagnostics.PerfFlags.None"/> when null.</param>
+    /// <param name="localServers">How Scribe frees the memory of a model Ollama or LM Studio holds for it; its own when null.</param>
     internal TextCleanupService(
         ILogger<TextCleanupService> log,
         AppPaths? paths,
         IFoundryLocalHost foundryHost,
         FoundryLocalStorage? foundryStorage,
         ILibraryVocabularySource? vocabularySource = null,
-        Diagnostics.PerfFlags? perfFlags = null)
+        Diagnostics.PerfFlags? perfFlags = null,
+        ILocalServerClient? localServers = null)
     {
         var resolvedPaths = paths ?? new AppPaths();
         _log = log;
         _perfFlags = perfFlags ?? Diagnostics.PerfFlags.None;
         _foundrySdkLog = new FoundrySdkLogger(log, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-        _foundryDemotionsPath = Path.Combine(resolvedPaths.RootDir, "foundry-local-demotions.json");
+        _foundryDemotionsPath = Path.Combine(resolvedPaths.RootDir, FoundryDemotionReset.FileName);
+        _legacyFoundryDemotionsPath = Path.Combine(resolvedPaths.RootDir, FoundryDemotionReset.LegacyFileName);
         _foundryHost = foundryHost;
         _foundryStorage = foundryStorage;
         _vocabularySource = vocabularySource;
+        LocalServers = localServers ?? new LocalServerClient();
 
         // The directory reclaim may delete under is, by construction, the one the SDK is told to use.
         _foundryAppDataDir = foundryStorage?.AppDataDir ?? FoundryLocalStorage.ResolveAppDataDir(resolvedPaths);
@@ -711,7 +816,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         var requested = WithoutUnadmittedGlossary(Normalize(options ?? CleanupOptions.Disabled));
-        var effective = ApplyPersistedFoundryDemotion(requested);
+        var effective = ApplyFoundryDemotion(requested);
 
         // Read before _gate: the first read loads the Foundry Local assembly, and that is not work to
         // do under the state lock. The flag only ever turns true, and a runtime this service created
@@ -722,6 +827,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         bool notActionable = false;
         bool promptRebuilt = false;
         bool statusChanged = false;
+        (string Endpoint, string Model, string? ApiKey)? releaseLocalModel = null;
         Exception? rebuildFailure = null;
         InitReservation? reservation = null;
         CancellationTokenSource? superseded = null;
@@ -738,6 +844,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             var sameConfig = _options == effective;
             var promptOnly = !sameConfig && _options.MatchesIgnoringPrompt(effective);
+            releaseLocalModel = LocalServerModelNoLongerUsed(_options, effective);
+            if (!sameConfig && !promptOnly)
+            {
+                // A new configuration loads its own model, or none; a model freed under the old one is not waited for.
+                _foundryReleased = false;
+            }
+
             _options = effective;
 
             if (!effective.Enabled)
@@ -836,6 +949,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         // Outside _gate: cancellation runs the token's callbacks synchronously on this thread, and a
         // superseded initialization's continuations must never run inside this lock.
         TryCancel(superseded);
+
+        if (releaseLocalModel is { } release)
+        {
+            StartLocalServerRelease(release.Endpoint, release.Model, release.ApiKey, "no longer used for AI cleanup");
+        }
 
         if (storagePlan.KeepOnlySelected == FoundryKeepOnlySelected.Set)
         {
@@ -1070,7 +1188,450 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     public AdmittedCleanup Admit(CleanupVocabulary vocabulary)
     {
         ArgumentNullException.ThrowIfNull(vocabulary);
-        return new AdmittedCleanup(vocabulary, (text, ct, style) => CleanCoreAsync(text, vocabulary, ct, style));
+        return new AdmittedCleanup(
+            vocabulary,
+            (text, ct, style) => CleanCoreAsync(text, vocabulary, ct, style),
+            style => Prewarm(vocabulary, style));
+    }
+
+    /*
+     * A server on this PC unloads an idle model, and the next dictation waits for it to load.
+     *
+     * Ollama unloads a model five minutes after its last request unless the request's keep_alive field asks for longer
+     * (its OpenAI-compatible address honors that field, measured on 0.34.4); LM Studio unloads a model it loaded on
+     * demand after an hour unless the request's ttl says otherwise. Measured on this machine with Scribe's own request,
+     * the first dictation after an unload waited 2.7 to 5.2 s on the GPU and 7 to 15 s on the CPU for a 1.7B to 4B
+     * model, where the next one took 0.3 to 0.5 s and 2.5 to 4.4 s. The load happens while nobody
+     * waits if it starts when the recording does: dictations run for several seconds, and a server that finds the same
+     * instructions and vocabulary cached then only reads the dictated words. So when a recording starts, this sends the
+     * dictation's own instructions and vocabulary with no text and a one-token ceiling, through the same admission as the
+     * dictation, to a server on this PC and nowhere else.
+     *
+     * It is skipped when the model answered within PrewarmAfterIdle: the model is loaded and the instructions cached, so
+     * the request would only queue in front of the dictation. One at a time. It never throws, and a failure changes
+     * nothing about the dictation, which sends its own request as it always did.
+     */
+    private static readonly TimeSpan PrewarmAfterIdle = TimeSpan.FromSeconds(LocalAiServer.PrewarmAfterIdleSeconds);
+    private long _lastModelAnswer;
+    private int _prewarming;
+
+    // Test-only: as if the model last answered longer ago than PrewarmAfterIdle, which the readiness probe never is.
+    internal void ForgetLastModelAnswerForTesting() => Volatile.Write(ref _lastModelAnswer, 0);
+
+    // Test-only: completes when no prewarm is running.
+    internal async Task WaitForPrewarmForTesting()
+    {
+        while (Volatile.Read(ref _prewarming) != 0)
+        {
+            await Task.Delay(10).ConfigureAwait(false);
+        }
+    }
+
+    private void Prewarm(CleanupVocabulary vocabulary, string? writingStyleOverride)
+    {
+        // A model on this PC that Scribe freed loads again while the user is still speaking.
+        TryStartReleasedModelReload();
+
+        if (Interlocked.Exchange(ref _prewarming, 1) == 1)
+        {
+            return;
+        }
+
+        // Called on the recording's start path, so nothing here may throw: a failure only means no readying request.
+        CleanupOperationTracker.Lease? lease = null;
+        var handedOff = false;
+        try
+        {
+            lease = _operations.TryEnter();
+            if (lease is null)
+            {
+                return;
+            }
+
+            AIAgent? agent = null;
+            CleanupOptions? options = null;
+            lock (_gate)
+            {
+                var lastAnswer = Volatile.Read(ref _lastModelAnswer);
+                if (_options.Enabled && _status == CleanupStatus.Ready && _agent is not null &&
+                    _agentFactory is { } factory &&
+                    LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint) &&
+                    (lastAnswer == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(lastAnswer) >= PrewarmAfterIdle))
+                {
+                    options = _options;
+                    var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
+
+                    // The instructions and writing style only, never vocabulary: they come first in every dictation's
+                    // prompt (PromptParts.Build appends the vocabulary after them), so the server caches exactly the part
+                    // each dictation shares, and a readying request carries nothing a dictation did not choose to send.
+                    agent = AdmittedAgentLocked(
+                        factory, options with { VocabularyMode = CleanupVocabularyMode.None }, style, vocabulary, dictation: null);
+                }
+            }
+
+            if (agent is null || options is null)
+            {
+                return;
+            }
+
+            var owned = lease;
+            _ = Task.Run(() => PrewarmAsync(agent, options, vocabulary, owned));
+            handedOff = true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(
+                "AI cleanup could not ready the model on this PC ({Failure}); the dictation sends its own request.",
+                DescribeFailureShape(ex));
+        }
+        finally
+        {
+            if (!handedOff)
+            {
+                lease?.Dispose();
+                Volatile.Write(ref _prewarming, 0);
+            }
+        }
+    }
+
+    private async Task PrewarmAsync(AIAgent agent, CleanupOptions options, CleanupVocabulary vocabulary, CleanupOperationTracker.Lease lease)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var coldStart = false;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            cts.CancelAfter(TimeSpan.FromSeconds(SingleCallBudgetSeconds(options.Provider)));
+
+            // Ollama and LM Studio say whether they hold the model; one they do not is loaded by this request, which is
+            // what the recording indicator's "Starting local model" means (IsLocalModelStarting).
+            if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
+                options.CustomEndpoint is { } endpoint && options.CustomModel is { } model)
+            {
+                var state = await LocalServers.ReadAsync(endpoint, options.CustomApiKey, cts.Token).ConfigureAwait(false);
+                coldStart = state.Reach == LocalServerReach.Reached && state.LoadedFor(model) is null;
+                if (coldStart)
+                {
+                    Volatile.Write(ref _localModelColdStart, 1);
+                }
+            }
+
+            var chatOptions = new ChatOptions { MaxOutputTokens = 1 };
+            ApplyOnThisPcGeneration(chatOptions, options);
+            using var entered = new CleanupAdmission(CleanupRequestKind.Prewarm, vocabulary.Scope, _vocabularySource).Enter();
+            _ = await agent.RunAsync(
+                    BuildUserMessage(string.Empty), options: new ChatClientAgentRunOptions(chatOptions), cancellationToken: cts.Token)
+                .ConfigureAwait(false);
+            Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
+            _log.LogDebug(
+                "AI cleanup readied the model on this PC in {Ms} ms (loaded it: {ColdStart}).",
+                (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                coldStart);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(
+                "AI cleanup could not ready the model on this PC ({Failure}); the dictation sends its own request.",
+                DescribeFailureShape(ex));
+        }
+        finally
+        {
+            if (coldStart)
+            {
+                Volatile.Write(ref _localModelColdStart, 0);
+            }
+
+            lease.Dispose();
+            Volatile.Write(ref _prewarming, 0);
+        }
+    }
+
+    /*
+     * Starting a model on this PC, and giving its memory back.
+     *
+     * A model on this PC takes seconds to load: measured on this machine, 2.7 to 5.2 s on the GPU and 7 to 15 s on the CPU
+     * for a 1.5B to 4B model. Scribe gives the memory back when AI cleanup no longer uses the model (it is turned off, or
+     * pointed elsewhere), when the user asks (Free memory), and when Scribe frees its own speech models after the idle time
+     * the user chose, and the model then loads again for the next dictation. So that next dictation waits for it, a bounded
+     * while, instead of being typed without cleanup, and the recording indicator says "Starting local model" and "This can
+     * take time" (IsLocalModelStarting) rather than leaving a long "Running AI cleanup" unexplained.
+     */
+    /// <summary>How long a dictation waits for a model on this PC that is starting (<see cref="LocalModelStartWaitSeconds"/>).</summary>
+    internal TimeSpan LocalModelStartWait { get; set; } = TimeSpan.FromSeconds(LocalModelStartWaitSeconds);
+
+    /// <summary>How long a dictation waits for a model on this PC that is starting before it is typed without cleanup.</summary>
+    internal const int LocalModelStartWaitSeconds = 30;
+
+    // Set while a readying request loads a model Ollama or LM Studio did not hold (PrewarmAsync).
+    private int _localModelColdStart;
+
+    // Foundry Local: the configured model was unloaded to free memory and loads again at the next dictation; the reload
+    // in flight, if one is. Both guarded by _gate.
+    private bool _foundryReleased;
+    private Task? _foundryReload;
+
+    // Foundry Local: the initialization, or a model load it waits behind, is downloading the model, which is no start to wait
+    // for.
+    private volatile bool _foundryDownloading;
+
+    /// <summary>
+    /// True while AI cleanup's model on this PC is starting: Foundry Local setting up or loading a model it has, or
+    /// loading one Scribe freed, or Ollama or LM Studio loading the model for this dictation. The recording indicator
+    /// says so when a dictation stops.
+    /// </summary>
+    public bool IsLocalModelStarting
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (!_options.Enabled)
+                {
+                    return false;
+                }
+
+                if (_options.Provider == CleanupProvider.FoundryLocal &&
+                    ((_foundryReleased && _status == CleanupStatus.Ready) || _foundryReload is not null))
+                {
+                    return true;
+                }
+
+                return IsModelStartingLocked() ||
+                    (Volatile.Read(ref _localModelColdStart) != 0 && LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint));
+            }
+        }
+    }
+
+    // Must be called under _gate. An initialization for a model on this PC that is loading it. Foundry Local counts only once
+    // its runtime is up in this process: before that it may be downloading the AI runtime (the first setup fetches several
+    // GB of it), and downloading the model is no start to wait for either; a dictation then is typed as heard, as before.
+    private bool IsModelStartingLocked()
+    {
+        if (!_options.Enabled || _initPhase != InitPhase.Live ||
+            (_status != CleanupStatus.Initializing && _status != CleanupStatus.Downloading))
+        {
+            return false;
+        }
+
+        return _options.Provider == CleanupProvider.FoundryLocal
+            ? Volatile.Read(ref _managerReady) && !_foundryDownloading
+            : LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint) && _status == CleanupStatus.Initializing;
+    }
+
+    // Waits, a bounded while, for a model on this PC that is starting, so its dictation is cleaned rather than typed as
+    // heard. Returns at once when nothing is starting. A Foundry Local model Scribe freed starts loading here if the
+    // dictation's start did not already begin it (Try dictation, or a dictation that began before the release).
+    private async Task WaitForLocalModelStartAsync(CancellationToken ct)
+    {
+        TryStartReleasedModelReload();
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var waited = false;
+        while (true)
+        {
+            Task? reload;
+            bool starting;
+            lock (_gate)
+            {
+                reload = _options.Provider == CleanupProvider.FoundryLocal ? _foundryReload : null;
+                starting = reload is not null || IsModelStartingLocked();
+            }
+
+            var remaining = LocalModelStartWait - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            if (!starting || remaining <= TimeSpan.Zero)
+            {
+                if (waited)
+                {
+                    _log.LogInformation(
+                        "AI cleanup waited {Ms} ms for its model on this PC to start (started: {Started}).",
+                        (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                        !starting);
+                }
+
+                return;
+            }
+
+            waited = true;
+            try
+            {
+                if (reload is not null)
+                {
+                    await reload.WaitAsync(remaining, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), ct).ConfigureAwait(false);
+                }
+            }
+            catch (TimeoutException)
+            {
+                // Checked again at the top, where the bound ends the wait.
+            }
+        }
+    }
+
+    // Starts loading the Foundry Local model Scribe freed, once, when a dictation begins.
+    private void TryStartReleasedModelReload()
+    {
+        try
+        {
+            lock (_gate)
+            {
+                if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null ||
+                    _options.Provider != CleanupProvider.FoundryLocal || !_foundryReleased || _foundryReload is not null ||
+                    _operations.TryEnter() is not { } lease)
+                {
+                    return;
+                }
+
+                var options = _options;
+                _foundryReload = Task.Run(() => ReloadReleasedFoundryModelAsync(options, lease));
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(
+                "AI cleanup could not start loading its model on this PC ({Failure}); the dictation loads it.",
+                DescribeFailureShape(ex));
+        }
+    }
+
+    private async Task ReloadReleasedFoundryModelAsync(CleanupOptions options, CleanupOperationTracker.Lease lease)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var loaded = false;
+        try
+        {
+            loaded = await LoadFoundryModelCoreAsync(options.FoundryModelAlias, progress: null, _lifetime.Token)
+                .ConfigureAwait(false);
+
+            // The first request after a load pays a one-time cost (4.4 s for Qwen2.5 1.5B on TensorRT-RTX with Foundry
+            // Local 2.1.0). The readiness probe pays it here, with no dictated text and no vocabulary, while the user is
+            // usually still speaking, rather than the dictation that waits for this reload.
+            Func<string, AIAgent>? factory;
+            lock (_gate)
+            {
+                factory = loaded && _options == options && _status == CleanupStatus.Ready ? _agentFactory : null;
+            }
+
+            if (factory is not null &&
+                await ProbeAgentAsync(options, factory, _lifetime.Token).ConfigureAwait(false) is { } warmUpFailure)
+            {
+                _log.LogDebug(
+                    "AI cleanup's first request after loading its model again failed ({Reason}); the dictation sends its own.",
+                    warmUpFailure.Reason.Diagnostic);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("AI cleanup could not load its model on this PC again ({Failure}).", DescribeFailureShape(ex));
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _foundryReload = null;
+            }
+
+            lease.Dispose();
+            _log.LogInformation(
+                "AI cleanup loaded its model on this PC again in {Ms} ms (loaded: {Loaded}).",
+                (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                loaded);
+        }
+    }
+
+    /// <summary>
+    /// Frees the memory of the model AI cleanup uses on this PC, when it uses one: Foundry Local's model, or the model
+    /// Ollama or LM Studio holds for it. The model loads again at the next dictation. Returns at once; never throws.
+    /// Called when Scribe frees its own speech models after the idle time the user chose, and when dictation is paused.
+    /// </summary>
+    public void ReleaseModelMemory()
+    {
+        try
+        {
+            CleanupOptions options;
+            lock (_gate)
+            {
+                options = _options;
+            }
+
+            if (!options.Enabled)
+            {
+                return;
+            }
+
+            if (options.Provider == CleanupProvider.FoundryLocal)
+            {
+                var alias = options.FoundryModelAlias;
+                _ = Task.Run(async () =>
+                {
+                    var freed = await UnloadFoundryModelAsync(alias).ConfigureAwait(false);
+                    _log.LogInformation("AI cleanup freed its model's memory on this PC: {Freed}.", freed);
+                });
+                return;
+            }
+
+            if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
+                options.CustomEndpoint is { } endpoint &&
+                !string.IsNullOrWhiteSpace(options.CustomModel))
+            {
+                StartLocalServerRelease(endpoint, options.CustomModel!, options.CustomApiKey, "Scribe is idle");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("AI cleanup could not free its model's memory ({Failure}).", DescribeFailureShape(ex));
+        }
+    }
+
+    // The Ollama or LM Studio model the previous configuration used, when the next one no longer uses it: cleanup was
+    // turned off, or pointed at another model or service. Its memory is given back (StartLocalServerRelease), with the key
+    // the previous configuration had for that address.
+    private static (string Endpoint, string Model, string? ApiKey)? LocalServerModelNoLongerUsed(
+        CleanupOptions previous, CleanupOptions next)
+    {
+        if (!previous.Enabled || string.IsNullOrWhiteSpace(previous.CustomModel) || previous.CustomEndpoint is not { } endpoint)
+        {
+            return null;
+        }
+
+        var app = LocalAiServer.AppServing(previous.Provider, endpoint);
+        if (app == LocalServerApp.None)
+        {
+            return null;
+        }
+
+        var stillUsed = next.Enabled &&
+            LocalAiServer.AppServing(next.Provider, next.CustomEndpoint) == app &&
+            LocalServerClient.SameModel(next.CustomModel, previous.CustomModel);
+        return stillUsed ? null : (endpoint, previous.CustomModel!.Trim(), previous.CustomApiKey);
+    }
+
+    // Asks Ollama or LM Studio to free a model's memory, in the background. Tracked, so disposal waits for it.
+    private void StartLocalServerRelease(string endpoint, string model, string? apiKey, string why)
+    {
+        if (_operations.TryEnter() is not { } lease)
+        {
+            return;
+        }
+
+        var app = LocalAiServer.AppAt(endpoint);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var freed = await LocalServers.UnloadAsync(endpoint, model, apiKey, _lifetime.Token).ConfigureAwait(false);
+                _log.LogInformation("AI cleanup asked {App} to free its model's memory ({Why}): {Freed}.", app, why, freed);
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug("AI cleanup could not ask {App} to free its model's memory ({Failure}).", app, DescribeFailureShape(ex));
+            }
+            finally
+            {
+                lease.Dispose();
+            }
+        });
     }
 
     // One cleanup, with the vocabulary its dictation was admitted with, or, for the admission-free overload, whatever
@@ -1091,6 +1652,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         if (lease is null)
         {
             return CleanupResult.Skip(text);
+        }
+
+        // A model on this PC that is starting (cleanup was just turned on, or Scribe freed the model's memory) is waited
+        // for, a bounded while, rather than the dictation being typed without cleanup.
+        try
+        {
+            using var startWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            await WaitForLocalModelStartAsync(startWait.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled or shutting down: what follows sees the same tokens and ends the way it always has.
         }
 
         AIAgent? agent;
@@ -1133,7 +1706,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
             if (vocabulary is not null && _agentFactory is { } admittedFactory)
             {
-                agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary);
+                agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary, text);
             }
             else if (style is not null &&
                 !string.Equals(style, CleanupPrompt.ResolveWritingStyle(options.WritingStyle), StringComparison.Ordinal) &&
@@ -1164,8 +1737,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         // Capable frontier models should see the complete dictation so they can make coherent sentence
         // and paragraph decisions. Local-prompt models keep bounded chunks because their context and
-        // output budgets are much smaller. The prompt-style choice is explicit for custom endpoints,
-        // so a local Ollama server can retain chunking by selecting the Local prompt.
+        // output budgets are much smaller. Auto picks the Local prompt for Foundry Local and for a server
+        // on this PC (Ollama, LM Studio), so those keep chunking unless the Frontier prompt is chosen.
         var chunks = PrepareChunks(text, options);
         string? overflowTail = null;
         if (chunks.Count > MaxCleanupChunks)
@@ -1317,11 +1890,15 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // Must be called under _gate, while serving. The agent for this vocabulary's glossary, at the term budget the
     // configuration being served uses, and this call's writing style: pure object construction against the connected
-    // client, as for a per-app writing style, kept for every dictation that shares both.
+    // client, as for a per-app writing style, kept for every dictation that shares both. The dictation is what a
+    // request under CleanupVocabularyMode.Mentioned picks its vocabulary by; a readying request passes none.
     private AIAgent AdmittedAgentLocked(
-        Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary)
+        Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary, string? dictation)
     {
-        var glossary = vocabulary.GlossaryFor(CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider));
+        var glossary = vocabulary.GlossaryFor(
+            CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider, options.CustomEndpoint),
+            options.VocabularyMode,
+            dictation);
         var parts = PromptParts.Of(options, style ?? options.WritingStyle, glossary);
         var prompt = _admittedPrompt is { } remembered && parts == _admittedPromptParts ? remembered : parts.Build();
         if (!_admittedAgents.TryGetValue(prompt, out var agent))
@@ -1478,6 +2055,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
         }
 
+        // A model on this PC that Scribe freed loads again first, a bounded while, as it does for a dictation: the service
+        // still reads as ready, and Foundry Local refuses a request for a model it does not hold.
+        try
+        {
+            using var startWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            await WaitForLocalModelStartAsync(startWait.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled or shutting down: what follows sees the same tokens and ends the way it always has.
+        }
+
         AIAgent agent;
         CleanupOptions options;
         lock (_gate)
@@ -1523,10 +2112,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
 
             var chatOptions = new ChatOptions { MaxOutputTokens = AuxiliaryCompletionMaxTokens };
-            if (options.Provider == CleanupProvider.FoundryLocal)
-            {
-                chatOptions.Temperature = CleanupTemperature;
-            }
+            ApplyOnThisPcGeneration(chatOptions, options);
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
             var result = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
@@ -1612,6 +2198,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _ when IsModelNotLoaded(exception) => "model-not-loaded",
                 _ when IsGpuShaderIncompatibility(exception) => "gpu-shader",
                 _ when IsExecutionProviderUnavailable(exception) => "execution-provider-unavailable",
+                _ when IsModelBuildFailure(exception) => "model-build",
                 _ when IsConnectivityFailure(exception) => "connectivity",
                 _ => null,
             };
@@ -1853,6 +2440,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, chunk));
             var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
+            Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
 
             attemptUsage = result.Usage;
             if (result.Usage is { } usage)
@@ -2079,7 +2667,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     internal static List<string> PrepareChunks(string text, CleanupOptions options)
     {
-        var frontierPrompt = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) ==
+        var frontierPrompt = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint) ==
             CleanupPromptStyle.Frontier;
         return frontierPrompt ? [text.Trim()] : ChunkForCleanup(text, ChunkTargetChars);
     }
@@ -2167,6 +2755,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                              "Pick a different model variant.");
         }
 
+        if (provider == CleanupProvider.FoundryLocal && IsModelBuildFailure(ex))
+        {
+            return WithDetail("Foundry Local couldn't run this model on this PC. Pick a different model in Settings.");
+        }
+
         return status switch
         {
             400 => WithDetail("The AI service rejected the request (400)."),
@@ -2241,12 +2834,38 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                text.Contains("execution provider, which is not available", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// ONNX Runtime's words when a model's build fails to run, as Foundry Local 2.x reports them through its web service.
+    /// Measured on an RTX 5080 (0.5.2): Qwen3 4B's CUDA build ("... failed to create generator: Non-zero status code
+    /// returned while running GroupQueryAttention node ...", before cuDNN attention was turned off) and Qwen3.5 2B's
+    /// ("... failed to create generator: Invalid rank for input: position_ids ..."). Matched only on the first request
+    /// of a graphics card build, which then falls back to its CPU build.
+    /// </summary>
+    internal static bool MentionsGpuBuildFailure(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains("failed to create generator", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Non-zero status code returned while running", StringComparison.OrdinalIgnoreCase);
+    }
+
     // The same bounded walk as CleanupFailureShape: recursing into each aggregate's list and then
     // carrying on down the same chain made the work exponential in the depth of a nested failure.
     private static bool IsGpuShaderIncompatibility(Exception? ex) =>
         CleanupFailureShape.Walk(ex).Any(current =>
             MentionsGpuShaderIncompatibility(CleanupFailureShape.MessageOf(current)) ||
             MentionsGpuShaderIncompatibility(ReadResponseBody(current)));
+
+    // A model build ONNX Runtime could not run (MentionsGpuBuildFailure). The same words come from a CPU build too (Qwen3.5
+    // 2B's text model fails on every build with Foundry Local 2.1.0), so they only demote a graphics card build and are
+    // never reported as a graphics card problem.
+    private static bool IsModelBuildFailure(Exception? ex) =>
+        CleanupFailureShape.Walk(ex).Any(current =>
+            MentionsGpuBuildFailure(CleanupFailureShape.MessageOf(current)) ||
+            MentionsGpuBuildFailure(ReadResponseBody(current)));
 
     private static bool IsExecutionProviderUnavailable(Exception? ex) =>
         CleanupFailureShape.Walk(ex).Any(current =>
@@ -2663,15 +3282,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (!await model.IsCachedAsync(ct).ConfigureAwait(false))
             {
                 _lastReportedPct = -1;
-                await model.DownloadAsync(p =>
+
+                // An initialization queued behind this download is no start for a dictation to wait for.
+                _foundryDownloading = true;
+                try
                 {
-                    var pct = Math.Clamp((int)Math.Round(p), 0, 100);
-                    if (pct != _lastReportedPct)
+                    await model.DownloadAsync(p =>
                     {
-                        _lastReportedPct = pct;
-                        progress?.Report($"Downloading {alias}… {pct}%");
-                    }
-                }, ct).ConfigureAwait(false);
+                        var pct = Math.Clamp((int)Math.Round(p), 0, 100);
+                        if (pct != _lastReportedPct)
+                        {
+                            _lastReportedPct = pct;
+                            progress?.Report($"Downloading {alias}… {pct}%");
+                        }
+                    }, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _foundryDownloading = false;
+                }
             }
 
             progress?.Report($"Loading {alias}…");
@@ -2832,6 +3461,30 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // Unloads every loaded Foundry model except the target so only one stays resident at a time.
     // Best-effort: a failure to unload one model never blocks loading the requested one.
+    // Unloads one loaded variant by its exact id, if it is loaded. Never throws but for cancellation.
+    private async Task UnloadFoundryVariantAsync(string variantId, CancellationToken ct)
+    {
+        if (Volatile.Read(ref _catalog) is not { } catalog)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var loaded in await catalog.GetLoadedModelsAsync(ct).ConfigureAwait(false))
+            {
+                if (string.Equals(loaded.Id, variantId, StringComparison.OrdinalIgnoreCase))
+                {
+                    await loaded.UnloadAsync(ct).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            _log.LogDebug("Could not unload the Foundry Local build that failed ({Failure}).", DescribeFailureShape(ex));
+        }
+    }
+
     private async Task UnloadOtherFoundryModelsAsync(string keepId, string keepAlias, CancellationToken ct)
     {
         if (Volatile.Read(ref _catalog) is not { } catalog)
@@ -2979,6 +3632,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         None,
         Invalidate,
         Rebuild,
+        Released,
     }
 
     // A decided resident change. Its status was written when it was decided, in the same step; what is
@@ -3037,6 +3691,20 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // if a *different* model was just loaded (loading one model evicts all others).
             var evicted = unloadedAll || Matches(unloadedAlias) || (loadedAlias is not null && !MatchesLoaded());
             var nowResident = MatchesLoaded();
+            if (nowResident)
+            {
+                _foundryReleased = false;
+            }
+
+            // Freeing the configured model's memory (Free memory in Settings, or Scribe freeing memory after the idle time
+            // the user chose) keeps cleanup on: the model is on disk, and the next dictation loads it again while the user
+            // is still speaking (TryStartReleasedModelReload), waiting for it if it has to. Loading another model is not a
+            // release: that is the user choosing a different model, and cleanup waits for its own to be loaded back.
+            if (evicted && loadedAlias is null && _agent is not null && _status == CleanupStatus.Ready)
+            {
+                _foundryReleased = true;
+                return new ResidentChange(ResidentChangeKind.Released, StatusChanged: false);
+            }
 
             // Normally an agent-less state means some other path already owns the status. That is not
             // true after this caller cancelled the current configuration's token: the agent was dropped
@@ -3088,6 +3756,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _log.LogInformation("Cleanup paused: its Foundry Local model is no longer resident.");
                 return true;
 
+            case ResidentChangeKind.Released:
+                _log.LogInformation("Cleanup's Foundry Local model was unloaded to free memory; the next dictation loads it again.");
+                return true;
+
             case ResidentChangeKind.Rebuild when change.Reservation is { } reservation:
                 TryCancel(reservation.Superseded);
                 if (change.StatusChanged)
@@ -3126,6 +3798,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _initWriter = generation;
             }
 
+            _foundryReselectAttempt = null;
             ct.ThrowIfCancellationRequested();
 
             /*
@@ -3185,7 +3858,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } probeFailure)
             {
                 var chatFailure = new StrongBox<AgentProbeFailure?>();
-                if (await TryDemoteFoundryGpuAsync(options, probeFailure, ct).ConfigureAwait(false) is { } demotion)
+                if (await TryFoundryReselectFallbackAsync(options, probeFailure, ct).ConfigureAwait(false) is { } fallback)
+                {
+                    agent = fallback.Agent;
+                    options = fallback.Options;
+                }
+                else if (await TryDemoteFoundryGpuAsync(options, probeFailure, ct).ConfigureAwait(false) is { } demotion)
                 {
                     agent = demotion.Agent;
                     options = demotion.Options;
@@ -3240,6 +3918,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 ClearAdmittedAgentsLocked();
                 _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
                 inUse = _foundryInUse;
+
+                // This initialization loaded its model, so no model it freed earlier is waited for or loaded again.
+                _foundryReleased = false;
             }
 
             // The selected model is in use, so a pending model switch can now delete the model it
@@ -3248,6 +3929,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (inUse is { } model)
             {
                 ScheduleKeepOnlySelected(options, model);
+            }
+
+            // A model a 1.x build demoted has run on the build a conclusive start chose for it, so later starts leave it to
+            // Foundry Local's own choice (a demoted or fallen-back run's alias names another build, which is never pending).
+            if (options.Provider == CleanupProvider.FoundryLocal && FoundryOutcomeConclusive(options.FoundryModelAlias))
+            {
+                SettleFoundryReselect(options.FoundryModelAlias);
             }
 
             SetInitStatus(CleanupStatus.Ready, ReadyReason(options));
@@ -3821,10 +4509,6 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     ? CloudInitProbeMaxOutputTokens
                     : InitProbeMaxOutputTokens,
             };
-            if (options.Provider == CleanupProvider.FoundryLocal)
-            {
-                chatOptions.Temperature = CleanupTemperature;
-            }
 
             /*
              * The probe reasons the way a real cleanup call will.
@@ -3836,7 +4520,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
              * then times out on the owner's first dictation is worse than one
              * that refuses at setup, because the failure has moved to where he
              * is not looking. Whatever the model's own default is, it is what
-             * both calls get.
+             * both calls get. For a model on this PC that is the same low
+             * temperature and, on a local server, thinking off, as for a dictation.
              */
             if (ReasoningEffortOverride is { } probeEffort)
             {
@@ -3846,6 +4531,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     Output = ReasoningOutput.None,
                 };
             }
+            else if (AzureReasoningEffortFor(options) is { } azureEffort)
+            {
+                chatOptions.Reasoning = new ReasoningOptions { Effort = azureEffort, Output = ReasoningOutput.None };
+            }
+
+            ApplyOnThisPcGeneration(chatOptions, options);
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
 
@@ -3854,6 +4545,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 .Enter();
             _ = await agent.RunAsync(BuildUserMessage("ok"), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
+            Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
             return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -3866,9 +4558,127 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            return new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
+            var failure = new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
+
+            // A Microsoft Foundry deployment that refuses the reasoning effort Scribe asked for gets the next one up, and
+            // one that refuses every effort gets none (see AzureReasoningEffortFor).
+            if (options.Provider == CleanupProvider.AzureFoundry && ReasoningEffortOverride is null &&
+                IsReasoningEffortRejection(ex) && StepUpAzureReasoningEffort(options))
+            {
+                return await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false);
+            }
+
+            /*
+             * A server on this PC that refuses the fields 0.5.2 added for local servers (reasoning_effort "none", the
+             * max_tokens copy) gets plain requests for this server and model instead, if it accepts those. Ollama and LM
+             * Studio take both; a strict validator, such as a server that allows only low, medium or high for
+             * reasoning_effort, answers 400. Any 400 buys this one attempt, as for the Responses surface; if the plain
+             * probe fails too, the first failure stands.
+             */
+            if (LocalAiServer.Serves(options.Provider, options.CustomEndpoint) && !SendsPlainRequests(options) &&
+                IsSurfaceRejection(ex))
+            {
+                Volatile.Write(ref _plainRequestsFor, PlainRequestsKey(options));
+                if (await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false) is null)
+                {
+                    _log.LogInformation(
+                        "The AI server on this PC refused reasoning_effort or max_tokens; AI cleanup sends it plain requests.");
+                    return null;
+                }
+
+                Volatile.Write(ref _plainRequestsFor, null);
+            }
+
+            return failure;
         }
     }
+
+    // The server and model that refused the local server fields (see ProbeAgentAsync), or null. Keyed by both, so a
+    // change of either tries the fields again.
+    private string? _plainRequestsFor;
+
+    /*
+     * How hard a Microsoft Foundry model thinks before it cleans a dictation.
+     *
+     * Cleanup is a light edit, and on the deployments measured for 0.5.2 thinking bought nothing but time: the blind judge
+     * gave gpt-6-sol 93.9 with no reasoning and 93.9 at its default, in 1.3 s against 2.0 s typically, and gpt-6.1-sol
+     * 96.5 at low against 96.1 at its default, in 1.6 s against 2.0 s (docs/local-model-benchmark.md). So Scribe asks for
+     * the least effort a deployment accepts: none, then low for a model that refuses none (gpt-6.1-sol answers "'none'
+     * is not supported ... Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'"), then nothing at all for a
+     * model that takes no reasoning effort, which keeps its own behavior. The readiness probe finds the step, and every
+     * request of that deployment uses it. Keyed by the endpoint and deployment, so another deployment starts again.
+     */
+    private static readonly ReasoningEffort?[] AzureReasoningSteps = [ReasoningEffort.None, ReasoningEffort.Low, null];
+
+    private static string AzureReasoningKey(CleanupOptions options) =>
+        $"{options.AzureEndpoint?.Trim()}\n{options.AzureDeployment?.Trim()}";
+
+    /// <summary>The reasoning effort this Microsoft Foundry deployment is asked for; null asks for none (its own default).</summary>
+    internal ReasoningEffort? AzureReasoningEffortFor(CleanupOptions options)
+    {
+        if (options.Provider != CleanupProvider.AzureFoundry || ReasoningEffortOverride is not null)
+        {
+            return null;
+        }
+
+        var recorded = Volatile.Read(ref _azureReasoningBox);
+        var step = recorded is { } box && box.Key == AzureReasoningKey(options) ? box.Step : 0;
+        return AzureReasoningSteps[step];
+    }
+
+    // Moves this deployment to the next effort; false once it is already asking for none.
+    private bool StepUpAzureReasoningEffort(CleanupOptions options)
+    {
+        var key = AzureReasoningKey(options);
+        var recorded = Volatile.Read(ref _azureReasoningBox);
+        var step = recorded is { } box && box.Key == key ? box.Step : 0;
+        if (step >= AzureReasoningSteps.Length - 1)
+        {
+            return false;
+        }
+
+        Volatile.Write(ref _azureReasoningBox, new AzureReasoningChoice(key, step + 1));
+        _log.LogInformation(
+            "The Microsoft Foundry deployment refused reasoning effort {Refused}; AI cleanup asks for {Next}.",
+            EffortName(AzureReasoningSteps[step]),
+            EffortName(AzureReasoningSteps[step + 1]));
+        return true;
+    }
+
+    // A fixed name for the log, never a rendered object.
+    private static string EffortName(ReasoningEffort? effort) => effort switch
+    {
+        null => "none (the model's default)",
+        ReasoningEffort.None => "None",
+        ReasoningEffort.Low => "Low",
+        _ => "other",
+    };
+
+    private sealed record AzureReasoningChoice(string Key, int Step);
+
+    private AzureReasoningChoice? _azureReasoningBox;
+
+    // A 400 that names the reasoning effort: a value the model does not support, or a model that takes none.
+    internal static bool IsReasoningEffortRejection(Exception? exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            if (ex is ClientResultException { Status: 400 } &&
+                (ex.Message.Contains("reasoning", StringComparison.OrdinalIgnoreCase) ||
+                 ex.Message.Contains("Supported values are", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string PlainRequestsKey(CleanupOptions options) =>
+        $"{options.CustomEndpoint?.Trim()}\n{options.CustomModel?.Trim()}";
+
+    private bool SendsPlainRequests(CleanupOptions options) =>
+        string.Equals(Volatile.Read(ref _plainRequestsFor), PlainRequestsKey(options), StringComparison.Ordinal);
 
     /// <summary>
     /// How long the readiness probe waits for a first response.
@@ -3975,7 +4785,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return null;
         }
 
-        RememberFoundryDemotion(options.FoundryModelAlias, cpuAlias);
+        // An execution provider that is not available here is the build's own, so this is remembered (once conclusive).
+        RecordFoundryDemotion(options.FoundryModelAlias, cpuAlias, buildsOwnFailure: true);
         lock (_gate)
         {
             if (_options != options)
@@ -3996,7 +4807,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         if (options.Provider != CleanupProvider.FoundryLocal ||
             probeFailure.Exception is null ||
-            !IsGpuShaderIncompatibility(probeFailure.Exception) ||
+            !(IsGpuShaderIncompatibility(probeFailure.Exception) || IsModelBuildFailure(probeFailure.Exception)) ||
             _catalog is null)
         {
             return null;
@@ -4015,17 +4826,21 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         if (cpuAlias is null)
         {
             _log.LogWarning(
-                "Foundry Local GPU model {GpuAlias} failed the shader probe, but no CPU counterpart was found in the catalog.",
+                "Foundry Local GPU model {GpuAlias} failed its first request, but no CPU counterpart was found in the catalog.",
                 sourceAlias);
             return null;
         }
 
         var demotedOptions = options with { FoundryModelAlias = cpuAlias };
         _log.LogWarning(
-            "Foundry Local GPU model {GpuAlias} failed the shader probe ({Failure}). Retrying once with CPU model {CpuAlias}.",
+            "Foundry Local GPU model {GpuAlias} failed its first request ({Failure}). Retrying once with CPU model {CpuAlias}.",
             sourceAlias,
             DescribeFailureShape(probeFailure.Exception),
             cpuAlias);
+
+        // The build that cannot run is loaded, and it shares the family alias the single-model rule keeps, so it would
+        // stay in memory beside its CPU build (on the graphics card, where it takes the most room).
+        await UnloadFoundryVariantAsync(sourceAlias, ct).ConfigureAwait(false);
 
         var agent = await InitFoundryAsync(demotedOptions, ct).ConfigureAwait(false);
         if (agent is null)
@@ -4041,13 +4856,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (cpuFailure.Exception is { } ex)
             {
                 _log.LogWarning(
-                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe ({Failure}).",
+                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed its first request ({Failure}).",
                     cpuAlias, sourceAlias, DescribeFailureShape(ex));
             }
             else
             {
                 _log.LogWarning(
-                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe: {Reason}",
+                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed its first request: {Reason}",
                     cpuAlias, sourceAlias, cpuFailure.Reason.Diagnostic);
             }
 
@@ -4058,7 +4873,21 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return null;
         }
 
-        RememberFoundryDemotion(options.FoundryModelAlias, cpuAlias);
+        // A WebGPU shader failure is the build's own, so it is remembered (once conclusive). ONNX Runtime words any failure
+        // inside a model step as a build failure, running out of graphics memory and a driver reset included, so that one
+        // lasts this session and the next start tries the graphics card again.
+        var remembered = RecordFoundryDemotion(
+            options.FoundryModelAlias,
+            cpuAlias,
+            buildsOwnFailure: IsGpuShaderIncompatibility(probeFailure.Exception));
+        if (!remembered)
+        {
+            _log.LogInformation(
+                "Foundry Local uses {CpuAlias} for {Alias} until Scribe restarts: a failure like this can also come from a busy graphics card.",
+                cpuAlias,
+                options.FoundryModelAlias);
+        }
+
         lock (_gate)
         {
             if (_options != options)
@@ -4070,6 +4899,79 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         return new FoundryDemotionResult(demotedOptions, agent);
+    }
+
+    /// <summary>
+    /// When the build chosen for a model a 1.x build demoted fails its first request, whatever the reason (an NPU build, a
+    /// timeout, a busy graphics card), the build it ran on before serves. That lasts this session, and the next start tries
+    /// the chosen build again, except after a WebGPU shader failure, which is the build's own and is remembered once the
+    /// start was conclusive. Returns null when no such choice is in play, or the build it falls back to fails too.
+    /// </summary>
+    private async Task<FoundryDemotionResult?> TryFoundryReselectFallbackAsync(
+        CleanupOptions options,
+        AgentProbeFailure probeFailure,
+        CancellationToken ct)
+    {
+        if (options.Provider != CleanupProvider.FoundryLocal ||
+            _foundryReselectAttempt is not { FellBack: false, Fallback: { } fallback, ChosenId: { } chosenId } attempt ||
+            !string.Equals(options.FoundryModelAlias.Trim(), attempt.Alias, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        // Decided before the fallback is taken, which makes the start inconclusive.
+        var remember = attempt.Conclusive &&
+            IsGpuShaderIncompatibility(probeFailure.Exception) &&
+            FoundryModelVariant.IsCpuExecutionProvider(fallback.Info?.Runtime?.ExecutionProvider);
+        attempt.FallBack();
+        var failureShape = probeFailure.Exception is { } probeException
+            ? DescribeFailureShape(probeException)
+            : probeFailure.Reason.Diagnostic;
+        _log.LogWarning(
+            "Foundry Local build {ChosenId}, chosen for {Alias}, failed its first request ({Failure}). Using {FallbackId}.",
+            chosenId,
+            attempt.Alias,
+            failureShape,
+            fallback.Id);
+
+        await UnloadFoundryVariantAsync(chosenId, ct).ConfigureAwait(false);
+        var fallbackOptions = options with { FoundryModelAlias = fallback.Id };
+        var agent = await InitFoundryAsync(fallbackOptions, ct).ConfigureAwait(false);
+        if (agent is null)
+        {
+            return null;
+        }
+
+        if (await ProbeAgentAsync(fallbackOptions, ct).ConfigureAwait(false) is { } fallbackFailure)
+        {
+            _log.LogWarning(
+                "Foundry Local build {FallbackId} failed its first request too: {Reason}",
+                fallback.Id,
+                fallbackFailure.Reason.Diagnostic);
+            return null;
+        }
+
+        if (remember)
+        {
+            RememberFoundryDemotion(attempt.Alias, fallback.Id);
+            _foundryReselect.TryRemove(attempt.Alias, out _);
+        }
+        else
+        {
+            _sessionFoundryDemotions[attempt.Alias] = fallback.Id;
+        }
+
+        lock (_gate)
+        {
+            if (_options != options)
+            {
+                return null;
+            }
+
+            _options = fallbackOptions;
+        }
+
+        return new FoundryDemotionResult(fallbackOptions, agent);
     }
 
     private static IEnumerable<FoundryModelVariantCandidate> BuildVariantCandidates(IEnumerable<IModel> models)
@@ -4169,21 +5071,43 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             SetInitStatus(CleanupStatus.Unavailable, $"Model '{alias}' was not found in the Foundry catalog.");
             return null;
         }
-        _log.LogInformation("Foundry Local cleanup model resolved to {ModelId}.", model.Id);
 
-        var cached = await model.IsCachedAsync(ct).ConfigureAwait(false);
-        if (!cached)
+        // A model a 1.x build demoted starts on the build Foundry Local would pick on a new install; a family alias only,
+        // since an exact variant id is the user's own choice. If that build cannot be downloaded or loaded, or fails its
+        // first request (TryFoundryReselectFallbackAsync), the build the model ran on before serves.
+        var attempt =
+            _foundryReselect.TryGetValue(alias.Trim(), out var legacyTarget) &&
+            string.Equals(model.Alias, alias.Trim(), StringComparison.OrdinalIgnoreCase)
+                ? ChooseFoundryBuild(model, alias.Trim(), legacyTarget)
+                : null;
+        if (attempt is not null)
         {
-            _lastReportedPct = -1;
-            SetInitStatus(CleanupStatus.Downloading, $"Downloading {alias}…");
-            await model.DownloadAsync(progress => OnDownloadProgress(alias, progress), ct).ConfigureAwait(false);
+            _foundryReselectAttempt = attempt;
         }
 
-        // Keep only one model resident: unload any previously-loaded model before loading this one.
-        await UnloadOtherFoundryModelsAsync(model.Id, model.Alias, ct).ConfigureAwait(false);
+        _log.LogInformation("Foundry Local cleanup model resolved to {ModelId}.", model.Id);
 
-        SetInitStatus(CleanupStatus.Downloading, $"Loading {alias}…");
-        await model.LoadAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await DownloadAndLoadFoundryModelAsync(model, alias, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (attempt is { Fallback: { } fallback, ChosenId: { } chosenId } chosen && !ct.IsCancellationRequested)
+        {
+            // An upgrade must not cost on-device cleanup, offline or where that build does not load (a busy graphics card
+            // included): the build this model ran on before serves for the rest of this session, and the next start tries
+            // the chosen build again.
+            _log.LogWarning(
+                "Could not download or load {ModelId}, the build chosen for {Alias} ({Failure}). Using {FallbackId} until Scribe restarts.",
+                chosenId,
+                alias,
+                DescribeFailureShape(ex),
+                fallback.Id);
+            chosen.FallBack();
+            _sessionFoundryDemotions[chosen.Alias] = fallback.Id;
+            await UnloadFoundryVariantAsync(chosenId, ct).ConfigureAwait(false);
+            model.SelectVariant(fallback);
+            await DownloadAndLoadFoundryModelAsync(model, alias, ct).ConfigureAwait(false);
+        }
 
         // Present the on-device OpenAI-compatible chat client as an Agent Framework agent so the
         // cleanup call site is identical to the Azure path.
@@ -4191,6 +5115,30 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
         _pendingFoundryInUse = new FoundryModelIdentity(model.Id, model.Alias);
         return _pendingFactory(BuildSystemPrompt(options));
+    }
+
+    private async Task DownloadAndLoadFoundryModelAsync(IModel model, string alias, CancellationToken ct)
+    {
+        if (!await model.IsCachedAsync(ct).ConfigureAwait(false))
+        {
+            _lastReportedPct = -1;
+            SetInitStatus(CleanupStatus.Downloading, $"Downloading {alias}…");
+            _foundryDownloading = true;
+            try
+            {
+                await model.DownloadAsync(progress => OnDownloadProgress(alias, progress), ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                _foundryDownloading = false;
+            }
+        }
+
+        // Keep only one model resident: unload any previously-loaded model before loading this one.
+        await UnloadOtherFoundryModelsAsync(model.Id, model.Alias, ct).ConfigureAwait(false);
+
+        SetInitStatus(CleanupStatus.Downloading, $"Loading {alias}…");
+        await model.LoadAsync(ct).ConfigureAwait(false);
     }
 
     private async Task<IModel?> ResolveFoundryModelAsync(string alias, CancellationToken ct)
@@ -4290,6 +5238,89 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 "Could not check Foundry Local variant compatibility for {Alias} ({Failure}).",
                 requestedAlias,
                 DescribeFailureShape(ex));
+        }
+    }
+
+    /// <summary>
+    /// For a model a 1.x build moved to its CPU build: chooses the build Foundry Local would pick on a new install, the
+    /// first of the family's variants, in Foundry Local's own order, whose execution provider is registered here, other
+    /// than the CPU. Left alone, the SDK prefers a build already downloaded, which for these models is the WebGPU or CPU
+    /// build 1.x left behind; and on 2.x the WebGPU build answers its readiness check, so nothing would demote it. Selects
+    /// that build and names the one to serve if it cannot start: the CPU build 1.x chose, else the family's CPU build, else
+    /// the SDK's own choice. Worked out whatever is selected now: the SDK keeps one model object per family for the whole
+    /// process, and once the chosen build is downloaded it is the SDK's own choice at later starts.
+    /// </summary>
+    private FoundryReselectAttempt ChooseFoundryBuild(IModel model, string alias, string legacyTarget)
+    {
+        try
+        {
+            var best = model.Variants.FirstOrDefault(variant =>
+                variant?.Info?.Runtime?.ExecutionProvider is { } provider &&
+                IsExecutionProviderAvailable(provider) &&
+                !FoundryModelVariant.IsCpuExecutionProvider(provider));
+            if (best is null)
+            {
+                // No graphics card or NPU build can run here, or its provider did not register this session: Foundry
+                // Local's own choice serves, and settles the demotion only if every provider registered.
+                return new FoundryReselectAttempt(alias, chosenId: null, fallback: null, _foundryEpSetupComplete);
+            }
+
+            var sdkChoice = model.Id;
+            var fallback =
+                VariantById(model, legacyTarget) ??
+                model.Variants.FirstOrDefault(variant =>
+                    FoundryModelVariant.IsCpuExecutionProvider(variant?.Info?.Runtime?.ExecutionProvider)) ??
+                (string.Equals(best.Id, sdkChoice, StringComparison.OrdinalIgnoreCase) ? null : VariantById(model, sdkChoice));
+            if (!string.Equals(best.Id, sdkChoice, StringComparison.OrdinalIgnoreCase))
+            {
+                model.SelectVariant(best);
+                _log.LogInformation(
+                    "Foundry Local chose {SdkChoice} for {Alias} because it is already downloaded. An earlier Foundry Local version had moved this model to its CPU build, so Scribe uses {VariantId} on {VariantProvider}, the build Foundry Local picks on a new install.",
+                    sdkChoice,
+                    alias,
+                    best.Id,
+                    best.Info?.Runtime?.ExecutionProvider);
+            }
+
+            return new FoundryReselectAttempt(alias, best.Id, fallback, _foundryEpSetupComplete);
+        }
+        catch (Exception ex)
+        {
+            // Choosing is an improvement over the SDK's own selection, which is still there to load; nothing is settled.
+            _log.LogDebug(
+                "Could not choose the Foundry Local build for {Alias} ({Failure}).",
+                alias,
+                DescribeFailureShape(ex));
+            return new FoundryReselectAttempt(alias, chosenId: null, fallback: null, conclusive: false);
+        }
+    }
+
+    private static IModel? VariantById(IModel model, string id) =>
+        model.Variants.FirstOrDefault(variant =>
+            string.Equals(variant?.Id, id.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A start's choice for a model a 1.x build demoted: the build chosen for it (null when no graphics card or NPU build
+    /// can run here), the build that serves if that one cannot start, and whether the start's outcome may settle the
+    /// demotion for good. Only the initialization holding <c>_initLock</c> reads or changes it.
+    /// </summary>
+    private sealed class FoundryReselectAttempt(string alias, string? chosenId, IModel? fallback, bool conclusive)
+    {
+        public string Alias { get; } = alias;
+
+        public string? ChosenId { get; } = chosenId;
+
+        public IModel? Fallback { get; } = fallback;
+
+        // Every execution provider registered this session, and no fallback served in place of the chosen build.
+        public bool Conclusive { get; private set; } = conclusive;
+
+        public bool FellBack { get; private set; }
+
+        public void FallBack()
+        {
+            FellBack = true;
+            Conclusive = false;
         }
     }
 
@@ -4708,7 +5739,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return null;
             }
 
-            var providers = await RegisterExecutionProvidersAsync(runtime, ct).ConfigureAwait(false);
+            var (providers, complete) = await RegisterExecutionProvidersAsync(runtime, ct).ConfigureAwait(false);
             var catalog = await runtime.GetCatalogAsync(ct).ConfigureAwait(false);
 
             lock (_gate)
@@ -4719,6 +5750,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 }
 
                 _availableExecutionProviders = providers;
+                _foundryEpSetupComplete = complete;
                 Volatile.Write(ref _catalog, catalog);
             }
 
@@ -4732,17 +5764,32 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // Registers the best available hardware execution providers (e.g. CUDA / TensorRT-RTX) for the
     // catalog about to be read. Best-effort: if EP setup fails the model still runs on CPU, so we log
-    // and continue. A cancelled registration publishes nothing, so the next caller tries again.
-    private async Task<string[]> RegisterExecutionProvidersAsync(IFoundryLocalRuntime runtime, CancellationToken ct)
+    // and continue. A cancelled registration publishes nothing, so the next caller tries again. Also
+    // reports whether every provider Foundry Local set up registered.
+    private async Task<(string[] Providers, bool Complete)> RegisterExecutionProvidersAsync(
+        IFoundryLocalRuntime runtime, CancellationToken ct)
     {
         try
         {
             var discovered = runtime.DiscoverEps();
             var result = await runtime.DownloadAndRegisterEpsAsync(ct).ConfigureAwait(false);
-            return MergeAvailableExecutionProviders(
-                discovered,
-                result.RegisteredEps,
-                runtime.DiscoverEps());
+            var complete = result.Success && (result.FailedEps is null || result.FailedEps.Length == 0);
+            if (!complete)
+            {
+                // Names are execution provider identifiers; the status is sanitized to a code.
+                _log.LogInformation(
+                    "Foundry execution-provider setup was incomplete ({Status}); {Failed} did not register: {Providers}.",
+                    CleanupFailureShape.SanitizeCode(result.Status) ?? "unset",
+                    result.FailedEps?.Length ?? 0,
+                    string.Join(", ", (result.FailedEps ?? []).Select(CleanupFailureShape.SanitizeCode).OfType<string>()));
+            }
+
+            return (
+                MergeAvailableExecutionProviders(
+                    discovered,
+                    result.RegisteredEps,
+                    runtime.DiscoverEps()),
+                complete);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -4758,12 +5805,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 DescribeFailureShape(ex));
             try
             {
-                return MergeAvailableExecutionProviders(runtime.DiscoverEps());
+                return (MergeAvailableExecutionProviders(runtime.DiscoverEps()), false);
             }
             catch (Exception discoverEx)
             {
                 _log.LogDebug("Could not enumerate Foundry execution providers ({Failure}).", DescribeFailureShape(discoverEx));
-                return MergeAvailableExecutionProviders(discovered: null);
+                return (MergeAvailableExecutionProviders(discovered: null), false);
             }
         }
     }
@@ -4899,7 +5946,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         public static PromptParts Of(CleanupOptions options, string? writingStyle, string? glossary) => new(
             // The guardrail preamble is the fixed part of the prompt; it varies by prompt style (frontier
             // vs local) and can be overridden per style by the user (with a restore-to-default in settings).
-            CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) == CleanupPromptStyle.Local
+            CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint) == CleanupPromptStyle.Local
                 ? CleanupPrompt.ResolveLocalPrompt(options.LocalPrompt)
                 : CleanupPrompt.ResolveFrontierPrompt(options.FrontierPrompt),
             CleanupPrompt.ResolveWritingStyle(writingStyle),
@@ -4994,17 +6041,126 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 Output = ReasoningOutput.None,
             };
         }
-
-        // A low temperature keeps Foundry Local instruct models deterministic for a faithful edit.
-        // Azure cleanup commonly targets gpt-5-class reasoning models, which run at a fixed internal
-        // temperature and can reject or ignore an override; so we leave it unset and trust the model.
-        if (options.Provider == CleanupProvider.FoundryLocal)
+        else if (AzureReasoningEffortFor(options) is { } azureEffort)
         {
-            chatOptions.Temperature = CleanupTemperature;
+            chatOptions.Reasoning = new ReasoningOptions { Effort = azureEffort, Output = ReasoningOutput.None };
         }
 
+        ApplyOnThisPcGeneration(chatOptions, options);
         return chatOptions;
     }
+
+    /*
+     * Generation settings for a model on this PC: Foundry Local, or an OpenAI-compatible server on this PC
+     * (LocalAiServer), which is how most people run Ollama and LM Studio.
+     *
+     * A low temperature keeps a small instruct model deterministic for a faithful edit. Cloud and remote endpoints get
+     * none: they commonly serve reasoning models that run at a fixed internal temperature and reject an override.
+     *
+     * A local server is also asked not to think (reasoning_effort "none"). Ollama turns thinking on by default for every
+     * model that can think and ignores the /no_think directive Scribe appends for Qwen3: measured on this machine,
+     * qwen3.5:0.8b spent 2,026 tokens and 12.2 s thinking about a one-sentence edit and 146 ms without, and under 0.5.1's
+     * requests qwen3.5:2b took 10 s typically and gemma4:e2b wrote 451 tokens on average. Ollama documents "none" as
+     * turning thinking off, and a model that cannot think accepted it unchanged (gemma3, granite4, phi4-mini, LFM2.5). An
+     * explicit effort from the benchmark harness wins.
+     */
+    private void ApplyOnThisPcGeneration(ChatOptions chatOptions, CleanupOptions options)
+    {
+        var localServer = LocalAiServer.Serves(options.Provider, options.CustomEndpoint);
+        if (options.Provider != CleanupProvider.FoundryLocal && !localServer)
+        {
+            return;
+        }
+
+        chatOptions.Temperature = TemperatureOverride switch
+        {
+            null => CleanupTemperature,
+            < 0 => null,
+            { } value => value,
+        };
+
+        /*
+         * Foundry Local 2.x also turns thinking off for reasoning_effort "none", and a model that cannot think accepts it
+         * unchanged. Measured on its web service with an RTX 5080 (0.5.2): Qwen3.5 4B spent all 2,048 of its output tokens
+         * thinking, 33 s, about a one-sentence edit and answered in 0.58 s with it off; Qwen3 4B went from 6.9 s and 674
+         * reasoning tokens to 0.37 s. Foundry Local reads max_completion_tokens itself, so no legacy field is patched in.
+         */
+        if (options.Provider == CleanupProvider.FoundryLocal)
+        {
+            chatOptions.Reasoning ??= new ReasoningOptions
+            {
+                Effort = ReasoningEffort.None,
+                Output = ReasoningOutput.None,
+            };
+            return;
+        }
+
+        if (!localServer || SendsPlainRequests(options))
+        {
+            return;
+        }
+
+        if (chatOptions.Reasoning is null)
+        {
+            chatOptions.Reasoning = new ReasoningOptions
+            {
+                Effort = ReasoningEffort.None,
+                Output = ReasoningOutput.None,
+            };
+        }
+
+        var keepMinutes = LocalServerKeepAliveMinutes(options);
+        if (chatOptions.MaxOutputTokens is int || keepMinutes is not null)
+        {
+            chatOptions.RawRepresentationFactory = WithLocalServerFields(
+                chatOptions.RawRepresentationFactory, chatOptions.MaxOutputTokens, keepMinutes);
+        }
+    }
+
+    // Ollama and LM Studio at their own addresses keep the model as long as Scribe keeps its speech models, so the memory
+    // comes back when Scribe's own does; any other server, and a setting that never frees memory, keeps its own policy.
+    private static (LocalServerApp App, int Minutes)? LocalServerKeepAliveMinutes(CleanupOptions options) =>
+        options.LocalModelKeepAliveMinutes is > 0 and var minutes &&
+        LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is var app and not LocalServerApp.None
+            ? (app, minutes)
+            : null;
+
+    /*
+     * The output ceiling under the name local servers read, and how long the model stays loaded.
+     *
+     * The OpenAI SDK sends the ceiling as max_completion_tokens. Ollama documents only max_tokens and ignored the other:
+     * measured on this machine, qwen3:0.6b fell into a repetition loop on one dictation and Ollama generated 19,711 tokens
+     * and counting, shifting its context to keep going, until the client gave up. In the app that is a 45-second wait
+     * and then the raw transcript. LM Studio's documented parameters are max_tokens too. Both fields carry the same
+     * number, so a server that reads either stops where Scribe asked.
+     *
+     * Ollama's OpenAI-compatible address honors keep_alive (measured on 0.34.4: "30m" kept the model loaded past its
+     * five-minute default, and 0 unloaded it as the answer came back); LM Studio reads ttl, in seconds, for a model it
+     * loaded on demand. Each is sent only to its own app.
+     */
+    private static Func<IChatClient, object?> WithLocalServerFields(
+        Func<IChatClient, object?>? inner, int? maxTokens, (LocalServerApp App, int Minutes)? keepAlive) =>
+        client =>
+        {
+            var raw = inner?.Invoke(client) as OpenAI.Chat.ChatCompletionOptions ?? new OpenAI.Chat.ChatCompletionOptions();
+#pragma warning disable SCME0001
+            if (maxTokens is int tokens)
+            {
+                raw.Patch.Set("$.max_tokens"u8, tokens);
+            }
+
+            switch (keepAlive)
+            {
+                case { App: LocalServerApp.Ollama, Minutes: var minutes }:
+                    raw.Patch.Set("$.keep_alive"u8, $"{minutes}m");
+                    break;
+                case { App: LocalServerApp.LmStudio, Minutes: var minutes }:
+                    raw.Patch.Set("$.ttl"u8, minutes * 60);
+                    break;
+            }
+#pragma warning restore SCME0001
+            return raw;
+        };
 
     private static int EstimateMaxTokens(string text, CleanupProvider provider)
     {
@@ -5058,6 +6214,28 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var cleaned = ThinkBlock.Replace(candidate, string.Empty).Trim();
 
+        // A bare "<think>" (or "</think>") left at the start when the runtime consumed its partner.
+        cleaned = LeadingThinkTag.Replace(cleaned, string.Empty, 1);
+
+        // A first line announcing the rewrite ("Here is the rewritten transcript:") or labeling it ("**Transcript
+        // Rewritten:**"), and the separator under it, unless the dictation itself opens that way, in which case the line
+        // is the user's.
+        if (!DictationOpensLikeAnAnnouncement(original) && RewriteAnnouncement.Match(cleaned) is { Success: true } announcement)
+        {
+            cleaned = LeadingSeparators.Replace(cleaned[announcement.Length..], string.Empty, 1).Trim();
+        }
+
+        if (!LabelOpening.IsMatch(original) && RewriteLabel.Match(cleaned) is { Success: true } label)
+        {
+            cleaned = LeadingSeparators.Replace(cleaned[label.Length..], string.Empty, 1).Trim();
+        }
+
+        // Commentary under a separator line after the rewrite; a dictation with a separator line of its own keeps it.
+        if (TrailingCommentary.Match(cleaned) is { Success: true } commentary && !SeparatorLine.IsMatch(original))
+        {
+            cleaned = cleaned[..commentary.Index].TrimEnd();
+        }
+
         // Strip an enclosing markdown code fence the model may have added.
         if (cleaned.StartsWith("```", StringComparison.Ordinal))
         {
@@ -5075,17 +6253,20 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             cleaned = cleaned.Trim();
         }
 
-        // Strip echoed transcript delimiters: a literal-minded model sometimes mirrors the tags it
-        // was shown around the user message back into its answer.
-        if (cleaned.StartsWith(TranscriptOpenTag, StringComparison.OrdinalIgnoreCase))
+        // Strip echoed transcript delimiters, and the other tags a small model wraps its answer in
+        // (<rewritten_transcript>, <output>...): a literal-minded model mirrors the tags it was shown
+        // around the user message back into its answer, or invents its own.
+        if (LeadingWrapperTag.Match(cleaned) is { Success: true } openTag && IsModelWrapperTag(openTag, original))
         {
-            cleaned = cleaned[TranscriptOpenTag.Length..].TrimStart();
+            cleaned = cleaned[openTag.Length..];
         }
 
-        if (cleaned.EndsWith(TranscriptCloseTag, StringComparison.OrdinalIgnoreCase))
+        if (TrailingWrapperTag.Match(cleaned) is { Success: true } closeTag && IsModelWrapperTag(closeTag, original))
         {
-            cleaned = cleaned[..^TranscriptCloseTag.Length].TrimEnd();
+            cleaned = cleaned[..closeTag.Index];
         }
+
+        cleaned = cleaned.Trim();
 
         // Strip a single pair of enclosing quotes if the model wrapped the whole answer in them.
         if (cleaned.Length >= 2 &&
@@ -5308,22 +6489,55 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         };
     }
 
-    private CleanupOptions ApplyPersistedFoundryDemotion(CleanupOptions options)
+    /// <summary>
+    /// The alias to start for a saved Foundry Local model: the build this session moved it to (its CPU build after a
+    /// failed first request, or the build it ran on before when the one chosen for a 1.x demotion could not start), or
+    /// the CPU build 2.x remembered (a blank 2.x entry records that the model has run on its best build since a 1.x
+    /// demotion). A demotion a 1.x build remembered is not applied, since it was made on 1.x's builds and execution
+    /// providers; the model is marked instead, and <see cref="InitFoundryAsync"/> starts it on the build Foundry Local
+    /// would pick on a new install.
+    /// </summary>
+    private CleanupOptions ApplyFoundryDemotion(CleanupOptions options)
     {
         if (!options.Enabled ||
-            options.Provider != CleanupProvider.FoundryLocal)
+            options.Provider != CleanupProvider.FoundryLocal ||
+            string.IsNullOrWhiteSpace(options.FoundryModelAlias))
         {
             return options;
         }
 
-        if (ReadFoundryDemotions().TryGetValue(options.FoundryModelAlias, out var cpuAlias) &&
-            !string.IsNullOrWhiteSpace(cpuAlias))
+        var alias = options.FoundryModelAlias.Trim();
+        if (_sessionFoundryDemotions.TryGetValue(alias, out var sessionAlias))
         {
             _log.LogInformation(
+                "Foundry Local uses {SessionAlias} for {Alias} until Scribe restarts, as decided earlier in this session.",
+                sessionAlias,
+                alias);
+            return options with { FoundryModelAlias = sessionAlias };
+        }
+
+        if (ReadFoundryDemotions(_foundryDemotionsPath).TryGetValue(alias, out var cpuAlias))
+        {
+            if (string.IsNullOrWhiteSpace(cpuAlias))
+            {
+                return options;
+            }
+
+            _log.LogInformation(
                 "Foundry Local model {GpuAlias} was previously demoted after a GPU compatibility failure. Using {CpuAlias}.",
-                options.FoundryModelAlias,
+                alias,
                 cpuAlias);
             return options with { FoundryModelAlias = cpuAlias.Trim() };
+        }
+
+        if (ReadFoundryDemotions(_legacyFoundryDemotionsPath).TryGetValue(alias, out var legacyAlias) &&
+            !string.IsNullOrWhiteSpace(legacyAlias) &&
+            _foundryReselect.TryAdd(alias, legacyAlias.Trim()))
+        {
+            _log.LogInformation(
+                "An earlier Foundry Local version moved {GpuAlias} to {CpuAlias}. That is not applied: Scribe starts it on the build Foundry Local picks on a new install.",
+                alias,
+                legacyAlias);
         }
 
         return options;
@@ -5342,18 +6556,28 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return null;
         }
 
+        var target = missingAlias.Trim();
+        foreach (var pair in _sessionFoundryDemotions)
+        {
+            if (string.Equals(pair.Value, target, StringComparison.OrdinalIgnoreCase) &&
+                _sessionFoundryDemotions.TryRemove(pair))
+            {
+                return pair.Key;
+            }
+        }
+
         try
         {
-            var demotions = ReadFoundryDemotions();
+            var demotions = ReadFoundryDemotions(_foundryDemotionsPath);
             var match = demotions.FirstOrDefault(pair =>
-                string.Equals(pair.Value?.Trim(), missingAlias.Trim(), StringComparison.OrdinalIgnoreCase));
+                string.Equals(pair.Value?.Trim(), target, StringComparison.OrdinalIgnoreCase));
             if (match.Key is null)
             {
                 return null;
             }
 
             demotions.Remove(match.Key);
-            WriteFoundryDemotions(demotions);
+            WriteFoundryDemotions(_foundryDemotionsPath, demotions);
             return match.Key;
         }
         catch (Exception ex)
@@ -5372,9 +6596,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         try
         {
-            var demotions = ReadFoundryDemotions();
+            var demotions = ReadFoundryDemotions(_foundryDemotionsPath);
             demotions[gpuAlias.Trim()] = cpuAlias.Trim();
-            WriteFoundryDemotions(demotions);
+            WriteFoundryDemotions(_foundryDemotionsPath, demotions);
         }
         catch (Exception ex)
         {
@@ -5382,17 +6606,72 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
+    // Records a demotion: remembered in the 2.x file when the failure is the build's own, which also settles a pending 1.x
+    // demotion, or kept for this session. A pending model's is remembered only when this start was conclusive
+    // (FoundryOutcomeConclusive): otherwise the next start chooses its build again. Returns whether it was remembered.
+    private bool RecordFoundryDemotion(string alias, string cpuAlias, bool buildsOwnFailure)
+    {
+        if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(cpuAlias))
+        {
+            return false;
+        }
+
+        var key = alias.Trim();
+        if (buildsOwnFailure && (!_foundryReselect.ContainsKey(key) || FoundryOutcomeConclusive(key)))
+        {
+            RememberFoundryDemotion(key, cpuAlias);
+            _foundryReselect.TryRemove(key, out _);
+            return true;
+        }
+
+        _sessionFoundryDemotions[key] = cpuAlias.Trim();
+        return false;
+    }
+
+    // Whether this start's outcome may settle a pending 1.x demotion of alias for good: its choice's (ChooseFoundryBuild),
+    // or, for an exact variant id, which Scribe never chooses a build for, whether every execution provider registered.
+    private bool FoundryOutcomeConclusive(string alias) =>
+        _foundryReselectAttempt is { } attempt &&
+        string.Equals(attempt.Alias, alias.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? attempt.Conclusive
+            : _foundryEpSetupComplete;
+
+    /// <summary>
+    /// Ends a pending 1.x demotion for <paramref name="alias"/> once a conclusive start has served the model: a blank 2.x
+    /// entry records that, and later starts leave the model to Foundry Local's own choice, which then prefers the build
+    /// that served because it is downloaded. The 1.x file is never changed.
+    /// </summary>
+    private void SettleFoundryReselect(string alias)
+    {
+        if (string.IsNullOrWhiteSpace(alias) || !_foundryReselect.TryRemove(alias.Trim(), out _))
+        {
+            return;
+        }
+
+        try
+        {
+            var demotions = ReadFoundryDemotions(_foundryDemotionsPath);
+            demotions[alias.Trim()] = string.Empty;
+            WriteFoundryDemotions(_foundryDemotionsPath, demotions);
+        }
+        catch (Exception ex)
+        {
+            // Unrecorded, the next start selects the same build again, now downloaded, and records it then.
+            _log.LogDebug("Could not record the Foundry Local model's build ({Failure}).", CleanupFailureShape.Describe(ex));
+        }
+    }
+
     // Written through a temp file and moved into place: a second Scribe process, or a crash
     // mid-write, would otherwise leave a truncated file. Reads already recover from that, but a
     // torn write silently discards every marker rather than the one being added.
-    private void WriteFoundryDemotions(Dictionary<string, string> demotions)
+    private static void WriteFoundryDemotions(string path, Dictionary<string, string> demotions)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_foundryDemotionsPath)!);
-        var staging = _foundryDemotionsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var staging = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             File.WriteAllText(staging, JsonSerializer.Serialize(demotions));
-            File.Move(staging, _foundryDemotionsPath, overwrite: true);
+            File.Move(staging, path, overwrite: true);
         }
         catch
         {
@@ -5412,17 +6691,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    private Dictionary<string, string> ReadFoundryDemotions()
+    private Dictionary<string, string> ReadFoundryDemotions(string path)
     {
         try
         {
-            if (!File.Exists(_foundryDemotionsPath))
+            if (!File.Exists(path))
             {
                 return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             }
 
             var values = JsonSerializer.Deserialize<Dictionary<string, string>>(
-                File.ReadAllText(_foundryDemotionsPath));
+                File.ReadAllText(path));
             return values is null
                 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);

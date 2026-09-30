@@ -141,11 +141,16 @@ public sealed class DictationOutcomeHandOffTests
 
         // Only the two returns to idle that end a dictation carry one, as a field of the change the relay orders.
         Assert.Equal(2, Regex.Matches(Controller, Regex.Escape("outcome: outcome")).Count);
-        Assert.Contains("new DictationStateChange(state, shown.Revision, aiPolishing, outcome)", Controller, StringComparison.Ordinal);
+        Assert.Contains("new DictationStateChange(state, shown.Revision, aiPolishing, outcome, startingLocalModel)", Controller, StringComparison.Ordinal);
         Assert.Contains(
-            "internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing, PillOutcome? Outcome = null);",
+            "internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing, PillOutcome? Outcome = null, bool StartingLocalModel = false);",
             Controller,
             StringComparison.Ordinal);
+
+        // Whether the model on this PC was still starting rides the processing change the stop raises, read once, then.
+        Assert.Contains("var startingLocalModel = aiCleanup && _cleanup.IsLocalModelStarting;", Controller, StringComparison.Ordinal);
+        Assert.Contains(
+            "announce: () => Raise(stop.Presentation, aiCleanup, startingLocalModel: startingLocalModel),", Controller, StringComparison.Ordinal);
 
         // Logged by kind only: the detail can name a microphone.
         Assert.Contains("(object?)outcome?.Kind ?? \"None\"", Controller, StringComparison.Ordinal);

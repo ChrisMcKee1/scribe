@@ -14,7 +14,9 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ui:SymbolIcon x:Name="StatusIcon" Grid.Column="0" FontSize="{DynamicResource ScribeFontBodyLarge}" Width="16" Height="16" Margin="0,2,8,0"/>
+        <!-- No fixed size: the glyph follows Windows text size (ScribeFontBodyLarge), and a 16 DIP box cut it off above 100%. -->
+        <ui:SymbolIcon x:Name="StatusIcon" Grid.Column="0" FontSize="{DynamicResource ScribeFontBodyLarge}" MinWidth="16" MinHeight="16"
+                       VerticalAlignment="Top" Margin="0,2,8,0"/>
         <ui:ProgressRing x:Name="BusyRing" Grid.Column="0" Width="16" Height="16" Margin="0,2,8,0"
                          IsIndeterminate="True" Visibility="Collapsed"/>
         <TextBlock x:Name="StatusTextBlock" Grid.Column="1" FontSize="{DynamicResource ScribeFontCaption}" TextWrapping="Wrap"

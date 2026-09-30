@@ -193,18 +193,20 @@ provider:
   per-application profile matches the focused application, that profile's
   writing style. The name of the application is not sent.
 - Your vocabulary: the enabled entries of your dictionary and of the word
-  packs you let AI cleanup use, each as its written form and, where that
-  differs, its spoken form. Scribe includes this vocabulary whether or not the
-  dictation
-  mentions any of it, and whether or not "Apply your dictionary and snippets" is
-  turned on, since that setting only decides whether the dictionary is applied on
-  this PC. An
+  packs you let AI cleanup use that the dictation appears to mention, each as
+  its written form and, where that differs, its spoken form. Scribe looks for
+  each entry's spoken and written words in what it recognized, including words
+  it heard slightly differently, so an entry the dictation does not mention is
+  not sent with it. This does not depend on whether "Apply your dictionary and
+  snippets" is turned on, since that setting only decides whether the dictionary
+  is applied on this PC. An
   entry whose written form spans more than one line or runs past 100
   characters, such as a signature or an address, is not vocabulary: the
   dictionary still applies it on this PC, but it is not sent. Your own entries
   come first, and the list holds up to 5,000 terms and 24,000 characters (80
   terms when AI cleanup uses the short instructions), with each spoken form put on one
-  line and shortened to 100 characters.
+  line and shortened to 100 characters. Versions before 0.5.2 sent every entry
+  with every request, whether or not the dictation mentioned it.
 
 Each time AI cleanup connects to such a provider, for example when Scribe starts
 with AI cleanup on, when you turn AI cleanup on, or when you save a different
@@ -212,6 +214,21 @@ provider or model, Scribe first sends a short test request containing the word
 "ok" and the cleanup instructions, with none of your vocabulary. If a Microsoft
 Foundry deployment does not accept that request's format, Scribe sends the same
 test once more in the other format it supports.
+
+When AI cleanup uses a server on this PC, such as Ollama or LM Studio at a
+`localhost` address, starting a dictation also sends that server the cleanup
+instructions with no dictated text and none of your vocabulary, unless it
+answered in
+the last 30 seconds. A server like this unloads a model it has not used for a
+while, and this request has it loaded again by the time you stop talking. It
+goes only to that server on this PC, never to a service elsewhere. When AI
+cleanup runs on Ollama or LM Studio at its own address on this PC (choosing it
+under "On this PC" saves that address), Scribe also asks that app which models
+it has and which it holds in memory, and asks it to free a model's memory when
+AI cleanup stops using the model, when you choose Free memory, and when Scribe
+frees its own memory after the time you set; these requests go only to that app
+on this PC and carry nothing you said, only the API key you saved for that
+address, if any, as cleanup requests do.
 
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.
@@ -280,7 +297,10 @@ If you configure a remote AI provider, Scribe may store endpoint addresses,
 deployment and model names, Azure tenant, subscription, resource or application
 identifiers, and API credentials locally. API keys and service-principal client
 secrets are encrypted at rest using Windows Data Protection API protection
-bound to your Windows user account.
+bound to your Windows user account. Scribe keeps what you set up for each place
+AI cleanup can run when you choose another, including another AI service's
+address, model and API key while you use Ollama or LM Studio, so choosing it
+again brings them back; to remove a key, clear its box and save.
 
 When you use Microsoft Foundry setup or discovery, Scribe communicates with
 Microsoft services using the credentials and account you select. Microsoft

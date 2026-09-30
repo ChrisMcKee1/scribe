@@ -48,6 +48,17 @@ public enum CleanupPromptStyle
 /// <c>AppSettings.AiCleanupPromptCaching</c>: false makes every Microsoft Foundry request ask not to use the prompt cache
 /// (<see cref="PromptCachePolicy"/>). Not a prompt field, so a change reconnects and probes again.
 /// </param>
+/// <param name="VocabularyMode">
+/// How much of the vocabulary a dictation's requests carry (<see cref="CleanupVocabularyMode"/>). A prompt field: it
+/// changes only the instructions an agent is built with.
+/// </param>
+/// <param name="LocalModelKeepAliveMinutes">
+/// How long Ollama or LM Studio at its own address (<see cref="LocalAiServer.AppAt"/>) should keep the model in memory
+/// after each request: <c>AppSettings.ReleaseModelsAfterIdleMinutes</c>, so the model is freed when Scribe frees its own
+/// speech models. Null or 0 sends nothing and leaves the app's own policy (Ollama five minutes, LM Studio an hour), so
+/// nothing stays pinned after Scribe closes. Asked of each request, so, like a prompt field, a change needs no reconnect;
+/// the app passes it only for Ollama and LM Studio, so a change never restarts another provider's setup.
+/// </param>
 public sealed record CleanupOptions(
     bool Enabled,
     CleanupProvider Provider,
@@ -69,7 +80,9 @@ public sealed record CleanupOptions(
     string? AzureClientId = null,
     string? AzureClientSecret = null,
     string? CopilotModel = null,
-    bool PromptCaching = true)
+    bool PromptCaching = true,
+    CleanupVocabularyMode VocabularyMode = CleanupVocabularyMode.All,
+    int? LocalModelKeepAliveMinutes = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =
@@ -77,10 +90,11 @@ public sealed record CleanupOptions(
 
     /// <summary>
     /// True when <paramref name="other"/> is the same configuration apart from what the prompt says:
-    /// the writing style, the glossary, the prompt style and either guardrail prompt. Those change
-    /// the instructions an agent is built with, and nothing about the provider, model, endpoint or
-    /// credentials it talks to, so a change confined to them needs no reconnect, no new readiness
-    /// probe and no "cleanup is now running on" notice.
+    /// the writing style, the glossary and how much of the vocabulary goes, the prompt style and either
+    /// guardrail prompt. Those change the instructions an agent is built with, and nothing about the
+    /// provider, model, endpoint or credentials it talks to, so a change confined to them needs no
+    /// reconnect, no new readiness probe and no "cleanup is now running on" notice. How long a server on
+    /// this PC keeps the model is asked of each request, so it counts with them.
     /// </summary>
     public bool MatchesIgnoringPrompt(CleanupOptions? other) =>
         other is not null && WithoutPrompt() == other.WithoutPrompt();
@@ -92,6 +106,8 @@ public sealed record CleanupOptions(
         PromptStyle = CleanupPromptStyle.Auto,
         FrontierPrompt = null,
         LocalPrompt = null,
+        VocabularyMode = CleanupVocabularyMode.All,
+        LocalModelKeepAliveMinutes = null,
     };
 
     /// <summary>True when the selected provider has everything it needs to initialize.</summary>

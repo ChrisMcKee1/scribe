@@ -12,7 +12,7 @@ public partial class SettingsWindow
 
     // Every status row on the AI cleanup page; each has a busy spinner.
     private SettingsStatusRow[] BusyStatusRows =>
-        [FoundryStatusRow, AzureSignInStatusRow, AzureVerifyStatusRow, CustomStatusRow, CopilotStatusRow];
+        [FoundryStatusRow, AzureSignInStatusRow, AzureVerifyStatusRow, CustomStatusRow, CopilotStatusRow, LocalAppStatusRow];
 
     private void InitializeBusyAnimations()
     {

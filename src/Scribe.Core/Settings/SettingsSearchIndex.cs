@@ -48,7 +48,9 @@ public static class SettingsSearchIndex
     private static readonly SettingsSearchRequirement RequiresAi =
         new("AiCleanupCheck", "Use AI cleanup", SettingsSearchRequirementKind.CheckBox);
     private static readonly SettingsSearchRequirement RequiresLocal =
-        new("AiProviderLocalRadio", "On this PC (Foundry Local)", SettingsSearchRequirementKind.Radio);
+        new("AiProviderLocalRadio", "On this PC", SettingsSearchRequirementKind.Radio);
+    private static readonly SettingsSearchRequirement RequiresScribeModel =
+        new("LocalAppScribeRadio", "Let Scribe manage it", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresFoundry =
         new("AiProviderFoundryRadio", "Microsoft Foundry", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresCustom =
@@ -79,11 +81,14 @@ public static class SettingsSearchIndex
         Entry("try.page", SettingsPage.TryDictation, "PlaygroundInput", "Try dictation", ["playground", "test", "sample", "try"]),
 
         Entry("ai.enabled", SettingsPage.AiCleanup, "AiCleanupCheck", "Use AI cleanup", ["polish", "grammar", "punctuation"]),
-        Entry("ai.local", SettingsPage.AiCleanup, "AiProviderLocalRadio", "On this PC (Foundry Local)", ["provider", "offline", "local"], null, [RequiresAi]),
+        Entry("ai.local", SettingsPage.AiCleanup, "AiProviderLocalRadio", "On this PC", ["provider", "offline", "local", "private"], null, [RequiresAi]),
         Entry("ai.copilot", SettingsPage.AiCleanup, "AiProviderCopilotRadio", "GitHub Copilot", ["provider", "github"], null, [RequiresAi]),
         Entry("ai.foundry", SettingsPage.AiCleanup, "AiProviderFoundryRadio", "Microsoft Foundry", ["provider", "azure"], null, [RequiresAi]),
-        Entry("ai.custom", SettingsPage.AiCleanup, "AiProviderCustomRadio", "Another AI service", ["provider", "ollama", "lm studio", "openrouter", "openai"], null, [RequiresAi]),
-        Entry("ai.model", SettingsPage.AiCleanup, "AiModelBox", "Model", ["foundry local", "download", "load"], "On this PC", [RequiresAi, RequiresLocal]),
+        Entry("ai.custom", SettingsPage.AiCleanup, "AiProviderCustomRadio", "Another AI service", ["provider", "openrouter", "openai", "server"], null, [RequiresAi]),
+        Entry("ai.local.scribe", SettingsPage.AiCleanup, "LocalAppScribeRadio", "Let Scribe manage it", ["foundry local", "download", "local model", "scribe"], "On this PC", [RequiresAi, RequiresLocal]),
+        Entry("ai.local.ollama", SettingsPage.AiCleanup, "LocalAppOllamaRadio", "Ollama", ["local model", "gemma", "llama", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
+        Entry("ai.local.lmstudio", SettingsPage.AiCleanup, "LocalAppLmStudioRadio", "LM Studio", ["lm studio", "lmstudio", "local model", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
+        Entry("ai.model", SettingsPage.AiCleanup, "AiModelBox", "Model", ["foundry local", "download", "load", "free memory"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
         Entry("ai.azure.auth.cli", SettingsPage.AiCleanup, "AzureCliRadio", "Your Azure account (Azure CLI) (recommended)", ["sign in", "browser", "tenant"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.sp", SettingsPage.AiCleanup, "AzureServicePrincipalRadio", "An app registration (service principal)", ["sign in", "entra", "client"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.key", SettingsPage.AiCleanup, "AzureApiKeyRadio", "An API key", ["sign in", "resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
@@ -97,8 +102,8 @@ public static class SettingsSearchIndex
         Entry("ai.azure.deployment", SettingsPage.AiCleanup, "AzureDeploymentBox", "Deployment name", ["model", "foundry"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureManualDetails]),
         Entry("ai.azure.key", SettingsPage.AiCleanup, "AzureApiKeyBox", "API key", ["resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureApiKey]),
         Entry("ai.azure.cache", SettingsPage.AiCleanup, "AiPromptCachingCheck", "Let Microsoft Foundry cache what Scribe sends", ["cache", "caching", "prompt cache", "privacy", "retention"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
-        Entry("ai.custom.endpoint", SettingsPage.AiCleanup, "CustomEndpointBox", "Server address", ["url", "ollama", "lm studio", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
-        Entry("ai.custom.model", SettingsPage.AiCleanup, "CustomModelBox", "Model name", ["model", "ollama", "lm studio", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
+        Entry("ai.custom.endpoint", SettingsPage.AiCleanup, "CustomEndpointBox", "Server address", ["url", "openrouter", "address"], "Another AI service", [RequiresAi, RequiresCustom]),
+        Entry("ai.custom.model", SettingsPage.AiCleanup, "CustomModelBox", "Model name", ["model", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.custom.key", SettingsPage.AiCleanup, "CustomApiKeyBox", "API key (optional)", ["secret", "token"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.copilot.model", SettingsPage.AiCleanup, "CopilotModelCombo", "Model name", ["github", "copilot"], "GitHub Copilot", [RequiresAi, RequiresCopilot]),
         Entry("ai.writing-style", SettingsPage.AiCleanup, "AiWritingStyleBox", "Writing style", ["prompt", "tone"], null, [RequiresAi]),

@@ -1,0 +1,461 @@
+{
+  "title": "Foundry Local 2.1.0 cleanup benchmark (Scribe 0.5.2)",
+  "measured": "2026-09-30",
+  "hardware": "NVIDIA GeForce RTX 5080 16 GB, AMD Ryzen 9 9900X, Windows 11 build 26200",
+  "sdk": "Microsoft.AI.Foundry.Local 2.1.0 (ONNX Runtime 1.30.0, GenAI 0.17.1); earlier rows V-* are SDK 1.2.4 (Foundry) and Ollama 0.35.0",
+  "configuration": "Scribe 0.5.2 shipped requests: writing style with lists, mentioned vocabulary (default word packs), Local prompt, temperature 0.1, reasoning_effort none, ORT_ENABLE_CUDNN_FLASH_ATTENTION=0",
+  "cases": "33 frozen dictations (docs/benchmarks/gpt6-astra-2026-09-04.json 25 + 8 structure cases); GPU arms 2 runs, CPU 1 run",
+  "judge": "claude-opus-5.5",
+  "rubric": "lists (writing style with list guidance); blind, anchors gpt-5.6-terra, gpt-5.6-sol, gpt-5.4-mini",
+  "calibration_spread_mean": 6.3,
+  "not_ready": [
+    "qwen3.5-2b-text (every build: Invalid rank for input position_ids)",
+    "smollm3-3b (chat template: Unknown method replace)",
+    "gemma-4-e2b-it CPU build (no answer within 180 s)"
+  ],
+  "observations": [
+    "qwen3-1.7b-generic-gpu:2 (WebGPU), chosen by id, 3 dictations, one run, not graded: loaded and passed the readiness check with no shader failure (1.2.4 failed every Qwen3 WebGPU build on this card); 418 and 250 output tokens in 5.36 and 3.16 s (about 78 tokens a second, against 110 for the CUDA build); both ran to Scribe's output ceiling for their length and were typed as heard, the third cleaned in 0.26 s"
+  ],
+  "rows": [
+    {
+      "arm": "V-ollama",
+      "model": "ollama:gemma4:e4b",
+      "score": 90.1,
+      "ci95": [
+        87.0,
+        93.0
+      ],
+      "fidelity": 88.8,
+      "instruction": 88.3,
+      "disfluency": 93.5,
+      "mechanics": 93.4,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 512.0,
+      "p95_ms": 893.0,
+      "load_s": 7.7,
+      "input_tokens": 1464.0,
+      "output_tokens": 58.0
+    },
+    {
+      "arm": "V-foundry",
+      "model": "foundry:qwen2.5-7b",
+      "score": 85.7,
+      "ci95": [
+        81.2,
+        89.7
+      ],
+      "fidelity": 84.8,
+      "instruction": 82.9,
+      "disfluency": 89.7,
+      "mechanics": 88.7,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 731.0,
+      "p95_ms": 1113.0,
+      "load_s": 35.8,
+      "input_tokens": 1457.0,
+      "output_tokens": 56.0
+    },
+    {
+      "arm": "V-ollama",
+      "model": "ollama:qwen3:4b-instruct",
+      "score": 85.5,
+      "ci95": [
+        80.1,
+        90.6
+      ],
+      "fidelity": 83.6,
+      "instruction": 85.0,
+      "disfluency": 87.9,
+      "mechanics": 90.2,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 449.0,
+      "p95_ms": 785.0,
+      "load_s": 6.4,
+      "input_tokens": 1461.0,
+      "output_tokens": 60.0
+    },
+    {
+      "arm": "F2-gpu-a",
+      "model": "foundry:qwen2.5-7b",
+      "score": 85.4,
+      "ci95": [
+        80.6,
+        89.6
+      ],
+      "fidelity": 84.3,
+      "instruction": 82.5,
+      "disfluency": 89.5,
+      "mechanics": 88.8,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 740.0,
+      "p95_ms": 1120.0,
+      "load_s": 39.6,
+      "input_tokens": 1457.0,
+      "output_tokens": 56.0
+    },
+    {
+      "arm": "V-ollama",
+      "model": "ollama:gemma4:e2b",
+      "score": 84.6,
+      "ci95": [
+        79.5,
+        89.1
+      ],
+      "fidelity": 82.5,
+      "instruction": 82.9,
+      "disfluency": 89.7,
+      "mechanics": 88.0,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 321.0,
+      "p95_ms": 536.0,
+      "load_s": 8.6,
+      "input_tokens": 1464.0,
+      "output_tokens": 57.0
+    },
+    {
+      "arm": "F2-gpu-cuda",
+      "model": "foundry:qwen2.5-7b-instruct-cuda-gpu:4",
+      "score": 84.0,
+      "ci95": [
+        79.3,
+        88.2
+      ],
+      "fidelity": 82.6,
+      "instruction": 81.8,
+      "disfluency": 87.3,
+      "mechanics": 89.4,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 729.0,
+      "p95_ms": 1494.0,
+      "load_s": 10.7,
+      "input_tokens": 1457.0,
+      "output_tokens": 56.0
+    },
+    {
+      "arm": "V-ollama",
+      "model": "ollama:granite4:3b",
+      "score": 82.2,
+      "ci95": [
+        76.8,
+        87.3
+      ],
+      "fidelity": 79.3,
+      "instruction": 80.8,
+      "disfluency": 87.6,
+      "mechanics": 88.0,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 336.0,
+      "p95_ms": 581.0,
+      "load_s": 6.6,
+      "input_tokens": 1450.0,
+      "output_tokens": 57.0
+    },
+    {
+      "arm": "F2-gpu-b",
+      "model": "foundry:qwen3-8b",
+      "score": 82.0,
+      "ci95": [
+        76.1,
+        87.4
+      ],
+      "fidelity": 84.1,
+      "instruction": 76.8,
+      "disfluency": 82.3,
+      "mechanics": 85.6,
+      "runs": 66,
+      "failed": 2,
+      "median_ms": 1001.0,
+      "p95_ms": 1898.0,
+      "load_s": 17.5,
+      "input_tokens": 1465.0,
+      "output_tokens": 62.0
+    },
+    {
+      "arm": "F2-gpu-a",
+      "model": "foundry:gemma-4-e2b-it",
+      "score": 81.9,
+      "ci95": [
+        76.5,
+        87.0
+      ],
+      "fidelity": 78.4,
+      "instruction": 81.8,
+      "disfluency": 87.1,
+      "mechanics": 88.1,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 1371.0,
+      "p95_ms": 7468.0,
+      "load_s": 18.1,
+      "input_tokens": 1464.0,
+      "output_tokens": 56.0
+    },
+    {
+      "arm": "F2-gpu-b",
+      "model": "foundry:qwen3.5-4b",
+      "score": 81.7,
+      "ci95": [
+        76.3,
+        86.9
+      ],
+      "fidelity": 81.7,
+      "instruction": 79.0,
+      "disfluency": 83.0,
+      "mechanics": 85.8,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 1267.0,
+      "p95_ms": 2237.0,
+      "load_s": 13.4,
+      "input_tokens": 1508.0,
+      "output_tokens": 59.0
+    },
+    {
+      "arm": "F2-gpu-a",
+      "model": "foundry:phi-4-mini",
+      "score": 80.3,
+      "ci95": [
+        74.3,
+        85.7
+      ],
+      "fidelity": 79.4,
+      "instruction": 77.5,
+      "disfluency": 83.8,
+      "mechanics": 84.5,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 787.0,
+      "p95_ms": 1360.0,
+      "load_s": 11.4,
+      "input_tokens": 1424.0,
+      "output_tokens": 55.0
+    },
+    {
+      "arm": "F2-gpu-a",
+      "model": "foundry:qwen3-4b",
+      "score": 79.3,
+      "ci95": [
+        72.8,
+        85.2
+      ],
+      "fidelity": 85.3,
+      "instruction": 71.7,
+      "disfluency": 76.8,
+      "mechanics": 76.0,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 721.0,
+      "p95_ms": 1448.0,
+      "load_s": 8.0,
+      "input_tokens": 1465.0,
+      "output_tokens": 59.0
+    },
+    {
+      "arm": "F2-gpu-a",
+      "model": "foundry:qwen2.5-1.5b",
+      "score": 74.0,
+      "ci95": [
+        67.6,
+        80.2
+      ],
+      "fidelity": 70.3,
+      "instruction": 71.2,
+      "disfluency": 80.7,
+      "mechanics": 84.0,
+      "runs": 66,
+      "failed": 2,
+      "median_ms": 374.0,
+      "p95_ms": 637.0,
+      "load_s": 25.2,
+      "input_tokens": 1457.0,
+      "output_tokens": 55.0
+    },
+    {
+      "arm": "V-foundry",
+      "model": "foundry:qwen2.5-1.5b",
+      "score": 73.5,
+      "ci95": [
+        66.8,
+        80.0
+      ],
+      "fidelity": 69.5,
+      "instruction": 71.0,
+      "disfluency": 80.9,
+      "mechanics": 83.4,
+      "runs": 66,
+      "failed": 2,
+      "median_ms": 369.0,
+      "p95_ms": 778.0,
+      "load_s": 33.6,
+      "input_tokens": 1457.0,
+      "output_tokens": 55.0
+    },
+    {
+      "arm": "F2-cpu",
+      "model": "foundry:qwen3.5-0.8b-generic-cpu:3",
+      "score": 70.2,
+      "ci95": [
+        64.0,
+        76.1
+      ],
+      "fidelity": 69.1,
+      "instruction": 64.5,
+      "disfluency": 77.5,
+      "mechanics": 74.5,
+      "runs": 33,
+      "failed": 0,
+      "median_ms": 4525.0,
+      "p95_ms": 8609.0,
+      "load_s": 11.6,
+      "input_tokens": 1508.0,
+      "output_tokens": 57.0
+    },
+    {
+      "arm": "V-cpu",
+      "model": "foundry:qwen2.5-1.5b-instruct-generic-cpu:4",
+      "score": 69.2,
+      "ci95": [
+        62.9,
+        75.4
+      ],
+      "fidelity": 62.4,
+      "instruction": 66.9,
+      "disfluency": 80.4,
+      "mechanics": 82.8,
+      "runs": 33,
+      "failed": 0,
+      "median_ms": 6181.0,
+      "p95_ms": 19348.0,
+      "load_s": 25.2,
+      "input_tokens": 1457.0,
+      "output_tokens": 55.0
+    },
+    {
+      "arm": "F2-gpu-b",
+      "model": "foundry:ministral-3-3b-instruct-2512",
+      "score": 67.8,
+      "ci95": [
+        62.3,
+        73.0
+      ],
+      "fidelity": 60.1,
+      "instruction": 60.2,
+      "disfluency": 84.8,
+      "mechanics": 88.2,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 590.0,
+      "p95_ms": 1097.0,
+      "load_s": 8.8,
+      "input_tokens": 1460.0,
+      "output_tokens": 60.0
+    },
+    {
+      "arm": "F2-gpu-cuda",
+      "model": "foundry:qwen2.5-1.5b-instruct-cuda-gpu:4",
+      "score": 67.0,
+      "ci95": [
+        60.6,
+        73.2
+      ],
+      "fidelity": 61.0,
+      "instruction": 64.0,
+      "disfluency": 76.5,
+      "mechanics": 82.2,
+      "runs": 66,
+      "failed": 0,
+      "median_ms": 531.0,
+      "p95_ms": 915.0,
+      "load_s": 15.8,
+      "input_tokens": 1457.0,
+      "output_tokens": 56.0
+    },
+    {
+      "arm": "F2-cpu",
+      "model": "foundry:qwen2.5-1.5b-instruct-generic-cpu:4",
+      "score": 66.1,
+      "ci95": [
+        59.8,
+        72.5
+      ],
+      "fidelity": 59.5,
+      "instruction": 62.6,
+      "disfluency": 77.8,
+      "mechanics": 81.8,
+      "runs": 33,
+      "failed": 0,
+      "median_ms": 6677.0,
+      "p95_ms": 10659.0,
+      "load_s": 19.7,
+      "input_tokens": 1457.0,
+      "output_tokens": 55.0
+    },
+    {
+      "arm": "F2-gpu-b",
+      "model": "foundry:olmo-3-7b-instruct",
+      "score": 60.7,
+      "ci95": [
+        52.6,
+        68.1
+      ],
+      "fidelity": 51.6,
+      "instruction": 58.0,
+      "disfluency": 74.6,
+      "mechanics": 80.3,
+      "runs": 66,
+      "failed": 1,
+      "median_ms": 1071.0,
+      "p95_ms": 2395.0,
+      "load_s": 14.2,
+      "input_tokens": 1453.0,
+      "output_tokens": 53.0
+    },
+    {
+      "arm": "F2-cpu",
+      "model": "foundry:qwen3-1.7b-generic-cpu:2",
+      "score": 59.5,
+      "ci95": [
+        52.3,
+        67.0
+      ],
+      "fidelity": 79.8,
+      "instruction": 32.2,
+      "disfluency": 52.8,
+      "mechanics": 49.1,
+      "runs": 33,
+      "failed": 0,
+      "median_ms": 12618.0,
+      "p95_ms": 24923.0,
+      "load_s": 10.7,
+      "input_tokens": 1465.0,
+      "output_tokens": 96.0
+    },
+    {
+      "arm": "F2-gpu-b",
+      "model": "foundry:qwen3-1.7b",
+      "score": 59.1,
+      "ci95": [
+        53.1,
+        65.5
+      ],
+      "fidelity": 81.8,
+      "instruction": 29.6,
+      "disfluency": 50.4,
+      "mechanics": 48.3,
+      "runs": 66,
+      "failed": 3,
+      "median_ms": 704.0,
+      "p95_ms": 1664.0,
+      "load_s": 16.4,
+      "input_tokens": 1465.0,
+      "output_tokens": 99.0
+    }
+  ]
+}

@@ -26,18 +26,40 @@ public static class CleanupDisclosure
         "Foundry Local runs cleanup on this PC, so your text stays on it. Microsoft Foundry, GitHub Copilot " +
         "and any other AI service you set up receive, with every cleanup request, the text Scribe recognized " +
         "for that dictation, the cleanup instructions with your writing style (or the matching app profile's), " +
-        "and your dictionary plus the word packs you let AI cleanup use as vocabulary: up to " +
+        "and, as vocabulary, the words from your dictionary plus the word packs you let AI cleanup use that the " +
+        "dictation appears to mention, including ones Scribe heard slightly differently: up to " +
         $"{Count(CleanupPrompt.MaxGlossaryTermsCloud)} words or phrases and {Count(CleanupPrompt.MaxGlossaryChars)} " +
-        $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} words or phrases with the short instructions, " +
-        "whether or not the dictation mentions them. A word from your dictionary or a word pack is not " +
+        $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} words or phrases with the short instructions. " +
+        "A word from your dictionary or a word pack is not " +
         "vocabulary, and is not sent, when what Scribe writes for it spans more than one line or runs past " +
         $"{Count(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature.";
 
-    /// <summary>The same card's second paragraph: the connection check, and what is never sent.</summary>
+    /// <summary>
+    /// The request that readies a model on a server on this PC as a dictation starts (<see cref="AdmittedCleanup.Prewarm"/>):
+    /// what it carries, where it goes, and when it is not sent. Declared before the card that quotes it, because static
+    /// initializers run in order.
+    /// </summary>
+    public static string ReadiesALocalServer { get; } =
+        "When AI cleanup runs on a server on this PC, such as Ollama or LM Studio, starting a dictation also sends that " +
+        "server the cleanup instructions with no dictated text and none of your vocabulary, unless it answered in the " +
+        $"last {LocalAiServer.PrewarmAfterIdleSeconds} seconds, so a model it unloaded while idle is loaded again by " +
+        "the time you stop talking.";
+
+    /// <summary>
+    /// What Scribe asks Ollama or LM Studio itself (<see cref="LocalServerClient"/>): the models it has and holds, and to
+    /// free one. Declared before the card that quotes it.
+    /// </summary>
+    public static string ManagesALocalApp { get; } =
+        "With Ollama or LM Studio at its own address on this PC, Scribe also asks that app which models it has and which " +
+        "it holds in memory, and asks it to free a model's memory when AI cleanup stops using it; these requests stay on " +
+        "this PC and carry nothing you said, only the API key you saved for that address, if any.";
+
+    /// <summary>The same card's second paragraph: the connection check, the readying request, and what is never sent.</summary>
     public static string WhatCleanupNeverSends { get; } =
         "Each time cleanup connects, for example when Scribe starts or you save a change to where AI cleanup " +
         "runs, it first sends a short test request holding the word \"ok\" and the same instructions, with " +
-        "none of your vocabulary. Cleanup never sends your snippet templates, and audio never leaves this device. " +
+        "none of your vocabulary. " + ReadiesALocalServer + " " + ManagesALocalApp + " Cleanup never sends your " +
+        "snippet templates, and audio never leaves this device. " +
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
 
@@ -83,8 +105,17 @@ public static class CleanupDisclosure
         _ => RemoteSummary("the AI service"),
     };
 
+    /// <summary>
+    /// <see cref="SummaryFor(CleanupProvider)"/> for the service at <paramref name="customEndpoint"/>: Ollama or LM Studio
+    /// at its own address on this PC (<see cref="LocalAiServer.AppAt"/>) keeps everything on this PC, as Foundry Local does.
+    /// </summary>
+    public static string SummaryFor(CleanupProvider provider, string? customEndpoint) =>
+        LocalAiServer.AppServing(provider, customEndpoint) != LocalServerApp.None
+            ? SummaryFor(CleanupProvider.FoundryLocal)
+            : SummaryFor(provider);
+
     private static string RemoteSummary(string destination) =>
-        $"Each cleanup sends the text Scribe heard, your writing style, and your dictionary and word pack words to {destination}. Audio never leaves this PC.";
+        $"Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to {destination}. Audio never leaves this PC.";
 
     /// <summary>The title of the confirmation shown before AI dictionary suggestions send dictation text.</summary>
     public const string SuggestionConsentTitle = "Send recent dictations to your AI service?";

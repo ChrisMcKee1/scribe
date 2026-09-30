@@ -15,6 +15,8 @@ public sealed class PerfFlagsTests
     [Theory]
     [InlineData("ExactInputArray")]
     [InlineData("ReuseInjectionWorker")]
+    // The Azure CLI token cache ships on since 0.5.2; the name that turned it on is gone, and a stale value is only counted.
+    [InlineData("CliAccessTokenCache")]
     public void Retired_input_experiments_are_not_registered(string name)
     {
         var flags = PerfFlags.Parse(name);

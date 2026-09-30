@@ -65,6 +65,22 @@ public class FoundryDemotionResetTests : IDisposable
     }
 
     [Fact]
+    public void Leaves_the_file_a_1x_build_wrote()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var settings = new SettingsRepository(db);
+        var paths = Paths();
+        var legacy = Path.Combine(_root, FoundryDemotionReset.LegacyFileName);
+        File.WriteAllText(legacy, """{"qwen3-1.7b":"qwen3-1.7b-generic-cpu:2"}""");
+
+        // 2.x never applies it, and the cleanup service sets each entry aside for the build Foundry Local picks on a
+        // new install until a conclusive start settles it; the file itself stays for a rollback to the 1.x build it
+        // describes.
+        Assert.False(FoundryDemotionReset.Apply(settings, paths));
+        Assert.True(File.Exists(legacy));
+    }
+
+    [Fact]
     public void Skips_when_settings_could_not_be_loaded()
     {
         var settings = new FailedLoadSettingsRepository();

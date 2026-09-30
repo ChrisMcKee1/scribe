@@ -1601,6 +1601,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
         AiPromptCachingCheck.IsChecked = _settings.AiCleanupPromptCaching;
 
+        // Ollama or LM Studio at its own address shows under "On this PC"; after the boxes above, which it clears then.
+        LoadLocalAppSettings();
+
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
 
@@ -1641,6 +1644,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.FoundryLocal)
         {
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
+        }
+        else if (SelectedLocalApp != LocalServerApp.None)
+        {
+            // Only asks the app on this PC, over this PC: which models it has and which it holds. Asked with AI cleanup off
+            // too, so the choice on the page never waits on a check that was not made.
+            _ = RefreshLocalAppAsync();
         }
         else if (RemoteActivityPolicy.MayContact(_committedSettings, CurrentAiDraftSettings(), RemoteActivityTrigger.WindowOpen) &&
                  SelectedProvider == CleanupProvider.AzureFoundry)
@@ -2395,10 +2404,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCopilotRadio?.IsChecked == true ? CleanupProvider.GitHubCopilot :
         AiProviderFoundryRadio?.IsChecked == true ? CleanupProvider.AzureFoundry :
         AiProviderCustomRadio?.IsChecked == true ? CleanupProvider.OpenAiCompatible :
+        // "On this PC" with Ollama or LM Studio is the OpenAI-compatible service at that app's own address.
+        SelectedLocalApp != LocalServerApp.None ? CleanupProvider.OpenAiCompatible :
         CleanupProvider.FoundryLocal;
 
     private CleanupPromptStyle SelectedPromptStyle =>
         (AiPromptStyleCombo.SelectedItem as PromptStyleChoice)?.Style ?? CleanupPromptStyle.Auto;
+
+    // The server address on screen, which decides whether Automatic gives a local server the short instructions.
+    private string? SelectedCustomEndpoint => ShownCustomService.Endpoint;
 
     private void AiCleanupCheck_Toggled(object sender, RoutedEventArgs e)
     {
@@ -2414,6 +2428,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (!_showingExternalAiCleanup)
         {
             _externalAiCleanup.UserChanged();
+        }
+
+        if (AiCleanupCheck.IsChecked == true)
+        {
+            ChooseDeviceDefaultModelOnFirstSetUp();
+            EnsureLocalAppRead();
         }
 
         UpdateAiEnabledState();
@@ -2443,6 +2463,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _ = RefreshFoundryModelsAsync(initializeRuntime: false);
+        }
+        else if (SelectedLocalApp != LocalServerApp.None)
+        {
+            _ = RefreshLocalAppAsync();
         }
         else if (SelectedProvider == CleanupProvider.AzureFoundry &&
                  RemoteActivityPolicy.MayContact(_committedSettings, CurrentAiDraftSettings(), trigger))
@@ -2496,9 +2520,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
         draft.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
         draft.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
-        draft.AiCleanupCustomEndpoint = CustomEndpointBox?.Text;
-        draft.AiCleanupCustomModel = CustomModelBox?.Text;
-        draft.AiCleanupCustomApiKey = CustomApiKeyBox?.Password;
+        var customService = ShownCustomService;
+        draft.AiCleanupCustomEndpoint = customService.Endpoint;
+        draft.AiCleanupCustomModel = customService.Model;
+        draft.AiCleanupCustomApiKey = customService.ApiKey;
         draft.AiCleanupCopilotModel = CopilotModelCombo?.Text;
         draft.AiCleanupPromptCaching = AiPromptCachingCheck?.IsChecked != false;
 
@@ -2753,9 +2778,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _foundryOperationStatus = new FoundryLocalSetupDescription(AiCleanupStatusKind.Info, count switch
             {
-                null => $"Foundry Local is running, but its model list could not be read. {running}",
-                0 => "Foundry Local is running but reported no models. Check that it finished starting, then try again.",
-                _ => $"Foundry Local is running. {count} models are in the dropdown above. {running}",
+                null => $"Scribe is set up, but its model list could not be read. {running}",
+                0 => "Scribe is set up but found no models. Check that setup finished, then try again.",
+                _ => $"Scribe is set up. {count} models are in the list above. {running}",
             }, "Load", false, FoundryLocalSetupStage.RuntimeReady);
             FoundryStatusRow.Show(new(_foundryOperationStatus.Kind, _foundryOperationStatus.Text, new(AiCleanupActionId.Load, "Load")));
         }
@@ -2806,7 +2831,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ? FoundryLocalSetupStage.CachedUnloaded
             : FoundryLocalSetupStage.Loaded;
         var setup = FoundryLocalSetup.Describe(stage, modelName, ModelSizeForAlias(SelectedFoundryModelAlias));
-        FoundryStatusRow.Show(new AiCleanupStatusRow(setup.Kind, setup.Text, setup.ActionText is null ? null : new(setup.ActionText == "Load" ? AiCleanupActionId.Load : AiCleanupActionId.Unload, setup.ActionText, setup.ActionText != "Unload" || setup.CanUnload)));
+        FoundryStatusRow.Show(new AiCleanupStatusRow(setup.Kind, setup.Text, setup.ActionText is null ? null : new(setup.ActionText == "Load" ? AiCleanupActionId.Load : AiCleanupActionId.Unload, setup.ActionText, setup.ActionText != FoundryLocalSetup.FreeMemoryAction || setup.CanUnload)));
     }
 
     private async Task LoadFoundryModelAsync()
@@ -4303,9 +4328,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var provider = SelectedProvider;
-        FoundryPanel.Visibility = provider == CleanupProvider.FoundryLocal ? Visibility.Visible : Visibility.Collapsed;
+        var localApp = SelectedLocalApp;
+        FoundryPanel.Visibility = AiProviderLocalRadio?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        ScribeModelPanel.Visibility = localApp == LocalServerApp.None ? Visibility.Visible : Visibility.Collapsed;
+        LocalAppPanel.Visibility = localApp == LocalServerApp.None ? Visibility.Collapsed : Visibility.Visible;
         AzurePanel.Visibility = provider == CleanupProvider.AzureFoundry ? Visibility.Visible : Visibility.Collapsed;
-        CustomPanel.Visibility = provider == CleanupProvider.OpenAiCompatible ? Visibility.Visible : Visibility.Collapsed;
+        CustomPanel.Visibility = AiProviderCustomRadio?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         CopilotPanel.Visibility = provider == CleanupProvider.GitHubCopilot ? Visibility.Visible : Visibility.Collapsed;
         if (provider == CleanupProvider.GitHubCopilot)
         {
@@ -4523,6 +4551,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         CancelCleanupConnectionTest();
         RefreshAiStatus();
+
+        // A server on this PC gets the short instructions and their glossary budget, so the count the dictionary page
+        // shows follows the address being typed.
+        if (ReferenceEquals(sender, CustomEndpointBox))
+        {
+            UpdateDictionaryGlossaryHint();
+        }
     }
 
     private AiCleanupPageDescription BuildAiPageDescription() =>
@@ -4543,7 +4578,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         var page = BuildAiPageDescription();
         ApplyAiPageDescription(page);
-        AiProviderSummaryText.Text = CleanupDisclosure.SummaryFor(SelectedProvider);
+        AiProviderSummaryText.Text = CleanupDisclosure.SummaryFor(SelectedProvider, SelectedCustomEndpoint);
         UpdateAiWritingStyleSummary();
         RefreshAiStatus();
         RefreshWordPackAiPermissionState();
@@ -4572,7 +4607,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             NormalizePrompt(AiWritingStyleBox.Text),
             NormalizePrompt(CleanupPrompt.DefaultWritingStyle),
             StringComparison.Ordinal)
-            ? "Scribe's style: clear sentences, correct punctuation, numbers as digits, and your spoken corrections applied."
+            ? "Scribe's style: clear sentences, lists when you list things, correct punctuation, numbers as digits, and your spoken corrections applied."
             : "Your own style.";
     }
 
@@ -4711,7 +4746,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureSignInStatusRow.Show(SelectedProvider == CleanupProvider.AzureFoundry && SelectedAzureAuthMode == AzureAuthMode.AzureCli && !IsAzureApiKeySelected ? page.StatusRow : null);
         AzureVerifyStatusRow.Show(SelectedProvider == CleanupProvider.AzureFoundry && (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal || IsAzureApiKeySelected) ? page.StatusRow : null);
         CopilotStatusRow.Show(SelectedProvider == CleanupProvider.GitHubCopilot ? page.StatusRow : null);
-        CustomStatusRow.Show(SelectedProvider == CleanupProvider.OpenAiCompatible ? page.StatusRow : null);
+        CustomStatusRow.Show(AiProviderCustomRadio?.IsChecked == true ? page.StatusRow : null);
+        ShowLocalAppStatus();
     }
 
     private async void FoundryStatusRow_PrimaryActionInvoked(object? sender, AiCleanupActionId e) => await InvokeFoundryActionAsync(e);
@@ -4812,6 +4848,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
+        _localServers.Dispose();
         SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
         if (_historyDeletionNotifier is not null)
         {
@@ -5267,12 +5304,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
             _settings.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
             _settings.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
-            _settings.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
-            _settings.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
+            var customService = ShownCustomService;
+            _settings.AiCleanupCustomEndpoint = customService.Endpoint;
+            _settings.AiCleanupCustomModel = customService.Model;
+            // Another AI service's address, model and key, remembered while Ollama or LM Studio runs the AI.
+            var rememberedService = ShownRememberedService;
+            _settings.AiCleanupOtherServiceEndpoint = rememberedService.Endpoint;
+            _settings.AiCleanupOtherServiceModel = rememberedService.Model;
+            _settings.AiCleanupOtherServiceApiKey = rememberedService.ApiKey;
             // Blank is a real answer here: it means "this account's default model", which is why it
             // is stored as null rather than rejected on save.
             _settings.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
-            _settings.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
+            _settings.AiCleanupCustomApiKey = customService.ApiKey;
             _settings.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
 
             // Persist the writing style only when it differs from the default; storing blank for the
@@ -5396,6 +5439,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Flag(_externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true))
             .Microphone(_externalMicrophone.ForSave(ShownMicrophone));
         draft.Part("foundryModel").Text(SelectedFoundryModelAlias);
+        // Ollama or LM Studio's address and model, or another AI service's boxes, as the Save stores them, and another AI
+        // service remembered beside an app.
+        var customService = ShownCustomService;
+        draft.Part("customService").Text(customService.Endpoint).Text(customService.Model).Text(customService.ApiKey);
+        var rememberedService = ShownRememberedService;
+        draft.Part("rememberedService")
+            .Text(rememberedService.Endpoint).Text(rememberedService.Model).Text(rememberedService.ApiKey);
         draft.Part("subscription").Subscription(AzureSubscriptionSelection.ResolveAuthenticationSubscription(
             _selectedAzureDeployment, SelectedAzureSubscription, AzureEndpointBox.Text, AzureDeploymentBox.Text));
         draft.Part("servicePrincipalSecret").Text(SpClientSecretBox.Password);

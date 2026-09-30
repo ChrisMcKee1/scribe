@@ -1177,7 +1177,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Free memory when Scribe isn't used" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Style="{StaticResource CardDescription}"
-                                                       Text="Unloads the speech model after this long without a dictation, freeing memory. The next dictation takes a second or two longer to start."/>
+                                                       Text="After this long without a dictation, Scribe frees the memory used by its speech model and any AI cleanup model on this PC. The next dictation may take longer before Scribe types it."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ComboBox x:Name="IdleReleaseCombo" MinWidth="240" DisplayMemberPath="Label"
@@ -1337,8 +1337,8 @@
                                                          AutomationProperties.LabeledBy="{Binding ElementName=AiProviderLocalTitle}"
                                                          AutomationProperties.HelpText="{Binding Text, ElementName=AiProviderLocalDescription}">
                                                 <StackPanel>
-                                                    <TextBlock x:Name="AiProviderLocalTitle" Text="On this PC (Foundry Local)" Style="{StaticResource CardTitle}"/>
-                                                    <TextBlock x:Name="AiProviderLocalDescription" Text="Private: your text stays on this PC. The first setup downloads an AI runtime and a model, which can take several GB." Style="{StaticResource CardDescription}"/>
+                                                    <TextBlock x:Name="AiProviderLocalTitle" Text="On this PC" Style="{StaticResource CardTitle}"/>
+                                                    <TextBlock x:Name="AiProviderLocalDescription" Text="Private: your text stays on this PC. Scribe can set it up for you, or use Ollama or LM Studio if you have them." Style="{StaticResource CardDescription}"/>
                                                 </StackPanel>
                                             </RadioButton>
                                             <RadioButton x:Name="AiProviderCopilotRadio" GroupName="AiProvider" Margin="0,0,0,8" Checked="AiProviderRadio_Checked"
@@ -1362,7 +1362,7 @@
                                                          AutomationProperties.HelpText="{Binding Text, ElementName=AiProviderCustomDescription}">
                                                 <StackPanel>
                                                     <TextBlock x:Name="AiProviderCustomTitle" Text="Another AI service" Style="{StaticResource CardTitle}"/>
-                                                    <TextBlock x:Name="AiProviderCustomDescription" Text="Connects to a compatible app or server, such as Ollama, LM Studio, OpenRouter or OpenAI. Your text goes to the address you enter." Style="{StaticResource CardDescription}"/>
+                                                    <TextBlock x:Name="AiProviderCustomDescription" Text="Connects to the server address you enter, such as OpenRouter, OpenAI or a server on another computer. Your text goes to that address." Style="{StaticResource CardDescription}"/>
                                                 </StackPanel>
                                             </RadioButton>
                                         </StackPanel>
@@ -1385,19 +1385,58 @@
                                     </StackPanel>
                                 </ui:CardExpander>
 
-                                        <!-- Foundry Local (on-device) -->
+                                        <!-- On this PC: Scribe's own (Foundry Local), or Ollama or LM Studio at their own addresses. -->
                                         <StackPanel x:Name="FoundryPanel">
-                                            <TextBlock x:Name="AiModelTitle" Text="Model" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
-                                            <ComboBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                      AutomationProperties.LabeledBy="{Binding ElementName=AiModelTitle}"
-                                                      IsEditable="False"
-                                                      SelectionChanged="AiModelBox_SelectionChanged"
-                                                      DropDownOpened="ModelCombo_DropDownOpened"/>
-                                            <TextBlock x:Name="AiModelHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
+                                            <TextBlock x:Name="LocalAppTitle" Text="How to run it" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                            <StackPanel Margin="0,8,0,0">
+                                                <RadioButton x:Name="LocalAppScribeRadio" GroupName="LocalApp" Margin="0,0,0,8" Checked="LocalAppRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=LocalAppScribeTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LocalAppScribeDescription}">
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="LocalAppScribeTitle" Text="Let Scribe manage it" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock x:Name="LocalAppScribeDescription" Text="Scribe downloads the model and manages its memory for you. Setup can use several GB." Style="{StaticResource CardDescription}"/>
+                                                    </StackPanel>
+                                                </RadioButton>
+                                                <RadioButton x:Name="LocalAppOllamaRadio" GroupName="LocalApp" Margin="0,0,0,8" Checked="LocalAppRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=LocalAppOllamaTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LocalAppOllamaDescription}">
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="LocalAppOllamaTitle" Text="Ollama" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock x:Name="LocalAppOllamaDescription" Text="Uses a model you downloaded in Ollama." Style="{StaticResource CardDescription}"/>
+                                                    </StackPanel>
+                                                </RadioButton>
+                                                <RadioButton x:Name="LocalAppLmStudioRadio" GroupName="LocalApp" Checked="LocalAppRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=LocalAppLmStudioTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LocalAppLmStudioDescription}">
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="LocalAppLmStudioTitle" Text="LM Studio" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock x:Name="LocalAppLmStudioDescription" Text="Uses a model you downloaded in LM Studio." Style="{StaticResource CardDescription}"/>
+                                                    </StackPanel>
+                                                </RadioButton>
+                                            </StackPanel>
 
-                                            <settings:SettingsStatusRow x:Name="FoundryStatusRow" PrimaryActionInvoked="FoundryStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="FoundryStatusRow_SecondaryActionInvoked"/>
-                                            <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource CardDescription}" Margin="0,8,0,0"
-                                                       Text="Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it."/>
+                                            <StackPanel x:Name="ScribeModelPanel">
+                                                <TextBlock x:Name="AiModelTitle" Text="Model" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=AiModelTitle}"
+                                                          IsEditable="False"
+                                                          SelectionChanged="AiModelBox_SelectionChanged"
+                                                          DropDownOpened="ModelCombo_DropDownOpened"/>
+                                                <TextBlock x:Name="AiModelHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
+
+                                                <settings:SettingsStatusRow x:Name="FoundryStatusRow" PrimaryActionInvoked="FoundryStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="FoundryStatusRow_SecondaryActionInvoked"/>
+                                                <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource CardDescription}" Margin="0,8,0,0"
+                                                           Text="Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it."/>
+                                            </StackPanel>
+
+                                            <StackPanel x:Name="LocalAppPanel" Visibility="Collapsed">
+                                                <TextBlock x:Name="LocalAppModelTitle" Text="Model" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="LocalAppModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=LocalAppModelTitle}"
+                                                          IsEditable="False" DisplayMemberPath="Label"
+                                                          SelectionChanged="LocalAppModelBox_SelectionChanged"/>
+                                                <settings:SettingsStatusRow x:Name="LocalAppStatusRow" PrimaryActionInvoked="LocalAppStatusRow_ActionInvoked" SecondaryActionInvoked="LocalAppStatusRow_ActionInvoked"/>
+                                            </StackPanel>
                                         </StackPanel>
 
                                         <!-- Microsoft Foundry: verify sign-in before revealing cloud resources. -->
@@ -1557,25 +1596,23 @@
                                             <TextBlock x:Name="CustomEndpointTitle" Text="Server address" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                             <ui:TextBox x:Name="CustomEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                         VerticalContentAlignment="Center"
-                                                        PlaceholderText="http://localhost:11434/v1"
+                                                        PlaceholderText="https://openrouter.ai/api/v1"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=CustomEndpointTitle}"
                                                         TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                       Text="The service's OpenAI-compatible address, usually ending in /v1. Ollama: http://localhost:11434/v1. LM Studio: http://localhost:1234/v1. OpenRouter: https://openrouter.ai/api/v1."/>
+                                                       Text="The service's OpenAI-compatible address, usually ending in /v1. For Ollama or LM Studio on this PC, choose On this PC instead."/>
 
                                             <TextBlock x:Name="CustomModelTitle" Text="Model name" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                             <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                         VerticalContentAlignment="Center"
-                                                        PlaceholderText="For example, qwen3:4b"
                                                         AutomationProperties.LabeledBy="{Binding ElementName=CustomModelTitle}"
                                                         TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                       Text="The name exactly as the service lists it. For Ollama, the command ollama list shows it."/>
+                                                       Text="The name exactly as the service lists it."/>
 
                                             <TextBlock x:Name="CustomApiKeyTitle" Text="API key (optional)" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                             <ui:PasswordBox x:Name="CustomApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                             VerticalContentAlignment="Center"
-                                                            PlaceholderText="Not needed for Ollama or LM Studio"
                                                             AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"
                                                             PasswordChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
@@ -1617,7 +1654,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="AiWritingStyleTitle" Text="Writing style" Style="{StaticResource CardTitle}"/>
                                         <TextBlock x:Name="AiWritingStyleSummary" Style="{StaticResource CardDescription}" Margin="0,2,0,0"
-                                                   Text="Scribe's style: clear sentences, correct punctuation, numbers as digits, and your spoken corrections applied."/>
+                                                   Text="Scribe's style: clear sentences, lists when you list things, correct punctuation, numbers as digits, and your spoken corrections applied."/>
                                         <ui:CardExpander x:Name="AiWritingStyleExpander" Margin="0,10,0,0" IsExpanded="False" AutomationProperties.Name="Customize">
                                             <ui:CardExpander.Header>
                                                 <StackPanel>

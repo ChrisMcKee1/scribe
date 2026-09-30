@@ -17,7 +17,7 @@ equivalent, and the default should be the one that gives the best out-of-the-box
 a storage or install-size cost:
 
 - **Foundry Local is Microsoft's own on-device SDK** (the same family Windows Scribe already uses via
-  `Microsoft.AI.Foundry.Local.WinML`), so choosing it as the macOS default keeps the two platforms on
+  `Microsoft.AI.Foundry.Local`, 2.x on Windows since 0.5.2), so choosing it as the macOS default keeps the two platforms on
   one real architecture instead of two unrelated local-inference stacks.
 - **It owns hardware selection for us**, same philosophy as Windows: `foundry status` reports the
   Apple M5 GPU and picks a `WebGpuExecutionProvider` variant automatically; there is no per-model

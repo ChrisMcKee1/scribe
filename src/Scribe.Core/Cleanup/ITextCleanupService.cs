@@ -24,6 +24,19 @@ public interface ITextCleanupService : IAsyncDisposable
     event Action? StatusChanged;
 
     /// <summary>
+    /// True while AI cleanup's model on this PC is starting: Foundry Local setting up or loading a model it has, loading
+    /// one Scribe freed, or Ollama or LM Studio loading the model for this dictation. A dictation that stops meanwhile
+    /// waits for it (a bounded while), and the recording indicator says "Starting local model".
+    /// </summary>
+    bool IsLocalModelStarting { get; }
+
+    /// <summary>
+    /// Frees the memory of the model AI cleanup uses on this PC, when it uses one (Foundry Local's model, or the one
+    /// Ollama or LM Studio holds for it); it loads again at the next dictation. Returns at once; never throws.
+    /// </summary>
+    void ReleaseModelMemory();
+
+    /// <summary>
     /// Raised after Scribe gave back disk space Foundry Local was using, and only when something was
     /// actually freed; see <see cref="FoundryStorageReclaim"/> for what it carries. Raised on a
     /// background thread, with no Scribe lock held, so a UI handler must marshal to its dispatcher.

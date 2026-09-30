@@ -31,20 +31,97 @@ internal sealed record BenchmarkConfig
     public CleanupPromptStyle PromptStyle { get; init; } = CleanupPromptStyle.Auto;
     public string? WritingStyle { get; init; }
     public string? FrontierPrompt { get; init; }
+    public string? LocalPrompt { get; init; }
 
     /// <summary>
     /// Pre-rendered glossary block appended to the system prompt, mirroring what the app builds from
     /// the user's enabled dictionary libraries. Null runs the arm with no glossary, which is how the
-    /// libraries' contribution is isolated.
+    /// libraries' contribution is isolated. Ignored when <see cref="GlossaryEntries"/> is set.
     /// </summary>
     public string? Glossary { get; init; }
+
+    /// <summary>
+    /// The dictionary library entries to render as a glossary for each model. Rendered per model at
+    /// <see cref="GlossaryMaxTerms"/>, or when that is null at the budget the app itself applies to the
+    /// model's provider and prompt style, so a Foundry Local arm carries the same 80 terms a user's
+    /// on-device cleanup does and an Ollama arm carries what that provider is sent.
+    /// </summary>
+    public IReadOnlyList<Scribe.Core.Models.DictionaryEntry>? GlossaryEntries { get; init; }
+
+    /// <summary>An explicit glossary term budget for every model; null follows the app's budget per provider.</summary>
+    public int? GlossaryMaxTerms { get; init; }
+
+    /// <summary>
+    /// How much of <see cref="GlossaryEntries"/> each dictation carries: all of it (every release before 0.5.2), only the
+    /// entries the dictation appears to mention (selected per case by the app's own <see cref="VocabularyMentions"/>), or
+    /// none.
+    /// </summary>
+    public CleanupVocabularyMode VocabularyMode { get; init; } = CleanupVocabularyMode.All;
+
+    public LocalEndpoints LocalEndpoints { get; init; } = LocalEndpoints.Default;
+
+    /// <summary>Leaves local servers' models loaded between roster entries, for instances loaded by hand (a CPU-only load).</summary>
+    public bool KeepServerModelsLoaded { get; init; }
+
+    /// <summary>
+    /// A file of frozen case transcripts: a <c>cases.json</c> array, or benchmark evidence with a
+    /// <c>fixtures</c> array. Seeds the output directory, so every model and runtime receives the exact
+    /// bytes an earlier run graded.
+    /// </summary>
+    public string? CasesFrom { get; init; }
     public ReasoningEffort? ReasoningEffort { get; init; }
     public int? MaxOutputTokens { get; init; }
+
+    /// <summary>Replaces the temperature a model on this PC is sent; a negative value sends none (the server's own default).</summary>
+    public float? Temperature { get; init; }
+
+    /// <summary>
+    /// The least time between the starts of two requests to a model, so a deployment with a small tokens-per-minute
+    /// quota is measured rather than throttled (its retries would otherwise be timed as the model). Zero sends at once.
+    /// </summary>
+    public int PaceMs { get; init; }
     public bool DisableRetries { get; init; }
     public bool DirectResponses { get; init; }
     public int CloudReadyTimeoutSeconds { get; init; } = 120;
     public int LocalReadyTimeoutSeconds { get; init; } = 1800;
     public int CleanTimeoutSeconds { get; init; } = 180;
+
+    /// <summary>The glossary a model is sent: rendered from <see cref="GlossaryEntries"/> at its budget, or the fixed block.</summary>
+    internal string? GlossaryFor(CleanupProvider provider, string? customEndpoint = null)
+    {
+        if (GlossaryEntries is not { Count: > 0 } entries)
+        {
+            return VocabularyMode == CleanupVocabularyMode.None ? null : Glossary;
+        }
+
+        if (VocabularyMode == CleanupVocabularyMode.None)
+        {
+            return null;
+        }
+
+        var glossary = CleanupPrompt.BuildGlossary(entries, GlossaryBudgetFor(provider, customEndpoint));
+        return string.IsNullOrEmpty(glossary) ? null : glossary;
+    }
+
+    /// <summary>
+    /// The glossary one dictation carries: under <see cref="CleanupVocabularyMode.Mentioned"/>, the entries it appears to
+    /// mention; otherwise the model's glossary (<see cref="GlossaryFor"/>).
+    /// </summary>
+    internal string? GlossaryFor(CleanupProvider provider, string? customEndpoint, string dictation)
+    {
+        if (VocabularyMode != CleanupVocabularyMode.Mentioned || GlossaryEntries is not { Count: > 0 } entries)
+        {
+            return GlossaryFor(provider, customEndpoint);
+        }
+
+        var glossary = CleanupPrompt.BuildGlossary(
+            VocabularyMentions.Select(entries, dictation), GlossaryBudgetFor(provider, customEndpoint));
+        return string.IsNullOrEmpty(glossary) ? null : glossary;
+    }
+
+    /// <summary>The term budget a model's glossary is rendered at: the pinned one, or the app's own for its provider and address.</summary>
+    internal int GlossaryBudgetFor(CleanupProvider provider, string? customEndpoint) =>
+        GlossaryMaxTerms ?? CleanupPrompt.GlossaryTermBudget(PromptStyle, provider, customEndpoint);
 }
 
 /// <summary>
@@ -78,7 +155,15 @@ internal sealed class BenchmarkRunner
         Console.WriteLine($"Preparing {BenchmarkCases.All.Count} benchmark cases (WAV synthesis + ASR)…");
         var inputCachePath = Path.Combine(_cfg.OutDir, "cases.json");
         List<BenchCaseInput>? cases = null;
-        if (!_cfg.Force && File.Exists(inputCachePath))
+        if (!string.IsNullOrWhiteSpace(_cfg.CasesFrom))
+        {
+            // Frozen transcripts win over --force, which is about re-running models, not re-recording
+            // the speech every model is compared on.
+            cases = ReadFrozenCases(_cfg.CasesFrom);
+            File.WriteAllText(inputCachePath, JsonSerializer.Serialize(cases, Json));
+            Console.WriteLine($"Using {cases.Count} frozen cases from {_cfg.CasesFrom}.");
+        }
+        else if (!_cfg.Force && File.Exists(inputCachePath))
         {
             cases = JsonSerializer.Deserialize<List<BenchCaseInput>>(File.ReadAllText(inputCachePath), Json);
             if (cases is { Count: > 0 })
@@ -141,7 +226,7 @@ internal sealed class BenchmarkRunner
 
         if (_cfg.IncludeLocal)
         {
-            var local = BenchmarkModels.BuildLocal(_cfg.LocalOnly, _cfg.MaxLocal);
+            var local = BenchmarkModels.BuildLocal(_cfg.LocalOnly, _cfg.MaxLocal, _cfg.LocalEndpoints);
             roster.AddRange(local);
             Console.WriteLine($"Local models ({local.Count}): {string.Join(", ", local.Select(m => m.Id))}");
         }
@@ -191,11 +276,15 @@ internal sealed class BenchmarkRunner
             Cases = cases.Select(c => new BenchCaseMeta(c.CaseId, c.Source, c.Transcript, c.Golden, c.AsrMs, c.AudioSeconds)).ToList(),
         };
 
-        await using var svc = new TextCleanupService(new VerboseConsoleLogger<TextCleanupService>())
+        // SCRIBE_PERF_FLAGS applies to a benchmark as it does to the app, so a switched-off change (for example the Azure
+        // CLI token cache) can be measured through the same service.
+        await using var svc = new TextCleanupService(
+            new VerboseConsoleLogger<TextCleanupService>(), perfFlags: Scribe.Core.Diagnostics.PerfFlags.FromEnvironment())
         {
             CleanupTimeoutOverride = TimeSpan.FromSeconds(_cfg.CleanTimeoutSeconds),
             ReasoningEffortOverride = _cfg.ReasoningEffort,
             MaxOutputTokensOverride = _cfg.MaxOutputTokens,
+            TemperatureOverride = _cfg.Temperature,
             DisableRetries = _cfg.DisableRetries,
         };
 
@@ -211,7 +300,18 @@ internal sealed class BenchmarkRunner
             }
 
             Console.WriteLine($"[{index}/{roster.Count}] {key} ({model.Target}){(model.Note is null ? "" : $" [{model.Note}]")}");
+            // Unloaded before and after, so its load time is a real load and the next model has the GPU to itself.
+            if (!_cfg.KeepServerModelsLoaded)
+            {
+                await LocalServerControl.UnloadAsync(model, ct).ConfigureAwait(false);
+            }
+
             var result = await BenchmarkOneAsync(svc, model, cases, style, judge, ct).ConfigureAwait(false);
+            svc.Configure(CleanupOptions.Disabled);
+            if (!_cfg.KeepServerModelsLoaded)
+            {
+                await LocalServerControl.UnloadAsync(model, ct).ConfigureAwait(false);
+            }
 
             results.RemoveAll(r => string.Equals($"{r.Group}/{r.Id}", key, StringComparison.OrdinalIgnoreCase));
             results.Add(result);
@@ -252,15 +352,28 @@ internal sealed class BenchmarkRunner
         TextCleanupService svc, BenchModel model, IReadOnlyList<BenchCaseInput> cases, string style,
         QualityJudge? judge, CancellationToken ct)
     {
-        var options = model.Provider == CleanupProvider.AzureFoundry
-            ? new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
+        var endpoint = model.Provider == CleanupProvider.OpenAiCompatible ? model.Endpoint : null;
+        var glossary = _cfg.GlossaryFor(model.Provider, endpoint);
+        var options = model.Provider switch
+        {
+            CleanupProvider.AzureFoundry => new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
                 model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style,
                 AzureSubscriptionId: _cfg.SubscriptionId,
-                Glossary: _cfg.Glossary,
-                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt)
-            : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null,
-                WritingStyle: style, Glossary: _cfg.Glossary,
-                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt);
+                Glossary: glossary,
+                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
+
+            // Exactly the configuration Settings builds for "Another AI service": the server's /v1
+            // address and the model name it lists, with no key.
+            CleanupProvider.OpenAiCompatible => new CleanupOptions(true, CleanupProvider.OpenAiCompatible,
+                CleanupModelCatalog.DefaultAlias, null, null,
+                WritingStyle: style, Glossary: glossary,
+                CustomEndpoint: model.Endpoint, CustomModel: model.Target,
+                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
+
+            _ => new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null,
+                WritingStyle: style, Glossary: glossary,
+                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
+        };
 
         var loadTimeout = TimeSpan.FromSeconds(
             model.Group == BenchGroup.Cloud ? _cfg.CloudReadyTimeoutSeconds : _cfg.LocalReadyTimeoutSeconds);
@@ -278,6 +391,11 @@ internal sealed class BenchmarkRunner
                 : model.Note,
             Status = "error",
             LoadedAtUtc = DateTime.UtcNow.ToString("u"),
+            PromptStyle = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint).ToString(),
+            GlossaryTerms = _cfg.GlossaryEntries is { Count: > 0 } glossaryEntries && glossary is not null
+                ? CleanupPrompt.CountGlossary(glossaryEntries, _cfg.GlossaryBudgetFor(model.Provider, endpoint)).Included
+                : 0,
+            SystemPromptChars = TextCleanupService.BuildSystemPrompt(options).Length,
         };
 
         var loadSw = Stopwatch.StartNew();
@@ -325,8 +443,38 @@ internal sealed class BenchmarkRunner
 
         try
         {
-            // One warmup call (discarded) so steady-state latency excludes any first-call cost.
+            // Under the Mentioned vocabulary each dictation carries its own glossary: a prompt-only change the service
+            // applies in place, with no reconnect, exactly as it would for the next dictation in the app.
+            void UseVocabularyFor(string dictation)
+            {
+                if (_cfg.VocabularyMode == CleanupVocabularyMode.Mentioned && directClient is null)
+                {
+                    svc.Configure(options with { Glossary = _cfg.GlossaryFor(model.Provider, endpoint, dictation) });
+                }
+            }
+
+            // Keeps requests at least PaceMs apart, start to start, so the timing measures the model and not a quota.
+            var lastStart = 0L;
+            async Task PaceAsync()
+            {
+                if (_cfg.PaceMs > 0 && lastStart != 0)
+                {
+                    var wait = _cfg.PaceMs - Stopwatch.GetElapsedTime(lastStart).TotalMilliseconds;
+                    if (wait > 0)
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(wait), ct).ConfigureAwait(false);
+                    }
+                }
+
+                lastStart = Stopwatch.GetTimestamp();
+            }
+
+            // One warmup call (discarded) so steady-state latency excludes any first-call cost. Its time
+            // is kept: it is what the first dictation after the model becomes ready would wait.
             svc.UsageObserver = null;
+            UseVocabularyFor(cases[0].Transcript);
+            await PaceAsync().ConfigureAwait(false);
+            var warmup = Stopwatch.StartNew();
             if (directClient is null)
             {
                 _ = await svc.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
@@ -336,6 +484,8 @@ internal sealed class BenchmarkRunner
                 _ = await directClient.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
             }
 
+            warmup.Stop();
+
             var caseResults = new List<BenchCaseResult>(cases.Count);
             var allTimes = new List<double>(cases.Count * _cfg.Runs);
 
@@ -343,16 +493,23 @@ internal sealed class BenchmarkRunner
             {
                 var times = new List<double>(_cfg.Runs);
                 var usages = new List<BenchTokenUsage?>(_cfg.Runs);
+                var outputs = new List<string>(_cfg.Runs);
+                var outcomes = new List<string>(_cfg.Runs);
                 var output = c.Transcript;
+                UseVocabularyFor(c.Transcript);
                 for (var i = 0; i < _cfg.Runs; i++)
                 {
                     ct.ThrowIfCancellationRequested();
+                    await PaceAsync().ConfigureAwait(false);
                     BenchTokenUsage? usage = null;
+                    var outcome = "Direct";
                     var sw = Stopwatch.StartNew();
                     if (directClient is null)
                     {
                         svc.UsageObserver = details => usage = AddUsage(usage, details);
-                        output = (await svc.CleanAsync(c.Transcript, ct).ConfigureAwait(false)).Text;
+                        var cleaned = await svc.CleanAsync(c.Transcript, ct).ConfigureAwait(false);
+                        output = cleaned.Text;
+                        outcome = cleaned.Outcome.ToString();
                     }
                     else
                     {
@@ -361,6 +518,8 @@ internal sealed class BenchmarkRunner
                     sw.Stop();
                     times.Add(sw.Elapsed.TotalMilliseconds);
                     usages.Add(usage);
+                    outputs.Add(output);
+                    outcomes.Add(outcome);
                 }
 
                 allTimes.AddRange(times);
@@ -382,17 +541,20 @@ internal sealed class BenchmarkRunner
                 var sortedCase = times.OrderBy(t => t).ToList();
                 caseResults.Add(new BenchCaseResult(
                     c.CaseId, Median(sortedCase), times.ToArray(), verdict?.Overall,
-                    verdict?.Dims, verdict?.Flags ?? [], verdict?.Rationale, caseChanged, output, usages.ToArray()));
+                    verdict?.Dims, verdict?.Flags ?? [], verdict?.Rationale, caseChanged, output, usages.ToArray(),
+                    outputs.ToArray(), outcomes.ToArray()));
 
                 var reasoning = usages
                     .Where(usage => usage?.ReasoningTokens is not null)
                     .Select(usage => (double)usage!.ReasoningTokens!.Value)
                     .OrderBy(tokens => tokens)
                     .ToList();
+                var failed = outcomes.Count(o => string.Equals(o, nameof(CleanupOutcome.Failed), StringComparison.Ordinal));
 
                 Console.WriteLine(
                     $"        {c.CaseId,-22} {Median(sortedCase),6:F0} ms  " +
                     $"q={verdict?.Overall.ToString() ?? "-"}  changed={caseChanged}" +
+                    (failed == 0 ? "" : $"  failed={failed}/{outcomes.Count}") +
                     (reasoning.Count == 0 ? "" : $"  reasoning={Median(reasoning):F0} tok"));
             }
 
@@ -442,6 +604,7 @@ internal sealed class BenchmarkRunner
                 Output = worst.Output,
                 Cases = caseResults.ToArray(),
                 LoadSeconds = loadSw.Elapsed.TotalSeconds,
+                WarmupMs = warmup.Elapsed.TotalMilliseconds,
             };
         }
         catch (Exception ex)
@@ -551,6 +714,29 @@ internal sealed class BenchmarkRunner
 
     private static void Persist(string path, List<BenchResult> results) =>
         File.WriteAllText(path, JsonSerializer.Serialize(results, Json));
+
+    /// <summary>
+    /// Reads frozen case transcripts from a <c>cases.json</c> array or from benchmark evidence carrying a
+    /// <c>fixtures</c> array (docs/benchmarks/*.json). Fails loudly on an empty or unreadable file: a
+    /// benchmark silently re-recording its speech would compare models on different bytes.
+    /// </summary>
+    internal static List<BenchCaseInput> ReadFrozenCases(string path)
+    {
+        var fullPath = Path.GetFullPath(path.Trim());
+        using var document = JsonDocument.Parse(File.ReadAllText(fullPath));
+        var root = document.RootElement;
+        var array = root.ValueKind == JsonValueKind.Array
+            ? root
+            : root.TryGetProperty("fixtures", out var fixtures) && fixtures.ValueKind == JsonValueKind.Array
+                ? fixtures
+                : throw new InvalidDataException($"{fullPath} has neither a case array nor a 'fixtures' array.");
+
+        var cases = array.Deserialize<List<BenchCaseInput>>(Json) ?? [];
+        cases = cases.Where(c => !string.IsNullOrWhiteSpace(c.CaseId) && !string.IsNullOrWhiteSpace(c.Transcript)).ToList();
+        return cases.Count > 0
+            ? cases
+            : throw new InvalidDataException($"{fullPath} holds no usable cases.");
+    }
 
     private static string Snippet(string text)
     {

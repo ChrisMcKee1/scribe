@@ -388,7 +388,7 @@ spike.**
 #### Foundry Local wins the default slot because
 
 - It is Microsoft's own on-device SDK, the same family Windows Scribe already depends on
-  (`Microsoft.AI.Foundry.Local.WinML`), so macOS and Windows share one real architecture for local AI
+  (`Microsoft.AI.Foundry.Local`, 2.x on Windows since 0.5.2), so macOS and Windows share one real architecture for local AI
   instead of two unrelated stacks.
 - It owns hardware selection for us (verified: Apple M5 GPU auto-selected via
   `WebGpuExecutionProvider` in this session), the same operating philosophy Windows already follows.
