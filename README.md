@@ -151,8 +151,9 @@ the text is typed. You choose where it runs:
     Setting it up downloads the AI runtime for your PC and the model you pick, which can take several GB,
     and Scribe removes them if you move AI cleanup elsewhere.
   - **Ollama** or **LM Studio**, if you already have one. Scribe lists the models you downloaded in it, shows
-    how much memory the model uses, and frees that memory when AI cleanup stops using it, when you choose
-    **Free memory**, and when Scribe frees its own memory after the time you set. A small open model does the
+    how much memory the model uses, and has the app free that memory after the time you set without a
+    dictation, when you pause dictation, when AI cleanup stops using the model, and when you choose **Free
+    memory**. That unloads it for any other app that uses the same model too. A small open model does the
     job: Gemma 4 E2B cleans a dictation in about a third of a second on a recent NVIDIA graphics card. If
     you set LM Studio to require an API key, choose **Another AI service** instead and enter its address
     and key there.

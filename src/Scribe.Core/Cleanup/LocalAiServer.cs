@@ -92,6 +92,16 @@ public static class LocalAiServer
     /// <summary>The app that serves cleanup when it runs on Ollama or LM Studio at its own address (<see cref="AppAt"/>).</summary>
     public static LocalServerApp AppServing(CleanupProvider provider, string? customEndpoint) =>
         provider == CleanupProvider.OpenAiCompatible ? AppAt(customEndpoint) : LocalServerApp.None;
+
+    /// <summary>
+    /// What <see cref="CleanupOptions.LocalModelKeepAliveMinutes"/> carries for this provider and address: the idle time
+    /// the user chose (<c>AppSettings.ReleaseModelsAfterIdleMinutes</c>) for Ollama and LM Studio at their own address, which
+    /// every request then asks the app to keep the model for, and null for anything else, so a change of the idle time
+    /// never touches another provider's setup. The same for dictation and Test connection: a model Test connection loads
+    /// is given back on the same clock.
+    /// </summary>
+    public static int? KeepAliveMinutes(CleanupProvider provider, string? customEndpoint, int idleMinutes) =>
+        AppServing(provider, customEndpoint) == LocalServerApp.None ? null : idleMinutes;
 }
 
 /// <summary>An app on this PC that serves AI models and that Scribe knows how to ask about, and free, its models.</summary>

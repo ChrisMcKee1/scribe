@@ -508,6 +508,97 @@ public sealed class DictationLifecycleTests
         Assert.Equal($"change:{Timeout.InfiniteTimeSpan}", loop.IdleTimer.Events[^1]);
     }
 
+    /// <summary>
+    /// The timer's tick runs on the pool, outside the gate, so a whole dictation can start and finish between the tick and
+    /// its claim. The deadline recorded with the schedule is what decides: the stale tick finds the new, later deadline
+    /// and releases nothing, and the new deadline releases on time.
+    /// </summary>
+    [Fact]
+    public void An_idle_tick_that_raced_a_whole_dictation_releases_nothing()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(IdleDelay);
+        loop.Clock.Advance(IdleDelay); // due: the tick is on its way to the pool
+
+        loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("a"));
+        var stop = loop.Lifecycle.TryBeginProcessing();
+        loop.Lifecycle.ReturnToIdle(IdleDelay);
+        Assert.Null(loop.Lifecycle.EndProcessing(stop.Admission!));
+
+        Assert.Equal(IdleReleaseOutcome.NotIdle, loop.ReleaseIdle()); // the stale tick claims
+
+        loop.Clock.Advance(IdleDelay - TimeSpan.FromSeconds(1));
+        Assert.Equal(IdleReleaseOutcome.NotIdle, loop.ReleaseIdle());
+        loop.Clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle());
+    }
+
+    /// <summary>
+    /// Saving settings used to restart the whole countdown, so a save made a minute before the release put it off by the
+    /// full idle time. The countdown runs from when the loop became idle: a save keeps it, a longer time extends it from
+    /// then, and a time shorter than the idle time already spent falls due at once.
+    /// </summary>
+    [Fact]
+    public void A_settings_change_never_postpones_the_idle_release()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(TimeSpan.FromMinutes(10));
+        loop.Clock.Advance(TimeSpan.FromMinutes(8));
+
+        loop.Lifecycle.RescheduleIdleRelease(TimeSpan.FromMinutes(10)); // an unrelated save
+        Assert.Equal("change:00:02:00", loop.IdleTimer.Events[^1]);
+
+        loop.Lifecycle.RescheduleIdleRelease(TimeSpan.FromMinutes(30)); // a longer time: from when the loop became idle
+        Assert.Equal("change:00:22:00", loop.IdleTimer.Events[^1]);
+        loop.Clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal(IdleReleaseOutcome.NotIdle, loop.ReleaseIdle());
+
+        loop.Lifecycle.RescheduleIdleRelease(TimeSpan.FromMinutes(5)); // shorter than the 10 minutes already idle
+        Assert.Equal("change:00:00:00", loop.IdleTimer.Events[^1]);
+        Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle());
+    }
+
+    [Fact]
+    public void After_its_release_an_idle_period_arms_nothing_until_the_loop_or_a_model_is_used_again()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(IdleDelay);
+        loop.Clock.Advance(IdleDelay);
+        Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle());
+
+        loop.Lifecycle.RescheduleIdleRelease(IdleDelay); // a save after the release: nothing is left to release
+        Assert.Equal($"change:{Timeout.InfiniteTimeSpan}", loop.IdleTimer.Events[^1]);
+        loop.Clock.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(IdleReleaseOutcome.NotIdle, loop.ReleaseIdle());
+
+        // AI cleanup's model on this PC loaded outside a dictation (Settings' Load, a one-off request): a new period.
+        loop.Lifecycle.NoteActivity(IdleDelay);
+        Assert.Equal("change:00:05:00", loop.IdleTimer.Events[^1]);
+        loop.Clock.Advance(IdleDelay);
+        Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle());
+    }
+
+    [Fact]
+    public void A_model_used_while_a_dictation_runs_leaves_the_countdown_to_that_dictation()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(IdleDelay);
+        loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("a"));
+        var events = loop.IdleTimer.Events.Count;
+
+        loop.Lifecycle.NoteActivity(IdleDelay);
+        var stop = loop.Lifecycle.TryBeginProcessing();
+        loop.Lifecycle.NoteActivity(IdleDelay);
+
+        Assert.Equal(events, loop.IdleTimer.Events.Count);
+        loop.Lifecycle.ReturnToIdle(IdleDelay);
+        Assert.Equal("change:00:05:00", loop.IdleTimer.Events[^1]);
+        loop.Lifecycle.EndProcessing(stop.Admission!);
+
+        loop.Lifecycle.NoteActivity(Timeout.InfiniteTimeSpan); // the countdown is off: nothing is armed
+        Assert.Equal($"change:{Timeout.InfiniteTimeSpan}", loop.IdleTimer.Events[^1]);
+    }
+
     [Fact]
     public void A_stop_is_admitted_only_for_the_live_recording_it_names()
     {
@@ -612,9 +703,11 @@ public sealed class DictationLifecycleTests
     {
         var loop = new Loop();
         loop.Lifecycle.Start(IdleDelay);
+        loop.Clock.Advance(IdleDelay);
         var steps = new List<string>();
 
         var outcome = loop.Lifecycle.RunIdleRelease(
+            IdleReleaseTrigger.IdleDeadline,
             anythingResident: () => true,
             unload: () =>
             {
@@ -640,10 +733,12 @@ public sealed class DictationLifecycleTests
         loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("a"));
         var stop = loop.Lifecycle.TryBeginProcessing();
         loop.Lifecycle.ReturnToIdle(IdleDelay);
+        loop.Clock.Advance(IdleDelay); // the deadline falls due while the dictation is still finishing
 
         Assert.Equal(IdleReleaseOutcome.NotIdle, loop.ReleaseIdle());
 
-        loop.Lifecycle.EndProcessing(stop.Admission!);
+        // Kept, not lost: the dictation's end hands it back.
+        Assert.Equal(IdleReleaseTrigger.IdleDeadline, loop.Lifecycle.EndProcessing(stop.Admission!));
 
         Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle());
     }
@@ -653,10 +748,12 @@ public sealed class DictationLifecycleTests
     {
         var loop = new Loop();
         loop.Lifecycle.Start(IdleDelay);
+        loop.Clock.Advance(IdleDelay);
         IdleReleaseOutcome? nested = null;
         var buffersReleased = 0;
 
         var outcome = loop.Lifecycle.RunIdleRelease(
+            IdleReleaseTrigger.IdleDeadline,
             anythingResident: () => false,
             unload: () => { },
             compact: () => { },
@@ -664,13 +761,14 @@ public sealed class DictationLifecycleTests
             releaseRetained: () =>
             {
                 buffersReleased++;
-                nested = loop.ReleaseIdle(); // a pause-triggered release racing the timer's
+                loop.Lifecycle.SetPaused(true);
+                nested = loop.ReleaseIdle(IdleReleaseTrigger.PauseRequest); // a pause-triggered release racing the timer's
             });
 
         Assert.Equal(IdleReleaseOutcome.NothingResident, outcome);
         Assert.Equal(IdleReleaseOutcome.NotIdle, nested);
         Assert.Equal(1, buffersReleased);
-        Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle()); // the claim was released afterwards
+        Assert.Equal(IdleReleaseOutcome.Released, loop.ReleaseIdle(IdleReleaseTrigger.PauseRequest)); // the claim was released afterwards
     }
 
     [Fact]
@@ -894,8 +992,8 @@ public sealed class DictationLifecycleTests
             return new Capture(name);
         }
 
-        public IdleReleaseOutcome ReleaseIdle() =>
-            Lifecycle.RunIdleRelease(() => true, () => { }, () => { }, () => { });
+        public IdleReleaseOutcome ReleaseIdle(IdleReleaseTrigger trigger = IdleReleaseTrigger.IdleDeadline) =>
+            Lifecycle.RunIdleRelease(trigger, () => true, () => { }, () => { }, () => { });
     }
 
     private sealed class RecordingWriter(ConcurrentQueue<string> order) : IHistoryWriter

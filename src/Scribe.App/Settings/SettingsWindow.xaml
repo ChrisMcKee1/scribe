@@ -1177,7 +1177,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Free memory when Scribe isn't used" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Style="{StaticResource CardDescription}"
-                                                       Text="After this long without a dictation, Scribe frees the memory used by its speech model and any AI cleanup model on this PC. The next dictation may take longer before Scribe types it."/>
+                                                       Text="After this long without a dictation, Scribe frees the memory its speech model and its own AI cleanup model use, and asks Ollama and LM Studio to free theirs. The next dictation may take longer before Scribe types it. Ollama and LM Studio may also free a model on their own."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ComboBox x:Name="IdleReleaseCombo" MinWidth="240" DisplayMemberPath="Label"

@@ -225,10 +225,11 @@ goes only to that server on this PC, never to a service elsewhere. When AI
 cleanup runs on Ollama or LM Studio at its own address on this PC (choosing it
 under "On this PC" saves that address), Scribe also asks that app which models
 it has and which it holds in memory, and asks it to free a model's memory when
-AI cleanup stops using the model, when you choose Free memory, and when Scribe
-frees its own memory after the time you set; these requests go only to that app
-on this PC and carry nothing you said, only the API key you saved for that
-address, if any, as cleanup requests do.
+AI cleanup stops using the model or you shorten the time Scribe keeps models,
+when you choose Free memory, and when you pause dictation. Each cleanup request
+also asks the app to free the model after the time you set without a dictation.
+These requests go only to that app on this PC and carry nothing you said, only
+the API key you saved for that address, if any, as cleanup requests do.
 
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.

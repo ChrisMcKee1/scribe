@@ -41,7 +41,16 @@ internal sealed class FakeLocalServerClient : ILocalServerClient
     /// <summary>Completes each time an unload is asked for.</summary>
     public event Action? Unloaded;
 
-    public Task<LocalServerState> ReadAsync(string endpoint, string? apiKey = null, CancellationToken cancellationToken = default)
+    /// <summary>When set, each unload is recorded and then held until this completes, as a slow app would hold it.</summary>
+    public TaskCompletionSource? UnloadGate { get; set; }
+
+    /// <summary>When set, each read is counted and then held until this completes.</summary>
+    public TaskCompletionSource? ReadGate { get; set; }
+
+    /// <summary>Completes each time a read is asked for.</summary>
+    public event Action? ReadStarted;
+
+    public async Task<LocalServerState> ReadAsync(string endpoint, string? apiKey = null, CancellationToken cancellationToken = default)
     {
         lock (_unloads)
         {
@@ -49,10 +58,16 @@ internal sealed class FakeLocalServerClient : ILocalServerClient
             _keys.Add(apiKey);
         }
 
-        return Task.FromResult(State);
+        ReadStarted?.Invoke();
+        if (ReadGate is { } gate)
+        {
+            await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return State;
     }
 
-    public Task<bool> UnloadAsync(
+    public async Task<bool> UnloadAsync(
         string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default)
     {
         lock (_unloads)
@@ -62,7 +77,12 @@ internal sealed class FakeLocalServerClient : ILocalServerClient
         }
 
         Unloaded?.Invoke();
-        return Task.FromResult(true);
+        if (UnloadGate is { } gate)
+        {
+            await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     /// <summary>Waits until at least <paramref name="count"/> unloads were asked for.</summary>

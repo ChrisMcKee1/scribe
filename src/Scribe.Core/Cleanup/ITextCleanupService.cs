@@ -31,10 +31,29 @@ public interface ITextCleanupService : IAsyncDisposable
     bool IsLocalModelStarting { get; }
 
     /// <summary>
-    /// Frees the memory of the model AI cleanup uses on this PC, when it uses one (Foundry Local's model, or the one
-    /// Ollama or LM Studio holds for it); it loads again at the next dictation. Returns at once; never throws.
+    /// Frees the memory of the model AI cleanup uses on this PC, when it uses one (Foundry Local's model, whatever cleanup
+    /// is set to, or the one Ollama or LM Studio holds for it); it loads again at the next dictation. <paramref name="reason"/>
+    /// decides how: see <see cref="ModelMemoryRelease"/>. The release is decided now: a dictation, a one-off request, a
+    /// readiness check or a Load that starts using the model before the release reaches it cancels it, a request still
+    /// using the model holds it back, and <paramref name="stillWanted"/> (a pause still in effect, for instance) is asked
+    /// again right before it goes out. Returns at once; never throws.
     /// </summary>
-    void ReleaseModelMemory();
+    void ReleaseModelMemory(ModelMemoryRelease reason, Func<bool>? stillWanted = null);
+
+    /// <summary>
+    /// Asks Ollama or LM Studio, at <paramref name="endpoint"/>, to free <paramref name="modelId"/>'s memory now: Settings'
+    /// Free memory. The next dictation then readies the model again rather than assuming it is loaded. True when the app
+    /// took the request, or held nothing of the model to free. Never throws.
+    /// </summary>
+    Task<bool> FreeLocalAppModelAsync(string endpoint, string modelId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Raised when AI cleanup's model on this PC (Foundry Local's, or the one Ollama or LM Studio serves) answered a request
+    /// or was loaded, dictations included, so the idle countdown can start again from then: a model a one-off request, a
+    /// setup or Settings' Load brought back is given back after the idle time too. Raised on a background thread with no
+    /// Scribe lock held; a handler must return quickly and must not throw.
+    /// </summary>
+    event Action? LocalModelUsed;
 
     /// <summary>
     /// Raised after Scribe gave back disk space Foundry Local was using, and only when something was

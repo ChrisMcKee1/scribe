@@ -243,6 +243,7 @@ internal sealed class DictationController : IDisposable
         }
 
         _cleanup.StatusChanged += OnCleanupStatusChangedForAnnouncement;
+        _cleanup.LocalModelUsed += OnLocalModelUsed;
         _cleanup.Configure(startupOptions);
 
         // Subscribed for the controller's lifetime rather than per recording: silence auto-stop is decided per recording
@@ -264,6 +265,21 @@ internal sealed class DictationController : IDisposable
     /// negative setting disarms it entirely, keeping the models resident forever.
     /// </summary>
     private void RescheduleIdleRelease() => _lifecycle.RescheduleIdleRelease(IdleReleaseDelay(CurrentSettings));
+
+    // AI cleanup's model on this PC answered or loaded. Outside a dictation (Settings' Load, a readiness check, a one-off
+    // request) that starts a new idle period, so the memory it took is given back after the idle time too; during one,
+    // the dictation's own return to idle re-arms the countdown. On a background thread; never throws.
+    private void OnLocalModelUsed()
+    {
+        try
+        {
+            _lifecycle.NoteActivity(IdleReleaseDelay(CurrentSettings));
+        }
+        catch (Exception ex)
+        {
+            TryLog(log => log.LogDebug("Restarting the idle countdown failed ({Failure}).", FailureShape.Describe(ex)));
+        }
+    }
 
     private static TimeSpan IdleReleaseDelay(AppSettings settings) =>
         settings.ReleaseModelsAfterIdleMinutes > 0
@@ -296,6 +312,7 @@ internal sealed class DictationController : IDisposable
         {
             IdleCollectionResult? collected = null;
             var outcome = _lifecycle.RunIdleRelease(
+                trigger,
                 anythingResident: () => _transcription.IsReady || _vad.IsAvailable,
                 unload: () =>
                 {
@@ -321,12 +338,22 @@ internal sealed class DictationController : IDisposable
                     {
                         TryLog(log => log.LogDebug("Released {Bytes} bytes of idle capture buffers.", bytes));
                     }
+                },
 
-                    // AI cleanup's model on this PC goes too, on every claimed release, whether or not the speech models
-                    // were still loaded (Settings' Load can load it on its own); it comes back with them at the next
-                    // dictation, and the recording indicator says it is starting. Returns at once.
-                    _cleanup.ReleaseModelMemory();
-                });
+                // AI cleanup's model on this PC goes too, on every claimed release, whether or not the speech models were
+                // still loaded (Settings' Load can load it on its own). First, with the authority of this claim: an idle
+                // release goes only while nothing started since the claim (a recording, or the model used outside a
+                // dictation, which starts a new idle period), and a pause's only while dictation is still paused. It comes
+                // back at the next dictation, and the recording indicator says it is starting. Returns at once.
+                afterClaim: ticket => _cleanup.ReleaseModelMemory(
+                    trigger == IdleReleaseTrigger.PauseRequest ? ModelMemoryRelease.Pause : ModelMemoryRelease.Idle,
+                    trigger == IdleReleaseTrigger.PauseRequest ? () => _lifecycle.IsPaused : () => _lifecycle.IsCurrent(ticket)));
+
+            // A release asked for while this one ran (a pause, most likely) was turned away; it runs now.
+            if (_lifecycle.ReleaseDue() is { } followUp)
+            {
+                _ = Task.Run(() => ReleaseIdleModels(followUp));
+            }
 
             // Whenever the collection ran, the released and the raced release alike: its pause is what a raced release is
             // about. Numbers and enum names only.
@@ -609,10 +636,8 @@ internal sealed class DictationController : IDisposable
         VocabularyMode: CleanupVocabularyMode.Mentioned,
         // Only Ollama and LM Studio at their own address read it, so a change of the idle time never touches another
         // provider's setup (a Foundry Local download, or GitHub Copilot's start).
-        LocalModelKeepAliveMinutes:
-            LocalAiServer.AppServing(settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint) == LocalServerApp.None
-                ? null
-                : settings.ReleaseModelsAfterIdleMinutes);
+        LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(
+            settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint, settings.ReleaseModelsAfterIdleMinutes));
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -839,6 +864,12 @@ internal sealed class DictationController : IDisposable
         {
             Raise(idle.Presentation, outcome: outcome);
             LogOutcome(id, outcome);
+
+            // A pause made while this recording's microphone was opening: the release it owes has nothing to wait for.
+            if (idle.PauseReleaseDue)
+            {
+                _ = Task.Run(() => ReleaseIdleModels(IdleReleaseTrigger.PauseRequest));
+            }
         }
     }
 
@@ -1070,8 +1101,12 @@ internal sealed class DictationController : IDisposable
         finally
         {
             // The very last step, after ResetToIdle has published Idle and re-armed the idle timer, so shutdown keeps
-            // observing this dictation until its cleanup has genuinely finished.
-            _lifecycle.EndProcessing(admission, faulted);
+            // observing this dictation until its cleanup has genuinely finished. A release that could not run while it
+            // processed (one a pause asked for, or an idle deadline that fell due as it finished) runs now.
+            if (_lifecycle.EndProcessing(admission, faulted) is { } releaseDue)
+            {
+                _ = Task.Run(() => ReleaseIdleModels(releaseDue));
+            }
         }
     }
 
@@ -1837,7 +1872,11 @@ internal sealed class DictationController : IDisposable
             }));
             stopInputs.Add(new(
                 "cleanup status subscription",
-                () => _cleanup.StatusChanged -= OnCleanupStatusChangedForAnnouncement));
+                () =>
+                {
+                    _cleanup.StatusChanged -= OnCleanupStatusChangedForAnnouncement;
+                    _cleanup.LocalModelUsed -= OnLocalModelUsed;
+                }));
         }
 
         var shutdown = _lifecycle.Shutdown(

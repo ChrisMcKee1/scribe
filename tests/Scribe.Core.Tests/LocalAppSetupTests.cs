@@ -130,13 +130,18 @@ public sealed class LocalAppSetupTests
 
         var row = LocalAppSetup.Describe(LocalServerApp.Ollama, state, "gemma4:e2b", 10);
         Assert.Equal(AiCleanupStatusKind.Success, row.Kind);
-        Assert.Equal("gemma4:e2b is using 1.6 GB of memory. Scribe frees it after 10 minutes without a dictation.", row.Text);
+        Assert.Equal(
+            "gemma4:e2b is using 1.6 GB of memory. Scribe asks Ollama to free it after 10 minutes without a dictation. " +
+            "Free memory unloads it from Ollama, for other apps too.",
+            row.Text);
         Assert.Equal(AiCleanupActionId.Unload, row.Primary!.Id);
         Assert.Equal(FoundryLocalSetup.FreeMemoryAction, row.Primary.Text);
 
         // "Never free memory" promises no time.
-        Assert.Equal("gemma4:e2b is using 1.6 GB of memory.", LocalAppSetup.Describe(LocalServerApp.Ollama, state, "gemma4:e2b", 0).Text);
-        Assert.EndsWith("after 1 minute without a dictation.", LocalAppSetup.Describe(LocalServerApp.Ollama, state, "gemma4:e2b", 1).Text, StringComparison.Ordinal);
+        Assert.Equal(
+            "gemma4:e2b is using 1.6 GB of memory. Free memory unloads it from Ollama, for other apps too.",
+            LocalAppSetup.Describe(LocalServerApp.Ollama, state, "gemma4:e2b", 0).Text);
+        Assert.Contains("after 1 minute without a dictation.", LocalAppSetup.Describe(LocalServerApp.Ollama, state, "gemma4:e2b", 1).Text, StringComparison.Ordinal);
     });
 
     [Fact]

@@ -381,7 +381,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows: 9941 as of 0.5.2, 9866 with the filter below).
+# Run the unit tests (must stay green; the count only ever grows: 9986 as of 0.5.2, 9911 with the filter below).
 # Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
 # session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
@@ -1102,6 +1102,20 @@ change the sums and needs a decision (and probably a flag) of its own.
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
   close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a
   duration ceiling armed for one recording could end the next.
+- **An idle release is decided when it is claimed, by its trigger** (0.5.2). A timer callback runs outside the gate, so
+  a whole dictation, or a settings change, can come between the timer's tick and the claim. So the lifecycle keeps the
+  countdown's own deadline (`_idleReleaseDue`, computed before the timer's, never later) and origin
+  (`_idleSinceTimestamp`: the last return to idle, or `NoteActivity`, which the controller calls when AI cleanup's model on
+  this PC answered or loaded outside a dictation, `ITextCleanupService.LocalModelUsed`), and `RunIdleRelease(trigger, ...)`
+  claims `IdleDeadline` only once that deadline has passed and `PauseRequest` only while still paused and still owed. A
+  settings save recomputes the deadline from the origin (it never postpones the release; a shorter time already spent
+  falls due at once), and after a claim nothing is armed until the loop or a model is next used (`_idleReleaseSpent`). A
+  pause owes a release (`_pauseReleaseOwed`, withdrawn by a resume, paid once): one the loop could not run while a
+  dictation recorded or processed is handed back by `EndProcessing` (after its lease completes), or by
+  `TryAbandonRecording` (`PauseReleaseDue`), and one turned away because another release was running by `ReleaseDue()`,
+  which the controller asks after every release; the controller runs it then, with the countdown off too; so is a
+  deadline that fell due while a dictation was finishing. AI cleanup's release runs first after the claim (`afterClaim`,
+  with the claim's `IdleReleaseTicket`, which `IsCurrent` checks), before the speech models unload.
 - **The idle release makes one collection, Aggressive from 0.5.1; `PerfFlags.ForcedIdleGc` brings back 0.5.0's Forced
   one for this release.** `DictationController.ReleaseIdleModels` runs on the idle countdown
   (`ReleaseModelsAfterIdleMinutes`) and on a pause made while nothing records (`IdleReleaseRequests.OnPauseChange`), even
@@ -3279,15 +3293,41 @@ recording indicator saying so, rather than being typed without cleanup.
   instance id. Loopback only, never anything the user said, only the key saved for that same address as a bearer token
   (a 401 or 403 reads as `LocalServerReach.NeedsKey`), and the callers log counts and enum names.
   `CleanupDisclosure.ManagesALocalApp` and PRIVACY.md disclose it; change them with it.
-- **When memory comes back.** `ConfigureCore` asks the app to unload the model the previous configuration used when
-  the next one no longer uses it (cleanup off, from Settings or the tray, or another model or place:
-  `LocalServerModelNoLongerUsed`). The idle release (`DictationController.ReleaseIdleModels`, on the idle countdown and
-  on a pause) calls `ITextCleanupService.ReleaseModelMemory`, which unloads Foundry Local's model or asks Ollama or LM
-  Studio to. Each request to those apps also carries `keep_alive` (Ollama) or `ttl` in seconds (LM Studio) equal to
-  `AppSettings.ReleaseModelsAfterIdleMinutes` (`CleanupOptions.LocalModelKeepAliveMinutes`, applied in
-  `WithLocalServerFields`, and set by the controller only for those two apps, so an idle-time change never restarts
-  another provider's setup), so the app frees it on its own if Scribe closes; Never (0) sends nothing and leaves the
-  app's own policy, so nothing is pinned after Scribe exits.
+- **When memory comes back** (the maintainer's rules, reviewed adversarially for 0.5.2). Every request to Ollama or LM
+  Studio carries `keep_alive` (Ollama) or `ttl` in seconds (LM Studio) equal to `AppSettings.ReleaseModelsAfterIdleMinutes`
+  (`CleanupOptions.LocalModelKeepAliveMinutes`, from `LocalAiServer.KeepAliveMinutes` for dictation and Test connection
+  alike, applied in `WithLocalServerFields`, and kept in plain requests, which drop only `reasoning_effort` and the
+  `max_tokens` copy), so the app frees the model on its own clock after the idle time. So the idle release
+  (`ReleaseModelMemory(ModelMemoryRelease.Idle)`) unloads Foundry Local's model and asks Ollama or LM Studio nothing: an
+  explicit unload then would only reach a model someone else used since, or one the user loaded in LM Studio. A pause
+  (`ModelMemoryRelease.Pause`), cleanup no longer using the model (off, from Settings or the tray, or another model or
+  place), a shorter idle time, or one turned on (`LocalServerModelToRelease`: a model loaded under the old time can keep
+  it until it is loaded again), and Free memory (`FreeLocalAppModelAsync`, which Settings calls) unload it explicitly,
+  for other apps using it too, which Settings says. Never (0) sends no retention field and never unloads on idle; Ollama
+  then keeps whatever time a request last asked for. Nothing is unloaded at exit: the app's clock does it.
+- **A release never frees the model under a use.** Every release (the idle time's, a pause's, cleanup no longer using the
+  model, a shorter idle time, Free memory, Foundry Local's) goes through one lane (`_releaseLane`), one at a time. In the
+  lane it waits for the uses in flight (`BeginModelUse`: a dictation's cleanup, a one-off request, a readiness check incl.
+  Test connection, a readying request), then commits in one step with every use that begins (`TryCommitRelease` under
+  `_releaseSync`): only while still wanted and no use is in flight. Wanted: for idle, pause and a shorter time, no use
+  began since it was decided (`_modelUseRevision`, moved by every use and by a recording's start, before its warm
+  shortcut) and the caller's predicate holds (the controller passes `DictationLifecycle.IsCurrent(ticket)` for idle, a
+  ticket the lifecycle issues inside the claim, withdrawn by a recording or a model used outside a dictation, and
+  `IsPaused` for a pause); for a model cleanup no longer uses, the configuration still not using it (A, B, A stays home);
+  always for Free memory. A release Scribe decided on itself waits up to `AutomaticReleaseDrainBound` (5 min), so it is
+  deferred, not dropped; Free memory waits `ModelUseDrainBound` (30 s) and then reports that it could not. The committed
+  unload is published (`_unloadInFlight`, the only one in flight), every use captures it as it begins
+  (`BeginModelUse(out unloading)`) and waits for it before it sends, up to `UnloadWaitBound` (20 s, whatever the start
+  bound is); past that a dictation is typed as heard and a one-off request is not ready. The barrier is global: a use of
+  model B waits for an unload of model A, so a switch frees the old model before the new one loads. Lock order is
+  `_releaseSync` then `_gate`, never the reverse. Every release forgets the last answer, so the next recording readies the
+  model again and says so when it has to load it.
+- **The readying request is bound to its configuration.** `Prewarm` publishes, under `_gate` and before its work starts,
+  the readying task, the options it readies (`_readyingFor`) and `ReadyingChecking`; the request then asks the app
+  whether it holds the model (`ReadyingLoading` or back to none), checks it still serves those options before the read and
+  after it, and hands over through `WhileServing(recipient)`. A dictation joins it only while it readies the configuration
+  served now; warmth (`_lastModelAnswer`) is recorded only for the configuration served now (`NoteModelAnswered`), and a
+  configuration change that is not prompt-only forgets it.
 - **A released Foundry Local model is not a failure.** An unload of the configured model while Ready (Free memory, or
   the idle release) is decided as `ResidentChangeKind.Released`: the agent and Ready status stay, `_foundryReleased`
   is set, and the next dictation's start reloads it (`TryStartReleasedModelReload`, one reload at a time, leased).
@@ -3295,12 +3335,14 @@ recording indicator saying so, rather than being typed without cleanup.
   refuses a request for a model it does not hold. Loading a different model is still an eviction that makes cleanup
   Unavailable. A new configuration, and any initialization that publishes Ready, clears the flag.
 - **A dictation waits for a model that is starting** (`WaitForLocalModelStartAsync`, at most
-  `LocalModelStartWait`, 30 s; tests set it to zero in the harnesses): an initialization for a model on this PC that
-  is loading it, or a released model's reload. Foundry Local counts only once its runtime is up in this process
-  (`_managerReady`): the first setup downloads several GB of runtime, and neither that nor a model download (the
-  setup's own or a Load's, `_foundryDownloading`) is a start to wait for. Past the bound it is typed as
-  heard, as before. `ITextCleanupService.IsLocalModelStarting` (also true while a readying request loads a model
-  Ollama or LM Studio did not hold) is read once when a dictation stops and rides the processing change
+  `LocalModelStartWait`, 30 s; tests set it to zero in the harnesses, and a zero bound gives nothing up): an
+  initialization for a model on this PC that is loading it, a released model's reload, an unload already on its way,
+  or the readying request while it loads a model Ollama or LM Studio did not hold. Foundry Local counts only once its
+  runtime is up in this process (`_managerReady`): the first setup downloads several GB of runtime, and neither that nor
+  a model download (the setup's own or a Load's, `_foundryDownloading`) is a start to wait for. Past the bound it is
+  typed as heard (a Skip, or NotReady for a one-off request), rather than sending a request that would wait behind the
+  load for its own time limit again. `ITextCleanupService.IsLocalModelStarting` (also true while a readying request loads
+  a model Ollama or LM Studio did not hold) is read once when a dictation stops and rides the processing change
   (`DictationStateChange.StartingLocalModel`) to the overlay's `PROCESSING 2`: "Starting local model…" and "This can
   take time".
 - **Microsoft Foundry asks for the least reasoning a deployment accepts** (`AzureReasoningEffortFor`): none, then low

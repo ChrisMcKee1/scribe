@@ -96,7 +96,7 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
     private readonly HttpClient _http;
 
     public LocalServerClient()
-        : this(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(2) })
+        : this(CreateHandler())
     {
     }
 
@@ -105,6 +105,12 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
     {
         _http = new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
     }
+
+    // No proxy, and no redirects: every request goes to the app's own address on this PC and nowhere else. A redirect
+    // would carry the saved key, as a bearer token, to wherever the answer pointed (the chat requests' transport refuses
+    // redirects for the same reason, see VocabularyHandOff).
+    internal static SocketsHttpHandler CreateHandler() =>
+        new() { UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromSeconds(2) };
 
     public void Dispose() => _http.Dispose();
 

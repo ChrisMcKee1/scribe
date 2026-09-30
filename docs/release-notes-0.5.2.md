@@ -42,13 +42,17 @@ adding a word to your dictionary takes one form. Everything you set up in 0.5.1 
   Scribe also reuses the access token until shortly before it expires instead of asking Azure CLI for a new
   one for every dictation, which cost 1.2 to 7 seconds each time. An account you change outside Scribe is
   picked up at the next token refresh.
-- **Your PC gets its memory back.** Ollama and LM Studio are asked to keep the model only as long as Scribe
-  keeps its own speech model (Free memory when Scribe isn't used, 10 minutes by default), and to free it at
-  once when you turn AI cleanup off or move it elsewhere. Settings shows how much memory the model uses and
-  has a Free memory button. When you start recording, Scribe asks the app to have the model ready. After
-  the model was freed, the next dictation waits for it to load, for up to 30 seconds, and the recording
-  indicator says Starting local model and This can take time, instead of typing what it heard without
-  cleanup.
+- **Your PC gets its memory back.** After 10 minutes without a dictation (Free memory when Scribe isn't used,
+  in Settings, Advanced), Scribe frees its speech model and the model Scribe sets up for you, and Ollama and
+  LM Studio free theirs on their own clock, because every request asks them to keep the model only that
+  long. Pausing dictation frees the model at once, even in the middle of a dictation (once it's typed), and
+  so do turning AI cleanup off, moving it to another model, and the Free memory button in Settings; with
+  Ollama or LM Studio that unloads it for any other app that uses the same model too. A shorter time applies
+  at once, saving an unrelated setting no longer puts the release off, and a model a dictionary suggestion
+  or Test connection loaded is freed after the same time. When you start recording, Scribe asks the app to
+  have the model ready. After the model was freed, the next dictation waits for it to load, for up to 30
+  seconds, and the recording indicator says Starting local model and This can take time; past that, Scribe
+  types what it heard.
 - **Foundry Local 2.1.** The model Scribe sets up for you now runs on Foundry Local 2.1, which runs models
   on NVIDIA graphics cards through CUDA: Phi-4 Mini and Qwen3 4B went from about 16 seconds on the processor
   to under a second. A first setup on an NVIDIA RTX graphics card with 8 GB or more starts from Qwen2.5 7B,
@@ -71,7 +75,9 @@ adding a word to your dictionary takes one form. Everything you set up in 0.5.1 
 - A graphics card build that fails its first request moves to its processor build for the rest of the
   session, and the next start tries the graphics card again, since a busy graphics card fails the same way.
 - To list their models and free memory, Scribe talks to Ollama's and LM Studio's own management
-  interfaces, only on this PC. PRIVACY.md lists those requests.
+  interfaces, only on this PC, and never follows a redirect elsewhere. PRIVACY.md lists those requests.
+- An idle release is decided when it runs, not when its timer was set: a release whose timer raced a
+  dictation or a settings change does nothing, and a release waits for any request still using the model.
 - The performance flag `CliTokenEveryRequest` brings back a new Azure CLI token for every dictation, for
   comparison, for this release only.
 
@@ -83,6 +89,10 @@ adding a word to your dictionary takes one form. Everything you set up in 0.5.1 
   the processor, and on CUDA it is erratic.
 - Ollama and LM Studio appear under On this PC only at their usual addresses on this PC and without an API
   key. At any other address, or with a key, use Another AI service.
+- After the time you set, Ollama and LM Studio free the model on their own clock, counted from the last
+  request they served; a model you loaded yourself in LM Studio stays loaded until you pause dictation, turn
+  AI cleanup off or choose Free memory. With the time set to Never, Ollama and LM Studio may still free a
+  model on their own.
 - Word pack changes are written to disk through a journal so that a crash can't leave a pack half saved.
   That was tested on the direct download; saving word packs has not yet been checked on a Microsoft Store
   install, which keeps its files in a different place.

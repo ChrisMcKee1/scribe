@@ -52,13 +52,15 @@ public sealed class LocalModelMemoryTests
     {
         await using var harness = new CleanupHarness();
         var svc = harness.Service;
-        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3"));
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3") with { LocalModelKeepAliveMinutes = 10 });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
-        // A change to what the prompt says, or to how long the model is kept, still uses the model, and so does the same
+        // A change to what the prompt says, or a longer idle time, still uses the model as it is, and so does the same
         // model under its implicit tag.
-        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3") with { WritingStyle = "Short.", LocalModelKeepAliveMinutes = 5 });
-        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3:latest") with { WritingStyle = "Short.", LocalModelKeepAliveMinutes = 5 });
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3") with { WritingStyle = "Short.", LocalModelKeepAliveMinutes = 30 });
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3:latest") with { WritingStyle = "Short.", LocalModelKeepAliveMinutes = 30 });
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3:latest") with { WritingStyle = "Short." }); // no idle time
+        await Task.Delay(100);
         Assert.Empty(harness.LocalServers.Unloads);
 
         svc.Configure(CleanupHarness.Custom(Ollama, "qwen3:4b-instruct"));
@@ -70,6 +72,58 @@ public sealed class LocalModelMemoryTests
         Assert.Equal((Ollama, "qwen3:4b-instruct"), harness.LocalServers.Unloads[1]);
     }
 
+    /// <summary>
+    /// A model loaded under the old idle time can keep that time until it is loaded again (LM Studio sets it when it loads
+    /// a model on demand, Ollama only when a request reaches it), so a shorter time, or one turned on, frees the model once,
+    /// and it loads with the new time when it is next used. Nothing is loaded again in the meantime.
+    /// </summary>
+    [Theory]
+    [InlineData(30, 5)]
+    [InlineData(null, 10)]
+    public async Task A_shorter_idle_time_frees_the_model_once_so_it_loads_with_the_new_time(int? before, int after)
+    {
+        var bodies = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(json);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(LmStudio, "google/gemma-4-e2b") with { LocalModelKeepAliveMinutes = before });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        int Sent()
+        {
+            lock (bodies)
+            {
+                return bodies.Count;
+            }
+        }
+
+        var sent = Sent();
+        svc.Configure(CleanupHarness.Custom(LmStudio, "google/gemma-4-e2b") with { LocalModelKeepAliveMinutes = after });
+
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        await Task.Delay(100);
+        Assert.Equal([(LmStudio, "google/gemma-4-e2b")], harness.LocalServers.Unloads);
+        Assert.Equal(sent, Sent());
+        Assert.Equal(CleanupStatus.Ready, svc.Status);
+
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync("um so we ship on friday").WaitAsync(Bound)).Outcome);
+        JsonElement last;
+        lock (bodies)
+        {
+            last = bodies[^1];
+        }
+
+        Assert.Equal(after * 60, last.GetProperty("ttl").GetInt32());
+    }
+
     [Fact]
     public async Task A_server_Scribe_does_not_recognize_is_never_asked_to_free_anything()
     {
@@ -79,24 +133,212 @@ public sealed class LocalModelMemoryTests
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
         svc.Configure(CleanupHarness.Custom("http://localhost:8080/v1", "gemma4:e2b") with { Enabled = false });
-        svc.ReleaseModelMemory();
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause);
         await Task.Delay(100);
 
         Assert.Empty(harness.LocalServers.Unloads);
     }
 
     [Fact]
-    public async Task Freeing_memory_while_idle_asks_the_app_to_free_the_model_cleanup_uses()
+    public async Task A_pause_asks_the_app_to_free_the_model_cleanup_uses()
     {
         await using var harness = new CleanupHarness();
-        harness.Service.Configure(CleanupHarness.Custom(LmStudio, "google/gemma-3-4b"));
+        harness.Service.Configure(CleanupHarness.Custom(LmStudio, "google/gemma-3-4b") with { LocalModelKeepAliveMinutes = 10 });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
-        harness.Service.ReleaseModelMemory();
+        harness.Service.ReleaseModelMemory(ModelMemoryRelease.Pause);
 
         await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
         Assert.Equal((LmStudio, "google/gemma-3-4b"), harness.LocalServers.Unloads[0]);
         Assert.Equal(CleanupStatus.Ready, harness.Service.Status);
+    }
+
+    /// <summary>
+    /// Every request asked the app to keep the model only the idle time (keep_alive, ttl), so at the idle time the app has
+    /// freed it on its own clock, counted from Scribe's last request: Scribe asks nothing more, which also leaves alone a
+    /// model someone else used since, or one the user loaded in the app itself. Only requests that could not say so (the
+    /// idle time off, which releases nothing on idle anyway) leave the asking to Scribe.
+    /// </summary>
+    [Theory]
+    [InlineData(Ollama, "gemma4:e2b")]
+    [InlineData(LmStudio, "google/gemma-3-4b")]
+    public async Task At_the_idle_time_the_app_frees_the_model_on_its_own_clock(string endpoint, string model)
+    {
+        await using var harness = new CleanupHarness();
+        harness.Service.Configure(CleanupHarness.Custom(endpoint, model) with { LocalModelKeepAliveMinutes = 10 });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        harness.Service.ReleaseModelMemory(ModelMemoryRelease.Idle);
+        harness.Service.ReleaseModelMemory(ModelMemoryRelease.Pause); // a pause right after still asks
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        await Task.Delay(100);
+
+        Assert.Equal([(endpoint, model)], harness.LocalServers.Unloads);
+    }
+
+    [Fact]
+    public async Task At_the_idle_time_Scribe_asks_the_app_itself_when_its_requests_could_not_say_how_long()
+    {
+        await using var harness = new CleanupHarness();
+        harness.Service.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        harness.Service.ReleaseModelMemory(ModelMemoryRelease.Idle);
+
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        Assert.Equal((Ollama, "gemma4:e2b"), harness.LocalServers.Unloads[0]);
+    }
+
+    /// <summary>
+    /// A release goes out in the background, and a recording can start using the model before it reaches the app: it then
+    /// stays home, rather than freeing the model the recording has just readied.
+    /// </summary>
+    [Fact]
+    public async Task A_release_decided_before_a_recording_started_stays_home()
+    {
+        await using var harness = new CleanupHarness();
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        // A release of another model is still on its way, so the next one queues behind it.
+        var slow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.UnloadGate = slow;
+        var other = svc.FreeLocalAppModelAsync(Ollama, "gemma3");
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause);
+        svc.ForgetLastModelAnswerForTesting();
+        svc.Admit(CleanupVocabulary.None).Prewarm(); // the next recording starts
+        harness.LocalServers.UnloadGate = null;
+        slow.SetResult();
+        Assert.True(await other.WaitAsync(Bound));
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+        await Task.Delay(200);
+
+        Assert.Equal([(Ollama, "gemma3")], harness.LocalServers.Unloads);
+    }
+
+    [Fact]
+    public async Task Switching_back_before_the_release_reaches_the_app_keeps_the_model()
+    {
+        await using var harness = new CleanupHarness();
+        var svc = harness.Service;
+        var slow = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        svc.Configure(CleanupHarness.Custom(Ollama, "phi4-mini"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.UnloadGate = slow;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b")); // frees phi4-mini, held by the app
+        await harness.LocalServers.WaitForUnloadsAsync(2, Bound);
+
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma3") with { Enabled = false }); // frees gemma4:e2b, queued
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b")); // back on it before that release went out
+        harness.LocalServers.UnloadGate = null;
+        slow.SetResult();
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        await Task.Delay(200);
+
+        Assert.DoesNotContain((Ollama, "gemma4:e2b"), harness.LocalServers.Unloads);
+    }
+
+    [Fact]
+    public async Task A_recording_after_a_release_readies_the_model_again_and_says_it_is_starting()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            if (body.RootElement.TryGetProperty("max_tokens", out var max) && max.GetInt32() == 1)
+            {
+                await release.Task.WaitAsync(ct);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("ok");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready); // the readiness check answered just now
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached, [new LocalServerModel("gemma4:e2b", "gemma4:e2b", 1)], []);
+
+        Assert.True(await svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b").WaitAsync(Bound));
+        svc.Admit(CleanupVocabulary.None).Prewarm();
+
+        await WaitUntilAsync(() => svc.IsLocalModelStarting);
+        release.SetResult();
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+    }
+
+    [Fact]
+    public async Task A_dictation_waits_for_the_readying_request_that_is_loading_the_model()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readying = 0; // 0 not sent, 1 loading the model, 2 answered
+        var sentWhileLoading = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            if (body.RootElement.TryGetProperty("max_tokens", out var max) && max.GetInt32() == 1)
+            {
+                Volatile.Write(ref readying, 1);
+                await release.Task.WaitAsync(ct);
+                Volatile.Write(ref readying, 2);
+                return ScriptedHttpHandler.ChatCompletion("ok");
+            }
+
+            if (Volatile.Read(ref readying) == 1)
+            {
+                Interlocked.Increment(ref sentWhileLoading);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached, [new LocalServerModel("gemma4:e2b", "gemma4:e2b", 1)], []);
+
+        svc.ForgetLastModelAnswerForTesting();
+        var admitted = svc.Admit(CleanupVocabulary.None);
+        admitted.Prewarm();
+        await WaitUntilAsync(() => svc.IsLocalModelStarting);
+
+        var dictation = admitted.CleanAsync("um so we ship on friday");
+        await Task.Delay(200);
+        Assert.False(dictation.IsCompleted);
+
+        release.SetResult();
+        var result = await dictation.WaitAsync(Bound);
+        Assert.Equal(CleanupOutcome.Cleaned, result.Outcome);
+        Assert.Equal(0, Volatile.Read(ref sentWhileLoading));
+    }
+
+    [Fact]
+    public async Task A_model_answering_outside_a_dictation_is_reported_so_the_idle_countdown_starts_again()
+    {
+        await using var harness = new CleanupHarness(http: Cleaned());
+        var svc = harness.Service;
+        var uses = 0;
+        svc.LocalModelUsed += () => Interlocked.Increment(ref uses);
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready); // the readiness check answered
+        await WaitUntilAsync(() => Volatile.Read(ref uses) >= 1);
+
+        var recipient = svc.Recipient!;
+        Assert.Equal(CompletionOutcome.Completed, (await svc.CompleteAsync("Suggest.", "history", recipient).WaitAsync(Bound)).Outcome);
+        Assert.True(Volatile.Read(ref uses) >= 2);
+
+        // Another AI service is no model on this PC.
+        var before = Volatile.Read(ref uses);
+        svc.Configure(CleanupHarness.Custom("https://ai.example.invalid/v1", "gpt-x"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Equal(before, Volatile.Read(ref uses));
     }
 
     [Fact]
@@ -247,7 +489,7 @@ public sealed class LocalModelMemoryTests
         svc.Configure(CleanupHarness.FoundryOn());
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
-        svc.ReleaseModelMemory();
+        svc.ReleaseModelMemory(ModelMemoryRelease.Idle);
 
         await WaitUntilAsync(() => harness.State.LoadedIds().Length == 0);
         await WaitUntilAsync(() => svc.IsLocalModelStarting);
@@ -446,13 +688,619 @@ public sealed class LocalModelMemoryTests
         svc.ForgetLastModelAnswerForTesting();
         svc.Admit(CleanupVocabulary.None).Prewarm();
         await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
-        svc.ReleaseModelMemory();
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause);
         await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
         svc.Configure(CleanupHarness.Custom(endpoint, model) with { CustomApiKey = "lm-token", Enabled = false });
         await harness.LocalServers.WaitForUnloadsAsync(2, Bound);
 
         Assert.Equal(3, harness.LocalServers.Keys.Count);
         Assert.All(harness.LocalServers.Keys, key => Assert.Equal("lm-token", key));
+    }
+
+    /// <summary>
+    /// Plain requests leave out the generation fields a strict server refused, never how long Ollama or LM Studio keeps
+    /// the model: it is what gives the memory back at the idle time, so Scribe does not ask the app itself then.
+    /// </summary>
+    [Fact]
+    public async Task Plain_requests_still_say_how_long_the_app_keeps_the_model()
+    {
+        var bodies = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(body);
+            }
+
+            return body.TryGetProperty("reasoning_effort", out _)
+                ? ScriptedHttpHandler.Json(HttpStatusCode.BadRequest,
+                    """{"error":{"message":"reasoning_effort: Input should be 'low', 'medium' or 'high'","type":"BadRequestError"}}""")
+                : ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b") with { LocalModelKeepAliveMinutes = 10 });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync("um so we ship on friday").WaitAsync(Bound)).Outcome);
+        JsonElement last;
+        lock (bodies)
+        {
+            last = bodies[^1];
+        }
+
+        Assert.False(last.TryGetProperty("reasoning_effort", out _));
+        Assert.False(last.TryGetProperty("max_tokens", out _));
+        Assert.Equal("10m", last.GetProperty("keep_alive").GetString());
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Idle);
+        await Task.Delay(100);
+        Assert.Empty(harness.LocalServers.Unloads);
+    }
+
+    [Fact]
+    public async Task Test_connection_asks_the_app_to_keep_the_model_only_the_idle_time_too()
+    {
+        var bodies = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(body);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("ok");
+        });
+        await using var harness = new CleanupHarness(http: http);
+
+        var candidate = CleanupHarness.Custom(LmStudio, "google/gemma-4-e2b") with
+        {
+            LocalModelKeepAliveMinutes = LocalAiServer.KeepAliveMinutes(CleanupProvider.OpenAiCompatible, LmStudio, 10),
+        };
+        await harness.Service.TestAsync(candidate).WaitAsync(Bound);
+
+        lock (bodies)
+        {
+            Assert.NotEmpty(bodies);
+            Assert.All(bodies, body => Assert.Equal(600, body.GetProperty("ttl").GetInt32()));
+        }
+    }
+
+    [Fact]
+    public void The_idle_time_goes_only_to_Ollama_and_LM_Studio_at_their_own_address_from_dictation_and_Test_connection()
+    {
+        Assert.Equal(10, LocalAiServer.KeepAliveMinutes(CleanupProvider.OpenAiCompatible, Ollama, 10));
+        Assert.Equal(0, LocalAiServer.KeepAliveMinutes(CleanupProvider.OpenAiCompatible, LmStudio, 0));
+        Assert.Null(LocalAiServer.KeepAliveMinutes(CleanupProvider.OpenAiCompatible, "http://localhost:8080/v1", 10));
+        Assert.Null(LocalAiServer.KeepAliveMinutes(CleanupProvider.OpenAiCompatible, "https://ai.example.invalid/v1", 10));
+        Assert.Null(LocalAiServer.KeepAliveMinutes(CleanupProvider.FoundryLocal, Ollama, 10));
+
+        var root = RepositoryRoot();
+        var controller = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Dictation", "DictationController.cs"));
+        var settings = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        Assert.Contains("LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(", controller, StringComparison.Ordinal);
+        Assert.Contains("LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(", settings, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Freeing_memory_waits_for_a_request_that_is_using_the_model()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var text = await request.Content!.ReadAsStringAsync(ct);
+            if (text.Contains("so we ship", StringComparison.Ordinal))
+            {
+                inFlight.TrySetResult();
+                await answer.Task.WaitAsync(ct);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        var dictation = svc.CleanAsync("um so we ship on friday");
+        await inFlight.Task.WaitAsync(Bound);
+        var free = svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b");
+        await Task.Delay(200);
+        Assert.Empty(harness.LocalServers.Unloads);
+
+        answer.SetResult();
+        Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+        Assert.True(await free.WaitAsync(Bound));
+        Assert.Equal([(Ollama, "gemma4:e2b")], harness.LocalServers.Unloads);
+    }
+
+    [Fact]
+    public async Task A_dictation_that_begins_while_the_model_is_being_freed_waits_for_it()
+    {
+        var unloading = 0;
+        var sentWhileUnloading = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if ((await request.Content!.ReadAsStringAsync(ct)).Contains("so we ship", StringComparison.Ordinal) &&
+                Volatile.Read(ref unloading) == 1)
+            {
+                Interlocked.Increment(ref sentWhileUnloading);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.UnloadGate = gate;
+        harness.LocalServers.Unloaded += () => Volatile.Write(ref unloading, 1);
+
+        var free = svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b");
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        var dictation = svc.CleanAsync("um so we ship on friday");
+        await Task.Delay(200);
+        Assert.False(dictation.IsCompleted);
+
+        Volatile.Write(ref unloading, 0);
+        gate.SetResult();
+        Assert.True(await free.WaitAsync(Bound));
+        Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+        Assert.Equal(0, Volatile.Read(ref sentWhileUnloading));
+    }
+
+    [Fact]
+    public async Task A_readiness_check_in_flight_holds_a_release_back_too()
+    {
+        var hold = 0;
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (_, ct) =>
+        {
+            if (Volatile.Read(ref hold) == 1)
+            {
+                inFlight.TrySetResult();
+                await answer.Task.WaitAsync(ct);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("ok");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        svc.ModelUseDrainBound = TimeSpan.FromMilliseconds(300);
+
+        Volatile.Write(ref hold, 1);
+        var test = svc.TestAsync(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await inFlight.Task.WaitAsync(Bound);
+
+        Assert.False(await svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b").WaitAsync(Bound));
+        Assert.Empty(harness.LocalServers.Unloads);
+
+        answer.SetResult();
+        await test.WaitAsync(Bound);
+        Assert.True(await svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b").WaitAsync(Bound));
+    }
+
+    /// <summary>
+    /// Releases go one at a time, so the unload a use waits for is the only one in flight: a second release queued behind
+    /// the first never lets a dictation through while the first is still freeing the model.
+    /// </summary>
+    [Fact]
+    public async Task Releases_go_one_at_a_time_and_a_dictation_waits_for_the_one_in_flight()
+    {
+        var unloading = 0;
+        var sentWhileUnloading = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if ((await request.Content!.ReadAsStringAsync(ct)).Contains("so we ship", StringComparison.Ordinal) &&
+                Volatile.Read(ref unloading) == 1)
+            {
+                Interlocked.Increment(ref sentWhileUnloading);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.UnloadGate = first;
+        harness.LocalServers.Unloaded += () => Volatile.Write(ref unloading, 1);
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause);
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        var free = svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b");
+        var dictation = svc.CleanAsync("um so we ship on friday");
+        await Task.Delay(200);
+        Assert.False(dictation.IsCompleted);
+        Assert.Single(harness.LocalServers.Unloads);
+
+        harness.LocalServers.UnloadGate = null;
+        Volatile.Write(ref unloading, 0);
+        first.SetResult();
+        Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+        Assert.True(await free.WaitAsync(Bound));
+        Assert.Equal(2, harness.LocalServers.Unloads.Count);
+        Assert.Equal(0, Volatile.Read(ref sentWhileUnloading));
+    }
+
+    [Fact]
+    public async Task A_pause_s_release_that_is_no_longer_wanted_stays_home()
+    {
+        await using var harness = new CleanupHarness();
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause, stillWanted: () => false); // resumed before it went out
+        await Task.Delay(200);
+
+        Assert.Empty(harness.LocalServers.Unloads);
+    }
+
+    /// <summary>
+    /// The readying request is published before it has asked the app whether it holds the model, so a dictation that stops
+    /// that soon waits for it rather than sending its own request into a model the app may be loading.
+    /// </summary>
+    [Fact]
+    public async Task A_dictation_that_stops_before_the_app_answered_waits_for_the_readying_request()
+    {
+        var order = new List<string>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            lock (order)
+            {
+                order.Add(IsReadying(body) ? "readying" : body.Contains("so we ship", StringComparison.Ordinal) ? "dictation" : "other");
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached, [new LocalServerModel("gemma4:e2b", "gemma4:e2b", 1)], []);
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.ReadGate = read;
+
+        svc.ForgetLastModelAnswerForTesting();
+        var admitted = svc.Admit(CleanupVocabulary.None);
+        admitted.Prewarm();
+        var dictation = admitted.CleanAsync("um so we ship on friday");
+        await Task.Delay(200);
+        Assert.False(dictation.IsCompleted);
+
+        read.SetResult();
+        Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+        lock (order)
+        {
+            Assert.True(order.IndexOf("readying") >= 0 && order.IndexOf("readying") < order.IndexOf("dictation"));
+        }
+    }
+
+    [Fact]
+    public async Task A_new_configuration_neither_waits_for_nor_lets_through_the_old_one_s_readying_request()
+    {
+        var readying = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if (IsReadying(await request.Content!.ReadAsStringAsync(ct)))
+            {
+                Interlocked.Increment(ref readying);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.ReadGate = read;
+        harness.LocalServers.ReadStarted += () => readStarted.TrySetResult();
+
+        svc.ForgetLastModelAnswerForTesting();
+        svc.Admit(CleanupVocabulary.None).Prewarm();
+        await readStarted.Task.WaitAsync(Bound);
+        svc.Configure(CleanupHarness.Custom(Ollama, "qwen3:4b-instruct"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        var cleaned = await svc.CleanAsync("um so we ship on friday").WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(CleanupOutcome.Cleaned, cleaned.Outcome);
+
+        read.SetResult();
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+        Assert.Equal(0, Volatile.Read(ref readying));
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        Assert.Equal((Ollama, "gemma4:e2b"), harness.LocalServers.Unloads[0]);
+    }
+
+    [Fact]
+    public async Task Turning_cleanup_off_while_the_readying_request_waits_for_an_unload_readies_nothing()
+    {
+        var readying = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if (IsReadying(await request.Content!.ReadAsStringAsync(ct)))
+            {
+                Interlocked.Increment(ref readying);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("ok");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var unload = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.UnloadGate = unload;
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause);
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        svc.ForgetLastModelAnswerForTesting();
+        svc.Admit(CleanupVocabulary.None).Prewarm();
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b") with { Enabled = false });
+
+        harness.LocalServers.UnloadGate = null;
+        unload.SetResult();
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+
+        Assert.Equal(0, Volatile.Read(ref readying));
+    }
+
+    /// <summary>
+    /// Foundry Local runs in Scribe's own process, so the idle release frees whatever model it holds, whatever cleanup is
+    /// set to: a model Settings loaded while cleanup was off stays no longer than the idle time either.
+    /// </summary>
+    [Fact]
+    public async Task At_the_idle_time_Scribe_frees_a_Foundry_Local_model_Settings_loaded_while_cleanup_was_off()
+    {
+        await using var harness = new CleanupHarness(http: Cleaned());
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.FoundryOn());
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        svc.Configure(CleanupHarness.FoundryOn() with { Enabled = false });
+        await harness.WaitForStatusAsync(CleanupStatus.Disabled);
+        Assert.True(await svc.LoadFoundryModelAsync(CleanupHarness.OtherAlias).WaitAsync(Bound));
+        Assert.NotEmpty(harness.State.LoadedIds());
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Idle);
+
+        await WaitUntilAsync(() => harness.State.LoadedIds().Length == 0);
+    }
+
+    /// <summary>
+    /// A release waits for the requests using the model and never frees the model under one. Free memory, asked for by the
+    /// user, reports that it could not when a request outlasts its wait; a release Scribe decided on itself (a pause here)
+    /// is deferred, not dropped, and goes out once the request has finished.
+    /// </summary>
+    [Fact]
+    public async Task A_release_never_frees_the_model_under_a_request_and_a_pause_s_goes_out_once_it_ends()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if ((await request.Content!.ReadAsStringAsync(ct)).Contains("so we ship", StringComparison.Ordinal))
+            {
+                inFlight.TrySetResult();
+                await answer.Task.WaitAsync(ct);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        svc.ModelUseDrainBound = TimeSpan.FromMilliseconds(300);
+        svc.AutomaticReleaseDrainBound = Bound;
+
+        var dictation = svc.CleanAsync("um so we ship on friday");
+        await inFlight.Task.WaitAsync(Bound);
+
+        Assert.False(await svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b").WaitAsync(Bound));
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause);
+        await Task.Delay(500);
+        Assert.Empty(harness.LocalServers.Unloads);
+
+        answer.SetResult();
+        Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        await Task.Delay(100);
+        Assert.Equal([(Ollama, "gemma4:e2b")], harness.LocalServers.Unloads);
+    }
+
+    [Fact]
+    public async Task A_dictation_whose_model_is_still_being_freed_past_the_wait_is_typed_as_heard()
+    {
+        var sent = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if ((await request.Content!.ReadAsStringAsync(ct)).Contains("so we ship", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref sent);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        svc.UnloadWaitBound = TimeSpan.FromMilliseconds(300);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.UnloadGate = gate;
+
+        var free = svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b");
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        var result = await svc.CleanAsync("um so we ship on friday").WaitAsync(Bound);
+
+        Assert.Equal(CleanupOutcome.Skipped, result.Outcome);
+        Assert.Equal("um so we ship on friday", result.Text);
+        Assert.Equal(0, Volatile.Read(ref sent));
+        harness.LocalServers.UnloadGate = null;
+        gate.SetResult();
+        Assert.True(await free.WaitAsync(Bound));
+    }
+
+    [Fact]
+    public async Task Test_connection_and_the_readying_request_wait_for_an_unload_already_on_its_way()
+    {
+        var unloading = 0;
+        var sentWhileUnloading = 0;
+        var http = new ScriptedHttpHandler((_, _) =>
+        {
+            if (Volatile.Read(ref unloading) == 1)
+            {
+                Interlocked.Increment(ref sentWhileUnloading);
+            }
+
+            return Task.FromResult(ScriptedHttpHandler.ChatCompletion("ok"));
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.LocalServers.UnloadGate = gate;
+        harness.LocalServers.Unloaded += () => Volatile.Write(ref unloading, 1);
+
+        var free = svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b");
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
+        var reads = harness.LocalServers.Reads;
+        var test = svc.TestAsync(CleanupHarness.Custom(Ollama, "gemma4:e2b"));
+        svc.ForgetLastModelAnswerForTesting();
+        svc.Admit(CleanupVocabulary.None).Prewarm();
+        await Task.Delay(300);
+
+        Assert.False(test.IsCompleted);
+        Assert.Equal(reads, harness.LocalServers.Reads);
+        Assert.Equal(0, Volatile.Read(ref sentWhileUnloading));
+
+        Volatile.Write(ref unloading, 0);
+        harness.LocalServers.UnloadGate = null;
+        gate.SetResult();
+        Assert.True(await free.WaitAsync(Bound));
+        await test.WaitAsync(Bound);
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+        Assert.True(harness.LocalServers.Reads > reads);
+    }
+
+    /// <summary>
+    /// An idle release carries the authority of its claim: a one-off request that was already running when the idle time
+    /// ran out, and answers while the release waits for it, starts a new idle period, and the release stays home.
+    /// </summary>
+    [Fact]
+    public async Task An_idle_release_withdrawn_while_it_waits_for_a_request_stays_home()
+    {
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            if ((await request.Content!.ReadAsStringAsync(ct)).Contains("some history", StringComparison.Ordinal))
+            {
+                inFlight.TrySetResult();
+                await answer.Task.WaitAsync(ct);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("Suggested.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.FoundryOn());
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var current = 1;
+        svc.LocalModelUsed += () => Volatile.Write(ref current, 0); // what the controller's NoteActivity does to the ticket
+
+        var suggestion = svc.CompleteAsync("Suggest dictionary words.", "some history", svc.Recipient!);
+        await inFlight.Task.WaitAsync(Bound);
+        svc.ReleaseModelMemory(ModelMemoryRelease.Idle, stillWanted: () => Volatile.Read(ref current) == 1);
+        await Task.Delay(200);
+        answer.SetResult();
+        Assert.Equal(CompletionOutcome.Completed, (await suggestion.WaitAsync(Bound)).Outcome);
+        await Task.Delay(300);
+
+        Assert.NotEmpty(harness.State.LoadedIds());
+    }
+
+    /// <summary>
+    /// A released Foundry Local model's reload is one use of the model, its load and its warm-up alike: a pause made while
+    /// it loads waits for all of it, is not withdrawn by the warm-up, and then frees the model.
+    /// </summary>
+    [Fact]
+    public async Task A_pause_s_release_waits_for_a_reload_and_its_warm_up_then_frees_the_model()
+    {
+        var holdProbe = 0;
+        var probeHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probeRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (_, ct) =>
+        {
+            if (Volatile.Read(ref holdProbe) == 1)
+            {
+                probeHeld.TrySetResult();
+                await probeRelease.Task.WaitAsync(ct);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.AutomaticReleaseDrainBound = Bound;
+        svc.Configure(CleanupHarness.FoundryOn());
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.True(await svc.UnloadFoundryModelAsync(CleanupHarness.FoundryAlias).WaitAsync(Bound));
+
+        var load = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Qwen.LoadGate = load;
+        harness.Qwen.LoadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        svc.Admit(CleanupVocabulary.None).Prewarm(); // a recording starts: the model loads again
+        await harness.Qwen.LoadStarted.Task.WaitAsync(Bound);
+
+        svc.ReleaseModelMemory(ModelMemoryRelease.Pause, stillWanted: () => true); // paused while it loads
+        Volatile.Write(ref holdProbe, 1);
+        harness.Qwen.LoadGate = null;
+        load.SetResult();
+        await probeHeld.Task.WaitAsync(Bound); // its warm-up has begun
+        await Task.Delay(200);
+        Assert.NotEmpty(harness.State.LoadedIds());
+
+        Volatile.Write(ref holdProbe, 0);
+        probeRelease.SetResult();
+        await WaitUntilAsync(() => harness.State.LoadedIds().Length == 0);
+    }
+
+    // The readying request: a one-token ceiling, which no other request has.
+    private static bool IsReadying(string body)
+    {
+        using var json = JsonDocument.Parse(body);
+        return json.RootElement.TryGetProperty("max_tokens", out var max) && max.GetInt32() == 1;
+    }
+
+    private static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return root.FullName;
     }
 
     // A cleanup the answer guards accept for "um so we ship on friday".

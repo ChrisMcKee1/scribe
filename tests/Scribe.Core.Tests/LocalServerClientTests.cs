@@ -251,4 +251,37 @@ public sealed class LocalServerClientTests
         Assert.Equal(3000000000, state.LoadedFor("my-cleanup-model")!.MemoryBytes);
         Assert.NotNull(state.LoadedFor("google/gemma-4-e2b"));
     }
+
+    // A redirect would carry the key saved for the address, as a bearer token, to wherever the answer pointed.
+    [Fact]
+    public void The_requests_use_no_proxy_and_follow_no_redirect()
+    {
+        using var handler = LocalServerClient.CreateHandler();
+
+        Assert.False(handler.UseProxy);
+        Assert.False(handler.AllowAutoRedirect);
+    }
+
+    [Fact]
+    public async Task A_redirect_reads_as_an_answer_that_is_not_the_app_s()
+    {
+        var hosts = new List<string>();
+        using var client = new LocalServerClient(new ScriptedHttpHandler((request, _) =>
+        {
+            lock (hosts)
+            {
+                hosts.Add(request.RequestUri!.Host);
+            }
+
+            var redirect = new HttpResponseMessage(HttpStatusCode.TemporaryRedirect);
+            redirect.Headers.Location = new Uri("https://example.com/api/tags");
+            return Task.FromResult(redirect);
+        }));
+
+        Assert.Equal(LocalServerReach.Failed, (await client.ReadAsync("http://localhost:11434/v1", "key")).Reach);
+        Assert.False(await client.UnloadAsync("http://localhost:11434/v1", "gemma4:e2b", "key"));
+        Assert.Equal(LocalServerReach.Failed, (await client.ReadAsync("http://localhost:1234/v1", "key")).Reach);
+        Assert.False(await client.UnloadAsync("http://localhost:1234/v1", "google/gemma-4-e2b", "key"));
+        Assert.All(hosts, host => Assert.Equal("localhost", host));
+    }
 }

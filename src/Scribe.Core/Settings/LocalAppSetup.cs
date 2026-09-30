@@ -132,13 +132,15 @@ public static class LocalAppSetup
 
         if (state.LoadedFor(model) is { } loaded)
         {
+            // Every request asks the app to keep the model only this long (keep_alive, ttl), so the app frees it on its own.
+            // Free memory, like a pause or turning AI cleanup off, unloads it from the app, so for any other app using it too.
             var memory = loaded.MemoryBytes > 0 ? $"{FormatSize(loaded.MemoryBytes)} of memory" : "memory";
             var freed = idleMinutes > 0
-                ? $" Scribe frees it after {idleMinutes} {(idleMinutes == 1 ? "minute" : "minutes")} without a dictation."
+                ? $" Scribe asks {name} to free it after {idleMinutes} {(idleMinutes == 1 ? "minute" : "minutes")} without a dictation."
                 : string.Empty;
             return new(
                 AiCleanupStatusKind.Success,
-                $"{model} is using {memory}.{freed}",
+                $"{model} is using {memory}.{freed} {SharedModelNote(name)}",
                 new(AiCleanupActionId.Unload, FoundryLocalSetup.FreeMemoryAction));
         }
 
@@ -152,6 +154,12 @@ public static class LocalAppSetup
 
         return new(AiCleanupStatusKind.Info, $"{model} isn't using memory now. It loads when you dictate.");
     }
+
+    /// <summary>
+    /// What freeing a model in Ollama or LM Studio does to other apps: the app unloads it for everyone, so an app that uses
+    /// the same model may have to load it again. Said beside Free memory, and true of a pause and of turning AI cleanup off.
+    /// </summary>
+    public static string SharedModelNote(string appName) => $"Free memory unloads it from {appName}, for other apps too.";
 
     /// <summary>A size in memory, as Task Manager counts it: "1.6 GB", or "850 MB" below one.</summary>
     public static string FormatSize(long bytes)

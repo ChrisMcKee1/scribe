@@ -123,7 +123,7 @@ public sealed class IdleCollectionTests
         var change = release.Lifecycle.SetPaused(true);
 
         Assert.True(IdleReleaseRequests.OnPauseChange(paused: true, change));
-        release.RunRequested();
+        release.RunPauseRequested();
         Assert.Equal(IdleReleaseOutcome.Released, release.LastOutcome);
         Assert.Equal([Mode(forced)], release.Gc.Collections);
     }
@@ -143,7 +143,7 @@ public sealed class IdleCollectionTests
 
         var change = release.Lifecycle.SetPaused(true);
         Assert.True(IdleReleaseRequests.OnPauseChange(paused: true, change));
-        release.RunRequested();
+        release.RunPauseRequested();
 
         Assert.Equal([Mode(forced)], release.Gc.Collections);
     }
@@ -187,12 +187,185 @@ public sealed class IdleCollectionTests
 
         var change = release.Lifecycle.SetPaused(true);
         Assert.True(IdleReleaseRequests.OnPauseChange(paused: true, change)); // asked for; the lifecycle decides
-        release.RunRequested();
+        release.RunPauseRequested();
 
         Assert.Equal(IdleReleaseOutcome.NotIdle, release.LastOutcome);
         Assert.Empty(release.Gc.Collections);
         Assert.Empty(release.Steps);
         Assert.NotNull(stop.Admission);
+    }
+
+    /// <summary>
+    /// A pause made while a dictation records or processes owes the release: the lifecycle hands it back when that
+    /// dictation has ended, and it runs then, once, whether or not the idle countdown is on. Before 0.5.2 it was refused and
+    /// forgotten, so with the countdown off ("Never") a pause mid-dictation kept every model loaded.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void A_pause_made_mid_dictation_releases_once_that_dictation_has_ended(bool whileRecording, bool countdownOn)
+    {
+        var release = new Release(forced: false);
+        release.Lifecycle.Start(countdownOn ? IdleDelay : Timeout.InfiniteTimeSpan);
+        release.Lifecycle.TryBeginRecording(() => new Capture("a"));
+        ProcessingAdmission<Capture>? admission = null;
+        if (!whileRecording)
+        {
+            admission = release.Lifecycle.TryBeginProcessing().Admission;
+        }
+
+        var change = release.Lifecycle.SetPaused(true);
+        Assert.Equal(!whileRecording, IdleReleaseRequests.OnPauseChange(paused: true, change));
+        if (!whileRecording)
+        {
+            release.RunPauseRequested(); // the immediate request, refused while processing
+            Assert.Equal(IdleReleaseOutcome.NotIdle, release.LastOutcome);
+        }
+
+        admission ??= release.Lifecycle.TryBeginProcessing().Admission; // the pause's own stop
+        release.Lifecycle.ReturnToIdle(countdownOn ? IdleDelay : Timeout.InfiniteTimeSpan);
+        release.RunPauseRequested(); // still finishing
+        Assert.Equal(IdleReleaseOutcome.NotIdle, release.LastOutcome);
+
+        Assert.Equal(IdleReleaseTrigger.PauseRequest, release.Lifecycle.EndProcessing(admission!));
+        release.RunPauseRequested();
+
+        Assert.Equal(IdleReleaseOutcome.Released, release.LastOutcome);
+        Assert.Equal(["Aggressive"], release.Gc.Collections);
+
+        // Owed once: the countdown (when on) was spent with it, so its deadline releases nothing more.
+        Assert.Null(release.Lifecycle.EndProcessing(admission!));
+        release.RunRequested();
+        Assert.Equal(IdleReleaseOutcome.NotIdle, release.LastOutcome);
+        Assert.Single(release.Gc.Collections);
+    }
+
+    [Fact]
+    public void A_resume_withdraws_the_release_a_pause_owed_and_a_pause_request_that_runs_after_it_releases_nothing()
+    {
+        var release = new Release(forced: false);
+        release.Lifecycle.Start(IdleDelay);
+        release.Lifecycle.TryBeginRecording(() => new Capture("a"));
+        release.Lifecycle.SetPaused(true);
+        var stop = release.Lifecycle.TryBeginProcessing();
+        release.Lifecycle.SetPaused(false);
+        release.Lifecycle.ReturnToIdle(IdleDelay);
+
+        Assert.Null(release.Lifecycle.EndProcessing(stop.Admission!));
+
+        // Paused and resumed again before the request it made ran.
+        release.Lifecycle.SetPaused(true);
+        release.Lifecycle.SetPaused(false);
+        release.RunPauseRequested();
+
+        Assert.Equal(IdleReleaseOutcome.NotIdle, release.LastOutcome);
+        Assert.Empty(release.Gc.Collections);
+    }
+
+    [Fact]
+    public void A_second_request_for_the_same_pause_releases_nothing()
+    {
+        var release = new Release(forced: false);
+        release.Lifecycle.Start(IdleDelay);
+        release.Lifecycle.SetPaused(true);
+
+        release.RunPauseRequested();
+        Assert.Equal(IdleReleaseOutcome.Released, release.LastOutcome);
+
+        // The immediate request and a dictation's hint can both be queued for one pause: the pause's release is paid once.
+        release.RunPauseRequested();
+        Assert.Equal(IdleReleaseOutcome.NotIdle, release.LastOutcome);
+        Assert.Single(release.Gc.Collections);
+    }
+
+    [Fact]
+    public void A_pause_made_while_a_release_runs_is_due_once_it_ends()
+    {
+        var release = new Release(forced: false);
+        release.Lifecycle.Start(IdleDelay);
+        IdleReleaseOutcome? nested = null;
+        release.DuringUnload = () =>
+        {
+            release.Lifecycle.SetPaused(true);
+            nested = release.RunNested(IdleReleaseTrigger.PauseRequest);
+        };
+
+        release.RunRequested(); // the idle deadline's release, with the pause's request turned away inside it
+
+        Assert.Equal(IdleReleaseOutcome.NotIdle, nested);
+        Assert.Equal(IdleReleaseTrigger.PauseRequest, release.Lifecycle.ReleaseDue());
+        release.DuringUnload = null;
+        release.RunPauseRequested();
+        Assert.Equal(IdleReleaseOutcome.Released, release.LastOutcome);
+        Assert.Null(release.Lifecycle.ReleaseDue());
+    }
+
+    /// <summary>
+    /// AI cleanup's release goes out in the background with the authority of the claim, decided first, before anything is
+    /// unloaded, so a recording that starts while the speech models unload cancels it rather than becoming its baseline.
+    /// </summary>
+    [Fact]
+    public void The_release_that_goes_out_in_the_background_is_decided_first_after_the_claim()
+    {
+        var resident = new Release(forced: false) { RecordAfterClaim = true };
+        resident.Lifecycle.Start(IdleDelay);
+        resident.RunRequested();
+        Assert.Equal(["after claim", "unload", "release buffers", "compact", "announce"], resident.Steps);
+
+        var nothing = new Release(forced: false) { RecordAfterClaim = true, Resident = false };
+        nothing.Lifecycle.Start(IdleDelay);
+        nothing.RunRequested();
+        Assert.Equal(["after claim", "release buffers"], nothing.Steps);
+
+        var refused = new Release(forced: false) { RecordAfterClaim = true };
+        refused.Lifecycle.Start(IdleDelay);
+        refused.Lifecycle.TryBeginRecording(() => new Capture("a"));
+        refused.RunRequested();
+        Assert.Empty(refused.Steps);
+    }
+
+    [Fact]
+    public void A_release_the_claim_started_in_the_background_is_withdrawn_by_anything_after_the_claim()
+    {
+        var model = new Release(forced: false) { RecordAfterClaim = true };
+        model.Lifecycle.Start(IdleDelay);
+        model.RunRequested();
+        var ticket = model.Ticket!.Value;
+        Assert.True(model.Lifecycle.IsCurrent(ticket));
+
+        // A one-off request that was already running answered while the release waited for it: a new idle period.
+        model.Lifecycle.NoteActivity(IdleDelay);
+        Assert.False(model.Lifecycle.IsCurrent(ticket));
+
+        var recording = new Release(forced: false) { RecordAfterClaim = true };
+        recording.Lifecycle.Start(IdleDelay);
+        recording.RunRequested();
+        var claimed = recording.Ticket!.Value;
+        recording.Lifecycle.TryBeginRecording(() => new Capture("a"));
+        Assert.False(recording.Lifecycle.IsCurrent(claimed));
+
+        var closing = new Release(forced: false) { RecordAfterClaim = true };
+        closing.Lifecycle.Start(IdleDelay);
+        closing.RunRequested();
+        closing.Lifecycle.BeginShutdown();
+        Assert.False(closing.Lifecycle.IsCurrent(closing.Ticket!.Value));
+    }
+
+    [Fact]
+    public void A_pause_while_a_recording_s_microphone_opens_releases_when_the_recording_is_abandoned()
+    {
+        var release = new Release(forced: false);
+        release.Lifecycle.Start(IdleDelay);
+        var recording = release.Lifecycle.TryBeginRecording(() => new Capture("a"));
+        release.Lifecycle.SetPaused(true);
+
+        var idle = release.Lifecycle.TryAbandonRecording(recording.DictationId, IdleDelay);
+
+        Assert.True(idle!.Value.PauseReleaseDue);
+        release.RunPauseRequested();
+        Assert.Equal(IdleReleaseOutcome.Released, release.LastOutcome);
     }
 
     [Theory]
@@ -350,6 +523,24 @@ public sealed class IdleCollectionTests
         Assert.Contains("IdleReleaseRequests.OnPauseChange(paused, change)", controller, StringComparison.Ordinal);
         Assert.Contains("Task.Run(() => ReleaseIdleModels(IdleReleaseTrigger.PauseRequest))", controller, StringComparison.Ordinal);
 
+        // A release the lifecycle kept while a dictation ran (a pause's, or a deadline that fell due as it finished) runs
+        // when that dictation ends; AI cleanup's model follows the trigger; a model used outside a dictation restarts the
+        // countdown.
+        Assert.Contains("if (_lifecycle.EndProcessing(admission, faulted) is { } releaseDue)", controller, StringComparison.Ordinal);
+        Assert.Contains("_ = Task.Run(() => ReleaseIdleModels(releaseDue));", controller, StringComparison.Ordinal);
+        Assert.Contains(
+            "trigger == IdleReleaseTrigger.PauseRequest ? ModelMemoryRelease.Pause : ModelMemoryRelease.Idle",
+            controller,
+            StringComparison.Ordinal);
+        Assert.Contains("_cleanup.LocalModelUsed += OnLocalModelUsed;", controller, StringComparison.Ordinal);
+        Assert.Contains("_lifecycle.NoteActivity(IdleReleaseDelay(CurrentSettings));", controller, StringComparison.Ordinal);
+        Assert.Contains("afterClaim: ticket => _cleanup.ReleaseModelMemory(", controller, StringComparison.Ordinal);
+        Assert.Contains(
+            "trigger == IdleReleaseTrigger.PauseRequest ? () => _lifecycle.IsPaused : () => _lifecycle.IsCurrent(ticket)",
+            controller,
+            StringComparison.Ordinal);
+        Assert.Contains("if (_lifecycle.ReleaseDue() is { } followUp)", controller, StringComparison.Ordinal);
+
         // What the release gives back before the collection (the order is IdleModelRelease's, pinned above): the capture
         // service's retained buffers and, since AU-3, its scratch pool, so the collection returns them too.
         Assert.Contains("var bytes = _audio.ReleaseRetainedBuffers();", controller, StringComparison.Ordinal);
@@ -410,7 +601,8 @@ public sealed class IdleCollectionTests
         public Release(bool forced)
         {
             _flags = forced ? PerfFlags.Parse(PerfFlags.ForcedIdleGc) : PerfFlags.None;
-            Lifecycle = new DictationLifecycle<Capture>(RunRequested, () => { }, Clock);
+            Lifecycle = new DictationLifecycle<Capture>(
+                () => LastOutcome = RunNested(IdleReleaseTrigger.IdleDeadline), () => { }, Clock);
         }
 
         public ManualTimeProvider Clock { get; } = new();
@@ -425,16 +617,31 @@ public sealed class IdleCollectionTests
 
         public bool Resident { get; init; } = true;
 
+        // Records the step that runs first after a claim (the controller's AI cleanup release) when set.
+        public bool RecordAfterClaim { get; init; }
+
+        // The ticket the last recorded claim handed that step.
+        public IdleReleaseTicket? Ticket { get; private set; }
+
         public Action? DuringUnload { get; set; }
 
         public Action? BeforeCollector { get; set; }
 
         public IdleReleaseOutcome? LastOutcome { get; private set; }
 
-        public void RunRequested() => LastOutcome = RunNested();
+        // The idle deadline falls due (the countdown armed with IdleDelay has run out) and its tick runs the release.
+        public void RunRequested()
+        {
+            Clock.Advance(IdleDelay);
+            LastOutcome = RunNested(IdleReleaseTrigger.IdleDeadline);
+        }
 
-        public IdleReleaseOutcome RunNested() =>
+        // What the controller runs when a pause asks for the release.
+        public void RunPauseRequested() => LastOutcome = RunNested(IdleReleaseTrigger.PauseRequest);
+
+        public IdleReleaseOutcome RunNested(IdleReleaseTrigger trigger = IdleReleaseTrigger.IdleDeadline) =>
             Lifecycle.RunIdleRelease(
+                trigger,
                 anythingResident: () => Resident,
                 unload: () =>
                 {
@@ -448,7 +655,8 @@ public sealed class IdleCollectionTests
                     IdleCollection.Compact(_flags, Gc);
                 },
                 announce: () => Steps.Add("announce"),
-                releaseRetained: () => Steps.Add("release buffers"));
+                releaseRetained: () => Steps.Add("release buffers"),
+                afterClaim: RecordAfterClaim ? ticket => { Steps.Add("after claim"); Ticket = ticket; } : null);
     }
 
     internal sealed class FakeCollector : IIdleCollector

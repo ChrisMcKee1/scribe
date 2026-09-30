@@ -54,10 +54,13 @@ public enum CleanupPromptStyle
 /// </param>
 /// <param name="LocalModelKeepAliveMinutes">
 /// How long Ollama or LM Studio at its own address (<see cref="LocalAiServer.AppAt"/>) should keep the model in memory
-/// after each request: <c>AppSettings.ReleaseModelsAfterIdleMinutes</c>, so the model is freed when Scribe frees its own
-/// speech models. Null or 0 sends nothing and leaves the app's own policy (Ollama five minutes, LM Studio an hour), so
-/// nothing stays pinned after Scribe closes. Asked of each request, so, like a prompt field, a change needs no reconnect;
-/// the app passes it only for Ollama and LM Studio, so a change never restarts another provider's setup.
+/// after each request: <c>AppSettings.ReleaseModelsAfterIdleMinutes</c>, so the app frees the model on its own clock after
+/// the idle time Scribe frees its speech models after (<see cref="LocalAiServer.KeepAliveMinutes"/>). Null or 0 sends
+/// nothing and leaves it to the app: Ollama keeps the time a request last asked for, or its own default, and LM Studio an
+/// hour for a model it loaded on demand, so nothing stays pinned after Scribe closes. Asked of each request, so, like a
+/// prompt field, a change needs no reconnect; a shorter time, or one turned on, frees the model once, since a model
+/// loaded under the old time can keep it until it is loaded again. The app passes it only for Ollama and LM Studio, so a
+/// change never restarts another provider's setup.
 /// </param>
 public sealed record CleanupOptions(
     bool Enabled,

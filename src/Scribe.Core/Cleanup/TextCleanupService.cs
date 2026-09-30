@@ -827,7 +827,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         bool notActionable = false;
         bool promptRebuilt = false;
         bool statusChanged = false;
-        (string Endpoint, string Model, string? ApiKey)? releaseLocalModel = null;
+        LocalServerRetirement? releaseLocalModel = null;
         Exception? rebuildFailure = null;
         InitReservation? reservation = null;
         CancellationTokenSource? superseded = null;
@@ -844,11 +844,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             var sameConfig = _options == effective;
             var promptOnly = !sameConfig && _options.MatchesIgnoringPrompt(effective);
-            releaseLocalModel = LocalServerModelNoLongerUsed(_options, effective);
+            releaseLocalModel = LocalServerModelToRelease(_options, effective);
             if (!sameConfig && !promptOnly)
             {
-                // A new configuration loads its own model, or none; a model freed under the old one is not waited for.
+                // A new configuration loads its own model, or none; a model freed under the old one is not waited for, and
+                // an answer the old one got says nothing about the new one's model.
                 _foundryReleased = false;
+                Volatile.Write(ref _lastModelAnswer, 0);
             }
 
             _options = effective;
@@ -952,7 +954,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         if (releaseLocalModel is { } release)
         {
-            StartLocalServerRelease(release.Endpoint, release.Model, release.ApiKey, "no longer used for AI cleanup");
+            // Cleanup no longer using the model: freed while the configuration still does not use it. The idle time
+            // shortened: freed while nothing has used the model since, so its next load takes the new time.
+            var decided = ModelUseRevision;
+            StartLocalServerRelease(
+                release.Endpoint,
+                release.Model,
+                release.ApiKey,
+                release.Why,
+                release.Why == LocalServerReleaseReason.NoLongerUsed
+                    ? () => StillNotUsing(release.Endpoint, release.Model)
+                    : () => ModelUseRevision == decided);
         }
 
         if (storagePlan.KeepOnlySelected == FoundryKeepOnlySelected.Set)
@@ -1215,6 +1227,205 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private long _lastModelAnswer;
     private int _prewarming;
 
+    // The readying request in flight and the configuration it readies, published before its work starts (Prewarm), so a
+    // dictation that stops meanwhile finds it and waits for it, a bounded while (WaitForLocalModelStartAsync), rather than
+    // sending its own request into a model the app is still loading. Only the configuration AI cleanup serves now joins
+    // it. Guarded by _gate.
+    private Task _readying = Task.CompletedTask;
+    private CleanupOptions? _readyingFor;
+
+    // What the readying request knows about the model. One readying request at a time (_prewarming), so it is the only
+    // writer: Checking until it has asked Ollama or LM Studio, Loading while its request loads a model the app did not hold.
+    private const int ReadyingNone = 0;
+    private const int ReadyingChecking = 1;
+    private const int ReadyingLoading = 2;
+    private int _readyingState;
+
+    /*
+     * Using the model and giving it back, in order.
+     *
+     * Every release goes through one lane (_releaseLane), one at a time: the idle time's, a pause's, cleanup no longer
+     * using the model, a shorter idle time, Free memory, and Foundry Local's. In the lane it waits, a bounded while
+     * (ModelUseDrainBound), for the model uses in flight to finish (BeginModelUse: a dictation's cleanup, a one-off request,
+     * a readiness check, a readying request), then commits in one step with every use that begins (TryCommitRelease, under
+     * _releaseSync): only while it is still wanted and no use is in flight. Wanted means: no use began since it was
+     * decided (_modelUseRevision, moved by every use and by a recording's start, before its warm shortcut) for the idle
+     * time, a pause and a shorter idle time; the configuration still not using the model for cleanup no longer using it
+     * (turned back on, or switched back to it, the release stays home); always for Free memory. A release Scribe decided
+     * on itself waits as long as a request that began before it can take (AutomaticReleaseDrainBound), so it is deferred,
+     * not dropped; Free memory waits ModelUseDrainBound and then reports that it could not. Neither ever frees the model
+     * under a request. The committed unload is published (_unloadInFlight), the only one in flight since the lane lets one
+     * through at a time, and every use captures it as it begins (BeginModelUse) and waits for it before it sends, so the
+     * model is loaded again after it rather than freed under a request. Lock order: _releaseSync, then _gate.
+     */
+    private readonly object _releaseSync = new();
+    private readonly SemaphoreSlim _releaseLane = new(1, 1);
+    private long _modelUseRevision;
+    private int _activeModelUses;
+    private Task _unloadInFlight = Task.CompletedTask;
+
+    /// <summary>How long Free memory waits for the model uses in flight to finish before it reports that it could not.</summary>
+    internal TimeSpan ModelUseDrainBound { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long a release Scribe decided on itself (the idle time, a pause, cleanup no longer using the model) waits for
+    /// the uses in flight: long enough for any request to end within its own time limit, so the release is deferred, not
+    /// dropped, while a request that began before it finishes.
+    /// </summary>
+    internal TimeSpan AutomaticReleaseDrainBound { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How long a use waits for an unload already on its way, whatever <see cref="LocalModelStartWait"/> is: waiting for it
+    /// keeps a request off a model being freed. An unload to Ollama or LM Studio ends within 15 s.
+    /// </summary>
+    internal TimeSpan UnloadWaitBound { get; set; } = TimeSpan.FromSeconds(20);
+
+    /// <inheritdoc/>
+    public event Action? LocalModelUsed;
+
+    // A use of the model begins: a release decided before it no longer goes out.
+    private void NoteModelUseStarting()
+    {
+        lock (_releaseSync)
+        {
+            _modelUseRevision++;
+        }
+    }
+
+    private long ModelUseRevision
+    {
+        get
+        {
+            lock (_releaseSync)
+            {
+                return _modelUseRevision;
+            }
+        }
+    }
+
+    // A use of the model begins, and is in flight until the result is disposed: both in one step with the unload in flight,
+    // so a release commits either before it (and the use waits for the unload it hands back) or not at all. Every local
+    // request waits for that unload before it sends.
+    private ModelUse BeginModelUse(out Task unloading)
+    {
+        lock (_releaseSync)
+        {
+            _modelUseRevision++;
+            _activeModelUses++;
+            unloading = _unloadInFlight;
+        }
+
+        return new ModelUse(this);
+    }
+
+    private readonly struct ModelUse(TextCleanupService owner) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (owner._releaseSync)
+            {
+                owner._activeModelUses--;
+            }
+        }
+    }
+
+    // Why a release did not go out, for the log.
+    private enum ReleaseHeld
+    {
+        None,
+        InUseAgain,
+        Busy,
+    }
+
+    // In the lane: waits, at most bound, for the model uses in flight to finish, and stops early once the release is no
+    // longer wanted.
+    private async Task WaitForModelUsesToFinishAsync(Func<bool> stillWanted, TimeSpan bound, CancellationToken ct)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (System.Diagnostics.Stopwatch.GetElapsedTime(started) < bound)
+        {
+            lock (_releaseSync)
+            {
+                if (_activeModelUses == 0 || !stillWanted())
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), ct).ConfigureAwait(false);
+        }
+    }
+
+    // In the lane: commits the release in one step with every use that begins, only while it is still wanted and no use is
+    // in flight, and publishes it as the unload in flight. Returns the completion to set once the unload is done, or null
+    // with why the release stays home.
+    private (TaskCompletionSource? Committed, ReleaseHeld Held) TryCommitRelease(Func<bool> stillWanted)
+    {
+        lock (_releaseSync)
+        {
+            if (!stillWanted())
+            {
+                return (null, ReleaseHeld.InUseAgain);
+            }
+
+            if (_activeModelUses > 0)
+            {
+                return (null, ReleaseHeld.Busy);
+            }
+
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _unloadInFlight, done.Task);
+            return (done, ReleaseHeld.None);
+        }
+    }
+
+    // True while AI cleanup serves exactly this configuration, apart from what the prompt says, and is ready.
+    private bool StillServes(CleanupOptions options)
+    {
+        lock (_gate)
+        {
+            return !_operations.IsClosed && _status == CleanupStatus.Ready && _options.MatchesIgnoringPrompt(options);
+        }
+    }
+
+    // The model on this PC answered or loaded (see LocalModelUsed). Never throws.
+    private void NoteLocalModelUse(CleanupOptions options)
+    {
+        if (options.Provider == CleanupProvider.FoundryLocal || LocalAiServer.Serves(options.Provider, options.CustomEndpoint))
+        {
+            RaiseLocalModelUsed();
+        }
+    }
+
+    private void RaiseLocalModelUsed()
+    {
+        try
+        {
+            LocalModelUsed?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("A handler of AI cleanup's model use failed ({Failure}).", DescribeFailureShape(ex));
+        }
+    }
+
+    // The model was freed, or is about to be: the next recording readies it again, and says so when it has to load,
+    // instead of trusting an answer from before the release.
+    private void ForgetModelAnswer() => Volatile.Write(ref _lastModelAnswer, 0);
+
+    // The model answered a request made for these options: the configuration AI cleanup uses now counts as warm only when
+    // the request was made for it, not for a configuration Test connection tried or one changed meanwhile.
+    private void NoteModelAnswered(CleanupOptions options)
+    {
+        lock (_gate)
+        {
+            if (_options.MatchesIgnoringPrompt(options))
+            {
+                Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
+            }
+        }
+    }
+
     // Test-only: as if the model last answered longer ago than PrewarmAfterIdle, which the readiness probe never is.
     internal void ForgetLastModelAnswerForTesting() => Volatile.Write(ref _lastModelAnswer, 0);
 
@@ -1225,10 +1436,21 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         {
             await Task.Delay(10).ConfigureAwait(false);
         }
+
+        Task readying;
+        lock (_gate)
+        {
+            readying = _readying;
+        }
+
+        await readying.ConfigureAwait(false);
     }
 
     private void Prewarm(CleanupVocabulary vocabulary, string? writingStyleOverride)
     {
+        // A recording starting is a use of the model: an idle or pause release decided before it stays home.
+        NoteModelUseStarting();
+
         // A model on this PC that Scribe freed loads again while the user is still speaking.
         TryStartReleasedModelReload();
 
@@ -1239,6 +1461,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         // Called on the recording's start path, so nothing here may throw: a failure only means no readying request.
         CleanupOperationTracker.Lease? lease = null;
+        TaskCompletionSource? readying = null;
         var handedOff = false;
         try
         {
@@ -1266,16 +1489,34 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     // each dictation shares, and a readying request carries nothing a dictation did not choose to send.
                     agent = AdmittedAgentLocked(
                         factory, options with { VocabularyMode = CleanupVocabularyMode.None }, style, vocabulary, dictation: null);
+
+                    // Published before the work starts: a dictation that stops before it has asked the app whether it
+                    // holds the model already waits for it.
+                    readying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _readying = readying.Task;
+                    _readyingFor = options;
+                    Volatile.Write(ref _readyingState, ReadyingChecking);
                 }
             }
 
-            if (agent is null || options is null)
+            if (agent is null || options is null || readying is null)
             {
                 return;
             }
 
             var owned = lease;
-            _ = Task.Run(() => PrewarmAsync(agent, options, vocabulary, owned));
+            var done = readying;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await PrewarmAsync(agent, options, vocabulary, owned).ConfigureAwait(false);
+                }
+                finally
+                {
+                    done.TrySetResult();
+                }
+            });
             handedOff = true;
         }
         catch (Exception ex)
@@ -1289,6 +1530,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (!handedOff)
             {
                 lease?.Dispose();
+                Volatile.Write(ref _readyingState, ReadyingNone);
+                readying?.TrySetResult();
                 Volatile.Write(ref _prewarming, 0);
             }
         }
@@ -1303,6 +1546,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             cts.CancelAfter(TimeSpan.FromSeconds(SingleCallBudgetSeconds(options.Provider)));
 
+            // In flight from here, and an unload already on its way to the app goes first, so the model is read, and loaded,
+            // after it. A release not yet on its way stays home: this recording's start came before it could commit.
+            using var use = BeginModelUse(out var unloading);
+            await unloading.WaitAsync(cts.Token).ConfigureAwait(false);
+
+            // Cleanup turned off, or pointed elsewhere, while this waited: nothing is readied, and the model a
+            // configuration no longer uses is not loaded again.
+            if (!StillServes(options))
+            {
+                return;
+            }
+
             // Ollama and LM Studio say whether they hold the model; one they do not is loaded by this request, which is
             // what the recording indicator's "Starting local model" means (IsLocalModelStarting).
             if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
@@ -1310,19 +1565,33 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 var state = await LocalServers.ReadAsync(endpoint, options.CustomApiKey, cts.Token).ConfigureAwait(false);
                 coldStart = state.Reach == LocalServerReach.Reached && state.LoadedFor(model) is null;
-                if (coldStart)
-                {
-                    Volatile.Write(ref _localModelColdStart, 1);
-                }
+            }
+
+            Volatile.Write(ref _readyingState, coldStart ? ReadyingLoading : ReadyingNone);
+
+            // Asked again after the read, and once more as the request is handed over (the admission below): cleanup
+            // turned off or pointed elsewhere meanwhile readies nothing.
+            if (!StillServes(options))
+            {
+                return;
             }
 
             var chatOptions = new ChatOptions { MaxOutputTokens = 1 };
             ApplyOnThisPcGeneration(chatOptions, options);
-            using var entered = new CleanupAdmission(CleanupRequestKind.Prewarm, vocabulary.Scope, _vocabularySource).Enter();
+
+            // Handed over only while AI cleanup still serves this configuration, checked in one step with the send, as a
+            // one-off request is.
+            using var entered = new CleanupAdmission(
+                    CleanupRequestKind.Prewarm, vocabulary.Scope, _vocabularySource, WhileServing(new CleanupRecipient(options)))
+                .Enter();
             _ = await agent.RunAsync(
                     BuildUserMessage(string.Empty), options: new ChatClientAgentRunOptions(chatOptions), cancellationToken: cts.Token)
                 .ConfigureAwait(false);
-            Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
+
+            // A configuration changed meanwhile is not the one this answer readied.
+            NoteModelAnswered(options);
+
+            NoteLocalModelUse(options);
             _log.LogDebug(
                 "AI cleanup readied the model on this PC in {Ms} ms (loaded it: {ColdStart}).",
                 (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
@@ -1336,11 +1605,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
         finally
         {
-            if (coldStart)
-            {
-                Volatile.Write(ref _localModelColdStart, 0);
-            }
-
+            // One readying request at a time (_prewarming), so this is the only writer.
+            Volatile.Write(ref _readyingState, ReadyingNone);
             lease.Dispose();
             Volatile.Write(ref _prewarming, 0);
         }
@@ -1350,20 +1616,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * Starting a model on this PC, and giving its memory back.
      *
      * A model on this PC takes seconds to load: measured on this machine, 2.7 to 5.2 s on the GPU and 7 to 15 s on the CPU
-     * for a 1.5B to 4B model. Scribe gives the memory back when AI cleanup no longer uses the model (it is turned off, or
-     * pointed elsewhere), when the user asks (Free memory), and when Scribe frees its own speech models after the idle time
-     * the user chose, and the model then loads again for the next dictation. So that next dictation waits for it, a bounded
-     * while, instead of being typed without cleanup, and the recording indicator says "Starting local model" and "This can
-     * take time" (IsLocalModelStarting) rather than leaving a long "Running AI cleanup" unexplained.
+     * for a 1.5B to 4B model. The memory comes back when AI cleanup no longer uses the model (it is turned off, or pointed
+     * elsewhere), when the user asks (Free memory), when dictation is paused, and after the idle time the user chose:
+     * Scribe unloads Foundry Local's model with its own speech models, and Ollama and LM Studio free theirs on their own
+     * clock, as every request asks. The model then loads again for the next dictation. So that next dictation waits for it,
+     * a bounded while, instead of being typed without cleanup, and the recording indicator says "Starting local model" and
+     * "This can take time" (IsLocalModelStarting) rather than leaving a long "Running AI cleanup" unexplained. At the bound
+     * it is typed as heard, rather than sending a request that would wait behind the load for its own time limit again.
      */
     /// <summary>How long a dictation waits for a model on this PC that is starting (<see cref="LocalModelStartWaitSeconds"/>).</summary>
     internal TimeSpan LocalModelStartWait { get; set; } = TimeSpan.FromSeconds(LocalModelStartWaitSeconds);
 
     /// <summary>How long a dictation waits for a model on this PC that is starting before it is typed without cleanup.</summary>
     internal const int LocalModelStartWaitSeconds = 30;
-
-    // Set while a readying request loads a model Ollama or LM Studio did not hold (PrewarmAsync).
-    private int _localModelColdStart;
 
     // Foundry Local: the configured model was unloaded to free memory and loads again at the next dictation; the reload
     // in flight, if one is. Both guarded by _gate.
@@ -1397,10 +1662,15 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 }
 
                 return IsModelStartingLocked() ||
-                    (Volatile.Read(ref _localModelColdStart) != 0 && LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint));
+                    (Volatile.Read(ref _readyingState) == ReadyingLoading && ReadyingForCurrentLocked());
             }
         }
     }
+
+    // Must be called under _gate. The readying request in flight readies the configuration AI cleanup serves now.
+    private bool ReadyingForCurrentLocked() =>
+        LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint) &&
+        _readyingFor is { } readyingFor && readyingFor.MatchesIgnoringPrompt(_options);
 
     // Must be called under _gate. An initialization for a model on this PC that is loading it. Foundry Local counts only once
     // its runtime is up in this process: before that it may be downloading the AI runtime (the first setup fetches several
@@ -1419,20 +1689,54 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     }
 
     // Waits, a bounded while, for a model on this PC that is starting, so its dictation is cleaned rather than typed as
-    // heard. Returns at once when nothing is starting. A Foundry Local model Scribe freed starts loading here if the
-    // dictation's start did not already begin it (Try dictation, or a dictation that began before the release).
-    private async Task WaitForLocalModelStartAsync(CancellationToken ct)
+    // heard. Returns at once when nothing is starting. An unload already on its way when this use began (captured with the
+    // use, BeginModelUse) goes first, whatever the start bound is (UnloadWaitBound): the model is loaded again after it,
+    // not freed under the request, and one that outlasts its bound means the model is not ready. A Foundry Local model
+    // Scribe freed starts loading here if the dictation's start did not already begin it (Try dictation, or a dictation
+    // that began before the release). The readying request its recording sent to Ollama or LM Studio is waited for too,
+    // from before it has asked the app whether it holds the model until the answer says it does, or until it has loaded
+    // it: the dictation's own request would otherwise queue behind that load with only its own time limit. Returns true
+    // when it gave up while the model was still starting or still being freed: the caller then types the text as heard,
+    // rather than sending a request of its own that would wait behind the load again, or reach a model going away.
+    private async Task<bool> WaitForLocalModelStartAsync(Task unloading, CancellationToken ct)
     {
-        TryStartReleasedModelReload();
+        bool onThisPc;
+        lock (_gate)
+        {
+            // An unload on its way matters only to a model on this PC: a cloud dictation never waits for one.
+            onThisPc = _options.Provider == CleanupProvider.FoundryLocal ||
+                LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint);
+        }
+
+        if (onThisPc && !unloading.IsCompleted)
+        {
+            try
+            {
+                await unloading.WaitAsync(UnloadWaitBound, ct).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _log.LogInformation("AI cleanup's model on this PC was still being freed; the dictation is typed as heard.");
+                return true;
+            }
+        }
+
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var waited = false;
         while (true)
         {
+            TryStartReleasedModelReload();
             Task? reload;
             bool starting;
             lock (_gate)
             {
                 reload = _options.Provider == CleanupProvider.FoundryLocal ? _foundryReload : null;
+                if (reload is null && Volatile.Read(ref _readyingState) != ReadyingNone && ReadyingForCurrentLocked() &&
+                    _readying is { IsCompleted: false } readying)
+                {
+                    reload = readying;
+                }
+
                 starting = reload is not null || IsModelStartingLocked();
             }
 
@@ -1447,7 +1751,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                         !starting);
                 }
 
-                return;
+                // Gave up only if it waited: a bound of zero (tests) waits for nothing and gives up nothing.
+                return waited && starting;
             }
 
             waited = true;
@@ -1469,22 +1774,44 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    // Starts loading the Foundry Local model Scribe freed, once, when a dictation begins.
+    // Starts loading the Foundry Local model Scribe freed, once, when a dictation begins. The reload is one use of the
+    // model from before it is published until its warm-up has answered (a release decided meanwhile waits for all of it,
+    // and is not withdrawn by the warm-up), so the use is taken first, outside _gate, and given back if no reload starts.
     private void TryStartReleasedModelReload()
     {
         try
         {
             lock (_gate)
             {
-                if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null ||
-                    _options.Provider != CleanupProvider.FoundryLocal || !_foundryReleased || _foundryReload is not null ||
-                    _operations.TryEnter() is not { } lease)
+                if (!ReleasedModelReloadNeededLocked())
                 {
                     return;
                 }
+            }
 
-                var options = _options;
-                _foundryReload = Task.Run(() => ReloadReleasedFoundryModelAsync(options, lease));
+            var use = BeginModelUse(out var unloading);
+            var started = false;
+            try
+            {
+                lock (_gate)
+                {
+                    if (!ReleasedModelReloadNeededLocked() || _operations.TryEnter() is not { } lease)
+                    {
+                        return;
+                    }
+
+                    var options = _options;
+                    var reloadUse = use;
+                    _foundryReload = Task.Run(() => ReloadReleasedFoundryModelAsync(options, lease, reloadUse, unloading));
+                    started = true;
+                }
+            }
+            finally
+            {
+                if (!started)
+                {
+                    use.Dispose();
+                }
             }
         }
         catch (Exception ex)
@@ -1495,18 +1822,41 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    private async Task ReloadReleasedFoundryModelAsync(CleanupOptions options, CleanupOperationTracker.Lease lease)
+    // Must be called under _gate.
+    private bool ReleasedModelReloadNeededLocked() =>
+        _options.Enabled && _status == CleanupStatus.Ready && _agent is not null &&
+        _options.Provider == CleanupProvider.FoundryLocal && _foundryReleased && _foundryReload is null;
+
+    private async Task ReloadReleasedFoundryModelAsync(
+        CleanupOptions options, CleanupOperationTracker.Lease lease, ModelUse use, Task unloading)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var loaded = false;
         try
         {
+            // An unload already on its way goes first, so the model is loaded after it; one that never ends leaves the
+            // dictation to load the model itself.
+            try
+            {
+                await unloading.WaitAsync(UnloadWaitBound, _lifetime.Token).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _log.LogDebug("AI cleanup's model on this PC was still being freed; it was not loaded again yet.");
+                return;
+            }
+
             loaded = await LoadFoundryModelCoreAsync(options.FoundryModelAlias, progress: null, _lifetime.Token)
                 .ConfigureAwait(false);
+            if (loaded)
+            {
+                NoteLocalModelUse(options);
+            }
 
             // The first request after a load pays a one-time cost (4.4 s for Qwen2.5 1.5B on TensorRT-RTX with Foundry
             // Local 2.1.0). The readiness probe pays it here, with no dictated text and no vocabulary, while the user is
-            // usually still speaking, rather than the dictation that waits for this reload.
+            // usually still speaking, rather than the dictation that waits for this reload. It is part of this reload's use
+            // of the model, not a use of its own.
             Func<string, AIAgent>? factory;
             lock (_gate)
             {
@@ -1514,7 +1864,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             if (factory is not null &&
-                await ProbeAgentAsync(options, factory, _lifetime.Token).ConfigureAwait(false) is { } warmUpFailure)
+                await ProbeAgentAsync(options, factory, _lifetime.Token, withinUse: true).ConfigureAwait(false) is { } warmUpFailure)
             {
                 _log.LogDebug(
                     "AI cleanup's first request after loading its model again failed ({Reason}); the dictation sends its own.",
@@ -1532,6 +1882,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _foundryReload = null;
             }
 
+            use.Dispose();
             lease.Dispose();
             _log.LogInformation(
                 "AI cleanup loaded its model on this PC again in {Ms} ms (loaded: {Loaded}).",
@@ -1545,37 +1896,64 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// Ollama or LM Studio holds for it. The model loads again at the next dictation. Returns at once; never throws.
     /// Called when Scribe frees its own speech models after the idle time the user chose, and when dictation is paused.
     /// </summary>
-    public void ReleaseModelMemory()
+    /// <remarks>
+    /// Every request Scribe sends Ollama or LM Studio asks it to keep the model only the idle time the user chose
+    /// (keep_alive, ttl; see ApplyOnThisPcGeneration), so after the idle time the app manages the model's expiry itself,
+    /// on its own clock, counted from the last request it served. Scribe asks it nothing more then: an explicit request
+    /// would only reach a model someone else used since, or one the user loaded in the app itself. Scribe asks it itself
+    /// only when its requests could not say so, and always when dictation is paused. Foundry Local runs in this process,
+    /// so whatever model it holds is freed, whatever cleanup is set to: a model Settings loaded while cleanup was off, or
+    /// set to something else, is Scribe's to give back too; a runtime this process never started is left alone. The
+    /// release is decided now, as its caller claimed it, and goes out in the lane (TryCommitRelease) only while nothing
+    /// began using the model since and <paramref name="stillWanted"/> still says so.
+    /// </remarks>
+    public void ReleaseModelMemory(ModelMemoryRelease reason, Func<bool>? stillWanted = null)
     {
         try
         {
+            var decided = ModelUseRevision;
+            bool Wanted() => ModelUseRevision == decided && (stillWanted?.Invoke() ?? true);
+
             CleanupOptions options;
             lock (_gate)
             {
                 options = _options;
             }
 
-            if (!options.Enabled)
+            if (Volatile.Read(ref _catalog) is not null && _operations.TryEnter() is { } lease)
             {
-                return;
-            }
-
-            if (options.Provider == CleanupProvider.FoundryLocal)
-            {
-                var alias = options.FoundryModelAlias;
                 _ = Task.Run(async () =>
                 {
-                    var freed = await UnloadFoundryModelAsync(alias).ConfigureAwait(false);
-                    _log.LogInformation("AI cleanup freed its model's memory on this PC: {Freed}.", freed);
+                    try
+                    {
+                        var freed = await UnloadFoundryModelAsync(alias: null, Wanted, AutomaticReleaseDrainBound, CancellationToken.None).ConfigureAwait(false);
+                        _log.LogInformation("AI cleanup freed its model's memory on this PC ({Reason}): {Freed}.", reason, freed);
+                    }
+                    finally
+                    {
+                        lease.Dispose();
+                    }
                 });
-                return;
             }
 
-            if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
+            if (options.Enabled &&
+                LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
                 options.CustomEndpoint is { } endpoint &&
                 !string.IsNullOrWhiteSpace(options.CustomModel))
             {
-                StartLocalServerRelease(endpoint, options.CustomModel!, options.CustomApiKey, "Scribe is idle");
+                ForgetModelAnswer();
+                if (reason == ModelMemoryRelease.Idle && AppKeepsModelOnlyForIdleTime(options))
+                {
+                    _log.LogDebug("AI cleanup left its model to the app on this PC, which frees it after the idle time.");
+                    return;
+                }
+
+                StartLocalServerRelease(
+                    endpoint,
+                    options.CustomModel!,
+                    options.CustomApiKey,
+                    reason == ModelMemoryRelease.Pause ? LocalServerReleaseReason.Pause : LocalServerReleaseReason.Idle,
+                    Wanted);
             }
         }
         catch (Exception ex)
@@ -1584,11 +1962,66 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    // The Ollama or LM Studio model the previous configuration used, when the next one no longer uses it: cleanup was
-    // turned off, or pointed at another model or service. Its memory is given back (StartLocalServerRelease), with the key
-    // the previous configuration had for that address.
-    private static (string Endpoint, string Model, string? ApiKey)? LocalServerModelNoLongerUsed(
-        CleanupOptions previous, CleanupOptions next)
+    // Every request to this app carried the idle time (keep_alive or ttl, plain requests included), so the app frees the
+    // model on its own clock. Null only when the idle time is off, which releases nothing on idle anyway.
+    private static bool AppKeepsModelOnlyForIdleTime(CleanupOptions options) =>
+        LocalServerKeepAliveMinutes(options) is not null;
+
+    public async Task<bool> FreeLocalAppModelAsync(string endpoint, string modelId, CancellationToken cancellationToken = default)
+    {
+        using var lease = _operations.TryEnter();
+        if (lease is null || LocalAiServer.AppAt(endpoint) == LocalServerApp.None || string.IsNullOrWhiteSpace(modelId))
+        {
+            return false;
+        }
+
+        // Asked for, so no revision stops it; but it goes through the lane like every release, never under a request that
+        // is using the model (it reports failure when one outlasts the wait), and a use that begins while it is on its way
+        // waits for it.
+        var inLane = false;
+        TaskCompletionSource? committed = null;
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            await _releaseLane.WaitAsync(linked.Token).ConfigureAwait(false);
+            inLane = true;
+            await WaitForModelUsesToFinishAsync(static () => true, ModelUseDrainBound, linked.Token).ConfigureAwait(false);
+            (committed, var held) = TryCommitRelease(static () => true);
+            if (committed is null)
+            {
+                _log.LogInformation("AI cleanup did not ask the app on this PC to free a model: {Held}.", held);
+                return false;
+            }
+
+            ForgetModelAnswer();
+            return await LocalServers.UnloadAsync(endpoint, modelId, apiKey: null, linked.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("AI cleanup could not ask the app on this PC to free a model ({Failure}).", DescribeFailureShape(ex));
+            return false;
+        }
+        finally
+        {
+            committed?.TrySetResult();
+            if (inLane)
+            {
+                _releaseLane.Release();
+            }
+        }
+    }
+
+    // An Ollama or LM Studio model a new configuration has Scribe free, with the key the previous configuration had for
+    // that address, and why.
+    private readonly record struct LocalServerRetirement(
+        string Endpoint, string Model, string? ApiKey, LocalServerReleaseReason Why);
+
+    // The Ollama or LM Studio model the previous configuration used, when the next one no longer uses it (cleanup was
+    // turned off, or pointed at another model or service), or uses it with a shorter idle time. A model loaded under the
+    // old time can keep that time until it is loaded again (LM Studio sets a model's time when it loads it on demand, and
+    // Ollama only when a request reaches it), so it is freed once and loads with the new time when it is next used. A
+    // longer idle time, or none, frees nothing: the model is then only freed sooner than asked, at worst.
+    private static LocalServerRetirement? LocalServerModelToRelease(CleanupOptions previous, CleanupOptions next)
     {
         if (!previous.Enabled || string.IsNullOrWhiteSpace(previous.CustomModel) || previous.CustomEndpoint is not { } endpoint)
         {
@@ -1601,14 +2034,34 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return null;
         }
 
+        var model = previous.CustomModel!.Trim();
         var stillUsed = next.Enabled &&
             LocalAiServer.AppServing(next.Provider, next.CustomEndpoint) == app &&
             LocalServerClient.SameModel(next.CustomModel, previous.CustomModel);
-        return stillUsed ? null : (endpoint, previous.CustomModel!.Trim(), previous.CustomApiKey);
+        if (!stillUsed)
+        {
+            return new(endpoint, model, previous.CustomApiKey, LocalServerReleaseReason.NoLongerUsed);
+        }
+
+        var shortened = next.LocalModelKeepAliveMinutes is > 0 and var now &&
+            (previous.LocalModelKeepAliveMinutes is not > 0 || now < previous.LocalModelKeepAliveMinutes);
+        return shortened ? new(endpoint, model, previous.CustomApiKey, LocalServerReleaseReason.IdleTimeShortened) : null;
     }
 
-    // Asks Ollama or LM Studio to free a model's memory, in the background. Tracked, so disposal waits for it.
-    private void StartLocalServerRelease(string endpoint, string model, string? apiKey, string why)
+    // Why a release asks Ollama or LM Studio to free a model, for the log.
+    private enum LocalServerReleaseReason
+    {
+        Idle,
+        Pause,
+        NoLongerUsed,
+        IdleTimeShortened,
+    }
+
+    // Asks Ollama or LM Studio to free a model's memory, in the background, through the lane: after the uses in flight have
+    // finished, and only if stillWanted still says so in one step with every use that begins (TryCommitRelease). Tracked,
+    // so disposal waits for it.
+    private void StartLocalServerRelease(
+        string endpoint, string model, string? apiKey, LocalServerReleaseReason why, Func<bool> stillWanted)
     {
         if (_operations.TryEnter() is not { } lease)
         {
@@ -1618,8 +2071,22 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         var app = LocalAiServer.AppAt(endpoint);
         _ = Task.Run(async () =>
         {
+            var inLane = false;
+            TaskCompletionSource? committed = null;
             try
             {
+                await _releaseLane.WaitAsync(_lifetime.Token).ConfigureAwait(false);
+                inLane = true;
+                await WaitForModelUsesToFinishAsync(stillWanted, AutomaticReleaseDrainBound, _lifetime.Token).ConfigureAwait(false);
+                (committed, var held) = TryCommitRelease(stillWanted);
+                if (committed is null)
+                {
+                    _log.LogInformation(
+                        "AI cleanup did not ask {App} to free its model's memory ({Why}): {Held}.", app, why, held);
+                    return;
+                }
+
+                ForgetModelAnswer();
                 var freed = await LocalServers.UnloadAsync(endpoint, model, apiKey, _lifetime.Token).ConfigureAwait(false);
                 _log.LogInformation("AI cleanup asked {App} to free its model's memory ({Why}): {Freed}.", app, why, freed);
             }
@@ -1629,9 +2096,27 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
             finally
             {
+                committed?.TrySetResult();
+                if (inLane)
+                {
+                    _releaseLane.Release();
+                }
+
                 lease.Dispose();
             }
         });
+    }
+
+    // True while the configuration in use still does not use this app's model: a release of a model cleanup no longer used
+    // stays home if cleanup was turned back on, or switched back to it, before the request went out.
+    private bool StillNotUsing(string endpoint, string model)
+    {
+        lock (_gate)
+        {
+            return !(_options.Enabled &&
+                LocalAiServer.AppServing(_options.Provider, _options.CustomEndpoint) == LocalAiServer.AppAt(endpoint) &&
+                LocalServerClient.SameModel(_options.CustomModel, model));
+        }
     }
 
     // One cleanup, with the vocabulary its dictation was admitted with, or, for the admission-free overload, whatever
@@ -1654,16 +2139,28 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return CleanupResult.Skip(text);
         }
 
+        using var use = BeginModelUse(out var unloading);
+
         // A model on this PC that is starting (cleanup was just turned on, or Scribe freed the model's memory) is waited
-        // for, a bounded while, rather than the dictation being typed without cleanup.
+        // for, a bounded while, rather than the dictation being typed without cleanup. One still starting at the bound is
+        // typed as heard now, instead of the dictation's own request waiting behind the load for its full time again.
+        var stillStarting = false;
         try
         {
             using var startWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-            await WaitForLocalModelStartAsync(startWait.Token).ConfigureAwait(false);
+            stillStarting = await WaitForLocalModelStartAsync(unloading, startWait.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Cancelled or shutting down: what follows sees the same tokens and ends the way it always has.
+        }
+
+        if (stillStarting)
+        {
+            return CleanupResult.Skip(text, "AI cleanup's model on this PC was still starting.") with
+            {
+                DisplayDetail = "The AI model on this PC was still starting, so Scribe typed what it heard.",
+            };
         }
 
         AIAgent? agent;
@@ -2055,16 +2552,24 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
         }
 
+        using var use = BeginModelUse(out var unloading);
+
         // A model on this PC that Scribe freed loads again first, a bounded while, as it does for a dictation: the service
         // still reads as ready, and Foundry Local refuses a request for a model it does not hold.
+        var stillStarting = false;
         try
         {
             using var startWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-            await WaitForLocalModelStartAsync(startWait.Token).ConfigureAwait(false);
+            stillStarting = await WaitForLocalModelStartAsync(unloading, startWait.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Cancelled or shutting down: what follows sees the same tokens and ends the way it always has.
+        }
+
+        if (stillStarting)
+        {
+            return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
         }
 
         AIAgent agent;
@@ -2117,6 +2622,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
             var result = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
+            NoteLocalModelUse(options);
 
             // Normalize here too: this is the path for the AI usage insight and AI dictionary
             // suggestions, both of which surface free-form model prose in Settings. Cleanup output is
@@ -2440,7 +2946,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, chunk));
             var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
-            Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
+            NoteModelAnswered(options);
+            NoteLocalModelUse(options);
 
             attemptUsage = result.Usage;
             if (result.Usage is { } usage)
@@ -3201,17 +3708,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    public Task<bool> LoadFoundryModelAsync(
+    public async Task<bool> LoadFoundryModelAsync(
         string alias, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(alias))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        // Before anything else, so storage work already queued can no longer undo this load.
+        // Before anything else, so storage work already queued can no longer undo this load, and a release Scribe decided
+        // on before it (the idle time, a pause) no longer goes out.
         NoteExplicitFoundryUse();
-        return LoadFoundryModelCoreAsync(alias, progress, cancellationToken);
+        NoteModelUseStarting();
+        var loaded = await LoadFoundryModelCoreAsync(alias, progress, cancellationToken).ConfigureAwait(false);
+        if (loaded)
+        {
+            RaiseLocalModelUsed();
+        }
+
+        return loaded;
     }
 
     // An explicit Load or List. See _explicitUseEpoch.
@@ -3377,7 +3892,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    public async Task<bool> UnloadFoundryModelAsync(string? alias, CancellationToken cancellationToken = default)
+    // Settings' Free memory: asked for, so nothing stops it, but it goes through the lane like every release, never unloads
+    // the model under a request that is using it, and a use that begins while it is on its way waits for it.
+    public Task<bool> UnloadFoundryModelAsync(string? alias, CancellationToken cancellationToken = default) =>
+        UnloadFoundryModelAsync(alias, static () => true, ModelUseDrainBound, cancellationToken);
+
+    // In the lane (see _releaseLane): waits for the uses in flight to finish, a bounded while, takes the init lock, and
+    // commits only while stillWanted says so and no use is in flight, in one step with every use that begins: a release
+    // Scribe decided on (the idle time, a pause) stays home when a dictation or a Load began using the model since.
+    private async Task<bool> UnloadFoundryModelAsync(
+        string? alias, Func<bool> stillWanted, TimeSpan drainBound, CancellationToken cancellationToken)
     {
         using var lease = _operations.TryEnter();
         if (lease is null)
@@ -3388,17 +3912,29 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         var ct = linked.Token;
 
+        var inLane = false;
         var acquired = false;
         var reconcile = false;
         string? trimmed = null;
+        TaskCompletionSource? committed = null;
         try
         {
+            await _releaseLane.WaitAsync(ct).ConfigureAwait(false);
+            inLane = true;
+            await WaitForModelUsesToFinishAsync(stillWanted, drainBound, ct).ConfigureAwait(false);
             await _initLock.WaitAsync(ct).ConfigureAwait(false);
             acquired = true;
 
             // Never initializes: a runtime this process never started has nothing loaded in it.
             if (Volatile.Read(ref _catalog) is not { } catalog)
             {
+                return false;
+            }
+
+            (committed, var held) = TryCommitRelease(stillWanted);
+            if (committed is null)
+            {
+                _log.LogInformation("AI cleanup did not free its model on this PC: {Held}.", held);
                 return false;
             }
 
@@ -3455,7 +3991,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 ResidentChangeDecidedForTesting?.Invoke();
             }
 
-            ApplyResidentChange(change);
+            // After the resident change: a dictation that waited for this unload then finds the model freed, and loads it.
+            try
+            {
+                ApplyResidentChange(change);
+            }
+            finally
+            {
+                committed?.TrySetResult();
+                if (inLane)
+                {
+                    _releaseLane.Release();
+                }
+            }
         }
     }
 
@@ -4483,7 +5031,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     }
 
     private async Task<AgentProbeFailure?> ProbeAgentAsync(
-        CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct)
+        CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct, bool withinUse = false)
     {
         ct.ThrowIfCancellationRequested();
         var agent = factory(BuildProbeSystemPrompt(options));
@@ -4540,12 +5088,24 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
 
-            // Through the admission point like every request, with no library scope: the probe carries no vocabulary.
+            // Through the admission point like every request, with no library scope: the probe carries no vocabulary. In
+            // flight from here, and a model on this PC being freed right now is waited for first: a probe that cannot wait
+            // for it fails, rather than reaching a model that is going away. A probe made within a use that is already in
+            // flight (a released model's reload warming it up) is part of that use: it took the use and waited already.
             using var entered = new CleanupAdmission(CleanupRequestKind.Probe, AiVocabularyScope.None, _vocabularySource)
                 .Enter();
+            var unloading = Task.CompletedTask;
+            using var use = withinUse ? default(ModelUse?) : BeginModelUse(out unloading);
+            if ((options.Provider == CleanupProvider.FoundryLocal || LocalAiServer.Serves(options.Provider, options.CustomEndpoint)) &&
+                !unloading.IsCompleted)
+            {
+                await unloading.WaitAsync(UnloadWaitBound, cts.Token).ConfigureAwait(false);
+            }
+
             _ = await agent.RunAsync(BuildUserMessage("ok"), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
-            Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
+            NoteModelAnswered(options);
+            NoteLocalModelUse(options);
             return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -6095,12 +6655,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return;
         }
 
-        if (!localServer || SendsPlainRequests(options))
+        if (!localServer)
         {
             return;
         }
 
-        if (chatOptions.Reasoning is null)
+        // Plain requests leave out the generation fields a strict server refused (reasoning_effort, the max_tokens copy),
+        // but never how long Ollama or LM Studio keeps the model: that is what gives its memory back after the idle time,
+        // and both apps take it.
+        var plain = SendsPlainRequests(options);
+        if (!plain && chatOptions.Reasoning is null)
         {
             chatOptions.Reasoning = new ReasoningOptions
             {
@@ -6109,11 +6673,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             };
         }
 
+        var maxTokens = plain ? null : chatOptions.MaxOutputTokens;
         var keepMinutes = LocalServerKeepAliveMinutes(options);
-        if (chatOptions.MaxOutputTokens is int || keepMinutes is not null)
+        if (maxTokens is int || keepMinutes is not null)
         {
             chatOptions.RawRepresentationFactory = WithLocalServerFields(
-                chatOptions.RawRepresentationFactory, chatOptions.MaxOutputTokens, keepMinutes);
+                chatOptions.RawRepresentationFactory, maxTokens, keepMinutes);
         }
     }
 

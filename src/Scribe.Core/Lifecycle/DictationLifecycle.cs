@@ -111,7 +111,16 @@ public readonly record struct StopDecision<TCapture>(
 /// <param name="Paused">Dictation is paused, so the shell should show Paused rather than Idle.</param>
 /// <param name="RejectedWhileProcessing">Activations turned away while the dictation that just ended was processing.</param>
 /// <param name="Presentation">The Idle or Paused change this return made to what the shell shows.</param>
-public readonly record struct IdleReturn(bool Paused, int RejectedWhileProcessing, DictationPresentation Presentation);
+/// <param name="PauseReleaseDue">
+/// A pause made while this recording was live asked for an idle release, and nothing is processing, so the caller runs
+/// it now (<see cref="IdleReleaseTrigger.PauseRequest"/>). Only a recording abandoned before processing sets it: a
+/// processing dictation's owed release is due when it ends (<see cref="DictationLifecycle{TCapture}.EndProcessing"/>).
+/// </param>
+public readonly record struct IdleReturn(
+    bool Paused,
+    int RejectedWhileProcessing,
+    DictationPresentation Presentation,
+    bool PauseReleaseDue = false);
 
 /// <summary>What <see cref="DictationLifecycle{TCapture}.SetPaused"/> changed.</summary>
 /// <param name="Changed">False when the requested pause state was already in effect.</param>
@@ -133,6 +142,14 @@ public readonly record struct PauseChange(
     bool WasIdle,
     long Sequence,
     DictationPresentation? Presentation = null);
+
+/// <summary>
+/// What an idle release claimed, for a release it starts in the background (<see cref="DictationLifecycle{TCapture}.IsCurrent"/>):
+/// the recordings started and the model uses outside a dictation up to the claim. Anything after it withdraws that release.
+/// </summary>
+/// <param name="Activity">The count of recordings started, at the claim.</param>
+/// <param name="ModelActivity">The count of model uses noted outside a dictation, at the claim.</param>
+public readonly record struct IdleReleaseTicket(long Activity, long ModelActivity);
 
 /// <summary>A silence auto-stop that fell due (see <see cref="DictationLifecycle{TCapture}.UpdateSilence"/>).</summary>
 /// <param name="DictationId">
@@ -225,8 +242,31 @@ public sealed class DictationLifecycle<TCapture>
     // its announcement if the value moved, because a dictation began while it was unloading.
     private long _activityEpoch;
 
+    // Advances every time a model is used outside a dictation (NoteActivity). A release an idle release started in the
+    // background checks it with the activity epoch (IsCurrent), so a model used after the claim is not freed under the new
+    // idle period it started.
+    private long _modelActivityEpoch;
+
     // True while an idle release runs, so a pause-triggered release and a timer tick can never run two at once.
     private bool _idleReleaseRunning;
+
+    // The moment the idle release countdown runs from, on _time: when the loop last became idle, or when a model was last
+    // used while it was idle (NoteActivity). A settings change re-arms the countdown from here, so saving an unrelated
+    // setting never postpones the release, and a shorter idle time applies to the idle time already spent.
+    private long _idleSinceTimestamp;
+
+    // When the armed countdown falls due, on _time; null while none is armed. The timer's tick is only a reason to look:
+    // the idle deadline is claimed only once this moment has passed, so a tick that raced a whole dictation, or a settings
+    // change that moved the deadline, releases nothing.
+    private long? _idleReleaseDue;
+
+    // This idle period's release has run, so nothing is armed again until the loop or a model is next used: a settings
+    // change after it has nothing left to release.
+    private bool _idleReleaseSpent;
+
+    // A pause asked for a release the loop could not run then (a recording was live, or a dictation was still finishing).
+    // It runs once that dictation has ended, if dictation is still paused; resuming withdraws it.
+    private bool _pauseReleaseOwed;
 
     // Activations turned away while the current dictation processes, reported when it returns to idle.
     private int _rejectedWhileProcessing;
@@ -313,13 +353,17 @@ public sealed class DictationLifecycle<TCapture>
             }
 
             _started = true;
+            MarkIdleSinceLocked();
             ScheduleIdleReleaseLocked(idleReleaseAfter);
         }
     }
 
     /// <summary>
     /// Re-arms the idle release countdown with a new delay, but only while the loop is started, idle and not closing:
-    /// a recording or a processing dictation re-arms it on its own way back to idle.
+    /// a recording or a processing dictation re-arms it on its own way back to idle. The countdown still runs from when
+    /// the loop became idle (or a model was last used), not from this call, so a settings save never postpones the
+    /// release; a delay shorter than the idle time already spent falls due at once. After this idle period's release has
+    /// run, nothing is armed until the loop or a model is next used.
     /// </summary>
     public void RescheduleIdleRelease(TimeSpan idleReleaseAfter)
     {
@@ -330,8 +374,32 @@ public sealed class DictationLifecycle<TCapture>
     }
 
     /// <summary>
+    /// Restarts the idle release countdown from now because a model was used while the loop was idle: AI cleanup's model
+    /// on this PC loaded or answered outside a dictation (Settings, a readiness check, a one-off request). The memory it
+    /// took is then given back after the idle time too, instead of staying until the next dictation, and a release an
+    /// earlier claim started in the background is withdrawn (<see cref="IsCurrent"/>). A recording or a processing
+    /// dictation re-arms the countdown on its own way back to idle, so this changes nothing then.
+    /// </summary>
+    public void NoteActivity(TimeSpan idleReleaseAfter)
+    {
+        lock (_gate)
+        {
+            if (_closing || !_started || _phase != DictationPhase.Idle)
+            {
+                return;
+            }
+
+            _modelActivityEpoch++;
+            MarkIdleSinceLocked();
+            ScheduleIdleReleaseLocked(idleReleaseAfter);
+        }
+    }
+
+    /// <summary>
     /// Changes the pause state and reports what the loop was doing when it changed. While idle, the change is also a change
-    /// to what the shell shows (Idle or Paused), numbered with it.
+    /// to what the shell shows (Idle or Paused), numbered with it. A pause owes an idle release: the caller asks for it at
+    /// once when nothing records (<see cref="IdleReleaseRequests.OnPauseChange"/>), and a release the loop cannot run then
+    /// is due when the dictation in flight ends. Resuming withdraws it.
     /// </summary>
     public PauseChange SetPaused(bool paused)
     {
@@ -343,6 +411,7 @@ public sealed class DictationLifecycle<TCapture>
             }
 
             _paused = paused;
+            _pauseReleaseOwed = paused;
             var idle = _phase == DictationPhase.Idle;
             return new PauseChange(
                 true,
@@ -392,6 +461,7 @@ public sealed class DictationLifecycle<TCapture>
             _activityEpoch++;
             _recordingStartedTimestamp = _time.GetTimestamp();
             _dictationId = ++_dictationSeq;
+            _idleReleaseDue = null;
             _idleReleaseTimer.Cancel();
             _silenceTracker = null;
             return new(ActivationDecision.Started, _dictationId, 0, capture);
@@ -477,8 +547,13 @@ public sealed class DictationLifecycle<TCapture>
             _phase = DictationPhase.Idle;
             _capture = null;
             _silenceTracker = null;
+            MarkIdleSinceLocked();
             ScheduleIdleReleaseLocked(idleReleaseAfter);
-            return new IdleReturn(_paused, 0, PresentLocked(DictationPhase.Idle, _paused));
+            return new IdleReturn(
+                _paused,
+                0,
+                PresentLocked(DictationPhase.Idle, _paused),
+                PauseReleaseDue: ReleaseDueLocked() == IdleReleaseTrigger.PauseRequest);
         }
     }
 
@@ -623,6 +698,7 @@ public sealed class DictationLifecycle<TCapture>
             _silenceTracker = null;
             var rejected = _rejectedWhileProcessing;
             _rejectedWhileProcessing = 0;
+            MarkIdleSinceLocked();
             ScheduleIdleReleaseLocked(idleReleaseAfter);
             return new IdleReturn(_paused, rejected, PresentLocked(DictationPhase.Idle, _paused));
         }
@@ -632,7 +708,12 @@ public sealed class DictationLifecycle<TCapture>
     /// Marks a processing dictation completely finished, recording whether it ended in an unexpected fault. Call it as the
     /// processing task's very last step. Only the first call for an admission counts.
     /// </summary>
-    public void EndProcessing(ProcessingAdmission<TCapture> admission, bool faulted = false)
+    /// <returns>
+    /// The idle release that is due now that no processing is in flight, for the caller to run
+    /// (<see cref="RunIdleRelease"/>, which decides again): the one a pause asked for while this dictation recorded or
+    /// processed, or the idle deadline if it fell due while this dictation was still finishing. Null when none is due.
+    /// </returns>
+    public IdleReleaseTrigger? EndProcessing(ProcessingAdmission<TCapture> admission, bool faulted = false)
     {
         ArgumentNullException.ThrowIfNull(admission);
 
@@ -645,6 +726,12 @@ public sealed class DictationLifecycle<TCapture>
         }
 
         admission.Lease.Complete(faulted);
+
+        // After the lease, because a release is claimed only once no processing is in flight.
+        lock (_gate)
+        {
+            return ReleaseDueLocked();
+        }
     }
 
     /// <summary>
@@ -652,14 +739,31 @@ public sealed class DictationLifecycle<TCapture>
     /// processing in flight, not closing, and no other release running; invalidated by any recording that starts after the
     /// claim. The steps run outside the gate.
     /// </summary>
+    /// <param name="trigger">
+    /// What asked for it, which the claim checks too: <see cref="IdleReleaseTrigger.IdleDeadline"/> only once the armed
+    /// countdown has fallen due (a timer tick that raced a dictation, or a settings change that moved the deadline, finds
+    /// it not due and releases nothing); <see cref="IdleReleaseTrigger.PauseRequest"/> only while dictation is still
+    /// paused and the pause still owes its release (a resume made before the request ran withdraws it, and a second
+    /// request for the same pause finds it paid). A claim ends this idle period: the deadline, and any release a pause
+    /// owed, are spent.
+    /// </param>
+    /// <param name="afterClaim">
+    /// Runs first after the claim, before the unload (see <see cref="IdleModelRelease.Run"/>), with the claim's ticket:
+    /// what it starts in the background takes its authority from the claim, and asks <see cref="IsCurrent"/> before it
+    /// goes out, so a recording that starts after the claim, or a model used meanwhile (<see cref="NoteActivity"/>),
+    /// withdraws it.
+    /// </param>
     public IdleReleaseOutcome RunIdleRelease(
+        IdleReleaseTrigger trigger,
         Func<bool> anythingResident,
         Action unload,
         Action compact,
         Action announce,
-        Action? releaseRetained = null)
+        Action? releaseRetained = null,
+        Action<IdleReleaseTicket>? afterClaim = null)
     {
         var claimed = false;
+        IdleReleaseTicket ticket = default;
         try
         {
             return IdleModelRelease.Run(
@@ -672,8 +776,24 @@ public sealed class DictationLifecycle<TCapture>
                             return null;
                         }
 
+                        var due = trigger switch
+                        {
+                            IdleReleaseTrigger.IdleDeadline => IdleDeadlinePassedLocked(),
+                            IdleReleaseTrigger.PauseRequest => _paused && _pauseReleaseOwed,
+                            _ => false,
+                        };
+                        if (!due)
+                        {
+                            return null;
+                        }
+
                         _idleReleaseRunning = true;
+                        _idleReleaseDue = null;
+                        _idleReleaseSpent = true;
+                        _pauseReleaseOwed = false;
+                        _idleReleaseTimer.Cancel();
                         claimed = true;
+                        ticket = new IdleReleaseTicket(_activityEpoch, _modelActivityEpoch);
                         return _activityEpoch;
                     }
                 },
@@ -688,7 +808,8 @@ public sealed class DictationLifecycle<TCapture>
                 unload,
                 compact,
                 announce,
-                releaseRetained);
+                releaseRetained,
+                afterClaim is null ? null : () => afterClaim(ticket));
         }
         finally
         {
@@ -699,6 +820,33 @@ public sealed class DictationLifecycle<TCapture>
                     _idleReleaseRunning = false;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// True while nothing has happened since the claim that issued <paramref name="ticket"/>: no recording started, no
+    /// model was used outside a dictation (<see cref="NoteActivity"/>), and shutdown has not begun. A release that goes out
+    /// in the background asks this right before it does.
+    /// </summary>
+    public bool IsCurrent(IdleReleaseTicket ticket)
+    {
+        lock (_gate)
+        {
+            return !_closing && _activityEpoch == ticket.Activity && _modelActivityEpoch == ticket.ModelActivity;
+        }
+    }
+
+    /// <summary>
+    /// The idle release that is due now, if any, for the caller to run (<see cref="RunIdleRelease"/> decides again): one a
+    /// pause asked for while another release ran, or a deadline that fell due meanwhile. Asked after a release has run, as
+    /// <see cref="EndProcessing"/> answers after a dictation, so a request turned away because a release was running is
+    /// not lost. Null when none is due or something stands in its way.
+    /// </summary>
+    public IdleReleaseTrigger? ReleaseDue()
+    {
+        lock (_gate)
+        {
+            return ReleaseDueLocked();
         }
     }
 
@@ -799,7 +947,9 @@ public sealed class DictationLifecycle<TCapture>
             : PresentLocked(DictationPhase.Recording, paused: false);
 
     // Caller holds _gate. Scheduling under the gate orders it against shutdown (which marks closing under the same gate
-    // before it closes the timer) and against an activation (which disarms the timer under it).
+    // before it closes the timer) and against an activation (which disarms the timer under it). The countdown runs from
+    // _idleSinceTimestamp; the deadline recorded here is never later than the timer's own due time (the timer reads its
+    // clock after this does), so the tick it delivers always finds the deadline passed.
     private void ScheduleIdleReleaseLocked(TimeSpan idleReleaseAfter)
     {
         if (_closing || !_started || _phase != DictationPhase.Idle)
@@ -807,6 +957,52 @@ public sealed class DictationLifecycle<TCapture>
             return;
         }
 
-        _idleReleaseTimer.Schedule(idleReleaseAfter);
+        if (idleReleaseAfter == Timeout.InfiniteTimeSpan || idleReleaseAfter < TimeSpan.Zero || _idleReleaseSpent)
+        {
+            _idleReleaseDue = null;
+            _idleReleaseTimer.Cancel();
+            return;
+        }
+
+        var now = _time.GetTimestamp();
+        var remaining = idleReleaseAfter - _time.GetElapsedTime(_idleSinceTimestamp, now);
+        if (remaining < TimeSpan.Zero)
+        {
+            remaining = TimeSpan.Zero;
+        }
+        else if (remaining > ClosableTimer.MaxDueTime)
+        {
+            remaining = ClosableTimer.MaxDueTime;
+        }
+
+        _idleReleaseDue = now + (long)(remaining.TotalSeconds * _time.TimestampFrequency);
+        _idleReleaseTimer.Schedule(remaining);
+    }
+
+    // Caller holds _gate. The loop has just become idle, or a model was used while it was: a new idle period starts.
+    private void MarkIdleSinceLocked()
+    {
+        _idleSinceTimestamp = _time.GetTimestamp();
+        _idleReleaseSpent = false;
+    }
+
+    // Caller holds _gate.
+    private bool IdleDeadlinePassedLocked() => _idleReleaseDue is { } due && _time.GetTimestamp() >= due;
+
+    // Caller holds _gate. The release a caller should ask for now, if one is owed and nothing stands in its way; the claim
+    // in RunIdleRelease still decides.
+    private IdleReleaseTrigger? ReleaseDueLocked()
+    {
+        if (_closing || !_started || _phase != DictationPhase.Idle || _idleReleaseRunning || _processing.Running > 0)
+        {
+            return null;
+        }
+
+        if (_paused && _pauseReleaseOwed)
+        {
+            return IdleReleaseTrigger.PauseRequest;
+        }
+
+        return IdleDeadlinePassedLocked() ? IdleReleaseTrigger.IdleDeadline : null;
     }
 }

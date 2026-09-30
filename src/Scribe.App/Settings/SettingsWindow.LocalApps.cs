@@ -219,7 +219,8 @@ public partial class SettingsWindow
         LocalAppStatusRow.Show(new(AiCleanupStatusKind.Busy, "Freeing memory..."));
         try
         {
-            var freed = await _localServers.UnloadAsync(address, model);
+            // Through AI cleanup, so the next dictation readies the model again rather than trusting an earlier answer.
+            var freed = await _cleanup.FreeLocalAppModelAsync(address, model);
             _log.LogInformation("Settings asked {App} to free a model's memory: {Freed}.", app, freed);
         }
         finally

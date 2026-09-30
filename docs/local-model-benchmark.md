@@ -135,13 +135,16 @@ points of the cloud models in half a second, at no cost per dictation.
 
 ### Memory, starting and defaults
 
-- **Memory comes back.** Ollama and LM Studio are asked to keep the model only as long as Scribe keeps its
-  own speech model ("Free memory when Scribe isn't used", 10 minutes by default: `keep_alive` for Ollama,
-  `ttl` for LM Studio), and to free it at once when AI cleanup is turned off or moved elsewhere. Settings shows
-  how much memory the model uses and has **Free memory** for Scribe's own model, Ollama and LM Studio.
+- **Memory comes back.** Every request asks Ollama and LM Studio to keep the model only as long as Scribe keeps
+  its own speech model ("Free memory when Scribe isn't used", 10 minutes by default: `keep_alive` for Ollama,
+  `ttl` for LM Studio), so they free it on their own clock after that time without a dictation, while Scribe
+  frees its speech model and Foundry Local's. Pausing dictation, turning AI cleanup off, moving it elsewhere,
+  shortening that time and **Free memory** in Settings free the model at once, for any other app using it
+  too. Settings shows how much memory the model uses.
 - **The first dictation after a release waits for the model** instead of being typed without cleanup, for up to
-  30 seconds, and the recording indicator says **Starting local model** and **This can take time**. Measured
-  loads: 2.7 to 5.2 s on the GPU, 7 to 15 s on the CPU.
+  30 seconds, and the recording indicator says **Starting local model** and **This can take time**; past that,
+  Scribe types what it heard rather than waiting behind the load again. Measured loads: 2.7 to 5.2 s on the GPU,
+  7 to 15 s on the CPU.
 - **Defaults follow the hardware, and Settings recommends no model.** With an NVIDIA RTX graphics card with 8 GB
   or more, a first setup of Scribe's own model starts from Qwen2.5 7B (85.7 at 0.73 s) instead of Qwen2.5 1.5B
   (73.5 at 0.37 s); anywhere else from Qwen2.5 1.5B, which also runs on the processor. With Ollama or LM Studio,
@@ -333,7 +336,8 @@ On the GPU the load finishes while you speak. On the CPU a load takes longer tha
 speech for the larger models, so the readying request halves the wait instead of removing it. Since
 round two (above), Scribe also asks Ollama and LM Studio to keep the model loaded as long as its own
 "Free memory when Scribe isn't used" setting says, so they no longer unload it after their own five
-minutes (Ollama) while you still use Scribe; set that setting to Never to leave their own policy in place.
+minutes (Ollama) while you still use Scribe, and free it on their own clock after that time. Set that
+setting to Never to leave their own policy in place (Ollama keeps the time it was last asked for).
 
 ### Tips for each runtime
 

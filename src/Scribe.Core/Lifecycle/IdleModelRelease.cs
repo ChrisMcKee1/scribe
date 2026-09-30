@@ -60,6 +60,11 @@ public static class IdleModelRelease
     /// collection can return it too. Like <paramref name="unload"/>, it must be safe against a dictation starting
     /// concurrently.
     /// </param>
+    /// <param name="afterClaim">
+    /// Runs first after every successful claim, before anything is unloaded, so what it decides is decided as the claim was
+    /// made: a release that goes out in the background (AI cleanup's model) takes its authority from this moment, and any
+    /// use that begins after it, while the speech models are still unloading, cancels it. Must return at once.
+    /// </param>
     public static IdleReleaseOutcome Run(
         Func<long?> tryClaim,
         Func<long, bool> isStillIdle,
@@ -67,7 +72,8 @@ public static class IdleModelRelease
         Action unload,
         Action compact,
         Action announce,
-        Action? releaseRetained = null)
+        Action? releaseRetained = null,
+        Action? afterClaim = null)
     {
         ArgumentNullException.ThrowIfNull(tryClaim);
         ArgumentNullException.ThrowIfNull(isStillIdle);
@@ -81,6 +87,7 @@ public static class IdleModelRelease
             return IdleReleaseOutcome.NotIdle;
         }
 
+        afterClaim?.Invoke();
         if (!anythingResident())
         {
             releaseRetained?.Invoke();

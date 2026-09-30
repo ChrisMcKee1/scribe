@@ -2571,7 +2571,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             draft.AiCleanupAzureClientId,
             draft.AiCleanupAzureClientSecret,
             draft.AiCleanupCopilotModel,
-            draft.AiCleanupPromptCaching));
+            draft.AiCleanupPromptCaching,
+            // A model Test connection loads in Ollama or LM Studio is kept only the idle time too, as a dictation's is.
+            LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(
+                draft.AiCleanupProvider, draft.AiCleanupCustomEndpoint, _committedSettings.ReleaseModelsAfterIdleMinutes)));
     }
 
     // --- Filterable model dropdowns --------------------------------------------------------

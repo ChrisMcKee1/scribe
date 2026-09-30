@@ -149,9 +149,12 @@ public static class IdleReleaseRequests
 {
     /// <summary>
     /// A pause made while no recording was live asks for the release right away ("Scribe should stand down"), whether or
-    /// not the idle countdown is enabled. A pause that stops a recording releases nothing here: that dictation processes
-    /// and returns to idle first. A resume only re-arms the countdown. The lifecycle still decides whether a requested
-    /// release may run: it refuses while a dictation processes or finishes, while another release runs, and once closing.
+    /// not the idle countdown is enabled. A pause that stops a recording asks for nothing here: that dictation processes
+    /// and returns to idle first, and the lifecycle keeps the release the pause owes and hands it back when the dictation
+    /// ends (<see cref="DictationLifecycle{TCapture}.EndProcessing"/>), as it does for a pause made while a dictation
+    /// processes, whose immediate request it refuses. A resume only re-arms the countdown, and withdraws a release still
+    /// owed. The lifecycle still decides whether a requested release may run: it refuses while a dictation processes or
+    /// finishes, while another release runs, once dictation is resumed, and once closing.
     /// </summary>
     public static bool OnPauseChange(bool paused, PauseChange change) =>
         change.Changed && paused && !change.WasRecording;
