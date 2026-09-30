@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
-using System.Windows.Threading;
 using Scribe.App.Settings;
 
 namespace Scribe.Core.Tests;
@@ -123,9 +122,11 @@ public sealed class DataGridTextEditTests
             panel.Children.Add(Grid);
             panel.Children.Add(After);
             _window = new Window { Width = 500, Height = 300, Content = panel, ShowInTaskbar = false };
+            PrivateDesktopTest.Step("grid: show");
             _window.Show();
+            PrivateDesktopTest.Step("grid: initial layout");
             _window.UpdateLayout();
-            Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
+            PrivateDesktopTest.RenderCheckpoint("grid: initial render", _window.UpdateLayout);
         }
 
         public void Dispose() => _window.Close();

@@ -12,6 +12,32 @@ namespace Scribe.Core.Tests;
 internal static class PrivateDesktopTest
 {
     private const string Prefix = "ScribeGridTests-";
+    private static readonly TimeSpan RenderCheckpointTimeout = TimeSpan.FromSeconds(10);
+    private static string _phase = "not started";
+
+    public static string Phase => Volatile.Read(ref _phase);
+
+    public static void Step(string phase) => Volatile.Write(ref _phase, phase);
+
+    public static void RenderCheckpoint(string stage, Action? updateLayout = null)
+    {
+        Step($"{stage}: queued");
+        try
+        {
+            // A FIFO render marker waits for earlier rendering, not for an animated window to become idle.
+            Dispatcher.CurrentDispatcher.Invoke(() =>
+            {
+                Step($"{stage}: render");
+                updateLayout?.Invoke();
+            }, DispatcherPriority.Render, CancellationToken.None, RenderCheckpointTimeout);
+        }
+        catch (TimeoutException error)
+        {
+            throw new TimeoutException($"The private-desktop WPF render checkpoint timed out. phase={Phase}", error);
+        }
+
+        Step($"{stage}: complete");
+    }
 
     public static bool IsCurrent
     {
@@ -36,10 +62,12 @@ internal static class PrivateDesktopTest
         }
 
         ExceptionDispatchInfo? failure = null;
+        Step($"{testName}: starting STA");
         var thread = new Thread(() =>
         {
             try
             {
+                Step($"{testName}: body");
                 action();
             }
             catch (Exception error)
@@ -48,12 +76,14 @@ internal static class PrivateDesktopTest
             }
             finally
             {
+                Step($"dispatcher shutdown after {Phase}");
                 Dispatcher.CurrentDispatcher.InvokeShutdown();
+                Step($"{testName}: finished");
             }
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "The private-desktop WPF check did not finish.");
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), $"The private-desktop WPF check did not finish. phase={Phase}; limit=30s");
         failure?.Throw();
     }
 

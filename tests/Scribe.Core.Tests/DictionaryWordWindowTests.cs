@@ -7,7 +7,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
-using System.Windows.Threading;
 using System.Xml.Linq;
 using Scribe.Core.Settings;
 using Row = Scribe.Core.Settings.DictionaryEntryBuilder.Row;
@@ -33,13 +32,13 @@ public sealed class DictionaryWordWindowTests
                 Assert.True(written.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
                 Assert.Same(FormBox(panel, 0), Keyboard.FocusedElement);
 
-                Click(Get<Button>(window, "AddWayButton"));
+                Click(Get<Button>(window, "AddWayButton"), "add second way");
                 Assert.Same(FormBox(panel, 1), Keyboard.FocusedElement);
                 FormBox(panel, 1).Text = "discarded";
-                Click(Get<Button>(window, "AddWayButton"));
+                Click(Get<Button>(window, "AddWayButton"), "add third way");
                 var last = FormBox(panel, 2);
                 last.Text = "contoso, ltd";
-                Click(Assert.Single(((Grid)panel.Children[1]).Children.OfType<Button>()));
+                Click(Assert.Single(((Grid)panel.Children[1]).Children.OfType<Button>()), "remove second way");
                 Assert.Same(last, Keyboard.FocusedElement);
                 Assert.Equal(2, panel.Children.Count);
                 Assert.Equal("Scribe hears, way 2 of 2", new TextBoxAutomationPeer(last).GetName());
@@ -47,7 +46,7 @@ public sealed class DictionaryWordWindowTests
                 var accept = Get<Button>(window, "AcceptButton");
                 var position = accept.TranslatePoint(new Point(), (FrameworkElement)window.Content);
                 Assert.InRange(position.Y + accept.ActualHeight, 0, window.ActualHeight);
-                Click(accept);
+                Click(accept, "accept new word");
                 var result = rig.Choice(window);
                 Assert.True(result.Succeeded);
                 Assert.Equal(new[] { "contoso limited", "contoso, ltd" }, result.AddedRows.Select(row => row.Pattern));
@@ -59,20 +58,26 @@ public sealed class DictionaryWordWindowTests
     public void Duplicate_validation_keeps_the_dialog_open_and_focuses_the_conflicting_box() =>
         PrivateDesktopTest.Run(typeof(DictionaryWordWindowTests), () =>
         {
+            PrivateDesktopTest.Step("duplicate: create rig");
             using var rig = new DialogRig();
             var window = rig.Open(null, (written, forms) => DictionaryWordEditor.Build([], null, written, forms));
             var panel = Get<StackPanel>(window, "FormsPanel");
+            PrivateDesktopTest.Step("duplicate: type first way");
             FormBox(panel, 0).Text = "same";
-            Click(Get<Button>(window, "AddWayButton"));
+            Click(Get<Button>(window, "AddWayButton"), "duplicate: add second way");
+            PrivateDesktopTest.Step("duplicate: type second way");
             FormBox(panel, 1).Text = " SAME ";
 
-            Click(Get<Button>(window, "AcceptButton"));
+            Click(Get<Button>(window, "AcceptButton"), "duplicate: show validation");
 
+            PrivateDesktopTest.Step("duplicate: assert validation and focus");
             Assert.True(window.IsVisible);
             Assert.Same(FormBox(panel, 1), Keyboard.FocusedElement);
             Assert.Equal(Visibility.Visible, Get<TextBlock>(window, "ErrorText").Visibility);
+            PrivateDesktopTest.Step("duplicate: correct second way");
             FormBox(panel, 1).Text = "different";
-            Click(Get<Button>(window, "AcceptButton"));
+            Click(Get<Button>(window, "AcceptButton"), "duplicate: accept corrected word");
+            PrivateDesktopTest.Step("duplicate: read result");
             Assert.Equal(2, rig.Choice(window).AddedRows.Count);
         });
 
@@ -85,7 +90,7 @@ public sealed class DictionaryWordWindowTests
             var window = rig.Open(original,
                 (written, forms) => DictionaryWordEditor.Build([original], 0, written, forms));
 
-            Click(Get<Button>(window, "AcceptButton"));
+            Click(Get<Button>(window, "AcceptButton"), "accept unchanged word");
 
             Assert.Equal(original, rig.Choice(window).EditedRow);
         });
@@ -142,10 +147,18 @@ public sealed class DictionaryWordWindowTests
     private static TextBox FormBox(StackPanel panel, int index) =>
         Assert.Single(((Grid)panel.Children[index]).Children.OfType<TextBox>());
 
-    private static void Click(Button button)
+    private static void Click(Button button, string stage)
     {
+        var window = Window.GetWindow(button);
+        PrivateDesktopTest.Step($"{stage}: click");
         button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-        Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
+        PrivateDesktopTest.RenderCheckpoint(stage, () =>
+        {
+            if (window?.IsVisible == true)
+            {
+                window.UpdateLayout();
+            }
+        });
     }
 
     private static void Escape(TextBox box) =>
@@ -164,6 +177,7 @@ public sealed class DictionaryWordWindowTests
 
         public DialogRig()
         {
+            PrivateDesktopTest.Step("dialog: load resources");
             var root = new DirectoryInfo(AppContext.BaseDirectory);
             while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
             {
@@ -196,6 +210,7 @@ public sealed class DictionaryWordWindowTests
 
             // Load only the resources, never Scribe.App.App or its posted startup callback.
             _app.Resources = (ResourceDictionary)XamlReader.Parse(resources.ToString());
+            PrivateDesktopTest.Step("dialog: show owner");
             Owner.Show();
             Owner.UpdateLayout();
         }
@@ -218,11 +233,15 @@ public sealed class DictionaryWordWindowTests
 
         public Window Open(Row? original, Func<string, IReadOnlyList<string>, DictionaryWordEditor.Result> build)
         {
+            PrivateDesktopTest.Step("dialog: create");
             var window = (Window)Activator.CreateInstance(_type, BindingFlags.Instance | BindingFlags.NonPublic,
                 binder: null, args: [Owner, original, build], culture: null)!;
+            PrivateDesktopTest.Step("dialog: show");
             window.Show();
+            PrivateDesktopTest.Step("dialog: initial layout");
             window.UpdateLayout();
-            Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
+            PrivateDesktopTest.RenderCheckpoint("dialog: initial render", window.UpdateLayout);
+            Assert.True(window.IsLoaded, "The word editor must be loaded before checking its controls.");
             return window;
         }
 
@@ -237,11 +256,13 @@ public sealed class DictionaryWordWindowTests
 
         public void Dispose()
         {
+            PrivateDesktopTest.Step("dialog: close windows");
             foreach (Window window in _app.Windows.Cast<Window>().ToArray())
             {
                 window.Close();
             }
 
+            PrivateDesktopTest.Step("dialog: application shutdown");
             _app.Shutdown();
             AssemblyLoadContext.Default.Resolving -= Resolve;
         }
