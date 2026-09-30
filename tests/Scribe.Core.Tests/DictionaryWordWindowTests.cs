@@ -5,9 +5,6 @@ using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
-using System.Windows.Markup;
-using System.Windows.Media;
-using System.Xml.Linq;
 using Scribe.Core.Settings;
 using Row = Scribe.Core.Settings.DictionaryEntryBuilder.Row;
 
@@ -177,7 +174,7 @@ public sealed class DictionaryWordWindowTests
 
         public DialogRig()
         {
-            PrivateDesktopTest.Step("dialog: load resources");
+            PrivateDesktopTest.Step("dialog: locate repository");
             var root = new DirectoryInfo(AppContext.BaseDirectory);
             while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
             {
@@ -194,22 +191,24 @@ public sealed class DictionaryWordWindowTests
             Assert.NotNull(output);
             _appBin = Path.Combine(root.FullName, "src", "Scribe.App", "bin", output.Name, "net10.0-windows10.0.22000.0");
             AssemblyLoadContext.Default.Resolving += Resolve;
+            PrivateDesktopTest.Step("dialog: load app assembly");
             _assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(_appBin, "Scribe.dll"));
+            PrivateDesktopTest.Step("dialog: resolve window type");
             _type = _assembly.GetType("Scribe.App.Settings.DictionaryWordWindow", throwOnError: true)!;
-            var document = XDocument.Load(Path.Combine(root.FullName, "src", "Scribe.App", "App.xaml"));
-            XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
-            var resources = document.Descendants(xaml + "ResourceDictionary").First();
-            foreach (var attribute in document.Root!.Attributes().Where(attribute => attribute.IsNamespaceDeclaration))
-            {
-                var value = attribute.Value.StartsWith("clr-namespace:", StringComparison.Ordinal) &&
-                    !attribute.Value.Contains(";assembly=", StringComparison.Ordinal)
-                    ? attribute.Value + ";assembly=Scribe"
-                    : attribute.Value;
-                resources.SetAttributeValue(attribute.Name, value);
-            }
-
-            // Load only the resources, never Scribe.App.App or its posted startup callback.
-            _app.Resources = (ResourceDictionary)XamlReader.Parse(resources.ToString());
+            var controlsAssembly = _type.BaseType!.Assembly;
+            // Use the shipped compiled dictionaries, not runtime parsing of unrelated App.xaml resources.
+            PrivateDesktopTest.Step("dialog: load theme dictionary");
+            var themeType = controlsAssembly.GetType("Wpf.Ui.Markup.ThemesDictionary", throwOnError: true)!;
+            var theme = Assert.IsAssignableFrom<ResourceDictionary>(Activator.CreateInstance(themeType));
+            var themeProperty = themeType.GetProperty("Theme")!;
+            themeProperty.SetValue(theme, Enum.Parse(themeProperty.PropertyType, "Dark"));
+            _app.Resources.MergedDictionaries.Add(theme);
+            PrivateDesktopTest.Step("dialog: load control dictionary");
+            var controlsType = controlsAssembly.GetType("Wpf.Ui.Markup.ControlsDictionary", throwOnError: true)!;
+            _app.Resources.MergedDictionaries.Add(
+                Assert.IsAssignableFrom<ResourceDictionary>(Activator.CreateInstance(controlsType)));
+            PrivateDesktopTest.Step("dialog: set font resources");
+            SetTextScale(1);
             PrivateDesktopTest.Step("dialog: show owner");
             Owner.Show();
             Owner.UpdateLayout();
@@ -221,7 +220,9 @@ public sealed class DictionaryWordWindowTests
             {
                 ("ScribeFontCaption", 12), ("ScribeFontBody", 14),
                 ("ScribeFontBodyLarge", 16), ("ScribeFontSubtitle", 20), ("ScribeFontTitle", 26),
+                ("ScribeFontIconLarge", 22), ("ScribeFontDisplay", 68),
                 ("ControlContentThemeFontSize", 14), ("TextControlThemeFontSize", 14), ("TitleBarThemeFontSize", 12),
+                ("DefaultDataGridFontSize", 14), ("InfoBarTitleThemeFontSize", 14), ("InfoBarMessageThemeFontSize", 14),
             })
             {
                 _app.Resources[key] = size * factor;
