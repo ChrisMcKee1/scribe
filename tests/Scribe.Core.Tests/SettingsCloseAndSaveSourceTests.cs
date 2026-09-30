@@ -105,7 +105,7 @@ public sealed class SettingsCloseAndSaveSourceTests
             show.IndexOf("if (issue.Severity == ValidationSeverity.Blocking)", StringComparison.Ordinal) <
             show.IndexOf("FocusDictionarySpokenCell(row);", StringComparison.Ordinal));
         var focus = Body(Window, "private void FocusDictionarySpokenCell(DictionaryRow row)");
-        Assert.Contains("DictionaryGrid.BeginEdit();", focus, StringComparison.Ordinal);
+        Assert.Contains("DataGridTextEdit.Begin(DictionaryGrid, row, column, selectAll: true)", focus, StringComparison.Ordinal);
     }
 
     // A method's text, from its signature to the closing brace at its indentation.

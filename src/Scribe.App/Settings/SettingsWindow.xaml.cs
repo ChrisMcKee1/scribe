@@ -846,10 +846,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     internal void AddDictionaryDraft(string spoken)
     {
         ShowPage(SettingsPage.Dictionary, nameof(DictionaryGrid));
-        if (!string.IsNullOrWhiteSpace(DictionarySearchBox.Text))
+        if (!ClearDictionarySearchForNewRow())
         {
-            DictionarySearchBox.Text = string.Empty;
-            _dictionaryView?.Refresh();
+            return;
         }
 
         if (string.IsNullOrWhiteSpace(spoken))
@@ -863,17 +862,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             DictionaryGrid.SelectedItem = existing;
             DictionaryGrid.ScrollIntoView(existing);
+            FocusDictionarySpokenCell(existing);
             return;
         }
 
         var row = new DictionaryRow { Pattern = spoken.Trim(), WholeWord = true, Enabled = true };
         _rows.Add(row);
-        DictionaryGrid.ScrollIntoView(row);
-        DictionaryGrid.UpdateLayout();
         DictionaryGrid.SelectedItem = row;
-        DictionaryGrid.CurrentCell = new DataGridCellInfo(row, DictionaryGrid.Columns.Count > 1 ? DictionaryGrid.Columns[1] : DictionaryGrid.Columns[0]);
-        DictionaryGrid.Focus();
-        DictionaryGrid.BeginEdit();
+        FocusDictionarySpokenCell(row);
     }
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
     {

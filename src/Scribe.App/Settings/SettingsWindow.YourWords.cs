@@ -42,7 +42,8 @@ public partial class SettingsWindow
         _dictionaryView.Filter = DictionaryFilter;
         DictionaryGrid.ItemsSource = _dictionaryView;
         DataGridCheckBoxClick.Attach(DictionaryGrid);
-        DataGridTypingTab.Attach(DictionaryGrid);
+        DataGridTypingTab.Attach(DictionaryGrid, ReportDictionaryEditFailure);
+        DataGridTextEdit.Attach(DictionaryGrid, ReportDictionaryEditFailure);
         _rows.CollectionChanged += DictionaryRows_CollectionChanged;
         DictionaryGrid.CellEditEnding += (_, _) => QueueDictionaryStatusRefresh();
         SetDictionaryEditable(false);
@@ -55,6 +56,7 @@ public partial class SettingsWindow
     {
         DictionaryGrid.IsEnabled = editable;
         DictionaryAddButton.IsEnabled = editable;
+        DictionaryEditButton.IsEnabled = editable && DictionaryGrid.SelectedItem is DictionaryRow;
         DictionarySuggestButton.IsEnabled = editable;
         DictionaryCleanupButton.IsEnabled = editable;
         DictionaryMoreButton.IsEnabled = editable || _dictionaryLoad.State == SettingsSectionState.Failed;
@@ -333,6 +335,7 @@ public partial class SettingsWindow
 
     private void DictionaryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        DictionaryEditButton.IsEnabled = _dictionaryLoad.IsLoaded && DictionaryGrid.SelectedItem is DictionaryRow;
         if (DictionaryGrid.SelectedItem is DictionaryRow row)
         {
             _dictionarySelectionPendingRestore = row;
@@ -394,30 +397,124 @@ public partial class SettingsWindow
         menu.IsOpen = true;
     }
 
-    /// <summary>
-    /// Adds a blank row and puts the cursor in it. The grid's own placeholder row was the only way
-    /// to add an entry, which is invisible unless you already know it exists.
-    /// </summary>
     private void DictionaryAddButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!ClearDictionarySearchForNewRow())
+        OpenDictionaryWordEditor(null, sender as UIElement);
+    }
+
+    private void DictionaryEditButton_Click(object sender, RoutedEventArgs e)
+    {
+        var row = (sender as FrameworkElement)?.DataContext as DictionaryRow
+            ?? DictionaryGrid.SelectedItem as DictionaryRow;
+        if (row is not null)
         {
+            OpenDictionaryWordEditor(row, sender as UIElement);
+        }
+    }
+
+    private void OpenDictionaryWordEditor(DictionaryRow? edited, UIElement? invoker)
+    {
+        if (_saveInProgress)
+        {
+            ShowInfo("Wait for Settings to finish saving before opening the word editor.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
             return;
         }
 
-        var row = new DictionaryRow();
-        _rows.Add(row);
+        if (!_dictionaryLoad.IsLoaded)
+        {
+            ShowInfo("Wait for your dictionary to load before adding or editing a word.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
 
-        DictionaryGrid.ScrollIntoView(row);
+        if (!DictionaryGrid.CommitEdit(DataGridEditingUnit.Cell, exitEditingMode: true) ||
+            !DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true))
+        {
+            ShowInfo("Finish correcting the word you are editing first.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
 
-        // The row container is generated lazily, and BeginEdit silently does nothing when it does
-        // not exist yet. Forcing layout first is what makes the new row actually land in edit mode
-        // rather than appearing blank and unfocused.
-        DictionaryGrid.UpdateLayout();
+        var original = edited is null ? (DictionaryEntryBuilder.Row?)null : DictionaryEditorRow(edited);
+        var result = DictionaryWordWindow.Show(this, original, (written, forms) =>
+        {
+            var index = edited is null ? (int?)null : _rows.IndexOf(edited);
+            if (edited is not null && (index < 0 ||
+                !string.Equals(edited.Pattern, original!.Value.Pattern, StringComparison.Ordinal) ||
+                !string.Equals(edited.Replacement, original.Value.Replacement, StringComparison.Ordinal)))
+            {
+                return new DictionaryWordEditor.Result(null, [],
+                    "This word changed while its editor was open. Cancel and open it again.");
+            }
 
+            var change = DictionaryWordEditor.Build(_rows.Select(DictionaryEditorRow).ToArray(), index, written, forms);
+            if (change.Succeeded && change.AddedRows.Count > 0 && !ClearDictionarySearchForNewRow())
+            {
+                return new DictionaryWordEditor.Result(null, [],
+                    "Cancel this editor and finish correcting the word in the list first.");
+            }
+
+            return change;
+        });
+        if (result is null)
+        {
+            if (invoker is { IsVisible: true })
+            {
+                invoker.Focus();
+            }
+            else if (edited is not null)
+            {
+                FocusDictionaryRow(edited);
+            }
+
+            return;
+        }
+
+        DictionaryRow? first = edited;
+        using (BatchDictionaryStatus())
+        {
+            if (edited is not null && result.EditedRow is { } changed)
+            {
+                edited.Pattern = changed.Pattern ?? string.Empty;
+                edited.Replacement = changed.Replacement ?? string.Empty;
+            }
+
+            foreach (var added in result.AddedRows)
+            {
+                var row = new DictionaryRow
+                {
+                    Pattern = added.Pattern ?? string.Empty,
+                    Replacement = added.Replacement ?? string.Empty,
+                    WholeWord = added.WholeWord,
+                    Enabled = added.Enabled,
+                };
+                _rows.Add(row);
+                first ??= row;
+            }
+        }
+
+        if (first is not null)
+        {
+            FocusDictionaryRow(first);
+        }
+    }
+
+    private static DictionaryEntryBuilder.Row DictionaryEditorRow(DictionaryRow row) =>
+        new(row.Id, row.Pattern, row.Replacement, row.WholeWord, row.Enabled);
+
+    private void FocusDictionaryRow(DictionaryRow row)
+    {
         DictionaryGrid.SelectedItem = row;
-        DictionaryGrid.CurrentCell = new DataGridCellInfo(row, DictionaryGrid.Columns.Count > 1 ? DictionaryGrid.Columns[1] : DictionaryGrid.Columns[0]);
-        DictionaryGrid.BeginEdit();
+        if (!DataGridTextEdit.Focus(DictionaryGrid, row, DictionarySpokenColumn))
+        {
+            _log.LogWarning("Could not restore focus to the dictionary row after closing its editor.");
+            ShowInfo("The word is in the list, but focus couldn't return to it. Select it to continue.",
+                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+    }
+
+    private void ReportDictionaryEditFailure()
+    {
+        _log.LogWarning("Could not focus the dictionary text editor.");
+        ShowInfo("Couldn't start editing here. Select the word, then choose Edit.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
     }
 
     // Clears Find a word so a row being added can be seen. A row still being edited is committed first: refreshing the view

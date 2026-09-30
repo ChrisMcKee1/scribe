@@ -642,13 +642,9 @@ public partial class SettingsWindow
                 return;
             }
 
-            DictionaryGrid.Focus();
-            DictionaryGrid.CurrentCell = new DataGridCellInfo(row, column);
-            DictionaryGrid.BeginEdit();
-            if (column.GetCellContent(row) is TextBox editor)
+            if (!DataGridTextEdit.Begin(DictionaryGrid, row, column, selectAll: true))
             {
-                editor.Focus();
-                editor.SelectAll();
+                ReportDictionaryEditFailure();
             }
         }));
     }

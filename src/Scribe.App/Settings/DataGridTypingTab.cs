@@ -20,21 +20,21 @@ namespace Scribe.App.Settings;
 /// </remarks>
 public static class DataGridTypingTab
 {
-    public static void Attach(DataGrid grid)
+    public static void Attach(DataGrid grid, Action? failed = null)
     {
         ArgumentNullException.ThrowIfNull(grid);
-        grid.PreviewKeyDown += OnPreviewKeyDown;
+        grid.PreviewKeyDown += (_, e) => OnPreviewKeyDown(grid, e, failed);
     }
 
-    private static void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    private static void OnPreviewKeyDown(object sender, KeyEventArgs e, Action? failed)
     {
         if (e.Key != Key.Tab ||
             (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0 ||
             sender is not DataGrid grid ||
-            e.OriginalSource is not TextBox ||
             FindCell(e.OriginalSource as DependencyObject) is not { IsEditing: true, Column: DataGridTextColumn } cell ||
             DataGridRow.GetRowContainingElement(cell) is not { } row ||
-            !ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(row), grid))
+            !ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(row), grid) ||
+            cell.Column.GetCellContent(row.Item) is not TextBox { IsKeyboardFocusWithin: true })
         {
             return;
         }
@@ -55,8 +55,10 @@ public static class DataGridTypingTab
 
         if (next is { } index)
         {
-            grid.CurrentCell = new DataGridCellInfo(row.Item, columns[index]);
-            grid.BeginEdit();
+            if (!DataGridTextEdit.Begin(grid, row.Item, columns[index], selectAll: true))
+            {
+                failed?.Invoke();
+            }
             return;
         }
 

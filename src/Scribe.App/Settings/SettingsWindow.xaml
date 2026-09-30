@@ -1766,7 +1766,11 @@
                                             <ui:Button x:Name="DictionaryAddButton" Padding="8,5" Content="Add word"
                                                        Icon="{ui:SymbolIcon Add24}"
                                                        Margin="0,0,4,0" Click="DictionaryAddButton_Click"
-                                                       ToolTip="Add a blank word and start editing it."/>
+                                                       ToolTip="Add one or several ways Scribe hears the same word."/>
+                                            <ui:Button x:Name="DictionaryEditButton" Padding="8,5" Content="Edit"
+                                                       Icon="{ui:SymbolIcon Edit24}" IsEnabled="False"
+                                                       Margin="0,0,4,0" Click="DictionaryEditButton_Click"
+                                                       ToolTip="Edit the selected word, or add another way Scribe hears it."/>
                                             <ui:Button x:Name="DictionarySuggestButton" Padding="8,5" Content="Learn from history"
                                                        Icon="{ui:SymbolIcon Lightbulb24}"
                                                        Margin="0,0,4,0" Click="DictionarySuggestButton_Click"
@@ -1859,6 +1863,17 @@
                                                                         Visibility="{Binding CoverageVisibility}">
                                                                     <TextBlock Text="{Binding CoverageLabel}" FontSize="{DynamicResource ScribeFontCaption}" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                                                                 </Border>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTemplateColumn Header="" Width="44">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <ui:Button Icon="{ui:SymbolIcon Edit24}" Appearance="Transparent"
+                                                                           Padding="6,2" Margin="0" ToolTip="Edit this word"
+                                                                           AutomationProperties.Name="{Binding Pattern, StringFormat='Edit {0}'}"
+                                                                           Style="{StaticResource DictionaryRemoveButton}"
+                                                                           Click="DictionaryEditButton_Click"/>
                                                             </DataTemplate>
                                                         </DataGridTemplateColumn.CellTemplate>
                                                     </DataGridTemplateColumn>

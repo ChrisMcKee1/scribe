@@ -70,14 +70,14 @@ public sealed class YourWordsReviewTests
     {
         var code = ReadSettingsWindowCode();
         var search = Body(code, "private void DictionarySearchBox_TextChanged");
-        var add = Body(code, "private void DictionaryAddButton_Click");
+        var add = Body(code, "private void OpenDictionaryWordEditor");
         var addDraft = Body(code, "internal void AddDictionaryDraft");
         var suggestions = Body(code, "private void AddSuggestionRows");
 
         Assert.Contains("_dictionarySelectionPendingRestore = selected;", search, StringComparison.Ordinal);
         Assert.Contains("RestoreDictionarySelectionIfVisible();", search, StringComparison.Ordinal);
-        Assert.Contains("if (!ClearDictionarySearchForNewRow())", add, StringComparison.Ordinal);
-        Assert.Contains("DictionarySearchBox.Text = string.Empty;", addDraft, StringComparison.Ordinal);
+        Assert.Contains("change.AddedRows.Count > 0 && !ClearDictionarySearchForNewRow()", add, StringComparison.Ordinal);
+        Assert.Contains("ClearDictionarySearchForNewRow()", addDraft, StringComparison.Ordinal);
         Assert.Contains("ClearDictionarySearchForNewRow();", suggestions, StringComparison.Ordinal);
     }
 

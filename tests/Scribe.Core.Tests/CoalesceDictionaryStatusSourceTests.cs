@@ -53,6 +53,7 @@ public sealed class CoalesceDictionaryStatusSourceTests
     [InlineData("private void AddSuggestionRows(", "// --- Dictionary cleanup")]
     [InlineData("private async Task ApplyCleanupAsync(", "// --- Dictionary CSV import / export")]
     [InlineData("private (int Added, int Updated, int Unchanged) MergeImportedEntries(", "private sealed class RedundantDictionaryRowKeyComparer")]
+    [InlineData("private void OpenDictionaryWordEditor(", "private static DictionaryEntryBuilder.Row DictionaryEditorRow(")]
     public void Every_bulk_edit_is_one_batch(string start, string end)
     {
         var method = Slice(YourWords, start, end);

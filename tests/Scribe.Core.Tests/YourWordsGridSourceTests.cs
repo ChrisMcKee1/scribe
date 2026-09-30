@@ -39,7 +39,7 @@ public sealed class YourWordsGridSourceTests
             clear.IndexOf("DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true)", StringComparison.Ordinal) <
             clear.IndexOf("_dictionaryView?.Refresh();", StringComparison.Ordinal),
             "An open row edit must be committed before the view refreshes.");
-        Assert.Contains("if (!ClearDictionarySearchForNewRow())", code, StringComparison.Ordinal);
+        Assert.Contains("change.AddedRows.Count > 0 && !ClearDictionarySearchForNewRow()", code, StringComparison.Ordinal);
     }
 
     private static string FindRoot()

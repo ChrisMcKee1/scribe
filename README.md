@@ -89,7 +89,7 @@ wrong and what to do next. Put it in any of nine places on screen, or turn it of
 </td>
 <td width="50%" valign="top">
 <a href="docs/screenshots/dictionary.png"><img src="docs/screenshots/dictionary.png" alt="The Dictionary page's Your words tab: 13 words, such as dot net written as .NET and cube control as kubectl, next to the Word packs tab showing 2 of 11 on" /></a><br />
-<b>Your words.</b> Teach Scribe how to write the names, acronyms and jargon you use. Import a CSV, or let Learn from history suggest words you say often.
+<b>Your words.</b> Teach Scribe how to write the names, acronyms and jargon you use. Add word lets you enter several ways Scribe hears a word with one written spelling: choose Add another way for each phrase, then Add and Save. Edit opens the same form for one existing entry; you can still edit directly in the list. Spaces and commas are part of a phrase, not separators. Import a CSV, or let Learn from history suggest words you say often.
 </td>
 </tr>
 <tr>
