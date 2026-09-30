@@ -9,7 +9,7 @@ Scribe's speech model writes what it hears, so kubectl comes out as "cube contro
 pack is a CSV file of fixes: each row says what speech recognition writes (`pattern`, shown in Scribe as
 **Scribe hears**) and what Scribe should type instead (`replacement`, shown as **Scribe writes**). Scribe swaps
 them on the person's PC as they dictate. If they turn on **Use in AI cleanup** for the word pack, AI cleanup also
-gets its words as vocabulary.
+gets, as vocabulary, the words each dictation appears to mention.
 
 The full guide, for people and assistants alike, is `docs/word-packs.md` in the Scribe repository
 (https://github.com/ChrisMcKee1/scribe/blob/main/docs/word-packs.md). Read it when you need the Settings steps,
@@ -148,9 +148,9 @@ few lines:
   word pack**, and choose **Save**.
 - To say a few of the words in **Try dictation** (in Settings), which shows what Scribe heard, and to adjust any
   pattern that doesn't match it.
-- That **Use in AI cleanup** starts off. Turning it on sends the words to wherever their AI cleanup runs, so for
-  confidential terms they should leave it off unless AI cleanup runs on their PC or with a service their
-  organization approves.
+- That **Use in AI cleanup** starts off. Turning it on sends the words a dictation mentions to wherever their AI
+  cleanup runs, so for confidential terms they should leave it off unless AI cleanup runs on their PC or with a
+  service their organization approves.
 - Which terms you left out or weren't sure of.
 
 ## Fixing an existing word pack

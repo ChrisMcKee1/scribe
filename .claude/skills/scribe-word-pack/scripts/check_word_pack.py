@@ -699,9 +699,8 @@ def check(document: Document) -> List[Finding]:
             add("NOTE", term.line, "enabled is false, so this row is imported but not used until you turn it on.")
 
     if len(document.terms) > LARGE_VOCABULARY:
-        add("WARNING", 0, "%d words is a lot for one word pack. Every entry can change what you dictate, and AI "
-            "cleanup's vocabulary holds at most 5,000 words, so keep it to the words people use."
-            % len(document.terms))
+        add("WARNING", 0, "%d words is a lot for one word pack. Every entry can change what you dictate, so keep it "
+            "to the words people use." % len(document.terms))
 
     return findings
 

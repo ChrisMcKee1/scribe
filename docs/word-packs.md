@@ -38,8 +38,9 @@ This page is written for AI assistants too. Give an assistant its link and ask f
   done, without touching your own words.
 - **Stays on your PC unless you choose.** A word pack works on your PC. A word pack you make or import is kept
   out of AI cleanup until you turn on **Use in AI cleanup** for it.
-- **Helps AI cleanup too.** With **Use in AI cleanup** on, AI cleanup gets the word pack's words as vocabulary,
-  so it can spell them your way even when speech recognition gets close but not exact.
+- **Helps AI cleanup too.** With **Use in AI cleanup** on, AI cleanup gets the word pack's words that each
+  dictation appears to mention, so it can spell them your way even when speech recognition gets close but not
+  exact.
 
 Good candidates for a word pack:
 
@@ -139,8 +140,7 @@ A few details:
 - **Encoding.** Save the file as UTF-8, so accented letters come through the same on every PC. In Excel, choose
   **CSV UTF-8 (Comma delimited)**. Scribe reads other files with your PC's Windows code page.
 - **Size.** A file can have up to 50,000 rows and 10 MB, and a value up to 2,000 characters. Bigger isn't
-  better, though: every entry can change what you dictate, and AI cleanup's vocabulary has room for only so
-  many words (see [AI cleanup and your word packs](#ai-cleanup-and-your-word-packs)).
+  better, though: every entry can change what you dictate, so keep a word pack to the words people use.
 - **Files Scribe exports** start with a `# formula-guard: 1` line, which protects values that start with `=`,
   `+`, `-` or `@` when a spreadsheet opens the file. Keep that line when you edit an exported file, and leave it
   out of a file you write yourself.
@@ -321,9 +321,11 @@ exact.
   [Privacy](../PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly what each request carries.
 - **Off until you choose.** Word packs you make or import start with Use in AI cleanup off. Built-in ones start
   with it on.
-- **Confidential terms.** Keep unreleased product names, customer names and other confidential terms out of AI
-  cleanup unless AI cleanup runs on your PC or with a service your organization approves. A dictation that
-  mentions such a term would send it. The word pack still fixes them on your PC.
+- **Confidential terms.** Leave Use in AI cleanup off for a word pack of unreleased product names, customer names
+  or other confidential terms, unless AI cleanup runs on your PC or with a service your organization approves:
+  with it on, a dictation that mentions such a term sends it as vocabulary. The word pack still fixes them on
+  your PC. Words you dictate reach the AI service in the text either way, so for confidential dictation, use AI
+  cleanup on your PC or your shortcut without AI cleanup.
 - **Room.** Each cleanup request holds up to 5,000 words and 24,000 characters of vocabulary, or 80 words with
   the short instructions, your words first, picked from the ones the dictation appears to mention. A word that
   doesn't fit is still fixed on your PC. Since Scribe 0.5.2 a large word pack no longer crowds out the words a
