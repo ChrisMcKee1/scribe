@@ -864,6 +864,12 @@ public sealed class SettingsRepository : ISettingsRepository
         settings.AiCleanupLocalPrompt ??= string.Empty;
         settings.TranscriptionModelId ??= Transcription.TranscriptionModelCatalog.DefaultId;
         settings.DecodeThreads = Math.Clamp(settings.DecodeThreads, 0, 16);
+
+        // A stored size is one an app can load with: zero or less is the app's own setting, and any other is kept within
+        // the bounds Scribe asks for.
+        settings.AiCleanupOllamaContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupOllamaContextTokens);
+        settings.AiCleanupLmStudioContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupLmStudioContextTokens);
+
         return settings;
     }
 }

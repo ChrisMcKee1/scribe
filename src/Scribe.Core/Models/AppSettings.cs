@@ -232,6 +232,21 @@ public sealed class AppSettings
     public string? AiCleanupCustomModel { get; set; }
 
     /// <summary>
+    /// Which API another AI service is reached through: Chat Completions, or Responses (every request then says
+    /// <c>store: false</c>). An address that ends in <c>/chat/completions</c> or <c>/responses</c> names its own API, which
+    /// Settings saves here, and Ollama and LM Studio at their own addresses always take Chat Completions
+    /// (<see cref="Cleanup.CustomServiceAddress.Effective"/>).
+    /// </summary>
+    /// <remarks>
+    /// Chat Completions for every install that has not chosen, as every release before 0.5.3 sent: the default is the
+    /// property initializer, so an older document reads as unchanged. An older build ignores the key and leaves it out of a
+    /// document it saves, which reads as Chat Completions again. A value this build does not know reads as Chat Completions
+    /// (<see cref="Cleanup.CustomApiStyleJsonConverter"/>). A whole-document setting (Save applies it, Cancel discards it).
+    /// </remarks>
+    [JsonConverter(typeof(Cleanup.CustomApiStyleJsonConverter))]
+    public Cleanup.CustomApiStyle AiCleanupCustomApiStyle { get; set; } = Cleanup.CustomApiStyle.ChatCompletions;
+
+    /// <summary>
     /// Which model the GitHub Copilot provider should ask for, e.g. <c>gpt-5</c> or
     /// <c>claude-sonnet-4</c>. Blank means whichever model that GitHub account defaults to.
     /// </summary>
@@ -294,6 +309,38 @@ public sealed class AppSettings
     /// </summary>
     [JsonConverter(typeof(DpapiProtectedStringConverter))]
     public string? AiCleanupOtherServiceApiKey { get; set; }
+
+    /// <summary>The API remembered with <see cref="AiCleanupOtherServiceEndpoint"/>, as <see cref="AiCleanupCustomApiStyle"/>.</summary>
+    [JsonConverter(typeof(Cleanup.CustomApiStyleJsonConverter))]
+    public Cleanup.CustomApiStyle AiCleanupOtherServiceApiStyle { get; set; } = Cleanup.CustomApiStyle.ChatCompletions;
+
+    /// <summary>
+    /// The context size, in tokens, Scribe asks Ollama to load the model with; 0 leaves it to Ollama's own setting (Context
+    /// length), as every release before 0.5.3 did. A size sends every request through Ollama's own chat API, the only one
+    /// that takes a size (<c>num_ctx</c>); 0 keeps its OpenAI-compatible API. 0 for every install that has not chosen a
+    /// size: the default is the property initializer, so an older document reads as unchanged, and a whole-document
+    /// setting (Save applies it, Cancel discards it).
+    /// </summary>
+    public int AiCleanupOllamaContextTokens { get; set; }
+
+    /// <summary>
+    /// The context size, in tokens, Scribe loads LM Studio's model with through LM Studio's own API; 0 leaves it to LM
+    /// Studio's own setting for the model. LM Studio does not take Scribe's idle time for a model loaded that way, so
+    /// Scribe frees it itself after the idle time. 0 for every install that has not chosen a size.
+    /// </summary>
+    public int AiCleanupLmStudioContextTokens { get; set; }
+
+    /// <summary>
+    /// For Ollama: send the whole vocabulary (the dictionary and the word packs AI cleanup may use) when it fits in the
+    /// model's context, not only the terms a dictation appears to mention. Off for every install unless turned on.
+    /// </summary>
+    public bool AiCleanupOllamaSendWholeVocabulary { get; set; }
+
+    /// <summary>The same as <see cref="AiCleanupOllamaSendWholeVocabulary"/>, for LM Studio.</summary>
+    public bool AiCleanupLmStudioSendWholeVocabulary { get; set; }
+
+    /// <summary>The same as <see cref="AiCleanupOllamaSendWholeVocabulary"/>, for Foundry Local (Let Scribe manage it).</summary>
+    public bool AiCleanupFoundryLocalSendWholeVocabulary { get; set; }
 
     /// <summary>
     /// How decoded text is placed into the focused app. Unicode typing is the default because it

@@ -32,6 +32,10 @@ Foundry Local, what Scribe did wrong with them, what 0.5.2 changes, and which mo
    quality. Microsoft Foundry is asked not to spend time reasoning, which saved about a third of the time on
    gpt-6-sol at the same score. The writing style now asks for a list when you list things. With all of it,
    every model measured scored as well or better than with 0.5.1's requests.
+5. **Round three (0.5.3, below) lets a model on this PC read more at once and get the whole vocabulary**, as a
+   choice for each app. Every request is now kept to what the model's context holds, the dictation first. Sending
+   the whole vocabulary scored no better on Gemma 4 E4B (**87.7** against **87.0**) and got the 2B models a fifth to
+   a third fewer word pack terms right, so it stays off unless you turn it on.
 
 ## Round two: vocabulary, instructions, lists and reasoning
 
@@ -155,6 +159,72 @@ points of the cloud models in half a second, at no cost per dictation.
   cloud number above, is now on by default: the token is reused until shortly before it expires, and an account
   change made outside Scribe is seen at the next token refresh rather than the next request.
   `PerfFlags.CliTokenEveryRequest` brings back the old path for one release.
+
+## Round three: the context size and the whole vocabulary (0.5.3)
+
+Measured September 30, 2026, on the same PC with Ollama 0.35.0, LM Studio 0.4.25 and Foundry Local 2.1.0, for the
+setting that lets a model on this PC read more at once and receive the whole vocabulary rather than the terms a
+dictation mentions. The frozen 25 dictations ran three times each with all 11 built-in word packs, 1,332 terms or
+about 8,300 tokens, and the judge graded every arm in one pass (its spread between repeated items: 1.3 points on
+average, 2.0 at most). "Terms right" is round two's count, the 30 uses of word pack terms in 7 dictations. Every
+number is in [`benchmarks/context-window-2026-09-30.json`](benchmarks/context-window-2026-09-30.json).
+
+| Model, context | Terms the dictation mentions: score, terms right, typical, first dictation | Whole vocabulary: score, terms right, typical, first dictation |
+|---|---|---|
+| gemma4:e4b, Ollama, 32K | **87.0**, 97%, 0.44 s, 0.9 s | **87.7**, 96%, 0.50 s, 2.4 s |
+| gemma4:e2b, Ollama, 32K | **81.3**, 80%, 0.28 s, 0.8 s | 79.5, 53%, 0.29 s, 1.5 s |
+| google/gemma-4-e2b, LM Studio, 32K | 78.5, 76%, 0.33 s, 0.7 s | 79.0, 53%, 0.36 s, 1.8 s |
+| gemma4:e4b, Ollama, 8K | | 87.0, 97%, 0.47 s, 1.4 s |
+| gemma4:e2b, Ollama, 8K | | 79.3, 60%, 0.29 s, 0.9 s |
+
+A request carried about 1,500 input tokens with the terms its dictation mentions, 13,700 with the whole vocabulary,
+and 6,400 at 8K, where the terms the dictation mentions went first and then as much of the rest as fit. The same
+check with the maintainer's own ten word packs (762 terms) and the two default packs, in 60 synthetic dictations
+that each mention three of those terms by what Scribe hears (43 of the 180 mentions slightly misheard), scored on
+this PC only by the written forms kept:
+
+| Model | Terms the dictation mentions | Whole vocabulary, 32K | Whole vocabulary, 8K |
+|---|---:|---:|---:|
+| gemma4:e4b, Ollama | 98% | 97% | 98% |
+| gemma4:e2b, Ollama | 95% | 80% | 91% |
+| google/gemma-4-e2b, LM Studio | 96% | 79% | 92% |
+
+- **The whole vocabulary bought nothing measurable.** Gemma 4 E4B scored the same within the judge's noise and kept
+  the same share of terms. The 2B models got a fifth to a third fewer terms right: a list of 1,300 lines hides the
+  few a dictation needs from a small model. Every request also reads 9 to 12 times as many tokens. Ollama and LM
+  Studio read them once a load, which made the first dictation after a load 1 to 1.5 s slower on the GPU, and cache
+  them after that. Foundry Local caches nothing, so its CPU builds would read them for every dictation: Qwen2.5 0.5B
+  took 2.2 s for a 1,700-token prompt and 11.5 s for 7,500.
+- **Repeating the mentioned terms after the whole list**, to point them out, lifted the 2B models' terms right from
+  53% to 70% but cost Gemma 4 E4B 3.6 points and once turned INT4 into INT8, a near match the repetition put next to
+  the dictation. Dropped.
+- **What helps is fitting every request to the context the model actually loaded**, the dictation and the longest
+  answer it allows first. Nothing checked before 0.5.3, and Ollama's 4,096-token default silently cut the start of a
+  long request (round one).
+
+**Decided:** every request to Foundry Local, Ollama or LM Studio is fitted to its context, whatever the settings: the
+dictated text and the longest answer the request allows take their room first, in chunks small enough to leave the
+vocabulary some, and a dictation that cannot fit even in short chunks is typed as heard. **Send your whole vocabulary
+when it fits** is off by default for every app, and its hint says a long list can confuse a small model. **Context
+size** defaults to the app's own setting.
+
+How each app takes a size:
+
+- **Ollama** reads one only through its own API (`num_ctx`); its OpenAI-compatible address ignores it. So with a size
+  chosen, Scribe sends every request through Ollama's own API asking for that size, capped at the most the model takes
+  (`/api/show`), and Ollama loads the model at it once, though another app asking for the same model at another size
+  makes Ollama reload it whenever the two take turns. With **Ollama's setting**, Scribe keeps the OpenAI-compatible
+  requests every earlier release sent and fits to the size Ollama loaded for Scribe's own request (`/api/ps`). Ollama's
+  own default is 4,096 tokens below 24 GB of graphics memory, 32,768 from 24 GB and 262,144 from 48 GB.
+- **LM Studio** loads a model at its own size through its OpenAI-compatible address, and at a chosen size through its
+  own chat API (`/api/v1/chat` with `context_length`). So with a size chosen, Scribe loads the model that way before
+  the first request, and requests by name reach that copy. LM Studio keeps a copy loaded this way for its own hour
+  whatever Scribe asks (its load refuses a `ttl`), so Scribe frees it itself after the idle time and when Scribe
+  closes. LM Studio makes a second copy rather than resizing one, so a copy it loaded on demand at another size is
+  unloaded first; a copy you loaded yourself keeps its size. Gemma 4 E2B's context took 545 MB at 32K against 214 MB
+  at 8K, by LM Studio's own estimate.
+- **Foundry Local** fixes each model's size in its files (`genai_config.json`: 32,768 for Qwen2.5 0.5B); its catalog
+  reports none. Scribe reads it and fits to it.
 
 ## What to use
 
@@ -341,10 +411,10 @@ setting to Never to leave their own policy in place (Ollama keeps the time it wa
 
 ### Tips for each runtime
 
-- **Ollama:** 0.34.4 was measured. Keep Automatic instructions: Ollama's default context is 4,096
-  tokens, and the short instructions with 80 vocabulary terms come to about 2,000. If you choose the
-  detailed instructions, raise the context first (`OLLAMA_CONTEXT_LENGTH=16384`), or Ollama drops
-  the start of the request without saying so.
+- **Ollama:** 0.34.4 and 0.35.0 were measured. Keep Automatic instructions. Scribe fits every request to the
+  context Ollama loaded the model with (its default is 4,096 tokens below 24 GB of graphics memory), the dictation
+  first. To give the model more room, choose a **Context size** under Ollama settings in AI cleanup, or change
+  **Context length** in Ollama's settings (`OLLAMA_CONTEXT_LENGTH`).
 - **LM Studio:** 0.4.25 with the CUDA 12 llama.cpp runtime 2.47.0 was measured. Its lmstudio-community
   `phi-4-mini-instruct` build scored 49.6 against 78.7 for Ollama's `phi4-mini`; use Ollama for
   Phi-4 Mini. Speculative decoding does not help dictation: LM Studio takes a draft model only when the model
@@ -535,11 +605,20 @@ dotnet run -c Release --project tools/Scribe.Evals -- --benchmark --no-local --r
 # Grade against a different writing style in a store of its own: grades are keyed by case and answer only
 dotnet run -c Release --project tools/Scribe.Evals -- --blind-judge --writing-style-file style.txt `
   --judge-results runs/cloud/results.json --out runs/judge-style
+
+# Round three: every built-in word pack ("all"), a context size (for Ollama, through its own API), and the whole
+# vocabulary through the production admission path (--whole-vocabulary; leave it out for the terms each dictation
+# mentions). --glossary-csv adds word pack files; keep a cloud judge off runs that carry private terms.
+dotnet run -c Release --project tools/Scribe.Evals -- --benchmark --no-cloud --runs 3 --no-judge `
+  --local-models "ollama:gemma4:e4b,ollama:gemma4:e2b,lmstudio:google/gemma-4-e2b" `
+  --cases-from docs/benchmarks/gpt6-astra-2026-09-04.json --glossary-libraries all --vocabulary mentioned `
+  --context-size 32768 --whole-vocabulary --out runs/whole32
 ```
 
 The scores, times and token counts behind every table are in
-[benchmarks/local-models-2026-09-29.json](benchmarks/local-models-2026-09-29.json) (round one) and
-[benchmarks/cleanup-tuning-2026-09-29.json](benchmarks/cleanup-tuning-2026-09-29.json) (round two).
+[benchmarks/local-models-2026-09-29.json](benchmarks/local-models-2026-09-29.json) (round one),
+[benchmarks/cleanup-tuning-2026-09-29.json](benchmarks/cleanup-tuning-2026-09-29.json) (round two) and
+[benchmarks/context-window-2026-09-30.json](benchmarks/context-window-2026-09-30.json) (round three).
 
 ## Full results
 

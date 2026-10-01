@@ -58,6 +58,22 @@ internal sealed record BenchmarkConfig
     /// </summary>
     public CleanupVocabularyMode VocabularyMode { get; init; } = CleanupVocabularyMode.All;
 
+    /// <summary>
+    /// The context size a model on this PC is asked to load at (see <see cref="CleanupOptions.LocalContextTokens"/>): for
+    /// Ollama, through its own chat API, as Settings does with a size chosen.
+    /// </summary>
+    public int? LocalContextTokens { get; init; }
+
+    /// <summary>The whole vocabulary goes to a model on this PC when it fits (<see cref="CleanupOptions.SendWholeVocabulary"/>).</summary>
+    public bool SendWholeVocabulary { get; init; }
+
+    /// <summary>
+    /// Requests go through the production admission path (<see cref="TextCleanupService.Admit"/>), which fits each request's
+    /// vocabulary into the model's context, rather than a glossary this harness renders: for a context size or the whole
+    /// vocabulary, which only that path applies.
+    /// </summary>
+    internal bool Admitted => SendWholeVocabulary || LocalContextTokens is not null;
+
     public LocalEndpoints LocalEndpoints { get; init; } = LocalEndpoints.Default;
 
     /// <summary>Leaves local servers' models loaded between roster entries, for instances loaded by hand (a CPU-only load).</summary>
@@ -310,7 +326,18 @@ internal sealed class BenchmarkRunner
             svc.Configure(CleanupOptions.Disabled);
             if (!_cfg.KeepServerModelsLoaded)
             {
-                await LocalServerControl.UnloadAsync(model, ct).ConfigureAwait(false);
+                // Ollama and LM Studio at their own address are freed through the service's own release, which turning
+                // cleanup off has just queued: a second unloader beside it once left LM Studio loading the model again at
+                // its own size (0.5.3). Other servers go through the harness's own request.
+                if (model.Provider == CleanupProvider.OpenAiCompatible &&
+                    LocalAiServer.AppAt(model.Endpoint) != LocalServerApp.None)
+                {
+                    await svc.FreeLocalAppModelAsync(model.Endpoint!, model.Target, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    await LocalServerControl.UnloadAsync(model, ct).ConfigureAwait(false);
+                }
             }
 
             results.RemoveAll(r => string.Equals($"{r.Group}/{r.Id}", key, StringComparison.OrdinalIgnoreCase));
@@ -353,7 +380,11 @@ internal sealed class BenchmarkRunner
         QualityJudge? judge, CancellationToken ct)
     {
         var endpoint = model.Provider == CleanupProvider.OpenAiCompatible ? model.Endpoint : null;
-        var glossary = _cfg.GlossaryFor(model.Provider, endpoint);
+        var admitted = _cfg.Admitted && model.Group != BenchGroup.Cloud;
+        var glossary = admitted ? null : _cfg.GlossaryFor(model.Provider, endpoint);
+        var vocabulary = admitted
+            ? new CleanupVocabulary(_cfg.GlossaryEntries ?? [], Scribe.Core.Libraries.AiVocabularyScope.None)
+            : null;
         var options = model.Provider switch
         {
             CleanupProvider.AzureFoundry => new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
@@ -375,6 +406,18 @@ internal sealed class BenchmarkRunner
                 PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
         };
 
+        // The tuning Settings gives the app on this PC (LocalModelTuning), and through the admission path the vocabulary
+        // mode the product sends with.
+        if (admitted)
+        {
+            options = options with
+            {
+                VocabularyMode = _cfg.VocabularyMode,
+                LocalContextTokens = _cfg.LocalContextTokens,
+                SendWholeVocabulary = _cfg.SendWholeVocabulary,
+            };
+        }
+
         var loadTimeout = TimeSpan.FromSeconds(
             model.Group == BenchGroup.Cloud ? _cfg.CloudReadyTimeoutSeconds : _cfg.LocalReadyTimeoutSeconds);
 
@@ -392,8 +435,10 @@ internal sealed class BenchmarkRunner
             Status = "error",
             LoadedAtUtc = DateTime.UtcNow.ToString("u"),
             PromptStyle = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint).ToString(),
-            GlossaryTerms = _cfg.GlossaryEntries is { Count: > 0 } glossaryEntries && glossary is not null
-                ? CleanupPrompt.CountGlossary(glossaryEntries, _cfg.GlossaryBudgetFor(model.Provider, endpoint)).Included
+            GlossaryTerms = _cfg.GlossaryEntries is { Count: > 0 } glossaryEntries && (glossary is not null || admitted)
+                ? admitted
+                    ? CleanupPrompt.CountGlossary(glossaryEntries, int.MaxValue).Eligible
+                    : CleanupPrompt.CountGlossary(glossaryEntries, _cfg.GlossaryBudgetFor(model.Provider, endpoint)).Included
                 : 0,
             SystemPromptChars = TextCleanupService.BuildSystemPrompt(options).Length,
         };
@@ -444,14 +489,18 @@ internal sealed class BenchmarkRunner
         try
         {
             // Under the Mentioned vocabulary each dictation carries its own glossary: a prompt-only change the service
-            // applies in place, with no reconnect, exactly as it would for the next dictation in the app.
+            // applies in place, with no reconnect, exactly as it would for the next dictation in the app. Through the
+            // admission path the service picks and fits it itself.
             void UseVocabularyFor(string dictation)
             {
-                if (_cfg.VocabularyMode == CleanupVocabularyMode.Mentioned && directClient is null)
+                if (_cfg.VocabularyMode == CleanupVocabularyMode.Mentioned && directClient is null && !admitted)
                 {
                     svc.Configure(options with { Glossary = _cfg.GlossaryFor(model.Provider, endpoint, dictation) });
                 }
             }
+
+            Task<CleanupResult> Clean(string text) =>
+                vocabulary is null ? svc.CleanAsync(text, ct) : svc.Admit(vocabulary).CleanAsync(text, ct);
 
             // Keeps requests at least PaceMs apart, start to start, so the timing measures the model and not a quota.
             var lastStart = 0L;
@@ -477,7 +526,7 @@ internal sealed class BenchmarkRunner
             var warmup = Stopwatch.StartNew();
             if (directClient is null)
             {
-                _ = await svc.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
+                _ = await Clean(cases[0].Transcript).ConfigureAwait(false);
             }
             else
             {
@@ -507,7 +556,7 @@ internal sealed class BenchmarkRunner
                     if (directClient is null)
                     {
                         svc.UsageObserver = details => usage = AddUsage(usage, details);
-                        var cleaned = await svc.CleanAsync(c.Transcript, ct).ConfigureAwait(false);
+                        var cleaned = await Clean(c.Transcript).ConfigureAwait(false);
                         output = cleaned.Text;
                         outcome = cleaned.Outcome.ToString();
                     }
@@ -605,6 +654,8 @@ internal sealed class BenchmarkRunner
                 Cases = caseResults.ToArray(),
                 LoadSeconds = loadSw.Elapsed.TotalSeconds,
                 WarmupMs = warmup.Elapsed.TotalMilliseconds,
+                ContextTokens = admitted ? svc.LocalContextTokens : null,
+                WholeVocabulary = admitted && _cfg.SendWholeVocabulary,
             };
         }
         catch (Exception ex)

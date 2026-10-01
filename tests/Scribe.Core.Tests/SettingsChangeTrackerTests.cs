@@ -65,6 +65,34 @@ public sealed class SettingsChangeTrackerTests
         Assert.Equal([SettingsPage.AiCleanup], SettingsChangeTracker.Compare(baseline, draft).Pages);
     }
 
+    [Theory]
+    [InlineData(nameof(AppSettings.AiCleanupCustomApiStyle))]
+    [InlineData(nameof(AppSettings.AiCleanupOtherServiceApiStyle))]
+    public void Another_AI_service_s_API_is_an_AI_cleanup_change(string property)
+    {
+        var baseline = AppSettings.CreateDefault();
+        var draft = baseline.Clone();
+        typeof(AppSettings).GetProperty(property)!.SetValue(draft, Scribe.Core.Cleanup.CustomApiStyle.Responses);
+
+        Assert.Equal([SettingsPage.AiCleanup], SettingsChangeTracker.Compare(baseline, draft).Pages);
+    }
+
+    [Fact]
+    public void A_stored_API_the_address_overrides_is_no_change()
+    {
+        // An older build drops the setting when it saves, so the stored API can differ from the one the address names; the
+        // page then stores the address's, which reaches the service the same way.
+        var baseline = AppSettings.CreateDefault();
+        baseline.AiCleanupCustomEndpoint = "https://ai.example.invalid/v1/responses";
+        baseline.AiCleanupOtherServiceEndpoint = "https://ai.example.invalid/v1/chat/completions";
+        baseline.AiCleanupOtherServiceApiStyle = Scribe.Core.Cleanup.CustomApiStyle.Responses;
+        var draft = baseline.Clone();
+        draft.AiCleanupCustomApiStyle = Scribe.Core.Cleanup.CustomApiStyle.Responses;
+        draft.AiCleanupOtherServiceApiStyle = Scribe.Core.Cleanup.CustomApiStyle.ChatCompletions;
+
+        Assert.False(SettingsChangeTracker.Compare(baseline, draft).IsDirty);
+    }
+
     [Fact]
     public void Compares_multiple_settings_pages_in_navigation_order()
     {

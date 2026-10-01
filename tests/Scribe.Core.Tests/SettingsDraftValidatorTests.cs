@@ -243,6 +243,27 @@ public sealed class SettingsDraftValidatorTests
         Assert.Contains(issues, issue => issue.Code == ValidationCode.CustomModelEmpty && issue.Message == "Enter the name of the model.");
     }
 
+    [Theory]
+    [InlineData("https://ai.example.invalid/v1/completions", true)]
+    [InlineData("https://ai.example.invalid/v1/chat/completions", false)]
+    [InlineData("https://ai.example.invalid/v1/responses", false)]
+    [InlineData("https://ai.example.invalid/v1", false)]
+    public void An_address_ending_in_the_older_completions_path_is_refused_before_Save(string address, bool refused)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+        settings.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        settings.AiCleanupCustomEndpoint = address;
+        settings.AiCleanupCustomModel = "some-model";
+
+        var issues = SettingsDraftValidator.Validate(new SettingsDraft(settings));
+
+        Assert.Equal(
+            refused,
+            issues.Any(issue => issue.Code == ValidationCode.CustomEndpointInvalid &&
+                issue.Message == SettingsDraftValidator.CustomEndpointOldCompletionsMessage));
+    }
+
     [Fact]
     public void Duration_fields_use_the_exact_range_message()
     {

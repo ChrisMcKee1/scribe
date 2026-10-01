@@ -214,6 +214,12 @@ not the current macOS effort described here.
 - **`Azure.Core`, not `Azure.Identity`, decides how the credentials behave.** `Azure.Identity`
   type-forwards `AzureCliCredential` and `ClientSecretCredential` to `Azure.Core`, whose version the
   `Azure.ResourceManager` packages lift transitively.
+- **OllamaSharp (MIT) moves with the `Microsoft.Extensions.AI` set.** It is the `IChatClient` for Ollama's own API
+  (Ollama with a context size chosen, 0.5.3), and 5.4.30 depends on `Microsoft.Extensions.AI` 10.8.0, which 10.9.0 satisfies.
+  After a bump of either, check that `ChatOptions.MaxOutputTokens` still maps to `num_predict`,
+  `ReasoningEffort.None` to `think: false`, and the `num_ctx` and `keep_alive` additional properties to the request,
+  and that an error answer is still an `HttpRequestException` with a status code; `LocalContextServiceTests` pins the
+  wire against a scripted Ollama.
 
 ### Cloud cleanup stores nothing (keep it that way)
 
@@ -237,8 +243,25 @@ This is a privacy control, not a preference: if it silently stops applying, Scri
 promise. `CleanupStoredOutputWireTests` pins both surfaces from the actual request JSON over a fake
 transport; `StoredOutputWireContractTests` pins that the packages do not send `store=false` on their
 own, which is what makes those wire tests measure Scribe's control; and the fail-closed tests stay. Do
-not relax any of them. Only the Azure agents carry the control: custom OpenAI-compatible endpoints and
-Foundry Local send no `store` field.
+not relax any of them. The Azure agents carry the control, and so does another AI service reached
+through Responses (0.5.3, below): OpenAI's Responses stores what it answers unless told not to, so its
+agent is built with the same wrapper (`DisableStoredOutput`, prompt caching left alone), and
+`CustomApiStyleTests` pins `store: false` on every request there. Another AI service on Chat Completions
+and Foundry Local send no `store` field.
+
+**Another AI service is reached through Chat Completions or Responses** (`AppSettings.AiCleanupCustomApiStyle`, the
+"API" box under its address; Chat Completions as the property initializer, so an older document reads as unchanged).
+The OpenAI SDK adds the API's path to the address it is given, so an address pasted with `/chat/completions` on it was
+sent to `.../chat/completions/chat/completions`: `CustomServiceAddress` takes an address that ends in `/chat/completions`
+or `/responses` (any case, a final slash allowed, the query kept) as that API with the path taken off, and that wins over
+the box, which then shows it and cannot be changed. Ollama and LM Studio at their own addresses always take Chat
+Completions, the API Scribe manages them through (`CustomServiceAddress.Effective`, which the service, the session banner's
+`api=`, the remote-activity fingerprint and Save all use; Save stores the API the boxes reach the service with). An address
+ending in the older `/completions` is refused, at Save and by the service, with why. There is no fallback between the two
+APIs, and a 404 from Responses names both possible causes (a wrong model name, or a service without Responses). An older
+build ignores the setting and adds `/chat/completions` to whatever address is saved, so an address that ends in an API's
+path does not work there. The macOS port has no such setting; its `PORTING-PLAN.md` row for another AI service may be
+stale.
 
 **`store=false` does not cover Microsoft Foundry's prompt cache; `AppSettings.AiCleanupPromptCaching` does.** On (the
 property initializer, so every install reads as on) keeps the request Scribe has always sent, and the service's own
@@ -286,24 +309,35 @@ anything was dictated.
   (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
   glossaries are unchanged). `CleanupVocabularyMode.All`, every release before 0.5.2, stays for the harness
   (`--vocabulary all`); change the selector only with the harness's vocabulary accuracy (`p2\vocab_accuracy.py` in
-  the benchmark evidence) and judge showing it does not hurt cleanup.
+  the benchmark evidence) and judge showing it does not hurt cleanup. **A model on this PC** (Foundry Local, or a
+  server at a loopback address) gets that glossary fitted into its context instead of the fixed budget, the dictation
+  and its answer first (`GlossaryForLocked`, see "Context size and the whole vocabulary on this PC"); with that app's
+  **Send your whole vocabulary when it fits** on (`CleanupOptions.SendWholeVocabulary`), the whole vocabulary when it
+  fits, otherwise the mentioned terms first and then the leading run of the rest that fits (`CleanupPrompt.FitGlossary`).
+  A cloud service or a server elsewhere keeps the budgets above whatever the settings say.
 - **The readiness probe carries no vocabulary.** `ProbeAgentAsync` builds its own agent from the factory
   the initialization connected, with `BuildProbeSystemPrompt` (the real guardrails and writing style,
   without the glossary), so it still reasons like a cleanup call. Never hand it the serving agent.
   `CleanupProbeVocabularyTests` pins this from the wire for custom endpoints, Foundry Local, Azure
   Responses and the Chat Completions fallback, and through the factory for Copilot.
-- **The readying request carries no vocabulary, and goes only to a server on this PC.** When a recording
+- **The readying request carries no vocabulary unless the whole vocabulary was chosen, and goes only to a server on
+  this PC.** When a recording
   starts, `AdmittedCleanup.Prewarm` sends a server at a loopback address (`LocalAiServer.Serves`) the
-  dictation's own instructions and writing style (built with `CleanupVocabularyMode.None`) with an empty
+  dictation's own instructions and writing style with an empty
   transcript and a one-token limit, through the
   dictation's admission (`CleanupRequestKind.Prewarm`), unless the model answered in the last
   `LocalAiServer.PrewarmAfterIdleSeconds`. They are exactly the start of every dictation's prompt
   (`PromptParts.Build` appends the glossary after them), so the server's cached prefix is the part each dictation
-  shares. `CleanupDisclosure.ReadiesALocalServer` and PRIVACY.md say so, and
+  shares. With that app's whole-vocabulary switch on, it also carries the leading run of the whole vocabulary that
+  fits beside a typical dictation (`ContextBudget.ReadyingVocabularyTokens`), which every dictation's request then
+  starts with, so the app has read it by the time the dictation arrives; off, no vocabulary at all.
+  `CleanupDisclosure.ReadiesALocalServer` and PRIVACY.md say so, and
   `LocalAiServerTests` pins both the wire and that no other destination is readied. Never extend it to a remote
-  service. For Ollama or LM Studio at its own address (`LocalAiServer.AppAt`), the readying request first asks the
-  app whether it holds the model (`LocalServerClient.ReadAsync`), which is what the recording indicator's
-  "Starting local model" means; `CleanupDisclosure.ManagesALocalApp` and PRIVACY.md disclose those requests.
+  service. For Ollama or LM Studio at its own address (`LocalAiServer.AppAt`), every recording first asks the app
+  whether it holds the model (`LocalServerClient.ReadAsync`), even when it answered moments ago, which is what the
+  recording indicator's "Starting local model" means; a model the app still holds at the size the dictation is fitted
+  into, and that answered within that time, gets no readying request. `CleanupDisclosure.ManagesALocalApp` and
+  PRIVACY.md disclose those requests.
 - **The wording lives in Core.** `CleanupDisclosure` holds the AI cleanup page card and the dictionary
   suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
   glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
@@ -381,7 +415,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows: 9986 as of 0.5.2, 9911 with the filter below).
+# Run the unit tests (must stay green; the count only ever grows: 10174 as of 0.5.3, 10099 with the filter below).
 # Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
 # session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
@@ -3254,8 +3288,9 @@ points on average:
   through the options' JSON patch, because Ollama ignores the `max_completion_tokens` the OpenAI package sends and a
   looping model ran to 19,711 tokens. A remote service gets none of these; `LocalAiServerTests` pins both sides from
   the wire. A server on this PC that answers the readiness probe with a 400 gets one plain probe without the two
-  extra fields, and if that passes, plain requests for that server and model (a strict validator such as vLLM's may
-  allow only low, medium or high for `reasoning_effort`); if it fails too, the first failure stands.
+  extra fields, and if that passes, plain requests for that server, API and model (a strict validator such as vLLM's may
+  allow only low, medium or high for `reasoning_effort`; one API refusing the fields says nothing about the other,
+  `PlainRequestsKey`); if it fails too, the first failure stands.
 - **A recording readies the model** (`AdmittedCleanup.Prewarm`, above): Ollama unloads an idle model after 5
   minutes unless a request's `keep_alive` asks for longer (its OpenAI-compatible address honors the field, measured on
   0.34.4), which made the next dictation wait 3 to 5 s on the GPU. One readying request at a time, skipped while the
@@ -3288,10 +3323,14 @@ recording indicator saying so, rather than being typed without cleanup.
   model the app does not list shows a warning instead of being swapped. The page reads the app when it opens, whatever
   the switch, and again when AI cleanup is turned on if nothing was read.
 - **`LocalServerClient` is the only code that talks to their management APIs**: Ollama's `/api/tags` (chat models
-  only: capabilities include "completion"), `/api/ps` and `/api/generate` with `keep_alive: 0`; LM Studio's
-  `/api/v1/models` (`type: llm`, `loaded_instances`, whose ids count as loaded names too) and `/api/v1/models/unload` by
-  instance id. Loopback only, never anything the user said, only the key saved for that same address as a bearer token
-  (a 401 or 403 reads as `LocalServerReach.NeedsKey`), and the callers log counts and enum names.
+  only: capabilities include "completion"), `/api/ps` (with each loaded model's `context_length`), `/api/show` (a
+  model's own largest context) and `/api/generate` with `keep_alive: 0`; LM Studio's `/api/v1/models` (`type: llm`,
+  `max_context_length`, `loaded_instances` with each instance's `config.context_length` and `remaining_ttl_seconds`,
+  whose ids count as loaded names too), `/api/v1/models/unload` by instance id, and `/api/v1/chat` with
+  `context_length`, the word "ok", one output token and `store: false`, which loads a model at a chosen size
+  (`LoadWithContextAsync`). Loopback only, never anything the user said, only an API key saved for that same server as a
+  bearer token (the settings' key, or, to free a copy Scribe loaded with a key since replaced, that earlier key:
+  `KeysFor`; a 401 or 403 reads as `LocalServerReach.NeedsKey`), and the callers log counts and enum names.
   `CleanupDisclosure.ManagesALocalApp` and PRIVACY.md disclose it; change them with it.
 - **When memory comes back** (the maintainer's rules, reviewed adversarially for 0.5.2). Every request to Ollama or LM
   Studio carries `keep_alive` (Ollama) or `ttl` in seconds (LM Studio) equal to `AppSettings.ReleaseModelsAfterIdleMinutes`
@@ -3304,7 +3343,14 @@ recording indicator saying so, rather than being typed without cleanup.
   place), a shorter idle time, or one turned on (`LocalServerModelToRelease`: a model loaded under the old time can keep
   it until it is loaded again), and Free memory (`FreeLocalAppModelAsync`, which Settings calls) unload it explicitly,
   for other apps using it too, which Settings says. Never (0) sends no retention field and never unloads on idle; Ollama
-  then keeps whatever time a request last asked for. Nothing is unloaded at exit: the app's clock does it.
+  then keeps whatever time a request last asked for. Nothing is unloaded at exit: the app's clock does it. **The one
+  exception is an LM Studio copy Scribe loaded at a chosen size** (see "Context size and the whole vocabulary on this
+  PC"): LM Studio keeps such a copy for its own hour whatever Scribe's requests ask, so the idle release frees it, by its
+  instance id and through the same lane, and so does shutdown (`ReleaseScribeLoadedCopyAsync`, after the drain, bounded
+  to 2 s), unless the idle time is Never, which leaves it to LM Studio's own policy like every other model. Copies of an
+  LM Studio model that no settings use (one Test connection loaded, one loaded for settings replaced meanwhile, one LM
+  Studio would not unload) are freed at the idle and pause releases and as Scribe closes, whatever the idle time, as a
+  model cleanup stops using is.
 - **A release never frees the model under a use.** Every release (the idle time's, a pause's, cleanup no longer using the
   model, a shorter idle time, Free memory, Foundry Local's) goes through one lane (`_releaseLane`), one at a time. In the
   lane it waits for the uses in flight (`BeginModelUse`: a dictation's cleanup, a one-off request, a readiness check incl.
@@ -3324,10 +3370,11 @@ recording indicator saying so, rather than being typed without cleanup.
   model again and says so when it has to load it.
 - **The readying request is bound to its configuration.** `Prewarm` publishes, under `_gate` and before its work starts,
   the readying task, the options it readies (`_readyingFor`) and `ReadyingChecking`; the request then asks the app
-  whether it holds the model (`ReadyingLoading` or back to none), checks it still serves those options before the read and
-  after it, and hands over through `WhileServing(recipient)`. A dictation joins it only while it readies the configuration
-  served now; warmth (`_lastModelAnswer`) is recorded only for the configuration served now (`NoteModelAnswered`), and a
-  configuration change that is not prompt-only forgets it.
+  whether it holds the model (`ReadyingLoading` or back to none), checks it still serves those options before the read,
+  builds its agent after the read and any load only while it still serves them (from the options served then, so a
+  prompt-only change meanwhile is what it carries), and hands over through `WhileServing(recipient)`. A dictation joins
+  it only while it readies the configuration served now; warmth (`_lastModelAnswer`) is recorded only for the
+  configuration served now (`NoteModelAnswered`), and a configuration change that is not prompt-only forgets it.
 - **A released Foundry Local model is not a failure.** An unload of the configured model while Ready (Free memory, or
   the idle release) is decided as `ResidentChangeKind.Released`: the agent and Ready status stay, `_foundryReleased`
   is set, and the next dictation's start reloads it (`TryStartReleasedModelReload`, one reload at a time, leased).
@@ -3349,6 +3396,142 @@ recording indicator saying so, rather than being typed without cleanup.
   when the probe's 400 names the effort (gpt-6.1-sol: "'none' is not supported ... Supported values are: 'low', ..."),
   then no effort field. Measured for 0.5.2: no quality change and about a third less time on gpt-6-sol, and the same on
   gpt-6.1-sol at low (docs/local-model-benchmark.md). `AzureReasoningEffortTests` pins it on the wire.
+
+## Context size and the whole vocabulary on this PC (read before touching ContextBudget, the glossary fit or LocalModelTuning)
+
+The maintainer asked for 0.5.3: a context size setting for local models where the runtime supports one, the whole
+vocabulary sent when it fits, and the dictated text first when it does not. Measured in round three of
+docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-30.json`).
+
+- **Every request to Foundry Local, and to Ollama or LM Studio at its own address, is planned to fit its context**
+  (`TextCleanupService.PlanLocalRequestLocked`, under `_gate` in `CleanCoreAsync`). Each request, with the longest answer
+  it declares (its `max_tokens`, `OutputCeiling`), fits the context under the instructions that call runs with, a per-app
+  writing style included: `ContextBudget.VocabularyTokensFor` leaves room for the chat template, those instructions,
+  the request whose dictated text and output ceiling cost the most (`RequestTextCost`; every request of a dictation
+  carries the same vocabulary, so that one decides, and a chunk of Cyrillic can cost more than a longer one of ASCII),
+  and a margin, and the vocabulary gets what is left, which can be nothing. The detailed instructions try the dictation
+  whole first and the short ones start from their 2,400-character chunks; a plan that leaves no room halves the chunks
+  down to `MinLocalChunkChars` (300), and a dictation that still does not fit is typed as heard, with nothing sent,
+  rather than reaching a model that would drop the instructions. Any other server on this PC, a cloud service or a
+  server elsewhere keeps the 0.5.2 budgets and `PrepareChunks`: Scribe cannot learn its context.
+- **The context a request is fitted into** (`EffectiveContextLocked`; the top comment of
+  `TextCleanupService.LocalContext.cs` says why for each):
+  Ollama with a size: the size asked, capped at the model's own maximum (`/api/show`, `LearnOllamaModelMaxAsync`; or
+  what `/api/ps` says after one of Scribe's own requests when that is smaller, `NoteOllamaCap`), never what `/api/ps`
+  says before one, since another app's copy is reloaded at Scribe's size by Scribe's next request. Ollama with its own
+  setting: what `/api/ps` says after one of Scribe's own requests (the readiness check, a readying request); a reading
+  before one can only lower it (`NoteObservedContext`), since Scribe's request may replace another app's copy at
+  Ollama's own size. LM Studio: the copy its requests reach, read at any time, and the size Scribe loaded a copy at;
+  never a size merely asked for. Foundry Local: its model's `genai_config.json` (the smaller of `search.max_length` and
+  `model.context_length`), since its catalog reports none. Before any of these, `ContextBudget.AssumedContextTokens`
+  (4,096, Ollama's and LM Studio's smallest default). Each is kept for the configuration it was learned under, compared
+  ignoring the prompt. **A size that no longer vouches for the copy is forgotten:** when a recording's read fails, finds
+  no copy of the model, finds one without a size or one about to be replaced (`ForgetObservedContext`), the next
+  requests are fitted to what is known again, so a size learned for a copy the user has since swapped for a smaller one
+  is never used for it. Ollama with a size keeps its asked size, which never came from a reading.
+- **Instructions that leave no room are refused, not sent** (`LeavesRoomForDictation`: the instructions with their
+  writing style, the shortest chunk a dictation is split into and its output ceiling must fit). Setup checks it before
+  the readiness check when the context is already known (Ollama with a size, an LM Studio copy just loaded, Foundry
+  Local's model once loaded, `_pendingFoundryContext`) and again once it has read the context the model answered with,
+  and ends Unavailable with `ContextTooSmallReason` rather than Ready with every dictation typed as heard; a change to
+  what the prompt says that no longer fits takes the full restart rather than the in-place rebuild
+  (`InstructionsFitLocked`), so it says so too; Test connection does the same for its candidate
+  (`CandidateContextTokensAsync`); a recording sends no readying request under an app profile's writing style that
+  leaves no room. **One-off requests are fitted too** (`CompleteCoreAsync`: the dictionary suggestions and the usage
+  insight): first `PrepareLocalServerAsync` does what a recording does for Ollama and LM Studio at their own addresses
+  (LM Studio with a size loads the model at it, then what the app holds is read, so the request is fitted to the copy it
+  reaches), and one whose preparation ran out of time (`LocalServerPrepareBound`) while LM Studio work it waited behind
+  still holds the lane, or a copy is still loading, is not sent; then the answer's
+  ceiling is lowered to the room left, and a request leaving less than `AuxiliaryMinOutputTokens` (512) is not sent, so
+  the suggestions fall back to the history miner.
+- **Every recording asks Ollama and LM Studio at their own addresses whether they hold the model**, even when it answered
+  within `PrewarmAfterIdle` (`PrewarmAsync`): a model evicted meanwhile, or held at a size other than the one the
+  dictation is fitted into (`OllamaWouldReload`, `LmStudioWouldReload`), is readied as after an idle time, and the
+  recording indicator says it is starting. Held at the right size and answered recently, no readying request is sent.
+  The readying request's agent is built after the read and any load, from the configuration served then, so its
+  vocabulary fits the context they found.
+- **Tokens are estimated, never counted** (`TokenEstimate`): 3.6 characters a token for prose, 2.6 for vocabulary, and
+  every character outside ASCII a whole token, all below what the tokenizers measured (4.18 for the benchmark
+  dictations on average, 2.99 for the worst with its tags, 2.87 to 3.29 for vocabulary), so an estimate errs toward
+  sending less. `ContextWindowTests` holds the rates under the measurements; move them only with new measurements.
+- **The whole vocabulary** (`CleanupOptions.SendWholeVocabulary`, from each app's switch through `LocalModelTuning`)
+  goes whole when it fits; otherwise the terms the dictation mentions keep their room and the longest leading run of
+  the whole list (personal dictionary first, then word packs in precedence order) fills the rest
+  (`CleanupPrompt.FitGlossary`), so consecutive dictations share the start of what they send and Ollama and LM Studio
+  read it once a load. It is a prompt-only field (`MatchesIgnoringPrompt`): changing it rebuilds the agent in place.
+  It is off by default for every app on the evidence: no better on Gemma 4 E4B, and a fifth to a third fewer word pack
+  terms right on the 2B models. Repeating the mentioned terms after the whole list was measured and dropped (it cost
+  Gemma 4 E4B 3.6 points). Change the fit only with the harness's `--whole-vocabulary` arms and the vocabulary accuracy.
+- **Ollama takes a size only through its own API**, so a size chosen for Ollama is also how Scribe reaches it
+  (`UsesOllamaApi`: Ollama at its own address with `CleanupOptions.LocalContextTokens` set; there is no separate
+  connection setting). Its OpenAI-compatible address has no `num_ctx`, so with a size every request goes through
+  OllamaSharp's `OllamaApiClient` (an `IChatClient`, behind the same `VocabularyHandOffHandler` admission point as every
+  cleanup client, built in `CreateOllamaChatClient`) with `num_ctx` (the effective context above), `keep_alive` and
+  `think: false` (`ApplyOllamaApiOptions`); "Ollama's setting" keeps the OpenAI-compatible requests every release before
+  0.5.3 sent. Every request asks for the same size, because Ollama reloads a model whose size a request changes;
+  another app asking for another size makes the two reload in turn, which Settings says. OllamaSharp reports Ollama's
+  error answers as `HttpRequestException` with a status code, which `CleanupFailureShape.ExtractHttpStatus` reads, so a
+  missing model is a 404, not "Couldn't reach the AI service".
+- **LM Studio takes a size only when a model loads.** Its OpenAI-compatible request loads a model at LM Studio's own
+  size, so with a size chosen `ReconcileLmStudioAsync` loads it first through `/api/v1/chat` with `context_length`,
+  before the readiness check and when a recording finds no copy or one at another size, and requests by the model's
+  name then reach that copy. LM Studio makes a second copy rather than resizing, so a copy it loaded on demand at
+  another size is unloaded first, and one it will not unload is used as it is (no second copy is loaded); a copy loaded
+  by hand (no `remaining_ttl_seconds`) is used as it is. The initialization's load and readiness check are one model use
+  (`BeginModelUse`), so a release decided before them cannot unload the copy they load, and one already on its way goes
+  first. **The copy requests reach changes only while one request uses the model** (`TryBeginLocalChange`): the unload
+  of a copy at another size, the unload of any copy Scribe loaded that no settings own, and every load at a size
+  (Test connection's included) happen only while the request asking is the only use of the
+  model, decided in one step with every use that begins and published as the unload in flight, which every request that
+  begins meanwhile waits for (a dictation as long as for a model starting, `LocalModelStartWait`); otherwise the copy is
+  used as it is and requests are fitted to it, and the next recording replaces it. A request that is only waiting for the
+  model to start counts as a use too, so in that rare order the change waits for the next recording. **One load at a
+  time** (`_lmStudioLane`): the read, the unload of a copy at another size, the load and the settling of the copy it made
+  share one lane, and a load Scribe stopped waiting for (its configuration replaced, its time run out) keeps the lane, a
+  use of the model (`ExtendModelUse`, which withdraws no release decided before it) and the change barrier until its copy
+  is settled (`SettleLoadInBackground`), so the next configuration reads LM Studio only once that copy is Scribe's or
+  gone, never loads a second copy beside it or probes one about to go, and no release frees the model before the load
+  lands. The lane is never held while waiting for the model uses in flight, so it and a release cannot wait on each other.
+  **Ownership follows LM Studio's word:** a copy becomes a configuration's (`_scribeLoadedInstance`, `_scribeLoadedFor`,
+  `TakeOwnership`, which records the configuration served) only once LM Studio has named the instance and cleanup still
+  serves that configuration, and stops being Scribe's only once LM Studio has unloaded it or no longer lists it
+  (`ForgetUnloadedCopy`, scoped to the server it was unloaded at by `SameServer`, the same port and the same host or both
+  this PC, so freeing an Ollama model of the same name leaves LM Studio's records alone). A copy an earlier configuration
+  owned stops being owned once a configuration that does not ask for it reconciles (`DisownEarlierCopy`), and is settled
+  with the copies no configuration owns: taken when it is the copy the requests reach at the size asked for, unloaded
+  otherwise, even when LM Studio already holds another copy at the new size. **A copy no configuration owns is not lost**
+  (`_unownedCopies`): one loaded for settings replaced meanwhile, one an earlier configuration owned, and one Test
+  connection loaded. Every one is kept, without a cap, and asked for until LM Studio has unloaded it or no longer lists it:
+  at the next recording's check, which takes one at the size asked for that the requests reach instead of loading
+  another, and unloads the rest only under the rule above, since a request of earlier settings may still be using a copy
+  these settings do not reach (`SettleUnownedCopiesAsync`); at the idle and pause releases, through the release lane once
+  the uses in flight have finished (`StartUnownedRetirement`); and as Scribe closes, whatever the idle time. Every unload
+  asks with the key that opens the server now, since the user may have replaced the key a copy was loaded with: in a
+  recording's check the key the settings just read LM Studio with, and otherwise the settings' key for that server
+  first, then the one the copy was loaded with (`KeysFor`); a copy LM Studio refuses is recorded with the key that opened
+  the server, and a model cleanup no longer uses is freed the same way. Scribe frees its copies itself, because LM
+  Studio's load takes no `ttl` and keeps it for its own hour (see "When memory comes back" above).
+- **Test connection tests the size Save would load** (`TestLmStudioAtSizeAsync`, for LM Studio at its own address with
+  a size, which only the "Another AI service" panel offers, at LM Studio's address): with no copy held, it loads one at
+  that size in the lane, within one model use, and checks it; a load LM Studio refuses fails the test, and so does a read
+  of LM Studio that fails, since the size could not be loaded. The load is a change to the copy requests reach, made only
+  behind the same barrier as a recording's (`TryBeginLocalChange`): a test while AI cleanup is using the model loads
+  nothing and says to test again, and a test cancelled during its load hands the barrier to the settling of that load.
+  Instructions that leave a dictation no room in the context the test would read fail it before anything is loaded or
+  sent; a held copy whose size LM Studio does not say counts as what is assumed, never as the size asked. The lane is
+  released before the readiness check, so a recording meanwhile fits its dictation to the copy rather than waiting; the
+  test's model use keeps anything from unloading it under the check. A copy LM Studio already holds is tested as it is and
+  never unloaded for a test. The test's copy becomes the
+  served settings' when they are the settings tested, and otherwise a copy no configuration owns, freed once the test is
+  done.
+- **Settings shows each app's tuning under its own folded expander** ("Ollama settings", "LM Studio settings", "Model
+  settings" for Foundry Local), with words from `LocalModelTuningText` and a status line saying what the model reads,
+  what the whole vocabulary needs and whether it fits (`ContextBudget.VocabularyRoom`). For Ollama with a size, the size
+  the model reads is the one AI cleanup serves (`ServedLocalContext`), never what Ollama holds for another app. For LM
+  Studio, a read of LM Studio that succeeded says what requests reach (nothing held, nothing in use), and the window reads
+  LM Studio again whenever AI cleanup becomes ready (`RereadLmStudioWhenReady`), which a load at a new size precedes;
+  without a read, the context AI cleanup serves. The defaults are the 0.5.2 behavior as property initializers (the
+  app's own size, switches off), so an older document reads as unchanged.
 
 ## AI cleanup service state (read before touching TextCleanupService)
 

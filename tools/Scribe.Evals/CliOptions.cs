@@ -53,8 +53,11 @@ internal sealed class CliOptions
     public string? BenchFrontierPromptFile { get; private set; }
     public string? BenchLocalPromptFile { get; private set; }
     public string[]? BenchGlossaryLibraries { get; private set; }
+    public string[]? BenchGlossaryCsv { get; private set; }
     public int? BenchGlossaryMaxTerms { get; private set; }
     public CleanupVocabularyMode BenchVocabularyMode { get; private set; } = CleanupVocabularyMode.All;
+    public int? BenchContextTokens { get; private set; }
+    public bool BenchWholeVocabulary { get; private set; }
     public int BenchPaceMs { get; private set; }
     public string? BenchCasesFrom { get; private set; }
     public string OllamaEndpoint { get; private set; } = BenchEndpoints.DefaultOllama;
@@ -128,9 +131,11 @@ internal sealed class CliOptions
             WritingStyle = ReadPromptFile(BenchWritingStyleFile),
             FrontierPrompt = ReadPromptFile(BenchFrontierPromptFile),
             LocalPrompt = ReadPromptFile(BenchLocalPromptFile),
-            GlossaryEntries = GlossaryEntries(BenchGlossaryLibraries),
+            GlossaryEntries = GlossaryEntries(BenchGlossaryLibraries, BenchGlossaryCsv),
             GlossaryMaxTerms = BenchGlossaryMaxTerms,
             VocabularyMode = BenchVocabularyMode,
+            LocalContextTokens = BenchContextTokens,
+            SendWholeVocabulary = BenchWholeVocabulary,
             PaceMs = BenchPaceMs,
             LocalEndpoints = new BenchEndpoints(OllamaEndpoint, LmStudioEndpoint),
             KeepServerModelsLoaded = KeepServerModelsLoaded,
@@ -340,6 +345,18 @@ internal sealed class CliOptions
                     o.BenchGlossaryLibraries = Next()
                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                     break;
+                case "--glossary-csv":
+                    o.BenchGlossaryCsv = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
+                case "--context-size":
+                    o.BenchContextTokens = int.TryParse(Next(), out var contextTokens) && contextTokens > 0
+                        ? contextTokens
+                        : throw new ArgumentException("--context-size takes a positive number of tokens.");
+                    break;
+                case "--whole-vocabulary":
+                    o.BenchWholeVocabulary = true;
+                    break;
                 case "--glossary-budget":
                     var budget = Next().Trim().ToLowerInvariant();
                     o.BenchGlossaryMaxTerms = budget switch
@@ -488,17 +505,20 @@ internal sealed class CliOptions
     /// <see cref="Benchmark.BenchmarkConfig.GlossaryFor"/>). Unknown ids fail loudly: silently
     /// benchmarking an empty glossary would produce a plausible-looking "no effect" result.
     /// </summary>
-    private static IReadOnlyList<Scribe.Core.Models.DictionaryEntry>? GlossaryEntries(string[]? libraryIds)
+    private static IReadOnlyList<Scribe.Core.Models.DictionaryEntry>? GlossaryEntries(string[]? libraryIds, string[]? csvFiles = null)
     {
+        var fromCsv = GlossaryEntriesFromCsv(csvFiles);
         if (libraryIds is null || libraryIds.Length == 0)
         {
-            return null;
+            return fromCsv;
         }
 
         var wanted = new HashSet<string>(
             libraryIds.SelectMany(id => string.Equals(id, "default", StringComparison.OrdinalIgnoreCase)
                 ? Scribe.Core.Models.AppSettings.DefaultLibraryIds
-                : [id]),
+                : string.Equals(id, "all", StringComparison.OrdinalIgnoreCase)
+                    ? BuiltInDictionaryLibraries.All.Select(l => l.Id)
+                    : [id]),
             StringComparer.OrdinalIgnoreCase);
         var known = BuiltInDictionaryLibraries.All.ToDictionary(l => l.Id, StringComparer.OrdinalIgnoreCase);
         var missing = wanted.Where(id => !known.ContainsKey(id)).ToList();
@@ -509,10 +529,30 @@ internal sealed class CliOptions
                 $"Available: {string.Join(", ", known.Keys.Order())}");
         }
 
-        return BuiltInDictionaryLibraries.All
+        // The built-in packs in their precedence order, then the word pack files given, as dictation composes them.
+        return [.. BuiltInDictionaryLibraries.All
             .Where(l => wanted.Contains(l.Id))
-            .SelectMany(l => l.Entries)
-            .ToList();
+            .SelectMany(l => l.Entries), .. fromCsv ?? []];
+    }
+
+    // Word pack files (a custom pack Scribe wrote, or one to import), read as an import reads them. For a run on this PC
+    // only: their terms reach the judge only through the outputs, so keep a cloud judge off runs that carry them.
+    private static IReadOnlyList<Scribe.Core.Models.DictionaryEntry>? GlossaryEntriesFromCsv(string[]? files)
+    {
+        if (files is null || files.Length == 0)
+        {
+            return null;
+        }
+
+        var entries = new List<Scribe.Core.Models.DictionaryEntry>();
+        foreach (var file in files)
+        {
+            var document = Scribe.Core.Libraries.LibraryCsvCodec.Instance.ReadImport(File.ReadAllBytes(Path.GetFullPath(file)));
+            entries.AddRange(document.Terms.Select(term => new Scribe.Core.Models.DictionaryEntry(
+                0, term.Spoken, term.Written, term.WholeWord, term.Enabled)));
+        }
+
+        return entries;
     }
 
     private static string RequireValue(string value, string flag) =>
@@ -588,7 +628,16 @@ internal sealed class CliOptions
               --frontier-prompt-file <path>     Benchmark-only frontier-prompt override.
               --glossary-libraries <a,b>        Append these built-in dictionary libraries to the
                                                 prompt as a glossary (e.g. ai-model-names,ai-terminology;
-                                                "default" names the libraries a fresh install turns on).
+                                                "default" names the libraries a fresh install turns on,
+                                                "all" every built-in word pack).
+              --glossary-csv <a.csv,b.csv>      Also append these word pack files, read as an import reads
+                                                them. Keep a cloud judge off runs that carry private terms.
+              --context-size <tokens>           The context size a model on this PC is asked to load at:
+                                                Ollama through its own chat API (num_ctx), LM Studio by
+                                                loading the model at it. Each request is fitted into it.
+              --whole-vocabulary                Send the whole vocabulary to a model on this PC when it fits
+                                                (Send your whole vocabulary when it fits), through the
+                                                production admission path with --vocabulary mentioned.
               --glossary-budget <auto|cloud|local|n>
                                                 Glossary term budget. auto (default) applies the app's own
                                                 budget for each model's provider and prompt style.

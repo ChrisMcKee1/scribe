@@ -140,13 +140,18 @@ public sealed class AiCleanupPromptCachingSettingsTests
 
         // The prompt cache choice, then how long Ollama or LM Studio keeps the model: Scribe's own idle setting, handed over
         // only for those two apps (LocalAiServer.KeepAliveMinutes), so an idle-time change never restarts another provider's
-        // setup.
+        // setup. Then the API another AI service is reached through, and the tuning of the app on this PC that runs the
+        // model, read from the same saved settings.
         var arguments = System.Text.RegularExpressions.Regex.Replace(controller[start..end], @"\s+", " ").TrimEnd();
-        Assert.EndsWith(
+        Assert.Contains(
+            "=> LocalModelTuning.Apply(new( settings.EnableAiCleanup,", arguments, StringComparison.Ordinal);
+        Assert.Contains(
             "LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes( settings.AiCleanupProvider, " +
-            "settings.AiCleanupCustomEndpoint, settings.ReleaseModelsAfterIdleMinutes)",
+            "settings.AiCleanupCustomEndpoint, settings.ReleaseModelsAfterIdleMinutes), " +
+            "CustomApiStyle: settings.AiCleanupCustomApiStyle),",
             arguments,
             StringComparison.Ordinal);
+        Assert.EndsWith(" settings", arguments, StringComparison.Ordinal);
         Assert.Contains("settings.AiCleanupPromptCaching,", arguments, StringComparison.Ordinal);
     }
 

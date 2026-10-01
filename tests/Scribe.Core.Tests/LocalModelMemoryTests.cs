@@ -229,6 +229,10 @@ public sealed class LocalModelMemoryTests
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
         svc.Configure(CleanupHarness.Custom(Ollama, "phi4-mini"));
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        // gemma3's release goes out before the app holds the next one: it runs beside phi4-mini's readiness check, and on a
+        // cold thread pool that check can finish first (this test failed in isolation on 0.5.2 for that reason).
+        await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
         harness.LocalServers.UnloadGate = slow;
         svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b")); // frees phi4-mini, held by the app
         await harness.LocalServers.WaitForUnloadsAsync(2, Bound);
@@ -693,7 +697,9 @@ public sealed class LocalModelMemoryTests
         svc.Configure(CleanupHarness.Custom(endpoint, model) with { CustomApiKey = "lm-token", Enabled = false });
         await harness.LocalServers.WaitForUnloadsAsync(2, Bound);
 
-        Assert.Equal(3, harness.LocalServers.Keys.Count);
+        // The read after the readiness check (what the app loaded the model with), the readying request's reads before it
+        // (whether the app holds the model) and after it (what it holds the model with), and the two unloads.
+        Assert.Equal(5, harness.LocalServers.Keys.Count);
         Assert.All(harness.LocalServers.Keys, key => Assert.Equal("lm-token", key));
     }
 

@@ -103,6 +103,14 @@
          detached per-dictation session before pinning the SDK any higher. -->
     <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.20.0" />
 
+    <!-- Ollama's own chat API, for the Ollama connection that lets Scribe choose the context size
+         (AppSettings.AiCleanupOllamaConnection): Ollama's OpenAI-compatible API reads no num_ctx, so
+         only /api/chat can ask for one. OllamaSharp is the IChatClient for Ollama that the
+         Microsoft.Extensions.AI documentation uses; it maps ChatOptions.MaxOutputTokens to num_predict,
+         ReasoningEffort.None to think: false, and the num_ctx and keep_alive additional properties to
+         the request. MIT. Built against Microsoft.Extensions.AI 10.8.0, which 10.9.0 satisfies. -->
+    <PackageVersion Include="OllamaSharp" Version="5.4.30" />
+
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
          user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens, no key stored).
          Azure.Identity type-forwards AzureCliCredential and ClientSecretCredential to Azure.Core,

@@ -57,6 +57,10 @@ public static class SettingsSearchIndex
         new("AiProviderCustomRadio", "Another AI service", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresCopilot =
         new("AiProviderCopilotRadio", "GitHub Copilot", SettingsSearchRequirementKind.Radio);
+    private static readonly SettingsSearchRequirement RequiresOllama =
+        new("LocalAppOllamaRadio", "Ollama", SettingsSearchRequirementKind.Radio);
+    private static readonly SettingsSearchRequirement RequiresLmStudio =
+        new("LocalAppLmStudioRadio", "LM Studio", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresAzureCli =
         new("AzureCliRadio", "Your Azure account (Azure CLI) (recommended)", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresAzureServicePrincipal =
@@ -89,6 +93,11 @@ public static class SettingsSearchIndex
         Entry("ai.local.ollama", SettingsPage.AiCleanup, "LocalAppOllamaRadio", "Ollama", ["local model", "gemma", "llama", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.local.lmstudio", SettingsPage.AiCleanup, "LocalAppLmStudioRadio", "LM Studio", ["lm studio", "lmstudio", "local model", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.model", SettingsPage.AiCleanup, "AiModelBox", "Model", ["foundry local", "download", "load", "free memory"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
+        Entry("ai.local.scribe.vocabulary", SettingsPage.AiCleanup, "FoundryWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context", "foundry local"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
+        Entry("ai.local.ollama.context", SettingsPage.AiCleanup, "OllamaContextSizeCombo", LocalModelTuningText.ContextSizeTitle, ["context", "context window", "context length", "num_ctx", "tokens", "memory"], "Ollama", [RequiresAi, RequiresLocal, RequiresOllama]),
+        Entry("ai.local.ollama.vocabulary", SettingsPage.AiCleanup, "OllamaWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context"], "Ollama", [RequiresAi, RequiresLocal, RequiresOllama]),
+        Entry("ai.local.lmstudio.context", SettingsPage.AiCleanup, "LmStudioContextSizeCombo", LocalModelTuningText.ContextSizeTitle, ["context", "context window", "context length", "tokens", "memory"], "LM Studio", [RequiresAi, RequiresLocal, RequiresLmStudio]),
+        Entry("ai.local.lmstudio.vocabulary", SettingsPage.AiCleanup, "LmStudioWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context"], "LM Studio", [RequiresAi, RequiresLocal, RequiresLmStudio]),
         Entry("ai.azure.auth.cli", SettingsPage.AiCleanup, "AzureCliRadio", "Your Azure account (Azure CLI) (recommended)", ["sign in", "browser", "tenant"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.sp", SettingsPage.AiCleanup, "AzureServicePrincipalRadio", "An app registration (service principal)", ["sign in", "entra", "client"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.key", SettingsPage.AiCleanup, "AzureApiKeyRadio", "An API key", ["sign in", "resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
@@ -103,6 +112,7 @@ public static class SettingsSearchIndex
         Entry("ai.azure.key", SettingsPage.AiCleanup, "AzureApiKeyBox", "API key", ["resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry, RequiresAzureApiKey]),
         Entry("ai.azure.cache", SettingsPage.AiCleanup, "AiPromptCachingCheck", "Let Microsoft Foundry cache what Scribe sends", ["cache", "caching", "prompt cache", "privacy", "retention"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.custom.endpoint", SettingsPage.AiCleanup, "CustomEndpointBox", "Server address", ["url", "openrouter", "address"], "Another AI service", [RequiresAi, RequiresCustom]),
+        Entry("ai.custom.api", SettingsPage.AiCleanup, "CustomApiStyleCombo", "API", ["chat completions", "responses", "openai"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.custom.model", SettingsPage.AiCleanup, "CustomModelBox", "Model name", ["model", "openrouter"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.custom.key", SettingsPage.AiCleanup, "CustomApiKeyBox", "API key (optional)", ["secret", "token"], "Another AI service", [RequiresAi, RequiresCustom]),
         Entry("ai.copilot.model", SettingsPage.AiCleanup, "CopilotModelCombo", "Model name", ["github", "copilot"], "GitHub Copilot", [RequiresAi, RequiresCopilot]),

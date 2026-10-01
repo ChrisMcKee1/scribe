@@ -557,6 +557,12 @@ public sealed class CleanupPromptRebuildTests
             [nameof(CleanupOptions.VocabularyMode)] = baseline with { VocabularyMode = CleanupVocabularyMode.Mentioned },
             // Asked of each request to Ollama or LM Studio, so it changes nothing an agent is connected to.
             [nameof(CleanupOptions.LocalModelKeepAliveMinutes)] = baseline with { LocalModelKeepAliveMinutes = 30 },
+            // The size the model loads at, and for Ollama the API its requests go through: changes what the agent is connected to.
+            [nameof(CleanupOptions.LocalContextTokens)] = baseline with { LocalContextTokens = 32768 },
+            // Changes only how much vocabulary a request carries.
+            [nameof(CleanupOptions.SendWholeVocabulary)] = baseline with { SendWholeVocabulary = true },
+            // The API another AI service is reached through: changes what the agent is connected to.
+            [nameof(CleanupOptions.CustomApiStyle)] = baseline with { CustomApiStyle = CustomApiStyle.Responses },
         };
         string[] promptFields =
         [
@@ -567,6 +573,7 @@ public sealed class CleanupPromptRebuildTests
             nameof(CleanupOptions.LocalPrompt),
             nameof(CleanupOptions.VocabularyMode),
             nameof(CleanupOptions.LocalModelKeepAliveMinutes),
+            nameof(CleanupOptions.SendWholeVocabulary),
         ];
 
         // A field added later has to be classified here: treated as part of the connection until it is.

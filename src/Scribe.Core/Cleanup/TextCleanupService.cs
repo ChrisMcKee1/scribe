@@ -175,6 +175,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private const int AuxiliaryCompletionTimeoutSeconds = 90;
     private const int AuxiliaryCompletionMaxTokens = 2048;
 
+    // The least room a one-off request to a model on this PC leaves its answer, or it is not sent: a dictionary suggestion
+    // list or a usage insight runs to a few hundred tokens.
+    internal const int AuxiliaryMinOutputTokens = 512;
+
     // The transcript is delimited inside the user message so the model reads it as data to rewrite
     // rather than a message addressed to it. Without this, dictation phrased as a request ("hey, can
     // you make sure X is installed") is routinely *answered* ("Sure, I can help with that") instead
@@ -753,8 +757,51 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var factory = ProviderFactoryForTesting is { } testFactory
                 ? await testFactory(options, ct).ConfigureAwait(false)
                 : BuildTestAgentFactory(options);
-            if (await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false) is not { } failure)
+
+            // Ollama with a size: the context its requests would be fitted into is known before anything is sent, so
+            // instructions that leave a dictation no room fail the test without loading the model for it.
+            if (UsesOllamaApi(options) &&
+                !LeavesRoomForDictation(options, style: null, await CandidateContextTokensAsync(options, ct).ConfigureAwait(false)))
             {
+                return CleanupTestResult.Failed(recipient, ContextTooSmallReason(options));
+            }
+
+            AgentProbeFailure? failure;
+            int? testedContext = null;
+            if (TestsLmStudioAtSize(options))
+            {
+                // One use of the model from the load to the readiness check, so a release decided before it cannot unload
+                // the copy the test loads; an unload already on its way goes first.
+                using var use = BeginModelUse(out var unloading);
+                try
+                {
+                    await unloading.WaitAsync(UnloadWaitBound, ct).ConfigureAwait(false);
+                    (failure, var context) = await TestLmStudioAtSizeAsync(options, factory, ct).ConfigureAwait(false);
+                    testedContext = context;
+                }
+                catch (TimeoutException ex)
+                {
+                    failure = new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
+                }
+            }
+            else
+            {
+                failure = await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false);
+            }
+
+            if (failure is null)
+            {
+                // A model on this PC answered: its instructions have to leave room for a dictation in what it reads at once,
+                // or every dictation would be typed as heard.
+                if (FitsLocalContext(options) &&
+                    !LeavesRoomForDictation(
+                        options,
+                        style: null,
+                        testedContext is > 0 and var tested ? tested : await CandidateContextTokensAsync(options, ct).ConfigureAwait(false)))
+                {
+                    return CleanupTestResult.Failed(recipient, ContextTooSmallReason(options));
+                }
+
                 return CleanupTestResult.Connected(recipient);
             }
 
@@ -890,12 +937,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
              * prompt too. A prompt too long for a small local model surfaces on the next cleanup
              * as an ordinary failure with the raw-text fallback. A re-initialization would not catch
              * that either when the glossary is what makes it too long: the probe never carries it.
+             * Instructions that leave no room for a dictation in the context of a model on this PC
+             * (InstructionsFitLocked) take the full restart instead, which says so (ContextTooSmallReason)
+             * rather than staying Ready while every dictation is typed as heard; a later shorter prompt
+             * restarts it again and recovers.
              *
              * Only while serving. During an initialization the options it will publish are the
              * ones it started with, so a prompt change then still restarts it, as before, and a
              * factory that throws falls back to the full restart.
              */
-            else if (promptOnly && IsServingLocked() && TryRebuildAgentsLocked(effective, out rebuildFailure))
+            else if (promptOnly && IsServingLocked() && InstructionsFitLocked(effective) &&
+                TryRebuildAgentsLocked(effective, out rebuildFailure))
             {
                 promptRebuilt = true;
             }
@@ -1220,8 +1272,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * dictation, to a server on this PC and nowhere else.
      *
      * It is skipped when the model answered within PrewarmAfterIdle: the model is loaded and the instructions cached, so
-     * the request would only queue in front of the dictation. One at a time. It never throws, and a failure changes
-     * nothing about the dictation, which sends its own request as it always did.
+     * the request would only queue in front of the dictation. Ollama and LM Studio at their own addresses are still asked
+     * whether they hold the model, at every recording's start: one evicted meanwhile, or held at a size other than the one
+     * the dictation is fitted into, is readied as after an idle time (PrewarmAsync). One at a time. It never throws, and a
+     * failure changes nothing about the dictation, which sends its own request as it always did.
      */
     private static readonly TimeSpan PrewarmAfterIdle = TimeSpan.FromSeconds(LocalAiServer.PrewarmAfterIdleSeconds);
     private long _lastModelAnswer;
@@ -1471,24 +1525,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return;
             }
 
-            AIAgent? agent = null;
             CleanupOptions? options = null;
+            string? style = null;
+            var answeredRecently = false;
             lock (_gate)
             {
                 var lastAnswer = Volatile.Read(ref _lastModelAnswer);
-                if (_options.Enabled && _status == CleanupStatus.Ready && _agent is not null &&
-                    _agentFactory is { } factory &&
+                answeredRecently = lastAnswer != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(lastAnswer) < PrewarmAfterIdle;
+                if (_options.Enabled && _status == CleanupStatus.Ready && _agent is not null && _agentFactory is not null &&
                     LocalAiServer.Serves(_options.Provider, _options.CustomEndpoint) &&
-                    (lastAnswer == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(lastAnswer) >= PrewarmAfterIdle))
+                    (!answeredRecently || LocalAiServer.AppServing(_options.Provider, _options.CustomEndpoint) != LocalServerApp.None))
                 {
                     options = _options;
-                    var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
-
-                    // The instructions and writing style only, never vocabulary: they come first in every dictation's
-                    // prompt (PromptParts.Build appends the vocabulary after them), so the server caches exactly the part
-                    // each dictation shares, and a readying request carries nothing a dictation did not choose to send.
-                    agent = AdmittedAgentLocked(
-                        factory, options with { VocabularyMode = CleanupVocabularyMode.None }, style, vocabulary, dictation: null);
+                    style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
 
                     // Published before the work starts: a dictation that stops before it has asked the app whether it
                     // holds the model already waits for it.
@@ -1499,18 +1548,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 }
             }
 
-            if (agent is null || options is null || readying is null)
+            if (options is null || readying is null)
             {
                 return;
             }
 
             var owned = lease;
             var done = readying;
+            var warm = answeredRecently;
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await PrewarmAsync(agent, options, vocabulary, owned).ConfigureAwait(false);
+                    await PrewarmAsync(options, style, vocabulary, warm, owned).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -1537,7 +1587,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    private async Task PrewarmAsync(AIAgent agent, CleanupOptions options, CleanupVocabulary vocabulary, CleanupOperationTracker.Lease lease)
+    private async Task PrewarmAsync(
+        CleanupOptions options, string? style, CleanupVocabulary vocabulary, bool answeredRecently, CleanupOperationTracker.Lease lease)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var coldStart = false;
@@ -1558,20 +1609,81 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return;
             }
 
-            // Ollama and LM Studio say whether they hold the model; one they do not is loaded by this request, which is
-            // what the recording indicator's "Starting local model" means (IsLocalModelStarting).
+            // Ollama and LM Studio say whether they hold the model, at every recording's start. One they do not hold is loaded
+            // by this request, which is what the recording indicator's "Starting local model" means (IsLocalModelStarting), and
+            // so is a copy held at a size other than the one Scribe asks for, which this request (Ollama) or the load below
+            // (LM Studio) replaces. One they hold says what it was loaded with, which the dictation is fitted into
+            // (NoteObservedContext).
+            LocalServerState? state = null;
             if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
                 options.CustomEndpoint is { } endpoint && options.CustomModel is { } model)
             {
-                var state = await LocalServers.ReadAsync(endpoint, options.CustomApiKey, cts.Token).ConfigureAwait(false);
-                coldStart = state.Reach == LocalServerReach.Reached && state.LoadedFor(model) is null;
+                state = await LocalServers.ReadAsync(endpoint, options.CustomApiKey, cts.Token).ConfigureAwait(false);
+                var held = state.LoadedFor(model);
+                coldStart = state.Reach == LocalServerReach.Reached &&
+                    (held is null || LmStudioWouldReload(options, state) || OllamaWouldReload(options, held));
+                if (held is not null && !coldStart && held.ContextTokens > 0)
+                {
+                    NoteObservedContext(options, held.ContextTokens, afterOwnRequest: false);
+                }
+                else
+                {
+                    // No copy the next request is known to reach (the read failed, found none, found one without a size, or
+                    // one about to be replaced): whatever loads the model decides its size, so a size learned for an earlier
+                    // copy no longer vouches for it, and the dictation is fitted to what is known again.
+                    ForgetObservedContext(options);
+                }
             }
 
             Volatile.Write(ref _readyingState, coldStart ? ReadyingLoading : ReadyingNone);
 
-            // Asked again after the read, and once more as the request is handed over (the admission below): cleanup
-            // turned off or pointed elsewhere meanwhile readies nothing.
-            if (!StillServes(options))
+            // LM Studio with a size chosen loads the model at it first, which its OpenAI-compatible request cannot ask for.
+            if (state is not null)
+            {
+                await ReconcileLmStudioAsync(options, state, cts.Token).ConfigureAwait(false);
+            }
+
+            // Held at the right size and answered within PrewarmAfterIdle: loaded, with the instructions cached.
+            if (answeredRecently && !coldStart)
+            {
+                return;
+            }
+
+            // Built now, after the read and the load, so its vocabulary is fitted into the context they found, from the
+            // configuration served now (a change to what the prompt says meanwhile is a change to what it carries). The
+            // instructions and writing style come first in every dictation's prompt (PromptParts.Build appends the
+            // vocabulary after them), so the server caches exactly the part each dictation shares; with the whole
+            // vocabulary on, so does the leading run of it that fits (GlossaryForLocked), which every dictation's request then
+            // starts with. Otherwise no vocabulary, so a readying request carries nothing a dictation did not choose to send.
+            AIAgent? agent = null;
+            var noRoom = false;
+            lock (_gate)
+            {
+                if (!_operations.IsClosed && IsServingLocked() && _options.MatchesIgnoringPrompt(options) &&
+                    _agentFactory is { } factory)
+                {
+                    options = _options;
+
+                    // Instructions that leave a dictation no room in what the model reads at once would have every dictation
+                    // typed as heard, so the model is not loaded for them.
+                    if (FitsLocalContext(options) && !LeavesRoomForDictationLocked(options, style))
+                    {
+                        noRoom = true;
+                    }
+                    else
+                    {
+                        agent = AdmittedAgentLocked(factory, options, style, vocabulary, dictation: null, readying: true);
+                    }
+                }
+            }
+
+            if (noRoom)
+            {
+                _log.LogDebug("AI cleanup sent no readying request: the instructions leave no room for a dictation in the model's context.");
+                return;
+            }
+
+            if (agent is null)
             {
                 return;
             }
@@ -1590,6 +1702,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             // A configuration changed meanwhile is not the one this answer readied.
             NoteModelAnswered(options);
+
+            // What the app holds the model with now that this request reached it, before the dictation it readies is fitted
+            // into it.
+            await LearnLocalContextAsync(options, cts.Token).ConfigureAwait(false);
 
             NoteLocalModelUse(options);
             _log.LogDebug(
@@ -1710,9 +1826,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         if (onThisPc && !unloading.IsCompleted)
         {
+            // A copy LM Studio is changing (TryBeginLocalChange) is a model starting, waited for as long as one; an unload
+            // only as long as an unload takes.
+            var bound = ReferenceEquals(unloading, Volatile.Read(ref _localChangeInFlight)) && LocalModelStartWait > UnloadWaitBound
+                ? LocalModelStartWait
+                : UnloadWaitBound;
             try
             {
-                await unloading.WaitAsync(UnloadWaitBound, ct).ConfigureAwait(false);
+                await unloading.WaitAsync(bound, ct).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -1914,6 +2035,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var decided = ModelUseRevision;
             bool Wanted() => ModelUseRevision == decided && (stillWanted?.Invoke() ?? true);
 
+            // Copies of an LM Studio model that no settings use go whatever cleanup is set to now.
+            StartUnownedRetirement();
+
             CleanupOptions options;
             lock (_gate)
             {
@@ -1942,7 +2066,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 !string.IsNullOrWhiteSpace(options.CustomModel))
             {
                 ForgetModelAnswer();
-                if (reason == ModelMemoryRelease.Idle && AppKeepsModelOnlyForIdleTime(options))
+
+                // LM Studio keeps an instance Scribe loaded at a size for its own idle time, whatever Scribe's requests ask,
+                // so after the idle time Scribe frees that instance itself, and only it.
+                var scribeLoaded = reason == ModelMemoryRelease.Idle ? ScribeLoadedInstanceFor(options) : null;
+                if (reason == ModelMemoryRelease.Idle && scribeLoaded is null && AppKeepsModelOnlyForIdleTime(options))
                 {
                     _log.LogDebug("AI cleanup left its model to the app on this PC, which frees it after the idle time.");
                     return;
@@ -1953,7 +2081,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     options.CustomModel!,
                     options.CustomApiKey,
                     reason == ModelMemoryRelease.Pause ? LocalServerReleaseReason.Pause : LocalServerReleaseReason.Idle,
-                    Wanted);
+                    Wanted,
+                    scribeLoaded);
             }
         }
         catch (Exception ex)
@@ -1994,7 +2123,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             ForgetModelAnswer();
-            return await LocalServers.UnloadAsync(endpoint, modelId, apiKey: null, linked.Token).ConfigureAwait(false);
+            var freedModel = await LocalServers.UnloadAsync(endpoint, modelId, apiKey: null, linked.Token).ConfigureAwait(false);
+            if (freedModel)
+            {
+                ForgetUnloadedCopy(endpoint, instance: null, modelId);
+            }
+
+            return freedModel;
         }
         catch (Exception ex)
         {
@@ -2059,9 +2194,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // Asks Ollama or LM Studio to free a model's memory, in the background, through the lane: after the uses in flight have
     // finished, and only if stillWanted still says so in one step with every use that begins (TryCommitRelease). Tracked,
-    // so disposal waits for it.
+    // so disposal waits for it. With an instance, only that LM Studio instance (one Scribe loaded at a size) is freed.
     private void StartLocalServerRelease(
-        string endpoint, string model, string? apiKey, LocalServerReleaseReason why, Func<bool> stillWanted)
+        string endpoint, string model, string? apiKey, LocalServerReleaseReason why, Func<bool> stillWanted,
+        string? instance = null)
     {
         if (_operations.TryEnter() is not { } lease)
         {
@@ -2087,7 +2223,15 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 }
 
                 ForgetModelAnswer();
-                var freed = await LocalServers.UnloadAsync(endpoint, model, apiKey, _lifetime.Token).ConfigureAwait(false);
+                var keys = KeysFor(endpoint, apiKey);
+                var freed = instance is null
+                    ? await UnloadModelWithAnyAsync(endpoint, model, keys, _lifetime.Token).ConfigureAwait(false)
+                    : await UnloadInstanceWithAnyAsync(endpoint, instance, keys, _lifetime.Token).ConfigureAwait(false);
+                if (freed)
+                {
+                    ForgetUnloadedCopy(endpoint, instance, model);
+                }
+
                 _log.LogInformation("AI cleanup asked {App} to free its model's memory ({Why}): {Freed}.", app, why, freed);
             }
             catch (Exception ex)
@@ -2165,6 +2309,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         AIAgent? agent;
         CleanupOptions options;
+        List<string>? plannedChunks = null;
+        var doesNotFit = false;
         lock (_gate)
         {
             if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null)
@@ -2196,14 +2342,34 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             agent = _agent;
             options = _options;
+            var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
+
+            // A model whose context Scribe knows gets requests that fit it, under the instructions this call runs with: the
+            // dictated text and its answer first, in chunks small enough to leave the vocabulary some room.
+            int? vocabularyTokens = null;
+            if (FitsLocalContext(options))
+            {
+                if (PlanLocalRequestLocked(options, style, text) is { } plan)
+                {
+                    plannedChunks = plan.Chunks;
+                    vocabularyTokens = plan.VocabularyTokens;
+                }
+                else
+                {
+                    doesNotFit = true;
+                }
+            }
 
             // Per-app profile: swap in (or lazily build) the agent for the overriding style. An
             // override matching the configured style falls through to the default agent, and a
             // missing factory (shouldn't happen when Ready) safely degrades to the default too.
-            var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
-            if (vocabulary is not null && _agentFactory is { } admittedFactory)
+            if (doesNotFit)
             {
-                agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary, text);
+                agent = null;
+            }
+            else if (vocabulary is not null && _agentFactory is { } admittedFactory)
+            {
+                agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary, text, vocabularyTokens: vocabularyTokens);
             }
             else if (style is not null &&
                 !string.Equals(style, CleanupPrompt.ResolveWritingStyle(options.WritingStyle), StringComparison.Ordinal) &&
@@ -2218,6 +2384,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
                 agent = styled;
             }
+        }
+
+        if (doesNotFit || agent is null)
+        {
+            _log.LogInformation("AI cleanup's instructions and the dictation do not fit in the context of the model on this PC.");
+            return CleanupResult.Skip(text, "The dictation does not fit in the context of AI cleanup's model on this PC.") with
+            {
+                DisplayDetail =
+                    "The instructions and this dictation don't fit in what the AI model on this PC reads at once, so Scribe " +
+                    "typed what it heard. " + ContextAdvice(options),
+            };
         }
 
         // Every attempt below, each chunk, a stall retry, a retry after a model reload and the client's own retries, is
@@ -2235,8 +2412,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         // Capable frontier models should see the complete dictation so they can make coherent sentence
         // and paragraph decisions. Local-prompt models keep bounded chunks because their context and
         // output budgets are much smaller. Auto picks the Local prompt for Foundry Local and for a server
-        // on this PC (Ollama, LM Studio), so those keep chunking unless the Frontier prompt is chosen.
-        var chunks = PrepareChunks(text, options);
+        // on this PC (Ollama, LM Studio), so those keep chunking unless the Frontier prompt is chosen. A
+        // model whose context Scribe knows gets the chunks its plan fitted into that context.
+        var chunks = plannedChunks ?? PrepareChunks(text, options);
         string? overflowTail = null;
         if (chunks.Count > MaxCleanupChunks)
         {
@@ -2385,17 +2563,22 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         return new CleanupResult(combined, outcome);
     }
 
-    // Must be called under _gate, while serving. The agent for this vocabulary's glossary, at the term budget the
-    // configuration being served uses, and this call's writing style: pure object construction against the connected
-    // client, as for a per-app writing style, kept for every dictation that shares both. The dictation is what a
-    // request under CleanupVocabularyMode.Mentioned picks its vocabulary by; a readying request passes none.
+    // Must be called under _gate, while serving. The agent for this vocabulary's glossary, fitted to the configuration being
+    // served (GlossaryForLocked), and this call's writing style: pure object construction against the connected client, as
+    // for a per-app writing style, kept for every dictation that shares both. The dictation is what a request under
+    // CleanupVocabularyMode.Mentioned picks its vocabulary by; a readying request passes none. A model on this PC whose
+    // context Scribe knows gets the vocabulary that fits in vocabularyTokens, the room its dictation's plan left
+    // (PlanLocalRequestLocked).
     private AIAgent AdmittedAgentLocked(
-        Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary, string? dictation)
+        Func<string, AIAgent> factory,
+        CleanupOptions options,
+        string? style,
+        CleanupVocabulary vocabulary,
+        string? dictation,
+        bool readying = false,
+        int? vocabularyTokens = null)
     {
-        var glossary = vocabulary.GlossaryFor(
-            CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider, options.CustomEndpoint),
-            options.VocabularyMode,
-            dictation);
+        var glossary = GlossaryForLocked(options, style, vocabulary, dictation, readying, vocabularyTokens);
         var parts = PromptParts.Of(options, style ?? options.WritingStyle, glossary);
         var prompt = _admittedPrompt is { } remembered && parts == _admittedPromptParts ? remembered : parts.Build();
         if (!_admittedAgents.TryGetValue(prompt, out var agent))
@@ -2572,8 +2755,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
         }
 
-        AIAgent agent;
+        // Ollama or LM Studio at its own address: LM Studio with a size loads the model at it first, and what the app holds the
+        // model with is read, so this request is fitted to the copy it reaches.
+        if (!await PrepareLocalServerAsync(recipient, cancellationToken).ConfigureAwait(false))
+        {
+            return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
+        }
+
+        AIAgent? agent = null;
         CleanupOptions options;
+        var outputCeiling = AuxiliaryCompletionMaxTokens;
         lock (_gate)
         {
             // Reuse the initialized client's agent factory, but with the caller's own system prompt
@@ -2600,7 +2791,30 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             options = _options;
-            agent = factory(BuildAuxiliarySystemPrompt(options, systemPrompt)); // pure object construction against the initialized client
+            var instructions = BuildAuxiliarySystemPrompt(options, systemPrompt);
+
+            // A model on this PC reads a limited context: the request and its longest answer fit it, the answer's ceiling
+            // lowered to the room left, and a request that leaves less than AuxiliaryMinOutputTokens for the answer is not
+            // sent at all (the dictionary suggestions then fall back to the history miner).
+            if (FitsLocalContext(options))
+            {
+                var room = ContextBudget.VocabularyTokensFor(
+                    ContextTokensLocked(options), instructions, TokenEstimate.Transcript(userMessage));
+                outputCeiling = room >= AuxiliaryMinOutputTokens ? Math.Min(outputCeiling, room) : 0;
+            }
+
+            if (outputCeiling > 0)
+            {
+                agent = factory(instructions); // pure object construction against the initialized client
+            }
+        }
+
+        if (agent is null)
+        {
+            _log.LogInformation(
+                "AI cleanup sent no one-off request: it does not fit in the context of the model on this PC ({Provider}).",
+                options.Provider);
+            return new ScopedCompletionResult(ScopedCompletionOutcome.Failed);
         }
 
         // Each attempt, the first and any retry the client makes, and for GitHub Copilot the session's creation and its send
@@ -2616,7 +2830,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
             cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
 
-            var chatOptions = new ChatOptions { MaxOutputTokens = AuxiliaryCompletionMaxTokens };
+            var chatOptions = new ChatOptions { MaxOutputTokens = outputCeiling };
             ApplyOnThisPcGeneration(chatOptions, options);
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
@@ -3172,6 +3386,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         return chunks;
     }
 
+    // The detailed instructions send a dictation whole, so a capable model makes its sentence and paragraph decisions across
+    // all of it; the short ones send it in bounded chunks. A model on this PC whose context Scribe knows is planned apart
+    // (PlanLocalRequestLocked).
     internal static List<string> PrepareChunks(string text, CleanupOptions options)
     {
         var frontierPrompt = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint) ==
@@ -3207,11 +3424,27 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// <see cref="DescribeFailureReason(Exception, CleanupProvider)"/> for the configuration that failed: with Microsoft
     /// Foundry's prompt cache turned off, a refusal of that option is named as the cause (<see cref="PromptCachePolicy"/>).
     /// </summary>
-    internal static CleanupReason DescribeFailureReason(Exception ex, CleanupOptions options) =>
-        options.Provider == CleanupProvider.AzureFoundry && !options.PromptCaching &&
-        PromptCachePolicy.DescribeRejection(ex, DescribeServerMessage(ex)) is { } rejection
-            ? rejection
-            : DescribeFailureReason(ex, options.Provider);
+    internal static CleanupReason DescribeFailureReason(Exception ex, CleanupOptions options)
+    {
+        if (options.Provider == CleanupProvider.AzureFoundry && !options.PromptCaching &&
+            PromptCachePolicy.DescribeRejection(ex, DescribeServerMessage(ex)) is { } rejection)
+        {
+            return rejection;
+        }
+
+        // A server without the Responses API answers its path with 404, which alone reads as a missing model.
+        if (options.Provider == CleanupProvider.OpenAiCompatible && ExtractHttpStatus(ex) == 404 && !IsModelNotLoaded(ex) &&
+            CustomServiceAddress.Effective(options.Provider, options.CustomEndpoint, options.CustomApiStyle) == CustomApiStyle.Responses)
+        {
+            const string Sentence =
+                "The AI service couldn't find that model, or doesn't take the Responses API (404). Check the model name, or " +
+                "use Chat Completions.";
+            var detail = DescribeServerMessage(ex);
+            return new(Sentence, string.IsNullOrEmpty(detail) ? Sentence : Sentence + " " + detail);
+        }
+
+        return DescribeFailureReason(ex, options.Provider);
+    }
 
     /// <summary>
     /// The failure in both forms. The diagnostic form is the same fixed sentence without the
@@ -3488,7 +3721,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         for (var current = ex; current is not null; current = current.InnerException)
         {
-            if (current is HttpRequestException or SocketException)
+            // A status code means the server answered (EnsureSuccessStatusCode's failure): not a connectivity failure.
+            if (current is HttpRequestException { StatusCode: null } or SocketException)
             {
                 return true;
             }
@@ -4363,6 +4597,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             _pendingFoundryInUse = null;
+            _pendingFoundryContext = 0;
             AIAgent? agent;
             try
             {
@@ -4403,7 +4638,41 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return;
             }
 
-            if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } probeFailure)
+            // LM Studio with a size chosen loads the model at it, before the readiness check would load it at its own. Both are
+            // one use of the model, so a release decided before it (a pause, the idle time) cannot unload the copy it loads,
+            // and an unload already on its way goes first; one that outlasts UnloadWaitBound fails the readiness check, as
+            // for any probe that cannot wait for it, rather than loading a model that is going away. Ollama with a size reads
+            // the largest context the model takes, which its requests are capped at.
+            AgentProbeFailure? probeFailure = null;
+            var lmStudioUnloading = Task.CompletedTask;
+            using var lmStudioUse = LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.LmStudio
+                ? BeginModelUse(out lmStudioUnloading)
+                : default(ModelUse?);
+            if (!lmStudioUnloading.IsCompleted)
+            {
+                try
+                {
+                    await lmStudioUnloading.WaitAsync(UnloadWaitBound, ct).ConfigureAwait(false);
+                }
+                catch (TimeoutException ex)
+                {
+                    probeFailure = new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
+                }
+            }
+
+            if (probeFailure is null)
+            {
+                await ReconcileLmStudioAsync(options, state: null, ct).ConfigureAwait(false);
+                await LearnOllamaModelMaxAsync(options, ct).ConfigureAwait(false);
+
+                // A context already known that leaves the instructions no room for a dictation fails setup without loading
+                // the model for a readiness check every dictation would then make pointless.
+                probeFailure = KnownContextLeavesRoom(options)
+                    ? await ProbeAgentAsync(options, ct, withinUse: lmStudioUse is not null).ConfigureAwait(false)
+                    : new AgentProbeFailure(ContextTooSmallReason(options), null);
+            }
+
+            if (probeFailure is not null)
             {
                 var chatFailure = new StrongBox<AgentProbeFailure?>();
                 if (await TryFoundryReselectFallbackAsync(options, probeFailure, ct).ConfigureAwait(false) is { } fallback)
@@ -4450,6 +4719,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 }
             }
 
+            // What the readiness check loaded the model with, so the first dictation is fitted into it.
+            await LearnLocalContextAsync(options, ct).ConfigureAwait(false);
+
+            var noRoom = false;
             lock (_gate)
             {
                 // A newer Configure (different provider/model, or disabled) may have superseded this
@@ -4459,16 +4732,43 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     return;
                 }
 
-                _options = options;
-                _agent = agent;
-                _agentFactory = _pendingFactory;
-                _styleAgents.Clear();
-                ClearAdmittedAgentsLocked();
-                _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
-                inUse = _foundryInUse;
+                // The context Foundry Local's model reads, learned with the options this run publishes.
+                if (options.Provider == CleanupProvider.FoundryLocal && _pendingFoundryContext > 0)
+                {
+                    _localContextTokens = _pendingFoundryContext;
+                    _localContextFor = options;
+                }
 
-                // This initialization loaded its model, so no model it freed earlier is waited for or loaded again.
-                _foundryReleased = false;
+                // Instructions that leave a dictation no room in what the model reads at once would have every dictation
+                // typed as heard: setup says so rather than reporting a model that is ready.
+                if (FitsLocalContext(options) && !LeavesRoomForDictationLocked(options, style: null))
+                {
+                    DropAgents();
+                    _pendingFactory = null;
+                    noRoom = true;
+                }
+                else
+                {
+                    _options = options;
+                    _agent = agent;
+                    _agentFactory = _pendingFactory;
+                    _styleAgents.Clear();
+                    ClearAdmittedAgentsLocked();
+                    _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
+                    inUse = _foundryInUse;
+
+                    // This initialization loaded its model, so no model it freed earlier is waited for or loaded again.
+                    _foundryReleased = false;
+                }
+            }
+
+            if (noRoom)
+            {
+                _log.LogWarning(
+                    "AI cleanup's instructions leave no room for a dictation in the context of the model on this PC ({Provider}).",
+                    options.Provider);
+                SetInitStatus(CleanupStatus.Unavailable, ContextTooSmallReason(options));
+                return;
             }
 
             // The selected model is in use, so a pending model switch can now delete the model it
@@ -4592,11 +4892,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
-        var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
-        ConfigureClient(clientOptions);
-        var client = new OpenAIClient(new ApiKeyCredential(key), clientOptions);
-        var chatClient = client.GetChatClient(options.CustomModel!.Trim());
-        return instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
+        if (UsesOllamaApi(options))
+        {
+            var ollama = CreateOllamaChatClient(endpointUri, options.CustomModel!);
+            return instructions => CreateOllamaAgent(ollama, instructions);
+        }
+
+        return CreateCustomAgentFactory(options, endpointUri, key);
     }
 
     private Func<string, AIAgent> BuildAzureTestAgentFactory(CleanupOptions options)
@@ -5022,12 +5324,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * still reasons the way a real cleanup call will (below), and without the glossary. It is built
      * here rather than handed in, so no caller can pass the serving agent back in.
      */
-    private async Task<AgentProbeFailure?> ProbeAgentAsync(CleanupOptions options, CancellationToken ct)
+    private async Task<AgentProbeFailure?> ProbeAgentAsync(CleanupOptions options, CancellationToken ct, bool withinUse = false)
     {
         ct.ThrowIfCancellationRequested();
         var factory = _pendingFactory
             ?? throw new InvalidOperationException("The readiness probe has no agent factory to build its agent from.");
-        return await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false);
+        return await ProbeAgentAsync(options, factory, ct, withinUse).ConfigureAwait(false);
     }
 
     private async Task<AgentProbeFailure?> ProbeAgentAsync(
@@ -5125,7 +5427,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (options.Provider == CleanupProvider.AzureFoundry && ReasoningEffortOverride is null &&
                 IsReasoningEffortRejection(ex) && StepUpAzureReasoningEffort(options))
             {
-                return await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false);
+                return await ProbeAgentAsync(options, factory, ct, withinUse).ConfigureAwait(false);
             }
 
             /*
@@ -5139,7 +5441,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 IsSurfaceRejection(ex))
             {
                 Volatile.Write(ref _plainRequestsFor, PlainRequestsKey(options));
-                if (await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false) is null)
+                if (await ProbeAgentAsync(options, factory, ct, withinUse).ConfigureAwait(false) is null)
                 {
                     _log.LogInformation(
                         "The AI server on this PC refused reasoning_effort or max_tokens; AI cleanup sends it plain requests.");
@@ -5153,8 +5455,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    // The server and model that refused the local server fields (see ProbeAgentAsync), or null. Keyed by both, so a
-    // change of either tries the fields again.
+    // The server, the API it is reached through and the model that refused the local server fields (see ProbeAgentAsync), or
+    // null. Keyed by all three, so a change of any tries the fields again: one API of a server refusing them says nothing
+    // about the other.
     private string? _plainRequestsFor;
 
     /*
@@ -5235,7 +5538,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     }
 
     private static string PlainRequestsKey(CleanupOptions options) =>
-        $"{options.CustomEndpoint?.Trim()}\n{options.CustomModel?.Trim()}";
+        $"{options.CustomEndpoint?.Trim()}\n{CustomServiceAddress.Effective(options.Provider, options.CustomEndpoint?.Trim(), options.CustomApiStyle)}\n" +
+        $"{options.CustomModel?.Trim()}";
 
     private bool SendsPlainRequests(CleanupOptions options) =>
         string.Equals(Volatile.Read(ref _plainRequestsFor), PlainRequestsKey(options), StringComparison.Ordinal);
@@ -5674,6 +5978,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         var chatClient = _openAiClient.GetChatClient(model.Id);
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
         _pendingFoundryInUse = new FoundryModelIdentity(model.Id, model.Alias);
+        _pendingFoundryContext = await FoundryContextTokensAsync(model, ct).ConfigureAwait(false);
         return _pendingFactory(BuildSystemPrompt(options));
     }
 
@@ -6065,12 +6370,42 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             "Connecting to your AI service…", $"Connecting to {endpointUri.Host}…"));
 
         var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
-        var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
+        if (UsesOllamaApi(options))
+        {
+            var ollama = CreateOllamaChatClient(endpointUri, options.CustomModel!);
+            _pendingFactory = instructions => CreateOllamaAgent(ollama, instructions);
+            return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
+        }
+
+        _pendingFactory = CreateCustomAgentFactory(options, endpointUri, key);
+        return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
+    }
+
+    /*
+     * Another AI service's agents, on the API it is reached through (CustomServiceAddress.Effective) at the address without
+     * that API's path, which the SDK adds itself. Chat Completions is sent as every release before 0.5.3 sent it, with no
+     * store field: a chat completion is stored only when store is true. Responses stores what it answers unless told not to
+     * ("store ... Defaults to true" in OpenAI's API reference), so every request there says store=false, through the same
+     * wrapper as Microsoft Foundry's Responses agent, without its prompt cache options (caching on leaves the request as it
+     * is). There is no fallback to the other API: the address, or the person, chose this one.
+     */
+    private Func<string, AIAgent> CreateCustomAgentFactory(CleanupOptions options, Uri endpoint, string key)
+    {
+        var clientOptions = new OpenAIClientOptions { Endpoint = CustomServiceAddress.BaseAddress(endpoint) };
         ConfigureClient(clientOptions);
         var client = new OpenAIClient(new ApiKeyCredential(key), clientOptions);
-        var chatClient = client.GetChatClient(options.CustomModel!.Trim());
-        _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
-        return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
+        var model = options.CustomModel!.Trim();
+        if (CustomServiceAddress.Effective(options.Provider, options.CustomEndpoint, options.CustomApiStyle) == CustomApiStyle.Responses)
+        {
+#pragma warning disable OPENAI001
+            var responses = client.GetResponsesClient();
+            return instructions => responses.AsAIAgent(
+                model: model, instructions: instructions, name: AgentName, clientFactory: DisableStoredOutput);
+#pragma warning restore OPENAI001
+        }
+
+        var chatClient = client.GetChatClient(model);
+        return instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
     }
 
     private Task<AIAgent?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
@@ -6590,7 +6925,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         var chatOptions = new ChatOptions
         {
-            MaxOutputTokens = MaxOutputTokensOverride ?? EstimateMaxTokens(text, options.Provider),
+            MaxOutputTokens = OutputCeiling(text, options),
         };
 
         if (ReasoningEffortOverride is { } effort)
@@ -6657,6 +6992,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         if (!localServer)
         {
+            return;
+        }
+
+        if (UsesOllamaApi(options))
+        {
+            ApplyOllamaApiOptions(chatOptions, options);
             return;
         }
 
@@ -6727,7 +7068,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return raw;
         };
 
-    private static int EstimateMaxTokens(string text, CleanupProvider provider)
+    internal static int EstimateMaxTokens(string text, CleanupProvider provider)
     {
         // English averages a little over one token per word; cleanup output tracks input length.
         var words = CountWords(text);
@@ -6892,6 +7233,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         if (endpoint.Scheme == Uri.UriSchemeHttp && !endpoint.IsLoopback)
         {
             error = "A server on another computer needs an address that starts with https://. An http:// address works for this PC.";
+            return false;
+        }
+
+        if (CustomServiceAddress.NamesOldCompletions(value))
+        {
+            error = Settings.SettingsDraftValidator.CustomEndpointOldCompletionsMessage;
             return false;
         }
 
@@ -8027,6 +8374,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         {
             await DisposeQuietlyAsync(agent).ConfigureAwait(false);
         }
+
+        // An LM Studio copy Scribe loaded at a size would outlive Scribe by LM Studio's own hour (see
+        // TextCleanupService.LocalContext), so it is freed now; a model Ollama or LM Studio loaded on demand keeps the idle
+        // time every request asked for, and is left to it, as the idle release leaves it.
+        await ReleaseScribeLoadedCopyAsync().ConfigureAwait(false);
 
         /*
          * The Copilot session is a child process, so it has to be asked to close.

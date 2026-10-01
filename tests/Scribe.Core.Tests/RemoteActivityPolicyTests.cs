@@ -96,6 +96,21 @@ public sealed class RemoteActivityPolicyTests
         Assert.False(RemoteActivityPolicy.MayContact(saved, draft, RemoteActivityTrigger.WindowOpen));
     }
 
+    [Fact]
+    public void Another_AI_service_s_API_is_part_of_the_fingerprint()
+    {
+        var saved = Complete(CleanupProvider.OpenAiCompatible);
+        saved.AiCleanupCustomEndpoint = "https://ai.example.invalid/v1";
+        var draft = saved.Clone();
+        draft.AiCleanupCustomApiStyle = CustomApiStyle.Responses;
+
+        Assert.False(RemoteActivityPolicy.MayContact(saved, draft, RemoteActivityTrigger.WindowOpen));
+
+        // An address that names its API decides it, whatever was chosen, so the two reach the service the same way.
+        saved.AiCleanupCustomEndpoint = draft.AiCleanupCustomEndpoint = "https://ai.example.invalid/v1/responses";
+        Assert.True(RemoteActivityPolicy.MayContact(saved, draft, RemoteActivityTrigger.WindowOpen));
+    }
+
     [Theory]
     [InlineData(nameof(AppSettings.AiCleanupAzureClientSecret), " secret")]
     [InlineData(nameof(AppSettings.AiCleanupAzureClientSecret), "secret ")]

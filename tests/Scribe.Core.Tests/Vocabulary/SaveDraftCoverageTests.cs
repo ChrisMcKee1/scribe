@@ -33,10 +33,12 @@ public sealed class SaveDraftCoverageTests
         ["AiCleanupCustomEndpoint"] = "ShownCustomService",
         ["AiCleanupCustomModel"] = "ShownCustomService",
         ["AiCleanupCustomApiKey"] = "ShownCustomService",
+        ["AiCleanupCustomApiStyle"] = "ShownCustomService",
         // Another AI service, remembered beside Ollama or LM Studio (CustomServiceFields), read the same way.
         ["AiCleanupOtherServiceEndpoint"] = "ShownRememberedService",
         ["AiCleanupOtherServiceModel"] = "ShownRememberedService",
         ["AiCleanupOtherServiceApiKey"] = "ShownRememberedService",
+        ["AiCleanupOtherServiceApiStyle"] = "ShownRememberedService",
         ["AiCleanupAzureSubscriptionId"] = Subscription,
         ["AiCleanupAzureSubscriptionName"] = Subscription,
         ["AiCleanupAzureSubscriptionTenantId"] = Subscription,

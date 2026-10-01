@@ -600,7 +600,7 @@ internal sealed class DictationController : IDisposable
     /// (<see cref="ITextCleanupService.Admit"/>), judged by that generation's library scope, so a vocabulary change is
     /// never a configuration change and a request never carries vocabulary no admission stands behind.
     /// </summary>
-    private CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
+    private CleanupOptions BuildCleanupOptions(AppSettings settings) => LocalModelTuning.Apply(new(
         settings.EnableAiCleanup,
         settings.AiCleanupProvider,
         settings.AiCleanupModel,
@@ -637,7 +637,10 @@ internal sealed class DictationController : IDisposable
         // Only Ollama and LM Studio at their own address read it, so a change of the idle time never touches another
         // provider's setup (a Foundry Local download, or GitHub Copilot's start).
         LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(
-            settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint, settings.ReleaseModelsAfterIdleMinutes));
+            settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint, settings.ReleaseModelsAfterIdleMinutes),
+        CustomApiStyle: settings.AiCleanupCustomApiStyle),
+        // How the app on this PC that runs the model is tuned: its connection, context size and whole vocabulary.
+        settings);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)

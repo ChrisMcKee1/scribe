@@ -31,6 +31,14 @@ public interface ITextCleanupService : IAsyncDisposable
     bool IsLocalModelStarting { get; }
 
     /// <summary>
+    /// The context the model on this PC reads for the configuration AI cleanup serves, in tokens, as far as Scribe knows it:
+    /// for Ollama with a size chosen, that size capped at the most the model takes; otherwise what Ollama, LM Studio or
+    /// Foundry Local said it holds the model with. 0 when cleanup does not run on Foundry Local or on Ollama or LM Studio
+    /// at its own address, or nothing is known yet. Each request is fitted into it (<see cref="ContextBudget"/>).
+    /// </summary>
+    int LocalContextTokens { get; }
+
+    /// <summary>
     /// Frees the memory of the model AI cleanup uses on this PC, when it uses one (Foundry Local's model, whatever cleanup
     /// is set to, or the one Ollama or LM Studio holds for it); it loads again at the next dictation. <paramref name="reason"/>
     /// decides how: see <see cref="ModelMemoryRelease"/>. The release is decided now: a dictation, a one-off request, a

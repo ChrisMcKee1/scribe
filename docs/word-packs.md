@@ -330,7 +330,13 @@ exact.
   the short instructions, your words first, picked from the ones the dictation appears to mention. A word that
   doesn't fit is still fixed on your PC. Since Scribe 0.5.2 a large word pack no longer crowds out the words a
   dictation needs, because each request carries the words that dictation mentions rather than the start of the
-  whole list.
+  whole list. A model on your PC also gets no more than fits in its context after your dictation.
+- **Everything, on your PC.** For Ollama, LM Studio or Foundry Local, **Send your whole vocabulary when it fits**
+  (under that app's settings in AI cleanup) sends every word of your dictionary and of the word packs you let AI
+  cleanup use, whenever they fit in the model's context with your dictation, rather than only the words a
+  dictation mentions. When they don't all fit, the words the dictation mentions go first, then as many others as
+  fit. For Ollama and LM Studio you can also choose a larger **Context size** so more of them fit. None of it
+  leaves your PC.
 
 ## Check a word pack before you share it
 

@@ -146,11 +146,20 @@ public static class SettingsChangeTracker
             !Same(baseline.AiCleanupCustomEndpoint, draft.AiCleanupCustomEndpoint) ||
             !Same(baseline.AiCleanupCustomModel, draft.AiCleanupCustomModel) ||
             !Same(baseline.AiCleanupCustomApiKey, draft.AiCleanupCustomApiKey) ||
+            ReachedWith(baseline.AiCleanupCustomEndpoint, baseline.AiCleanupCustomApiStyle) !=
+                ReachedWith(draft.AiCleanupCustomEndpoint, draft.AiCleanupCustomApiStyle) ||
             !Same(baseline.AiCleanupOtherServiceEndpoint, draft.AiCleanupOtherServiceEndpoint) ||
             !Same(baseline.AiCleanupOtherServiceModel, draft.AiCleanupOtherServiceModel) ||
             !Same(baseline.AiCleanupOtherServiceApiKey, draft.AiCleanupOtherServiceApiKey) ||
+            ReachedWith(baseline.AiCleanupOtherServiceEndpoint, baseline.AiCleanupOtherServiceApiStyle) !=
+                ReachedWith(draft.AiCleanupOtherServiceEndpoint, draft.AiCleanupOtherServiceApiStyle) ||
             !Same(baseline.AiCleanupCopilotModel, draft.AiCleanupCopilotModel) ||
             baseline.AiCleanupPromptCaching != draft.AiCleanupPromptCaching ||
+            baseline.AiCleanupOllamaContextTokens != draft.AiCleanupOllamaContextTokens ||
+            baseline.AiCleanupLmStudioContextTokens != draft.AiCleanupLmStudioContextTokens ||
+            baseline.AiCleanupOllamaSendWholeVocabulary != draft.AiCleanupOllamaSendWholeVocabulary ||
+            baseline.AiCleanupLmStudioSendWholeVocabulary != draft.AiCleanupLmStudioSendWholeVocabulary ||
+            baseline.AiCleanupFoundryLocalSendWholeVocabulary != draft.AiCleanupFoundryLocalSendWholeVocabulary ||
             !Same(baseline.AiCleanupWritingStyle, draft.AiCleanupWritingStyle) ||
             baseline.AiCleanupPromptStyle != draft.AiCleanupPromptStyle ||
             !Same(baseline.AiCleanupFrontierPrompt, draft.AiCleanupFrontierPrompt) ||
@@ -373,6 +382,11 @@ public static class SettingsChangeTracker
 
     private static bool Same(string? left, string? right) =>
         string.Equals(left ?? string.Empty, right ?? string.Empty, StringComparison.Ordinal);
+
+    // The API another AI service at this address is reached with: what Save stores, so a stored choice the address overrides
+    // (left by an older build, which drops the setting) is no change.
+    private static Cleanup.CustomApiStyle ReachedWith(string? endpoint, Cleanup.CustomApiStyle chosen) =>
+        Cleanup.CustomServiceAddress.Effective(Cleanup.CleanupProvider.OpenAiCompatible, endpoint?.Trim(), chosen);
 
     private static bool SameLibraryIds(IReadOnlyList<string> left, IReadOnlyList<string> right) =>
         new HashSet<string>(left, StringComparer.OrdinalIgnoreCase).SetEquals(right);

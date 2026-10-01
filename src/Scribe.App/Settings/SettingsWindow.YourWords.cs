@@ -598,7 +598,7 @@ public partial class SettingsWindow
             ?? DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(CurrentWordPackLibraries(), CollectEnabledLibraryIds()));
         var aiEntries = composition?.AiLibraryEntries ?? localEntries;
 
-        DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
+        var hint = new GlossaryHint.Input(
             _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
             localEntries,
             AiCleanupOn: aiOn,
@@ -606,8 +606,26 @@ public partial class SettingsWindow
             SelectedProvider,
             SelectedPromptStyle,
             aiEntries,
-            SelectedCustomEndpoint));
+            SelectedCustomEndpoint,
+            SendsWholeVocabulary);
+        DictionaryGlossaryHint.Text = GlossaryHint.Describe(hint);
+
+        // What a model's context needs to hold all of it, for each app's settings on the AI cleanup page.
+        _wholeVocabularyTokens = GlossaryHint.WholeVocabularyTokens(hint);
+        UpdateLocalModelTuning();
     }
+
+    // The whole vocabulary switch of the app on this PC that runs the AI, as the page shows it.
+    private bool SendsWholeVocabulary => SelectedProvider switch
+    {
+        Scribe.Core.Cleanup.CleanupProvider.FoundryLocal => FoundryWholeVocabularyCheck?.IsChecked == true,
+        _ => SelectedLocalApp switch
+        {
+            Scribe.Core.Cleanup.LocalServerApp.Ollama => OllamaWholeVocabularyCheck?.IsChecked == true,
+            Scribe.Core.Cleanup.LocalServerApp.LmStudio => LmStudioWholeVocabularyCheck?.IsChecked == true,
+            _ => false,
+        },
+    };
 
     private LibraryComposition? CurrentLibraryComposition()
     {

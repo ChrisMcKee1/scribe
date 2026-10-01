@@ -41,25 +41,38 @@ public static class CleanupDisclosure
     /// </summary>
     public static string ReadiesALocalServer { get; } =
         "When AI cleanup runs on a server on this PC, such as Ollama or LM Studio, starting a dictation also sends that " +
-        "server the cleanup instructions with no dictated text and none of your vocabulary, unless it answered in the " +
-        $"last {LocalAiServer.PrewarmAfterIdleSeconds} seconds, so a model it unloaded while idle is loaded again by " +
-        "the time you stop talking.";
+        "server the cleanup instructions with no dictated text, unless it answered in the last " +
+        $"{LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model, so a model it unloaded is loaded " +
+        "again by the time you stop talking. It carries none of your vocabulary, unless \"" +
+        Settings.LocalModelTuningText.WholeVocabularyTitle + "\" is on for that app, when it carries as much of it as fits.";
+
+    /// <summary>
+    /// What a model on this PC may receive beyond what the card above lists for a remote service: the whole vocabulary,
+    /// with that app's switch on (<see cref="CleanupPrompt.FitGlossary"/>). Declared before the card that quotes it.
+    /// </summary>
+    public static string WholeVocabularyOnThisPc { get; } =
+        "With \"" + Settings.LocalModelTuningText.WholeVocabularyTitle + "\" on for a model on this PC (Foundry Local, " +
+        "Ollama or LM Studio), each request carries all of that vocabulary when it fits in the model's context with the " +
+        "dictation, and otherwise the words the dictation appears to mention first, then as many others as fit. None of " +
+        "it leaves this PC.";
 
     /// <summary>
     /// What Scribe asks Ollama or LM Studio itself (<see cref="LocalServerClient"/>): the models it has and holds, and to
     /// free one. Declared before the card that quotes it.
     /// </summary>
     public static string ManagesALocalApp { get; } =
-        "With Ollama or LM Studio at its own address on this PC, Scribe also asks that app which models it has and which " +
-        "it holds in memory, and asks it to free a model's memory when AI cleanup stops using it; these requests stay on " +
-        "this PC and carry nothing you said, only the API key you saved for that address, if any.";
+        "With Ollama or LM Studio at its own address on this PC, Scribe also asks that app, including as each dictation " +
+        "starts, which models it has, which it holds in memory and how much each reads at once, asks it to free a model's " +
+        "memory when AI cleanup stops using it, and, with a context size chosen for LM Studio, to load the model at that " +
+        "size with a request holding the word \"ok\"; these requests stay on this PC and carry nothing you said, only an " +
+        "API key you saved for that address, if any.";
 
     /// <summary>The same card's second paragraph: the connection check, the readying request, and what is never sent.</summary>
     public static string WhatCleanupNeverSends { get; } =
         "Each time cleanup connects, for example when Scribe starts or you save a change to where AI cleanup " +
         "runs, it first sends a short test request holding the word \"ok\" and the same instructions, with " +
-        "none of your vocabulary. " + ReadiesALocalServer + " " + ManagesALocalApp + " Cleanup never sends your " +
-        "snippet templates, and audio never leaves this device. " +
+        "none of your vocabulary. " + WholeVocabularyOnThisPc + " " + ReadiesALocalServer + " " + ManagesALocalApp +
+        " Cleanup never sends your snippet templates, and audio never leaves this device. " +
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
 

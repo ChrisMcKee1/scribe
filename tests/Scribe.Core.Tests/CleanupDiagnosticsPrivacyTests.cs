@@ -41,6 +41,10 @@ internal sealed class CleanupHarness : IAsyncDisposable
         {
             OpenAIClientOptionsOverride = ScriptedHttpHandler.Install(Http),
 
+            // Ollama's own API is sent through its own client, which the override above does not reach: the same scripted
+            // network, behind the production hand-off, so no test ever reaches a real Ollama.
+            InnerHttpHandlerForTesting = Http,
+
             // Never the real Ollama or LM Studio a developer's PC may run.
             LocalServers = LocalServers,
 

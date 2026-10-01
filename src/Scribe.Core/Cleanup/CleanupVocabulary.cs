@@ -76,4 +76,64 @@ public sealed class CleanupVocabulary
                 return GlossaryFor(maxTerms);
         }
     }
+
+    /// <summary>
+    /// Every line of this vocabulary's glossary with no budget, in priority order, each with its estimated tokens
+    /// (<see cref="CleanupPrompt.GlossaryLines"/>). Built once, at the first request that fits the glossary into a context.
+    /// </summary>
+    internal IReadOnlyList<GlossaryLineInfo> Lines =>
+        LazyInitializer.EnsureInitialized(ref _lines, () => CleanupPrompt.GlossaryLines(GlossaryEntries));
+
+    private List<GlossaryLineInfo>? _lines;
+    private string? _wholeGlossary;
+
+    /// <summary>The estimated tokens of the whole glossary with no budget, its header included; 0 when it is empty.</summary>
+    public long WholeGlossaryTokens => Lines.Count == 0 ? 0 : CleanupPrompt.GlossaryHeaderTokens + CleanupPrompt.Tokens(Lines);
+
+    /// <summary>
+    /// The glossary block one request to a model on this PC carries, fitted into <paramref name="tokenBudget"/> tokens of
+    /// its context (<see cref="ContextBudget"/>, the dictated text and its answer already taken out; see
+    /// <see cref="CleanupPrompt.FitGlossary"/>). Null when nothing fits or there is nothing to add.
+    /// </summary>
+    /// <param name="mode">How much of the vocabulary the request may carry at most.</param>
+    /// <param name="everything">
+    /// Whether the whole vocabulary goes when it fits (Send your whole vocabulary when it fits). Without a dictation, as a
+    /// readying request has, it is the leading run of the whole vocabulary that fits; with it, nothing.
+    /// </param>
+    /// <param name="dictation">The text the request carries, which the mentioned terms are picked by; null for a readying request.</param>
+    /// <param name="maxTerms">The most terms the request may carry, whatever fits.</param>
+    public string? GlossaryFor(CleanupVocabularyMode mode, bool everything, string? dictation, int tokenBudget, int maxTerms)
+    {
+        if (mode == CleanupVocabularyMode.None || GlossaryEntries.Count == 0)
+        {
+            return null;
+        }
+
+        var all = Lines;
+        IReadOnlyList<GlossaryLineInfo> lines;
+        if (mode == CleanupVocabularyMode.All || string.IsNullOrWhiteSpace(dictation))
+        {
+            if (mode != CleanupVocabularyMode.All && !everything)
+            {
+                return null;
+            }
+
+            lines = CleanupPrompt.TakeWhileFits(all, (long)tokenBudget - CleanupPrompt.GlossaryHeaderTokens, maxTerms);
+        }
+        else
+        {
+            var mentioned = CleanupPrompt.GlossaryLines(VocabularyMentions.Select(GlossaryEntries, dictation));
+            lines = CleanupPrompt.FitGlossary(all, mentioned, everything, tokenBudget, maxTerms);
+        }
+
+        if (lines.Count == 0)
+        {
+            return null;
+        }
+
+        // The whole glossary is the same text for every request that carries it, so it is rendered once.
+        return ReferenceEquals(lines, all)
+            ? LazyInitializer.EnsureInitialized(ref _wholeGlossary, () => CleanupPrompt.RenderGlossary(all))
+            : CleanupPrompt.RenderGlossary(lines);
+    }
 }

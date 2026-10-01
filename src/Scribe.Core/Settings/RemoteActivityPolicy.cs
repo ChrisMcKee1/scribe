@@ -29,6 +29,7 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
     private readonly string? _customEndpoint;
     private readonly string? _customModel;
     private readonly string? _customApiKey;
+    private readonly CustomApiStyle _customApiStyle;
     private readonly string? _copilotModel;
 
     private RemoteActivityFingerprint(AppSettings settings)
@@ -60,6 +61,7 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
         _customEndpoint = EmptyToNull(settings.AiCleanupCustomEndpoint);
         _customModel = EmptyToNull(settings.AiCleanupCustomModel);
         _customApiKey = RawEmptyToNull(settings.AiCleanupCustomApiKey);
+        _customApiStyle = CustomServiceAddress.Effective(settings.AiCleanupProvider, _customEndpoint, settings.AiCleanupCustomApiStyle);
         _copilotModel = EmptyToNull(settings.AiCleanupCopilotModel);
     }
 
@@ -86,6 +88,7 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
         Same(_customEndpoint, other._customEndpoint) &&
         Same(_customModel, other._customModel) &&
         Same(_customApiKey, other._customApiKey) &&
+        _customApiStyle == other._customApiStyle &&
         Same(_copilotModel, other._copilotModel);
 
     public override bool Equals(object? obj) => Equals(obj as RemoteActivityFingerprint);
@@ -107,6 +110,7 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
         hash.Add(_customEndpoint, StringComparer.Ordinal);
         hash.Add(_customModel, StringComparer.Ordinal);
         hash.Add(_customApiKey, StringComparer.Ordinal);
+        hash.Add(_customApiStyle);
         hash.Add(_copilotModel, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
@@ -241,7 +245,9 @@ public static class RemoteActivityPolicy
         CleanupProvider.OpenAiCompatible =>
             Same(EmptyToNull(saved.AiCleanupCustomEndpoint), EmptyToNull(draft.AiCleanupCustomEndpoint)) &&
             Same(EmptyToNull(saved.AiCleanupCustomModel), EmptyToNull(draft.AiCleanupCustomModel)) &&
-            Same(RawEmptyToNull(saved.AiCleanupCustomApiKey), RawEmptyToNull(draft.AiCleanupCustomApiKey)),
+            Same(RawEmptyToNull(saved.AiCleanupCustomApiKey), RawEmptyToNull(draft.AiCleanupCustomApiKey)) &&
+            CustomServiceAddress.Effective(provider, EmptyToNull(saved.AiCleanupCustomEndpoint), saved.AiCleanupCustomApiStyle) ==
+                CustomServiceAddress.Effective(provider, EmptyToNull(draft.AiCleanupCustomEndpoint), draft.AiCleanupCustomApiStyle),
         CleanupProvider.GitHubCopilot =>
             Same(EmptyToNull(saved.AiCleanupCopilotModel), EmptyToNull(draft.AiCleanupCopilotModel)),
         _ => false,

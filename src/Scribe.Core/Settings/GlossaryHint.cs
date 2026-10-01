@@ -43,7 +43,25 @@ public static class GlossaryHint
         CleanupProvider Provider,
         CleanupPromptStyle PromptStyle,
         IReadOnlyList<DictionaryEntry>? AiLibraryEntries = null,
-        string? CustomEndpoint = null);
+        string? CustomEndpoint = null,
+        bool SendWholeVocabulary = false);
+
+    /// <summary>
+    /// The estimated tokens of the whole vocabulary AI cleanup may receive, header included, as dictation would render it
+    /// with no budget (<see cref="CleanupPrompt.GlossaryLines"/>): what a model's context needs to hold all of it. 0 when
+    /// there is none.
+    /// </summary>
+    public static long WholeVocabularyTokens(Input input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var personal = DictionaryEntryBuilder.Build(input.Rows).Entries
+            .Where(e => e.Enabled)
+            .OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance)
+            .ToList();
+        var lines = CleanupPrompt.GlossaryLines(
+            CleanupPrompt.ComposeVocabulary(personal, input.AiLibraryEntries ?? input.LibraryEntries));
+        return lines.Count == 0 ? 0 : CleanupPrompt.GlossaryHeaderTokens + CleanupPrompt.Tokens(lines);
+    }
 
     public static string Describe(Input input)
     {
@@ -97,7 +115,17 @@ public static class GlossaryHint
             var onThisPc = input.Provider == CleanupProvider.FoundryLocal ||
                 LocalAiServer.Serves(input.Provider, input.CustomEndpoint);
             var receiver = onThisPc ? "The AI model on this PC" : "Your AI service";
-            if (glossary.Eligible == 1)
+            if (onThisPc && input.SendWholeVocabulary)
+            {
+                // Send your whole vocabulary when it fits (CleanupPrompt.FitGlossary), the dictation's own words first.
+                var tokens = WholeVocabularyTokens(input);
+                text.Append(
+                    $" {receiver} receives all {Count(glossary.Eligible)} of {(glossary.Eligible == 1 ? "it" : "these words")} " +
+                    $"with each cleanup request when they fit in its context with the dictation, about {Count(tokens)} tokens. " +
+                    "When they don't, the words a dictation appears to mention go first, then as many others as fit, your " +
+                    "own words first.");
+            }
+            else if (glossary.Eligible == 1)
             {
                 text.Append($" {receiver} receives that word as vocabulary whenever a dictation appears to mention it.");
             }
@@ -147,4 +175,6 @@ public static class GlossaryHint
     }
 
     private static string Count(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
+
+    private static string Count(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
 }

@@ -104,6 +104,11 @@ public static class SettingsDraftValidator
     public const string ShortcutsIdenticalMessage = "Both shortcuts use the same key. Choose a different key for one of them.";
     public const string FoundryEndpointInvalidMessage = "Enter the address of your Microsoft Foundry resource. It starts with https://.";
     public const string CustomEndpointInvalidMessage = "Enter the service's address, such as http://localhost:11434/v1.";
+
+    /// <summary>An address that ends in the older Completions API's path, which Scribe does not use; the service says the same.</summary>
+    public const string CustomEndpointOldCompletionsMessage =
+        "This address ends in /completions, the older Completions API, which Scribe doesn't use. End it in " +
+        "/chat/completions or /responses, or in the part before them, usually /v1.";
     public const string CustomModelEmptyMessage = "Enter the name of the model.";
     public const string LocalAppModelEmptyMessage = "Choose a model from the list.";
     public const string DeploymentEmptyMessage = "Enter the name of the model deployment.";
@@ -287,6 +292,10 @@ public static class SettingsDraftValidator
                     if (!IsHttpOrHttps(settings.AiCleanupCustomEndpoint, requireHttps: false))
                     {
                         Add(ValidationCode.CustomEndpointInvalid, SettingsPage.AiCleanup, "CustomEndpointBox", null, CustomEndpointInvalidMessage);
+                    }
+                    else if (Cleanup.CustomServiceAddress.NamesOldCompletions(settings.AiCleanupCustomEndpoint))
+                    {
+                        Add(ValidationCode.CustomEndpointInvalid, SettingsPage.AiCleanup, "CustomEndpointBox", null, CustomEndpointOldCompletionsMessage);
                     }
 
                     if (string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel))

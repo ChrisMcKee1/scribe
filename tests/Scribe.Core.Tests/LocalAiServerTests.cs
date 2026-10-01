@@ -287,18 +287,36 @@ public sealed class LocalAiServerTests
             policy = policy.Replace("  ", " ", StringComparison.Ordinal);
         }
 
-        Assert.Contains("starting a dictation also sends that server the cleanup instructions with no dictated text and none of your vocabulary", policy, StringComparison.Ordinal);
-        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds", policy, StringComparison.Ordinal);
+        Assert.Contains("starting a dictation also sends that server the cleanup instructions with no dictated text, unless it answered in the last", policy, StringComparison.Ordinal);
+        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model", policy, StringComparison.Ordinal);
+        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
         Assert.Contains("It goes only to that server on this PC, never to a service elsewhere.", policy, StringComparison.Ordinal);
         Assert.Contains("none of your vocabulary", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
 
-        // What Scribe asks Ollama or LM Studio itself: disclosed on the card and in the policy, and it carries nothing said,
-        // only the key saved for that address.
+        // With the whole vocabulary on, the readying request carries the leading run of it that fits (GlossaryForLocked),
+        // and every request to a model on this PC may carry all of it: said on the card and in the policy.
+        Assert.Contains("It carries none of your vocabulary, unless \"Send your whole vocabulary when it fits\" is on for that app, when it also carries as much of your vocabulary as fits.", policy, StringComparison.Ordinal);
+        Assert.Contains($"\"{LocalModelTuningText.WholeVocabularyTitle}\" is on for that app, when it carries as much of it as fits.", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
+        Assert.Contains(CleanupDisclosure.WholeVocabularyOnThisPc, CleanupDisclosure.WhatCleanupNeverSends, StringComparison.Ordinal);
+        Assert.Contains("None of it leaves this PC.", CleanupDisclosure.WholeVocabularyOnThisPc, StringComparison.Ordinal);
+        Assert.Contains("With \"Send your whole vocabulary when it fits\" on for that app, each cleanup request carries all of the vocabulary described below", policy, StringComparison.Ordinal);
+        Assert.Contains("Every request to a model on this PC is also kept to what the model's context holds, the dictation first. None of this leaves this PC.", policy, StringComparison.Ordinal);
+
+        // LM Studio loading the model at a chosen size, through its own chat API with the word "ok".
+        Assert.Contains("to load the model at that size with a request holding the word \"ok\"", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
+        Assert.Contains("With a context size chosen for LM Studio, Scribe asks LM Studio to load the model at that size with a request holding the word \"ok\", which it asks LM Studio not to keep, and frees that copy itself after the time you set without a dictation, and when Scribe closes, unless that time is Never.", policy, StringComparison.Ordinal);
+        Assert.Contains("Test connection loads the model that way too, to check that size, and Scribe frees a copy it loaded only for a test, or for settings you have since changed, once it is not needed, whatever that time.", policy, StringComparison.Ordinal);
+
+        // What Scribe asks Ollama or LM Studio itself, as each dictation starts too: disclosed on the card and in the policy,
+        // and it carries nothing said, only a key saved for that address (an earlier one only to free a copy loaded with it).
         Assert.Contains(CleanupDisclosure.ManagesALocalApp, CleanupDisclosure.WhatCleanupNeverSends, StringComparison.Ordinal);
+        Assert.Contains("including as each dictation starts, which models it has, which it holds in memory and how much each reads at once", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
+        Assert.Contains("including as each dictation starts, which models it has, which it holds in memory and how much each reads at once", policy, StringComparison.Ordinal);
         Assert.Contains("carry nothing you said", policy, StringComparison.Ordinal);
         Assert.Contains("asks it to free a model's memory when AI cleanup stops using the model", policy, StringComparison.Ordinal);
-        Assert.Contains("only the API key you saved for that address, if any", policy, StringComparison.Ordinal);
-        Assert.Contains("only the API key you saved for that address, if any", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
+        Assert.Contains("only an API key you saved for that address, if any", policy, StringComparison.Ordinal);
+        Assert.Contains("to free a copy Scribe loaded with a key you have since replaced, that earlier key", policy, StringComparison.Ordinal);
+        Assert.Contains("only an API key you saved for that address, if any", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
     }
 
     private static ScriptedHttpHandler Capturing(List<JsonElement> bodies) => new(async (request, ct) =>

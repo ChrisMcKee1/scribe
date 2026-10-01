@@ -20,8 +20,9 @@ namespace Scribe.Core.Settings;
 /// </remarks>
 public static class CustomServiceFields
 {
-    /// <summary>A server address, a model name and an API key.</summary>
-    public sealed record Fields(string? Endpoint, string? Model, string? ApiKey)
+    /// <summary>A server address, a model name, an API key and the API the service is reached through.</summary>
+    public sealed record Fields(
+        string? Endpoint, string? Model, string? ApiKey, CustomApiStyle ApiStyle = CustomApiStyle.ChatCompletions)
     {
         public static Fields None { get; } = new(null, null, null);
     }
@@ -47,18 +48,24 @@ public static class CustomServiceFields
     {
         ArgumentNullException.ThrowIfNull(settings);
         return SavedApp(settings) == LocalServerApp.None
-            ? new(settings.AiCleanupCustomEndpoint, settings.AiCleanupCustomModel, settings.AiCleanupCustomApiKey)
-            : new(settings.AiCleanupOtherServiceEndpoint, settings.AiCleanupOtherServiceModel, settings.AiCleanupOtherServiceApiKey);
+            ? new(settings.AiCleanupCustomEndpoint, settings.AiCleanupCustomModel, settings.AiCleanupCustomApiKey, settings.AiCleanupCustomApiStyle)
+            : new(
+                settings.AiCleanupOtherServiceEndpoint,
+                settings.AiCleanupOtherServiceModel,
+                settings.AiCleanupOtherServiceApiKey,
+                settings.AiCleanupOtherServiceApiStyle);
     }
 
     /// <summary>
     /// What Save stores: the fields that run cleanup, and the Another AI service boxes to remember beside Ollama or LM
     /// Studio. With <paramref name="app"/> <see cref="LocalServerApp.None"/> the boxes run cleanup and nothing is
-    /// remembered. Blank values are stored as null and the rest trimmed, as Settings always stored them.
+    /// remembered. Blank values are stored as null and the rest trimmed, as Settings always stored them. The API stored
+    /// for the boxes is the one they reach the service with (<see cref="CustomServiceAddress.Effective"/>: an address that
+    /// names its API stores that one), and Ollama and LM Studio store Chat Completions.
     /// </summary>
     /// <param name="app">Ollama or LM Studio when "On this PC" runs the AI with it; otherwise none.</param>
     /// <param name="appModel">The model chosen from the app's list.</param>
-    /// <param name="otherService">What the Another AI service boxes hold.</param>
+    /// <param name="otherService">What the Another AI service boxes hold, with the API chosen for them.</param>
     /// <param name="saved">
     /// The settings last saved: an app keeps the address it was saved at (<c>127.0.0.1</c> or <c>localhost</c>, with or
     /// without a final slash), so opening Settings and saving changes nothing.
@@ -68,14 +75,19 @@ public static class CustomServiceFields
     {
         ArgumentNullException.ThrowIfNull(otherService);
         ArgumentNullException.ThrowIfNull(saved);
-        var boxes = new Fields(Trimmed(otherService.Endpoint), Trimmed(otherService.Model), Trimmed(otherService.ApiKey));
+        var endpoint = Trimmed(otherService.Endpoint);
+        var boxes = new Fields(
+            endpoint,
+            Trimmed(otherService.Model),
+            Trimmed(otherService.ApiKey),
+            CustomServiceAddress.Effective(CleanupProvider.OpenAiCompatible, endpoint, otherService.ApiStyle));
         if (app == LocalServerApp.None)
         {
             return (boxes, Fields.None);
         }
 
-        var endpoint = SavedApp(saved) == app ? Trimmed(saved.AiCleanupCustomEndpoint) : LocalAiServer.AddressOf(app);
-        return (new(endpoint, Trimmed(appModel), null), boxes);
+        var appEndpoint = SavedApp(saved) == app ? Trimmed(saved.AiCleanupCustomEndpoint) : LocalAiServer.AddressOf(app);
+        return (new(appEndpoint, Trimmed(appModel), null), boxes);
     }
 
     private static string? Trimmed(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -404,6 +404,17 @@ public partial class SettingsWindow
             case "StoreAudioCheck":
                 HistorySettingsCard.IsExpanded = true;
                 break;
+            case "OllamaContextSizeCombo":
+            case "OllamaWholeVocabularyCheck":
+                OllamaTuningExpander.IsExpanded = true;
+                break;
+            case "LmStudioContextSizeCombo":
+            case "LmStudioWholeVocabularyCheck":
+                LmStudioTuningExpander.IsExpanded = true;
+                break;
+            case "FoundryWholeVocabularyCheck":
+                FoundryTuningExpander.IsExpanded = true;
+                break;
         }
     }
 

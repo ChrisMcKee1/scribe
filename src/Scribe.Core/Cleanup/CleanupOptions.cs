@@ -62,6 +62,21 @@ public enum CleanupPromptStyle
 /// loaded under the old time can keep it until it is loaded again. The app passes it only for Ollama and LM Studio, so a
 /// change never restarts another provider's setup.
 /// </param>
+/// <param name="LocalContextTokens">
+/// The context size, in tokens, Scribe asks the app on this PC to load the model with: Ollama through its own chat API
+/// (<c>num_ctx</c> on every request, which a size switches Ollama's requests to), LM Studio through its own API when Scribe
+/// loads the model. Null leaves it to the app's own setting, and Ollama's requests on its OpenAI-compatible API. Not a
+/// prompt field: a change reconnects, and the model loads at the new size.
+/// </param>
+/// <param name="SendWholeVocabulary">
+/// For a model on this PC: send the whole vocabulary when it fits in the model's context, not only the terms a dictation
+/// appears to mention (<see cref="CleanupPrompt.FitGlossary"/>). A prompt field: it changes only what a request carries.
+/// </param>
+/// <param name="CustomApiStyle">
+/// <c>AppSettings.AiCleanupCustomApiStyle</c>: which API another AI service is reached through. The address's own path,
+/// and Ollama or LM Studio at its own address, decide first (<see cref="CustomServiceAddress.Effective"/>). Not a prompt
+/// field: a change reconnects and probes again.
+/// </param>
 public sealed record CleanupOptions(
     bool Enabled,
     CleanupProvider Provider,
@@ -85,7 +100,10 @@ public sealed record CleanupOptions(
     string? CopilotModel = null,
     bool PromptCaching = true,
     CleanupVocabularyMode VocabularyMode = CleanupVocabularyMode.All,
-    int? LocalModelKeepAliveMinutes = null)
+    int? LocalModelKeepAliveMinutes = null,
+    int? LocalContextTokens = null,
+    bool SendWholeVocabulary = false,
+    CustomApiStyle CustomApiStyle = CustomApiStyle.ChatCompletions)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =
@@ -111,6 +129,7 @@ public sealed record CleanupOptions(
         LocalPrompt = null,
         VocabularyMode = CleanupVocabularyMode.All,
         LocalModelKeepAliveMinutes = null,
+        SendWholeVocabulary = false,
     };
 
     /// <summary>True when the selected provider has everything it needs to initialize.</summary>

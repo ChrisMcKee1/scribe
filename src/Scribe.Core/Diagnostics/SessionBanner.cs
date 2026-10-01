@@ -294,7 +294,8 @@ public static class SessionBanner
              */
             Cleanup.CleanupProvider.GitHubCopilot =>
                 $"model={settings.AiCleanupCopilotModel ?? "account default"}",
-            _ => $"model={settings.AiCleanupCustomModel ?? "unset"} endpoint={Presence(settings.AiCleanupCustomEndpoint)}",
+            _ => $"model={settings.AiCleanupCustomModel ?? "unset"} endpoint={Presence(settings.AiCleanupCustomEndpoint)} " +
+                $"api={Cleanup.CustomServiceAddress.Effective(settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint, settings.AiCleanupCustomApiStyle)}",
         };
 
         return $"on provider={settings.AiCleanupProvider} {target} promptStyle={settings.AiCleanupPromptStyle} " +

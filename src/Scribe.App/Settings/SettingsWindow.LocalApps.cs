@@ -48,20 +48,21 @@ public partial class SettingsWindow
         CustomServiceFields.ForSave(
             SelectedLocalApp,
             SelectedLocalAppModel,
-            new(CustomEndpointBox?.Text, CustomModelBox?.Text, CustomApiKeyBox?.Password),
+            new(CustomEndpointBox?.Text, CustomModelBox?.Text, CustomApiKeyBox?.Password, ChosenCustomApiStyle),
             _committedSettings);
 
     /// <summary>
-    /// The server address, model and key Save stores for the OpenAI-compatible service: the app's own address and the
-    /// model picked from its list, with no key, for Ollama or LM Studio; what the boxes hold for another AI service. The
-    /// draft, Try dictation and Save read them only through this, so what is stored is what the page compares.
+    /// The server address, model, key and API Save stores for the OpenAI-compatible service: the app's own address and the
+    /// model picked from its list, with no key and Chat Completions, for Ollama or LM Studio; what the boxes hold for another
+    /// AI service, with the API they reach it through. The draft, Try dictation and Save read them only through this, so what
+    /// is stored is what the page compares.
     /// </summary>
-    private (string? Endpoint, string? Model, string? ApiKey) ShownCustomService
+    private (string? Endpoint, string? Model, string? ApiKey, CustomApiStyle ApiStyle) ShownCustomService
     {
         get
         {
             var stored = ShownCustomServiceFields.Stored;
-            return (stored.Endpoint, stored.Model, stored.ApiKey);
+            return (stored.Endpoint, stored.Model, stored.ApiKey, stored.ApiStyle);
         }
     }
 
@@ -80,6 +81,8 @@ public partial class SettingsWindow
         CustomEndpointBox.Text = otherService.Endpoint ?? string.Empty;
         CustomModelBox.Text = otherService.Model ?? string.Empty;
         CustomApiKeyBox.Password = otherService.ApiKey ?? string.Empty;
+        _chosenCustomApiStyle = otherService.ApiStyle;
+        ShowCustomApiStyle();
         LocalAppScribeRadio.IsChecked = app == LocalServerApp.None;
         LocalAppOllamaRadio.IsChecked = app == LocalServerApp.Ollama;
         LocalAppLmStudioRadio.IsChecked = app == LocalServerApp.LmStudio;
@@ -265,6 +268,7 @@ public partial class SettingsWindow
 
     private void ShowLocalAppStatus()
     {
+        UpdateLocalModelTuning();
         var app = SelectedLocalApp;
         if (app == LocalServerApp.None)
         {

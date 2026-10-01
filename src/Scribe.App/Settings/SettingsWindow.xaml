@@ -1427,6 +1427,29 @@
                                                 <settings:SettingsStatusRow x:Name="FoundryStatusRow" PrimaryActionInvoked="FoundryStatusRow_PrimaryActionInvoked" SecondaryActionInvoked="FoundryStatusRow_SecondaryActionInvoked"/>
                                                 <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource CardDescription}" Margin="0,8,0,0"
                                                            Text="Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it."/>
+
+                                                <!-- Foundry Local's tuning (LocalModelTuning): its context is set by each model, so only the vocabulary choice. -->
+                                                <ui:CardExpander x:Name="FoundryTuningExpander" Margin="0,12,0,0" IsExpanded="False"
+                                                                 AutomationProperties.Name="Model settings">
+                                                    <ui:CardExpander.Header>
+                                                        <StackPanel>
+                                                            <TextBlock Text="Model settings" Style="{StaticResource CardTitle}"/>
+                                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                       Text="How much of your vocabulary the model gets. Most people never need to change this."/>
+                                                        </StackPanel>
+                                                    </ui:CardExpander.Header>
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <CheckBox x:Name="FoundryWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=FoundryWholeVocabularyTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=FoundryWholeVocabularyHint}"
+                                                                  Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                            <TextBlock x:Name="FoundryWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                        </CheckBox>
+                                                        <TextBlock Margin="28,2,0,0" x:Name="FoundryWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.FoundryWholeVocabularyHint}"/>
+                                                        <TextBlock x:Name="FoundryContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander>
                                             </StackPanel>
 
                                             <StackPanel x:Name="LocalAppPanel" Visibility="Collapsed">
@@ -1436,6 +1459,66 @@
                                                           IsEditable="False" DisplayMemberPath="Label"
                                                           SelectionChanged="LocalAppModelBox_SelectionChanged"/>
                                                 <settings:SettingsStatusRow x:Name="LocalAppStatusRow" PrimaryActionInvoked="LocalAppStatusRow_ActionInvoked" SecondaryActionInvoked="LocalAppStatusRow_ActionInvoked"/>
+
+                                                <!-- Ollama's tuning (LocalModelTuning): the context size it asks for, the vocabulary. -->
+                                                <ui:CardExpander x:Name="OllamaTuningExpander" Margin="0,12,0,0" IsExpanded="False"
+                                                                 AutomationProperties.Name="Ollama settings">
+                                                    <ui:CardExpander.Header>
+                                                        <StackPanel>
+                                                            <TextBlock Text="Ollama settings" Style="{StaticResource CardTitle}"/>
+                                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                       Text="{x:Static coresettings:LocalModelTuningText.TuningSummary}"/>
+                                                        </StackPanel>
+                                                    </ui:CardExpander.Header>
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <TextBlock x:Name="OllamaContextSizeTitle" Text="Context size" Style="{StaticResource CardTitle}"/>
+                                                        <ComboBox x:Name="OllamaContextSizeCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=OllamaContextSizeTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=OllamaContextSizeHint}"
+                                                                  SelectionChanged="LocalModelTuning_Changed"/>
+                                                        <TextBlock x:Name="OllamaContextSizeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.OllamaContextSizeHint}"/>
+                                                        <CheckBox x:Name="OllamaWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}" Margin="0,16,0,0"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=OllamaWholeVocabularyTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=OllamaWholeVocabularyHint}"
+                                                                  Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                            <TextBlock x:Name="OllamaWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                        </CheckBox>
+                                                        <TextBlock Margin="28,2,0,0" x:Name="OllamaWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.AppWholeVocabularyHint}"/>
+                                                        <TextBlock x:Name="OllamaContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander>
+
+                                                <!-- LM Studio's tuning (LocalModelTuning): the context size it loads the model at, the vocabulary. -->
+                                                <ui:CardExpander x:Name="LmStudioTuningExpander" Margin="0,12,0,0" IsExpanded="False"
+                                                                 AutomationProperties.Name="LM Studio settings">
+                                                    <ui:CardExpander.Header>
+                                                        <StackPanel>
+                                                            <TextBlock Text="LM Studio settings" Style="{StaticResource CardTitle}"/>
+                                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                       Text="{x:Static coresettings:LocalModelTuningText.TuningSummary}"/>
+                                                        </StackPanel>
+                                                    </ui:CardExpander.Header>
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <TextBlock x:Name="LmStudioContextSizeTitle" Text="Context size" Style="{StaticResource CardTitle}"/>
+                                                        <ComboBox x:Name="LmStudioContextSizeCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=LmStudioContextSizeTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=LmStudioContextSizeHint}"
+                                                                  SelectionChanged="LocalModelTuning_Changed"/>
+                                                        <TextBlock x:Name="LmStudioContextSizeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.LmStudioContextSizeHint}"/>
+                                                        <CheckBox x:Name="LmStudioWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}" Margin="0,16,0,0"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=LmStudioWholeVocabularyTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=LmStudioWholeVocabularyHint}"
+                                                                  Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                            <TextBlock x:Name="LmStudioWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                        </CheckBox>
+                                                        <TextBlock Margin="28,2,0,0" x:Name="LmStudioWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.AppWholeVocabularyHint}"/>
+                                                        <TextBlock x:Name="LmStudioContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander>
                                             </StackPanel>
                                         </StackPanel>
 
@@ -1600,7 +1683,16 @@
                                                         AutomationProperties.LabeledBy="{Binding ElementName=CustomEndpointTitle}"
                                                         TextChanged="CustomConnectionField_Changed"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
-                                                       Text="The service's OpenAI-compatible address, usually ending in /v1. For Ollama or LM Studio on this PC, choose On this PC instead."/>
+                                                       Text="{x:Static coresettings:CustomApiStyleText.AddressHint}"/>
+
+                                            <!-- AppSettings.AiCleanupCustomApiStyle. The address's own path, or Ollama and LM Studio at their own
+                                                 addresses, decide first (CustomServiceAddress.Effective); the box shows that and cannot be changed then. -->
+                                            <TextBlock x:Name="CustomApiStyleTitle" Text="API" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                            <ComboBox x:Name="CustomApiStyleCombo" Margin="0,8,0,0" MinWidth="220" HorizontalAlignment="Left"
+                                                      AutomationProperties.LabeledBy="{Binding ElementName=CustomApiStyleTitle}"
+                                                      AutomationProperties.HelpText="{Binding Text, ElementName=CustomApiStyleHint}"
+                                                      SelectionChanged="CustomApiStyleCombo_SelectionChanged"/>
+                                            <TextBlock x:Name="CustomApiStyleHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
 
                                             <TextBlock x:Name="CustomModelTitle" Text="Model name" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                             <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"

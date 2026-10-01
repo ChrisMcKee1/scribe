@@ -157,6 +157,9 @@ the text is typed. You choose where it runs:
     job: Gemma 4 E2B cleans a dictation in about a third of a second on a recent NVIDIA graphics card. If
     you set LM Studio to require an API key, choose **Another AI service** instead and enter its address
     and key there.
+  - Each app's own settings, folded away under it, choose its **Context size** (how much the model reads at
+    once) and whether to **Send your whole vocabulary when it fits** rather than just the words a dictation
+    mentions. Every request is kept to what the model's context holds, your dictation first.
   - The first dictation after the model was freed waits for it to load, and the recording indicator says
     **Starting local model** while it does.
 - **Microsoft Foundry,** with your Azure CLI sign-in or an app registration. [Set up a Foundry
@@ -166,7 +169,9 @@ the text is typed. You choose where it runs:
   for new cleanup requests (see [Privacy](#privacy)).
 - **GitHub Copilot,** with your own Copilot subscription, through the GitHub Copilot command-line tool.
 - **Another AI service** that works like the OpenAI API, such as OpenRouter, OpenAI, or a server on another
-  computer.
+  computer. Choose whether it takes **Chat Completions** or **Responses**; an address that ends in
+  `/chat/completions` or `/responses` is used as it is. With Responses, Scribe asks the service not to store
+  responses.
 
 Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares 39
 open models across Foundry Local, Ollama and LM Studio, and the cloud models, on quality and time.
@@ -239,8 +244,8 @@ samples included, and how to reproduce them.
   instructions, which a server on your PC such as Ollama or LM Studio gets unless you choose otherwise). A
   word whose written text spans more than one line or runs past 100 characters, such as a signature, stays
   out. It goes only to the service you set up. With a server on your PC, starting a dictation also sends it
-  the instructions with no dictated text and none of your vocabulary, so a model it unloaded while idle is
-  ready by the time you stop talking.
+  the instructions with no dictated text, and none of your vocabulary unless you chose to send your whole
+  vocabulary to it, so a model it unloaded is ready by the time you stop talking.
 - **Microsoft Foundry.** Scribe asks Microsoft Foundry not to store the response, though Microsoft's abuse
   monitoring can still keep a sample of flagged prompts and responses for review, as its
   [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)
@@ -286,7 +291,7 @@ Scribe is released under the [MIT License](LICENSE). It builds on excellent open
 - **Silero VAD**: MIT
 - **Microsoft Agent Framework** (`Microsoft.Agents.AI`, `Microsoft.Agents.AI.GitHub.Copilot`): © Microsoft, MIT
 - **GitHub Copilot SDK** (`GitHub.Copilot.SDK`): © GitHub, MIT
-- **Also:** WPF UI, NAudio, H.NotifyIcon, Velopack, the OpenAI package for .NET, the Foundry Local SDK,
-  Microsoft.Extensions.AI, Microsoft.Data.Sqlite and the Azure SDK for .NET (all MIT); SQLitePCLRaw and
-  OpenTelemetry .NET (Apache-2.0); SQLite (public domain); and the Windows App SDK (Microsoft Software
+- **Also:** WPF UI, NAudio, H.NotifyIcon, Velopack, the OpenAI package for .NET, OllamaSharp, the Foundry
+  Local SDK, Microsoft.Extensions.AI, Microsoft.Data.Sqlite and the Azure SDK for .NET (all MIT); SQLitePCLRaw
+  and OpenTelemetry .NET (Apache-2.0); SQLite (public domain); and the Windows App SDK (Microsoft Software
   License Terms).

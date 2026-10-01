@@ -209,6 +209,26 @@ public class SessionBannerTests : IDisposable
         Assert.Contains("writingStyle=unset", text);
     }
 
+    [Theory]
+    [InlineData("https://ai.example.invalid/v1", CustomApiStyle.Responses, "api=Responses")]
+    [InlineData("https://ai.example.invalid/v1", CustomApiStyle.ChatCompletions, "api=ChatCompletions")]
+    [InlineData("https://ai.example.invalid/v1/responses", CustomApiStyle.ChatCompletions, "api=Responses")]
+    [InlineData("http://localhost:1234/v1", CustomApiStyle.Responses, "api=ChatCompletions")]
+    public void Another_AI_service_s_API_is_the_one_its_requests_use(string endpoint, CustomApiStyle chosen, string shape)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+        settings.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        settings.AiCleanupCustomEndpoint = endpoint;
+        settings.AiCleanupCustomModel = "some-model";
+        settings.AiCleanupCustomApiStyle = chosen;
+
+        var text = Compose(settings);
+
+        Assert.Contains("endpoint=configured " + shape, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("example.invalid", text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_settings_store_that_failed_to_load_is_reported_as_such()
     {

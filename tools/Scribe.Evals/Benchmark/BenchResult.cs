@@ -84,6 +84,15 @@ internal sealed record BenchResult
     /// <summary>Length of the system prompt the model saw, the dominant part of every request's input.</summary>
     public int SystemPromptChars { get; init; }
 
+    /// <summary>
+    /// The context the model on this PC read, as its app said it loaded the model (or the size Scribe asked for), when the
+    /// run went through the production admission path; null otherwise.
+    /// </summary>
+    public int? ContextTokens { get; init; }
+
+    /// <summary>Whether the whole vocabulary went when it fit (Send your whole vocabulary when it fits).</summary>
+    public bool WholeVocabulary { get; init; }
+
     /// <summary>The first timed request's latency: what a dictation pays right after the model became ready.</summary>
     public double? WarmupMs { get; init; }
 

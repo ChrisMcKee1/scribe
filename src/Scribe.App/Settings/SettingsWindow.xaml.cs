@@ -409,6 +409,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         openStages?.Mark("reads");
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
+        _cleanupWasReady = _cleanup.Status == CleanupStatus.Ready;
         _cleanup.StatusChanged += OnCleanupStatusChanged;
         if (_historyDeletionNotifier is not null)
         {
@@ -1600,6 +1601,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Ollama or LM Studio at its own address shows under "On this PC"; after the boxes above, which it clears then.
         LoadLocalAppSettings();
 
+        // Each app's own tuning: its connection, context size and whole vocabulary.
+        LoadLocalModelTuning();
+
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
 
@@ -2520,8 +2524,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupCustomEndpoint = customService.Endpoint;
         draft.AiCleanupCustomModel = customService.Model;
         draft.AiCleanupCustomApiKey = customService.ApiKey;
+        draft.AiCleanupCustomApiStyle = customService.ApiStyle;
         draft.AiCleanupCopilotModel = CopilotModelCombo?.Text;
         draft.AiCleanupPromptCaching = AiPromptCachingCheck?.IsChecked != false;
+        draft.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
+        draft.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
+        draft.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck?.IsChecked == true;
+        draft.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck?.IsChecked == true;
+        draft.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck?.IsChecked == true;
 
         var writingStyle = NormalizePrompt(AiWritingStyleBox?.Text);
         draft.AiCleanupWritingStyle =
@@ -2545,7 +2555,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private CleanupOptions BuildAiCleanupCandidateOptions()
     {
         var draft = CurrentAiDraftSettings();
-        return CleanupConnectionTestPolicy.Canonicalize(new CleanupOptions(
+        return CleanupConnectionTestPolicy.Canonicalize(LocalModelTuning.Apply(new CleanupOptions(
             true,
             draft.AiCleanupProvider,
             draft.AiCleanupModel,
@@ -2574,7 +2584,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             draft.AiCleanupPromptCaching,
             // A model Test connection loads in Ollama or LM Studio is kept only the idle time too, as a dictation's is.
             LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(
-                draft.AiCleanupProvider, draft.AiCleanupCustomEndpoint, _committedSettings.ReleaseModelsAfterIdleMinutes)));
+                draft.AiCleanupProvider, draft.AiCleanupCustomEndpoint, _committedSettings.ReleaseModelsAfterIdleMinutes),
+            CustomApiStyle: draft.AiCleanupCustomApiStyle),
+            // Tested with the connection and context size the page shows, as a dictation would run.
+            draft));
     }
 
     // --- Filterable model dropdowns --------------------------------------------------------
@@ -4331,6 +4344,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         FoundryPanel.Visibility = AiProviderLocalRadio?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         ScribeModelPanel.Visibility = localApp == LocalServerApp.None ? Visibility.Visible : Visibility.Collapsed;
         LocalAppPanel.Visibility = localApp == LocalServerApp.None ? Visibility.Collapsed : Visibility.Visible;
+        UpdateLocalModelTuning();
         AzurePanel.Visibility = provider == CleanupProvider.AzureFoundry ? Visibility.Visible : Visibility.Collapsed;
         CustomPanel.Visibility = AiProviderCustomRadio?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         CopilotPanel.Visibility = provider == CleanupProvider.GitHubCopilot ? Visibility.Visible : Visibility.Collapsed;
@@ -4552,10 +4566,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         RefreshAiStatus();
 
         // A server on this PC gets the short instructions and their glossary budget, so the count the dictionary page
-        // shows follows the address being typed.
+        // shows follows the address being typed; the API box follows what the address says about its API.
         if (ReferenceEquals(sender, CustomEndpointBox))
         {
             UpdateDictionaryGlossaryHint();
+            ShowCustomApiStyle();
         }
     }
 
@@ -4729,7 +4744,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         RefreshAiStatus();
         RefreshUsageInsightAvailability();
+        RereadLmStudioWhenReady();
     }));
+
+    // Whether AI cleanup was ready at the last status change this window saw.
+    private bool _cleanupWasReady;
+
+    // AI cleanup that has just become ready may have loaded the model in LM Studio at the size asked: the page reads LM Studio
+    // again, so its status line says what requests reach now rather than what LM Studio held when it was last read.
+    private void RereadLmStudioWhenReady()
+    {
+        var ready = _cleanup.Status == CleanupStatus.Ready;
+        var becameReady = ready && !_cleanupWasReady;
+        _cleanupWasReady = ready;
+        if (becameReady && SelectedLocalApp == LocalServerApp.LmStudio)
+        {
+            _ = RefreshLocalAppAsync();
+        }
+    }
 
     private void RefreshAiStatus()
     {
@@ -5306,16 +5338,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var customService = ShownCustomService;
             _settings.AiCleanupCustomEndpoint = customService.Endpoint;
             _settings.AiCleanupCustomModel = customService.Model;
-            // Another AI service's address, model and key, remembered while Ollama or LM Studio runs the AI.
+            _settings.AiCleanupCustomApiStyle = customService.ApiStyle;
+            // Another AI service's address, model, key and API, remembered while Ollama or LM Studio runs the AI.
             var rememberedService = ShownRememberedService;
             _settings.AiCleanupOtherServiceEndpoint = rememberedService.Endpoint;
             _settings.AiCleanupOtherServiceModel = rememberedService.Model;
             _settings.AiCleanupOtherServiceApiKey = rememberedService.ApiKey;
+            _settings.AiCleanupOtherServiceApiStyle = rememberedService.ApiStyle;
             // Blank is a real answer here: it means "this account's default model", which is why it
             // is stored as null rather than rejected on save.
             _settings.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
             _settings.AiCleanupCustomApiKey = customService.ApiKey;
             _settings.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
+
+            // Each app's own tuning, from its own controls (LocalModelTuning).
+            _settings.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
+            _settings.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
+            _settings.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck.IsChecked == true;
+            _settings.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck.IsChecked == true;
+            _settings.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck.IsChecked == true;
 
             // Persist the writing style only when it differs from the default; storing blank for the
             // default keeps users tracking future improvements to the built-in guidance.

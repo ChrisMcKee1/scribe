@@ -192,12 +192,19 @@ public partial class SettingsWindow
         var customService = ShownCustomService;
         draft.AiCleanupCustomEndpoint = customService.Endpoint;
         draft.AiCleanupCustomModel = customService.Model;
+        draft.AiCleanupCustomApiStyle = customService.ApiStyle;
         var rememberedService = ShownRememberedService;
         draft.AiCleanupOtherServiceEndpoint = rememberedService.Endpoint;
         draft.AiCleanupOtherServiceModel = rememberedService.Model;
         draft.AiCleanupOtherServiceApiKey = rememberedService.ApiKey;
+        draft.AiCleanupOtherServiceApiStyle = rememberedService.ApiStyle;
         draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
         draft.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
+        draft.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
+        draft.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
+        draft.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck.IsChecked == true;
         draft.AiCleanupCustomApiKey = customService.ApiKey;
         var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
         draft.AiCleanupWritingStyle = writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
@@ -349,7 +356,8 @@ UpdateTryDictationPage();
         AzureClientId: _committedSettings.AiCleanupAzureClientId,
         AzureClientSecret: _committedSettings.AiCleanupAzureClientSecret,
         CopilotModel: _committedSettings.AiCleanupCopilotModel,
-        PromptCaching: _committedSettings.AiCleanupPromptCaching);
+        PromptCaching: _committedSettings.AiCleanupPromptCaching,
+        CustomApiStyle: _committedSettings.AiCleanupCustomApiStyle);
 
     private static string TryFormatDuration(TimeSpan elapsed) =>
         elapsed.TotalMilliseconds < 1 ? "<1 ms" : $"{elapsed.TotalMilliseconds:N0} ms";

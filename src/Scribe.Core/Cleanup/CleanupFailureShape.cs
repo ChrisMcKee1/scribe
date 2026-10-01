@@ -111,6 +111,11 @@ internal static partial class CleanupFailureShape
                     return client.Status;
                 case Azure.RequestFailedException request:
                     return request.Status;
+
+                // EnsureSuccessStatusCode's failure, which OllamaSharp throws when Ollama answers with an error: the
+                // server answered, so its status says what went wrong (a 404 for a model it does not have).
+                case HttpRequestException { StatusCode: { } code }:
+                    return (int)code;
             }
         }
 

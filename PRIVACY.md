@@ -182,6 +182,15 @@ endpoint.
 AI features are optional. The default Foundry Local provider runs on the device,
 so the text it cleans, its instructions and your vocabulary stay on the device.
 
+A model on this PC, Foundry Local or Ollama or LM Studio at its own address, can
+also receive your whole vocabulary. With "Send your whole vocabulary when it
+fits" on for that app, each cleanup request carries all of the vocabulary
+described below, not just the entries the dictation appears to mention, when it
+fits in the model's context with the dictation; when it does not, the entries
+the dictation appears to mention go first, then as many others as fit. Every
+request to a model on this PC is also kept to what the model's context holds,
+the dictation first. None of this leaves this PC.
+
 If you turn on AI cleanup with Microsoft Foundry, another AI service that works
 like the OpenAI API, or GitHub Copilot, every cleanup request sends that
 provider:
@@ -217,19 +226,30 @@ test once more in the other format it supports.
 
 When AI cleanup uses a server on this PC, such as Ollama or LM Studio at a
 `localhost` address, starting a dictation also sends that server the cleanup
-instructions with no dictated text and none of your vocabulary, unless it
-answered in
-the last 30 seconds. A server like this unloads a model it has not used for a
+instructions with no dictated text, unless it answered in the last 30 seconds
+and still holds the model.
+It carries none of your vocabulary, unless "Send your whole vocabulary when it
+fits" is on for that app, when it also carries as much of your vocabulary as
+fits. A server like this unloads a model it has not used for a
 while, and this request has it loaded again by the time you stop talking. It
 goes only to that server on this PC, never to a service elsewhere. When AI
 cleanup runs on Ollama or LM Studio at its own address on this PC (choosing it
-under "On this PC" saves that address), Scribe also asks that app which models
-it has and which it holds in memory, and asks it to free a model's memory when
+under "On this PC" saves that address), Scribe also asks that app, including as
+each dictation starts, which models it has, which it holds in memory and how
+much each reads at once, and asks it to free a model's memory when
 AI cleanup stops using the model or you shorten the time Scribe keeps models,
 when you choose Free memory, and when you pause dictation. Each cleanup request
 also asks the app to free the model after the time you set without a dictation.
-These requests go only to that app on this PC and carry nothing you said, only
-the API key you saved for that address, if any, as cleanup requests do.
+With a context size chosen for LM Studio, Scribe asks LM Studio to load the
+model at that size with a request holding the word "ok", which it asks LM Studio
+not to keep, and frees that copy itself after the time you set without a
+dictation, and when Scribe closes, unless that time is Never. Test connection
+loads the model that way too, to check that size, and Scribe frees a copy it
+loaded only for a test, or for settings you have since changed, once it is not
+needed, whatever that time. These requests go
+only to that app on this PC and carry nothing you said, only an API key you
+saved for that address, if any: the one saved now, as cleanup requests carry, or,
+to free a copy Scribe loaded with a key you have since replaced, that earlier key.
 
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.
@@ -253,7 +273,10 @@ other AI service you set up. The publisher of Scribe does not receive this
 information. For Microsoft Foundry, Scribe asks the service not to store its
 responses, but Microsoft's abuse monitoring can still keep a sample of prompts
 and responses it flags for review, as Microsoft's data privacy documentation for
-Foundry models describes.
+Foundry models describes. For another AI service you set up to use the
+Responses API, Scribe asks it not to store responses too; with Chat Completions,
+Scribe never asks it to store anything. What that service keeps otherwise
+follows its own policy.
 
 Asking Microsoft Foundry not to store responses does not turn off its separate
 prompt cache. With "Let Microsoft Foundry cache what Scribe sends" on, which is

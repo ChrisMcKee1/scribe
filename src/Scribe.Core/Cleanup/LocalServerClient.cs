@@ -23,14 +23,34 @@ public enum LocalServerReach
 /// <param name="Id">The name requests use: Ollama's <c>name</c>, LM Studio's <c>key</c>.</param>
 /// <param name="DisplayName">What the app itself calls it.</param>
 /// <param name="SizeBytes">Its size on disk, 0 when the app does not say.</param>
-public sealed record LocalServerModel(string Id, string DisplayName, long SizeBytes);
+public sealed record LocalServerModel(string Id, string DisplayName, long SizeBytes)
+{
+    /// <summary>The largest context the app says it can load the model with, in tokens (LM Studio's <c>max_context_length</c>); 0 when it does not say.</summary>
+    public int MaxContextTokens { get; init; }
+}
 
 /// <summary>A model an app on this PC holds in memory now.</summary>
 /// <param name="Id">The name requests use.</param>
 /// <param name="MemoryBytes">
 /// What it takes: Ollama's own figure; for LM Studio, which reports none per model, the model's size, which is close.
 /// </param>
-public sealed record LocalServerLoadedModel(string Id, long MemoryBytes);
+public sealed record LocalServerLoadedModel(string Id, long MemoryBytes)
+{
+    /// <summary>
+    /// The context the app loaded it with, in tokens: Ollama's <c>context_length</c>, LM Studio's instance
+    /// <c>config.context_length</c>; 0 when it does not say.
+    /// </summary>
+    public int ContextTokens { get; init; }
+
+    /// <summary>LM Studio's id for this loaded instance, the name it unloads by; null for Ollama.</summary>
+    public string? InstanceId { get; init; }
+
+    /// <summary>
+    /// LM Studio: the seconds left before it unloads the instance on its own (<c>remaining_ttl_seconds</c>); null when it
+    /// says none, as for a model loaded by hand, which stays until it is unloaded.
+    /// </summary>
+    public long? RemainingTtlSeconds { get; init; }
+}
 
 /// <summary>What an app on this PC has downloaded and what it holds in memory, read at one moment.</summary>
 public sealed record LocalServerState(
@@ -71,6 +91,25 @@ public interface ILocalServerClient
     /// </summary>
     Task<bool> UnloadAsync(
         string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// LM Studio only: loads <paramref name="modelId"/> with a context of <paramref name="contextTokens"/> through LM
+    /// Studio's own chat API, which its OpenAI-compatible one cannot ask for. Returns the id of the instance it loaded, or
+    /// null when it did not. Never throws.
+    /// </summary>
+    Task<string?> LoadWithContextAsync(
+        string endpoint, string modelId, int contextTokens, string? apiKey = null, CancellationToken cancellationToken = default);
+
+    /// <summary>LM Studio only: unloads one loaded instance, by its id. True when the app took the request. Never throws.</summary>
+    Task<bool> UnloadInstanceAsync(
+        string endpoint, string instanceId, string? apiKey = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Ollama only: the largest context <paramref name="modelId"/> was made for, in tokens (its <c>context_length</c> in
+    /// <c>/api/show</c>); 0 when the app does not say. Never throws.
+    /// </summary>
+    Task<int> ReadMaxContextAsync(
+        string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -80,18 +119,28 @@ public interface ILocalServerClient
 /// </summary>
 /// <remarks>
 /// Ollama: <c>GET /api/tags</c> lists the downloaded models (a model whose capabilities leave out "completion", such as
-/// an embedding model, is left out), <c>GET /api/ps</c> the loaded ones with their memory, and <c>POST /api/generate</c>
+/// an embedding model, is left out), <c>GET /api/ps</c> the loaded ones with their memory and context, <c>POST
+/// /api/show</c> one model's details, among them the largest context it was made for, and <c>POST /api/generate</c>
 /// with <c>keep_alive: 0</c> unloads one at once. LM Studio: <c>GET /api/v1/models</c> lists every model with its
-/// <c>type</c> (only <c>llm</c> can chat) and its <c>loaded_instances</c>, and <c>POST /api/v1/models/unload</c> with an
-/// instance's id unloads it. With "Require Authentication" on (LM Studio 0.4 and later), LM Studio refuses a request
-/// without one of its API tokens, so the key saved for that address goes with every request as a bearer token, as it
-/// does with a chat request, and a refusal (401 or 403) reads as <see cref="LocalServerReach.NeedsKey"/>. Measured on
-/// Ollama 0.34.4 and 0.35.0 and LM Studio 0.4.25.
+/// <c>type</c> (only <c>llm</c> can chat), its <c>max_context_length</c> and its <c>loaded_instances</c>, each with
+/// its <c>config.context_length</c>; <c>POST /api/v1/models/unload</c> with an instance's id unloads it; and
+/// <c>POST /api/v1/chat</c> with a <c>context_length</c> loads a model at that size, which its OpenAI-compatible chat
+/// cannot ask for (measured on 0.4.25: the OpenAI-compatible request loaded the model at LM Studio's own size whatever
+/// it asked, and LM Studio's own load request refuses a <c>ttl</c>, so a model loaded that way would stay until it is
+/// unloaded, where one LM Studio's chat loads is unloaded after LM Studio's own idle time). With "Require
+/// Authentication" on (LM Studio 0.4 and later), LM Studio refuses a request without one of its API tokens, so the key
+/// saved for that address goes with every request as a bearer token, as it does with a chat request, and a refusal
+/// (401 or 403) reads as <see cref="LocalServerReach.NeedsKey"/>. Measured on Ollama 0.34.4 and 0.35.0 and LM Studio
+/// 0.4.25.
 /// </remarks>
 public sealed class LocalServerClient : ILocalServerClient, IDisposable
 {
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan UnloadTimeout = TimeSpan.FromSeconds(15);
+
+    // A model load reads gigabytes from disk: 5 to 7 s for Gemma 4 E2B on this machine, longer for a larger model or a slow
+    // disk.
+    private static readonly TimeSpan LoadTimeout = TimeSpan.FromSeconds(120);
 
     private readonly HttpClient _http;
 
@@ -210,6 +259,113 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
         }
     }
 
+    public async Task<string?> LoadWithContextAsync(
+        string endpoint, string modelId, int contextTokens, string? apiKey = null, CancellationToken cancellationToken = default)
+    {
+        if (Root(endpoint) is not { App: LocalServerApp.LmStudio } root || string.IsNullOrWhiteSpace(modelId) ||
+            contextTokens <= 0)
+        {
+            return null;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(LoadTimeout);
+        try
+        {
+            // One word and a one-token answer, which LM Studio does not keep (store: false): the request exists to load the
+            // model at this size, and the dictation's own requests then reach the instance it loaded.
+            using var load = Request(HttpMethod.Post, new Uri(root.Uri, "/api/v1/chat"), apiKey, new
+            {
+                model = modelId.Trim(),
+                input = "ok",
+                max_output_tokens = 1,
+                temperature = 0,
+                context_length = contextTokens,
+                store = false,
+            });
+            using var response = await _http.SendAsync(load, timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            using var document = await ReadJsonAsync(response, timeout.Token).ConfigureAwait(false);
+            return Text(document.RootElement, "model_instance_id") ?? modelId.Trim();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    public async Task<bool> UnloadInstanceAsync(
+        string endpoint, string instanceId, string? apiKey = null, CancellationToken cancellationToken = default)
+    {
+        if (Root(endpoint) is not { App: LocalServerApp.LmStudio } root || string.IsNullOrWhiteSpace(instanceId))
+        {
+            return false;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(UnloadTimeout);
+        try
+        {
+            using var unload = Request(
+                HttpMethod.Post, new Uri(root.Uri, "/api/v1/models/unload"), apiKey, new { instance_id = instanceId.Trim() });
+            using var response = await _http.SendAsync(unload, timeout.Token).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    public async Task<int> ReadMaxContextAsync(
+        string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default)
+    {
+        if (Root(endpoint) is not { App: LocalServerApp.Ollama } root || string.IsNullOrWhiteSpace(modelId))
+        {
+            return 0;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ReadTimeout);
+        try
+        {
+            using var show = Request(HttpMethod.Post, new Uri(root.Uri, "/api/show"), apiKey, new { model = modelId.Trim() });
+            using var response = await _http.SendAsync(show, timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return 0;
+            }
+
+            // The model's own figure, named for its architecture: "gemma4.context_length", "qwen3.context_length".
+            using var document = await ReadJsonAsync(response, timeout.Token).ConfigureAwait(false);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("model_info", out var info) || info.ValueKind != JsonValueKind.Object)
+            {
+                return 0;
+            }
+
+            foreach (var property in info.EnumerateObject())
+            {
+                if (property.Name.EndsWith(".context_length", StringComparison.Ordinal) &&
+                    property.Value.ValueKind == JsonValueKind.Number &&
+                    property.Value.TryGetInt64(out var length) && length > 0)
+                {
+                    return (int)Math.Min(length, int.MaxValue);
+                }
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return 0;
+        }
+    }
+
     /// <summary>
     /// True when two names are the same model to its app: equal ignoring case, or equal once Ollama's implicit
     /// <c>:latest</c> tag is added to a name without a tag.
@@ -271,7 +427,10 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
                 {
                     if ((Text(model, "name") ?? Text(model, "model")) is { } name)
                     {
-                        loaded.Add(new LocalServerLoadedModel(name, Number(model, "size")));
+                        loaded.Add(new LocalServerLoadedModel(name, Number(model, "size"))
+                        {
+                            ContextTokens = Int(model, "context_length"),
+                        });
                     }
                 }
             }
@@ -306,11 +465,15 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             }
 
             var size = Number(model, "size_bytes");
-            models.Add(new LocalServerModel(key, Text(model, "display_name") ?? key, size));
+            models.Add(new LocalServerModel(key, Text(model, "display_name") ?? key, size)
+            {
+                MaxContextTokens = Int(model, "max_context_length"),
+            });
             var instances = Array(model, "loaded_instances").ToList();
             if (instances.Count > 0)
             {
-                loaded.Add(new LocalServerLoadedModel(key, size));
+                // Requests by the model's key reach its first instance.
+                loaded.Add(Instance(key, size, instances[0]));
             }
 
             // An instance loaded under a name of its own (lms load --identifier) answers to that name as well.
@@ -318,13 +481,28 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             {
                 if (Text(instance, "id") is { } id && !SameModel(id, key))
                 {
-                    loaded.Add(new LocalServerLoadedModel(id, size));
+                    loaded.Add(Instance(id, size, instance));
                 }
             }
         }
 
         return new LocalServerState(LocalServerReach.Reached, Sorted(models), loaded);
     }
+
+    // One LM Studio instance as a loaded model: its context, its id and the time LM Studio still keeps it.
+    private static LocalServerLoadedModel Instance(string name, long size, JsonElement instance) =>
+        new(name, size)
+        {
+            ContextTokens = instance.ValueKind == JsonValueKind.Object && instance.TryGetProperty("config", out var config)
+                ? Int(config, "context_length")
+                : 0,
+            InstanceId = Text(instance, "id"),
+            RemainingTtlSeconds = instance.ValueKind == JsonValueKind.Object &&
+                instance.TryGetProperty("remaining_ttl_seconds", out var ttl) &&
+                ttl.ValueKind == JsonValueKind.Number && ttl.TryGetInt64(out var seconds)
+                    ? seconds
+                    : null,
+        };
 
     // The key saved for this address, when there is one, as the bearer token a chat request carries.
     private static HttpRequestMessage Request(HttpMethod method, Uri uri, string? apiKey, object? json = null)
@@ -394,6 +572,8 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
         number > 0
             ? number
             : 0;
+
+    private static int Int(JsonElement element, string name) => (int)Math.Min(Number(element, name), int.MaxValue);
 
     private static (LocalServerApp App, Uri Uri)? Root(string endpoint)
     {
