@@ -227,7 +227,7 @@ test once more in the other format it supports.
 When AI cleanup uses a server on this PC, such as Ollama or LM Studio at a
 `localhost` address, starting a dictation also sends that server the cleanup
 instructions with no dictated text, unless it answered in the last 30 seconds
-and still holds the model.
+and still holds the model at the size AI cleanup uses.
 It carries none of your vocabulary, unless "Send your whole vocabulary when it
 fits" is on for that app, when it also carries as much of your vocabulary as
 fits. A server like this unloads a model it has not used for a

@@ -309,12 +309,12 @@ anything was dictated.
   (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
   glossaries are unchanged). `CleanupVocabularyMode.All`, every release before 0.5.2, stays for the harness
   (`--vocabulary all`); change the selector only with the harness's vocabulary accuracy (`p2\vocab_accuracy.py` in
-  the benchmark evidence) and judge showing it does not hurt cleanup. **A model on this PC** (Foundry Local, or a
-  server at a loopback address) gets that glossary fitted into its context instead of the fixed budget, the dictation
+  the benchmark evidence) and judge showing it does not hurt cleanup. **A model on this PC** (Foundry Local, or Ollama or
+  LM Studio at its own address, `FitsLocalContext`) gets that glossary fitted into its context instead of the fixed budget, the dictation
   and its answer first (`GlossaryForLocked`, see "Context size and the whole vocabulary on this PC"); with that app's
   **Send your whole vocabulary when it fits** on (`CleanupOptions.SendWholeVocabulary`), the whole vocabulary when it
   fits, otherwise the mentioned terms first and then the leading run of the rest that fits (`CleanupPrompt.FitGlossary`).
-  A cloud service or a server elsewhere keeps the budgets above whatever the settings say.
+  A cloud service, a server elsewhere or any other server on this PC keeps the budgets above whatever the settings say.
 - **The readiness probe carries no vocabulary.** `ProbeAgentAsync` builds its own agent from the factory
   the initialization connected, with `BuildProbeSystemPrompt` (the real guardrails and writing style,
   without the glossary), so it still reasons like a cleanup call. Never hand it the serving agent.
@@ -415,7 +415,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows: 10174 as of 0.5.3, 10099 with the filter below).
+# Run the unit tests (must stay green; the count only ever grows: 10175 as of 0.5.3, 10100 with the filter below).
 # Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
 # session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
@@ -3423,7 +3423,7 @@ docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-
   before one can only lower it (`NoteObservedContext`), since Scribe's request may replace another app's copy at
   Ollama's own size. LM Studio: the copy its requests reach, read at any time, and the size Scribe loaded a copy at;
   never a size merely asked for. Foundry Local: its model's `genai_config.json` (the smaller of `search.max_length` and
-  `model.context_length`), since its catalog reports none. Before any of these, `ContextBudget.AssumedContextTokens`
+  `model.context_length`), since its catalog reports none. **An exception to the rule against re-deriving what the SDK states, kept on purpose for 0.5.3:** Foundry Local 2.1.0 does expose a limit (`ChatSession.PreflightRequestAsync`'s `ContextLimitTokens`, and `ModelInfo.ContextLength`, which is null for the chat models measured), and the benchmark evidence shows the preflight agreeing with the file on the one model it ran on (`docs/benchmarks/context-window-2026-09-30.json`); the preflight needs a native session on a model Scribe serves through the web service, so the file is read until it is checked on the default model and a GPU build. Prefer `Info.ContextLength` when it is above 0, then the preflight, and keep the file as the last resort. Before any of these, `ContextBudget.AssumedContextTokens`
   (4,096, Ollama's and LM Studio's smallest default). Each is kept for the configuration it was learned under, compared
   ignoring the prompt. **A size that no longer vouches for the copy is forgotten:** when a recording's read fails, finds
   no copy of the model, finds one without a size or one about to be replaced (`ForgetObservedContext`), the next
@@ -3477,7 +3477,7 @@ docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-
   before the readiness check and when a recording finds no copy or one at another size, and requests by the model's
   name then reach that copy. LM Studio makes a second copy rather than resizing, so a copy it loaded on demand at
   another size is unloaded first, and one it will not unload is used as it is (no second copy is loaded); a copy loaded
-  by hand (no `remaining_ttl_seconds`) is used as it is. The initialization's load and readiness check are one model use
+  by hand (no `remaining_ttl_seconds`) is used as it is. **A size LM Studio refuses is not asked for again** (`_lmStudioRefusedFor`, `LmStudioRefusedSize`): when the load at the asked size returns nothing, the settings and size are recorded, and the copy LM Studio then loads at its own size is used as it is, neither counted as another size by a recording's readying check nor unloaded and loaded again at every recording; the record ends when a copy at that size is held or other settings are served (a restart or another size asks again). The initialization's load and readiness check are one model use
   (`BeginModelUse`), so a release decided before them cannot unload the copy they load, and one already on its way goes
   first. **The copy requests reach changes only while one request uses the model** (`TryBeginLocalChange`): the unload
   of a copy at another size, the unload of any copy Scribe loaded that no settings own, and every load at a size

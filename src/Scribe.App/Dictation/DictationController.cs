@@ -639,7 +639,7 @@ internal sealed class DictationController : IDisposable
         LocalModelKeepAliveMinutes: LocalAiServer.KeepAliveMinutes(
             settings.AiCleanupProvider, settings.AiCleanupCustomEndpoint, settings.ReleaseModelsAfterIdleMinutes),
         CustomApiStyle: settings.AiCleanupCustomApiStyle),
-        // How the app on this PC that runs the model is tuned: its connection, context size and whole vocabulary.
+        // How the app on this PC that runs the model is tuned: its context size and whole vocabulary.
         settings);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>

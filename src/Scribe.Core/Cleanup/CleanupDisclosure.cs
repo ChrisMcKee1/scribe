@@ -42,8 +42,8 @@ public static class CleanupDisclosure
     public static string ReadiesALocalServer { get; } =
         "When AI cleanup runs on a server on this PC, such as Ollama or LM Studio, starting a dictation also sends that " +
         "server the cleanup instructions with no dictated text, unless it answered in the last " +
-        $"{LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model, so a model it unloaded is loaded " +
-        "again by the time you stop talking. It carries none of your vocabulary, unless \"" +
+        $"{LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model at the size AI cleanup uses, so a model it " +
+        "unloaded, or holds at another size, is loaded again by the time you stop talking. It carries none of your vocabulary, unless \"" +
         Settings.LocalModelTuningText.WholeVocabularyTitle + "\" is on for that app, when it carries as much of it as fits.";
 
     /// <summary>

@@ -103,8 +103,8 @@
          detached per-dictation session before pinning the SDK any higher. -->
     <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.20.0" />
 
-    <!-- Ollama's own chat API, for the Ollama connection that lets Scribe choose the context size
-         (AppSettings.AiCleanupOllamaConnection): Ollama's OpenAI-compatible API reads no num_ctx, so
+    <!-- Ollama's own chat API, for the context size Scribe chooses
+         (AppSettings.AiCleanupOllamaContextTokens; a size chosen is what selects it): Ollama's OpenAI-compatible API reads no num_ctx, so
          only /api/chat can ask for one. OllamaSharp is the IChatClient for Ollama that the
          Microsoft.Extensions.AI documentation uses; it maps ChatOptions.MaxOutputTokens to num_predict,
          ReasoningEffort.None to think: false, and the num_ctx and keep_alive additional properties to

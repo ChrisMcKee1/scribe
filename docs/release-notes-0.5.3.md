@@ -1,9 +1,9 @@
 # Scribe 0.5.3
 
 Scribe 0.5.3 gives AI cleanup on your own PC two more choices: how much the model reads at once, and whether it
-gets your whole vocabulary. It also lets you choose which API another AI service is reached through. Nothing
-changes unless you change it: every new setting starts at what 0.5.2 did, and everything you set up before carries
-over.
+gets your whole vocabulary. It also lets you choose which API another AI service is reached through. Every new
+setting starts at what 0.5.2 did, and everything you set up before carries over. One change needs no setting:
+requests to a model on this PC are now fitted to what it reads, as the first item below says.
 
 ## What changes when you update
 
@@ -31,8 +31,6 @@ over.
   `/responses` is used as that API with the path taken off, so a pasted address works. With Responses, Scribe asks
   the service not to store responses, as it does for Microsoft Foundry. An address ending in the older
   `/completions` is refused with the reason.
-- **Test connection checks the size you chose.** For LM Studio at its own address it loads the model at that size
-  to check it, and frees a copy it loaded only for the test.
 
 ## Under the hood
 
@@ -50,7 +48,9 @@ over.
 
 - With a size chosen for Ollama, Ollama reloads the model whenever another app uses it at a different size, and the
   other app reloads it back.
-- LM Studio takes a size only when it loads a model, so a model you loaded yourself keeps its own size.
+- LM Studio takes a size only when it loads a model, so a model you loaded yourself keeps its own size. If LM Studio
+  refuses the size you chose (for example, not enough memory for 128K), Scribe uses the copy LM Studio loads at its
+  own size until you choose another size or restart Scribe.
 - The mouse button and shortcut limitations listed in the 0.5.0 notes, and the Store and text size notes in the
   0.5.2 notes, still apply.
 

@@ -164,6 +164,36 @@ public sealed class LocalContextRulesTests
     }
 
     [Fact]
+    public async Task A_size_LM_Studio_refused_is_not_asked_for_again_at_every_recording()
+    {
+        await using var harness = new CleanupHarness();
+        harness.LocalServers.State = LmStudioHoldsOnDemand(4096);
+        harness.LocalServers.LoadAnswer = (_, _) => null;
+
+        harness.Service.Configure(LmStudio(16384));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Single(harness.LocalServers.Loads);
+        Assert.Single(harness.LocalServers.InstanceUnloads);
+
+        // The request that follows loads the model at LM Studio's own size, and every recording after it finds that copy.
+        harness.LocalServers.State = LmStudioHoldsOnDemand(4096);
+        for (var recording = 0; recording < 2; recording++)
+        {
+            harness.Service.ForgetLastModelAnswerForTesting();
+            await PrewarmAsync(harness);
+        }
+
+        Assert.Single(harness.LocalServers.Loads);
+        Assert.Single(harness.LocalServers.InstanceUnloads);
+        Assert.Equal(4096, harness.Service.LocalContextTokens);
+
+        // Another size is a new question.
+        harness.Service.Configure(LmStudio(8192));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Equal(2, harness.LocalServers.Loads.Count);
+    }
+
+    [Fact]
     public async Task Scribe_owns_the_copy_it_loaded_until_LM_Studio_has_unloaded_it()
     {
         var harness = new CleanupHarness();

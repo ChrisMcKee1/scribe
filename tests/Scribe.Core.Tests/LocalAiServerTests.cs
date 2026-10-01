@@ -288,8 +288,8 @@ public sealed class LocalAiServerTests
         }
 
         Assert.Contains("starting a dictation also sends that server the cleanup instructions with no dictated text, unless it answered in the last", policy, StringComparison.Ordinal);
-        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model", policy, StringComparison.Ordinal);
-        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
+        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model at the size AI cleanup uses", policy, StringComparison.Ordinal);
+        Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model at the size AI cleanup uses", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
         Assert.Contains("It goes only to that server on this PC, never to a service elsewhere.", policy, StringComparison.Ordinal);
         Assert.Contains("none of your vocabulary", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
 

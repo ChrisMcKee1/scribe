@@ -53,6 +53,12 @@ internal sealed partial class TextCleanupService
     private string? _scribeLoadedInstance;
     private CleanupOptions? _scribeLoadedFor;
 
+    // LM Studio: the size it refused to load the model at, and the configuration it refused it for. Without it, every
+    // recording would find the copy LM Studio loaded at its own size to be "another size", unload it and ask for the refused
+    // size again. Ends when a copy at that size is held, or when a different configuration is served. Guarded by _gate.
+    private CleanupOptions? _lmStudioRefusedFor;
+    private int _lmStudioRefusedTarget;
+
     /*
      * One LM Studio load at a time, with what follows it: the read it decides by, unloading a copy at another size, the
      * load, and settling the copy it made (SettleLoadedCopyAsync). A load Scribe stopped waiting for (its configuration was
@@ -76,9 +82,10 @@ internal sealed partial class TextCleanupService
     private sealed record UnownedCopy(string Endpoint, string Model, string Instance, int ContextTokens, string? ApiKey);
 
     // One handler for every Ollama client this process builds, as the OpenAI clients share one transport: the hand-off in
-    // front of a handler that follows no redirect.
+    // front of a handler that follows no redirect and uses no proxy, since it only ever reaches Ollama's own address on this
+    // PC (as LocalServerClient's requests do).
     private static readonly Lazy<HttpMessageHandler> SharedOllamaHandler = new(() =>
-        new VocabularyHandOffHandler(new HttpClientHandler { AllowAutoRedirect = false }));
+        new VocabularyHandOffHandler(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }));
 
     private HttpMessageHandler? _testOllamaHandler;
 
@@ -308,6 +315,44 @@ internal sealed partial class TextCleanupService
         held.ContextTokens > 0 && held.ContextTokens != target && held.RemainingTtlSeconds is not null &&
         held.InstanceId is not null;
 
+    // True when LM Studio refused to load the model at this size for these settings, so a copy at LM Studio's own size is used
+    // as it is rather than replaced at every recording.
+    private bool LmStudioRefusedSize(CleanupOptions options, int target)
+    {
+        lock (_gate)
+        {
+            return _lmStudioRefusedFor is { } refusedFor && _lmStudioRefusedTarget == target &&
+                refusedFor.MatchesIgnoringPrompt(options);
+        }
+    }
+
+    // Recorded only while cleanup still serves these settings, so a refusal for settings since replaced is not kept.
+    private void NoteLmStudioRefusedSize(CleanupOptions options, int target)
+    {
+        lock (_gate)
+        {
+            if (!_operations.IsClosed && _options.MatchesIgnoringPrompt(options))
+            {
+                _lmStudioRefusedFor = options;
+                _lmStudioRefusedTarget = target;
+            }
+        }
+    }
+
+    // Forgets a refusal that is not for these settings, or that a copy at its size has answered.
+    private void ForgetLmStudioRefusal(CleanupOptions options, int? heldAtTarget = null)
+    {
+        lock (_gate)
+        {
+            if (_lmStudioRefusedFor is { } refusedFor &&
+                (!refusedFor.MatchesIgnoringPrompt(options) || heldAtTarget == _lmStudioRefusedTarget))
+            {
+                _lmStudioRefusedFor = null;
+                _lmStudioRefusedTarget = 0;
+            }
+        }
+    }
+
     // The copy Scribe loaded at a size for an earlier configuration, which this one no longer asks for.
     private string? EarlierScribeLoadedInstance(CleanupOptions options)
     {
@@ -342,7 +387,7 @@ internal sealed partial class TextCleanupService
             return !(target > 0 && held.ContextTokens == target);
         }
 
-        return target > 0 && LmStudioCopyIsOtherSize(held, target);
+        return target > 0 && LmStudioCopyIsOtherSize(held, target) && !LmStudioRefusedSize(options, target);
     }
 
     /*
@@ -427,6 +472,7 @@ internal sealed partial class TextCleanupService
 
             var target = LmStudioTarget(state, model, asked);
             var held = state.LoadedFor(model);
+            ForgetLmStudioRefusal(options, held?.ContextTokens);
             if (held is not null && !LmStudioCopyIsOtherSize(held, target))
             {
                 // A copy of Scribe's that this configuration's requests reach is this configuration's, so its release frees it.
@@ -436,6 +482,16 @@ internal sealed partial class TextCleanupService
                 }
 
                 NoteObservedContext(options, held.ContextTokens, afterOwnRequest: true);
+                return changed;
+            }
+
+            if (LmStudioRefusedSize(options, target))
+            {
+                if (held is not null)
+                {
+                    NoteObservedContext(options, held.ContextTokens, afterOwnRequest: true);
+                }
+
                 return changed;
             }
 
@@ -485,6 +541,7 @@ internal sealed partial class TextCleanupService
 
             if (loaded is null)
             {
+                NoteLmStudioRefusedSize(options, target);
                 _log.LogInformation("LM Studio did not load the model at the context size Scribe asked for; it loads at its own.");
                 return held is not null || changed;
             }

@@ -1601,7 +1601,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Ollama or LM Studio at its own address shows under "On this PC"; after the boxes above, which it clears then.
         LoadLocalAppSettings();
 
-        // Each app's own tuning: its connection, context size and whole vocabulary.
+        // Each app's own tuning: its context size and whole vocabulary.
         LoadLocalModelTuning();
 
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
