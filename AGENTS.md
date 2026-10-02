@@ -2822,12 +2822,13 @@ store, GitHub signing secrets, or a publisher trust bundle.
   switches read-only until the Word packs page replaced it. It must remain absent from release heads (`git grep
   LegacyLibraryPageContainment -- src tests` returns no matches), and word pack switches are saved only through the
   library payload, never by a settings-only write of `EnabledDictionaryLibraryIds`.
-- **A `VersionSuffix` in `Directory.Build.props` marks a test build and keeps it off the Microsoft Store.** `0.5.4-ollama.1`
-  sorts above the released 0.5.3 (so an install updates to it) and below the real 0.5.4 (which supersedes it).
-  `pack.ps1` refuses `-Publish` for it, and `release.yml`, `store.yml` and `pack-msix.ps1` throw while a suffix is set, so even
-  a stray `v*` tag cannot reach the Store. Hand the Setup.exe over as an asset of a prerelease whose tag does not start with
-  `v` (a `v*` tag starts the Release workflow, then the Store hand-off); the app's update feed ignores prereleases. Remove the
-  suffix when the fix ships as a real release.
+- **A `VersionSuffix` set in `Directory.Build.props` marks a test build and keeps it off the Microsoft Store.** A build such
+  as `0.5.4-ollama.1` (shipped once, to test the 0.5.4 fix on one machine) sorts above the released 0.5.3, so an install
+  updates to it, and below the real 0.5.4, which supersedes it. `pack.ps1` refuses `-Publish` for it, and `release.yml`,
+  `store.yml` and `pack-msix.ps1` throw while a suffix is set, so even a stray `v*` tag cannot reach the Store. Hand the
+  Setup.exe over as an asset of a prerelease whose tag does not start with `v` (a `v*` tag starts the Release workflow, then
+  the Store hand-off; Setup.exe is far over the 100 MB a branch can hold); the app's update feed ignores prereleases. Delete
+  the prerelease and its tag, and unset the suffix, when the fix ships as a real release.
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
@@ -2849,7 +2850,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.3.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.4.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
