@@ -205,8 +205,12 @@ actor WordPackSaveCoordinator {
         guard let held = preparations[prepared.id],
             held.participant == prepared.participant, held.changes == prepared.changes
         else { return .notCommitted }
+        let store = self.store
+        let writes = participants + [prepared.participant]
         do {
-            try await store.commitSettingsParticipants(participants + [prepared.participant])
+            try await service.changingVocabularyAsync {
+                try await store.commitSettingsParticipants(writes)
+            }
         } catch {
             do {
                 let receipt = try await store.loadStringSetting(key: WordPackJournal.receiptKey)

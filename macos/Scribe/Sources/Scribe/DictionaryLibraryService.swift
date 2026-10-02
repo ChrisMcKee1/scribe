@@ -68,16 +68,19 @@ final class DictionaryLibraryService: @unchecked Sendable {
 
     private let fileManager: FileManager
     private let persistenceStore: PersistenceStore?
+    private let publication: LibraryVocabularyPublication?
 
     init(
         fileManager: FileManager = .default,
         librariesDirectory overrideDirectory: URL? = nil,
         settings: DictionaryLibrarySettings = DictionaryLibrarySettingsStore.standard,
-        persistenceStore: PersistenceStore? = nil
+        persistenceStore: PersistenceStore? = nil,
+        publication: LibraryVocabularyPublication? = nil
     ) {
         self.fileManager = fileManager
         self.settings = settings
         self.persistenceStore = persistenceStore
+        self.publication = publication
         if let overrideDirectory {
             self.librariesDirectory = overrideDirectory
         } else {
@@ -149,8 +152,10 @@ final class DictionaryLibraryService: @unchecked Sendable {
                 basedOn: library.basedOn,
                 rows: file.terms))
         let url = librariesDirectory.appendingPathComponent("\(id).csv")
-        try managed.write(to: url, options: .atomic)
-        try updatePersistedStateAfterImport(id: id, contentHash: LibraryContentHash(data: managed))
+        try changingVocabulary {
+            try managed.write(to: url, options: .atomic)
+            try updatePersistedStateAfterImport(id: id, contentHash: LibraryContentHash(data: managed))
+        }
         return library
     }
 
@@ -167,11 +172,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
         }
 
         let path = librariesDirectory.appendingPathComponent(fileName)
-        if fileManager.fileExists(atPath: path.path) {
-            try fileManager.removeItem(at: path)
+        try changingVocabulary {
+            if fileManager.fileExists(atPath: path.path) {
+                try fileManager.removeItem(at: path)
+            }
+            settings.setEnabled(false, id: id)
+            try updatePersistedStateAfterRemoval(id: id)
         }
-        settings.setEnabled(false, id: id)
-        try updatePersistedStateAfterRemoval(id: id)
     }
 
     func loadCatalog() async throws -> LibraryCatalog {
@@ -185,6 +192,18 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     func loadVocabulary() async throws -> LibraryVocabulary {
+        guard let publication else { return try await readVocabulary() }
+        var latest = LibraryVocabulary.empty
+        for _ in 0..<3 {
+            let revision = publication.revision()
+            latest = try await readVocabulary()
+            if publication.publishRead(latest.aiScope, revision) { return latest }
+        }
+        // A continuously changing source stays withheld. The send authority still decides every request.
+        return latest
+    }
+
+    private func readVocabulary() async throws -> LibraryVocabulary {
         let catalog = try await loadCatalog()
         let composition = compose(catalog: catalog)
         let permitted = catalog.libraries.reduce(into: [String: String?]()) { result, library in
@@ -196,11 +215,22 @@ final class DictionaryLibraryService: @unchecked Sendable {
             }
             result[library.id.lowercased()] = .some(library.contentHash?.value)
         }
-        return LibraryVocabulary(
+        let vocabulary = LibraryVocabulary(
             generation: catalog.generation,
             entries: composition.entries,
             aiEntries: composition.aiEntries,
             aiScope: AiVocabularyScope(generation: catalog.generation, permittedContent: permitted))
+        return vocabulary
+    }
+
+    func changingVocabulary<Result>(_ change: () throws -> Result) rethrows -> Result {
+        if let publication { return try publication.changing(change) }
+        return try change()
+    }
+
+    func changingVocabularyAsync<Result>(_ change: () async throws -> Result) async rethrows -> Result {
+        if let publication { return try await publication.changingAsync(change) }
+        return try await change()
     }
 
     private func loadCatalogLibraries() -> [CatalogLibrary] {
@@ -413,17 +443,21 @@ final class DictionaryLibraryService: @unchecked Sendable {
             if replaced {
                 state.generation += 1
                 state.legacyEnabledIds = state.enabledIds.filter { state.aiPermissions[$0.lowercased()] != false }
-                settings.enabledLibraryIds = Set(state.legacyEnabledIds)
             }
         }
         if raw == nil || synced || replaced {
             let value = String(decoding: try JSONEncoder().encode(state), as: UTF8.self)
+            let projection = state.legacyEnabledIds
+            let needsProjection = replaced
             do {
-                try await persistenceStore.commitSettingsParticipants([
-                    StoredSettingsParticipant(
-                        checks: [StoredSettingCheck(key: Self.libraryStateKey, expected: raw)],
-                        writes: [StoredSettingWrite(key: Self.libraryStateKey, value: value)])
-                ])
+                try await changingVocabularyAsync {
+                    try await persistenceStore.commitSettingsParticipants([
+                        StoredSettingsParticipant(
+                            checks: [StoredSettingCheck(key: Self.libraryStateKey, expected: raw)],
+                            writes: [StoredSettingWrite(key: Self.libraryStateKey, value: value)])
+                    ])
+                    if needsProjection { settings.enabledLibraryIds = Set(projection) }
+                }
             } catch StoredSettingsCommitError.conflict {
                 return try decodeState(await persistenceStore.loadStringSetting(key: Self.libraryStateKey))
                     ?? unreadableState()
