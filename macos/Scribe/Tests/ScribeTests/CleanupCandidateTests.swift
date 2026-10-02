@@ -3,6 +3,34 @@ import XCTest
 @testable import Scribe
 
 final class CleanupCandidateTests: XCTestCase {
+    func testStatusAndRecordingRecipientCaptureDoNotWaitBehindThePublicationTransaction() async throws {
+        let fixture = makeCleanupStore()
+        let gate = CleanupSendGate()
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:],
+            factory: .testing(session: makeStubSession { StubReply.completion($0, "Unwanted.") }),
+            sendGate: gate)
+        let recipient = try cache.captureRecipient()
+        let held = ReadPause()
+        let publishing = Task.detached {
+            gate.withPublication(
+                {
+                    held.arrive()
+                    return recipient
+                },
+                publication: { CleanupAuthorityPublication(vocabulary: .none, recipient: $0) })
+        }
+        await held.waitUntilReached()
+        let read = LockedValue<CleanupRecipient>()
+        let finished = await finishes(within: 30) {
+            if let captured = try? cache.captureRecipient() { read.set(captured) }
+        }
+        held.release()
+        _ = await publishing.value
+        XCTAssertTrue(finished, "Metadata capture must not take the lock which covers SQLite COMMIT")
+        XCTAssertEqual(read.value, recipient)
+    }
+
     func testUnsavedCredentialChangesHaveDistinctOpaqueRecipientIdentities() throws {
         let fixture = makeCleanupStore()
         var candidate = CleanupCandidate(settings: fixture.store.snapshot())

@@ -11,6 +11,11 @@ struct CleanupRecipient: Equatable, Sendable, CustomStringConvertible, CustomRef
     var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
+struct CleanupAuthorityPublication: Sendable {
+    let vocabulary: AiVocabularyScope
+    let recipient: CleanupRecipient?
+}
+
 enum CleanupRequestKind: Sendable, Equatable {
     case dictation
     case probe
@@ -46,6 +51,7 @@ final class CleanupSendGate: Sendable {
     private struct State {
         var scope = AiVocabularyScope.none
         var recipient: CleanupRecipient?
+        var recipientPublished = false
         var closed = false
         var uncertain = false
         var vocabularyRevision: UInt64 = 0
@@ -78,7 +84,10 @@ final class CleanupSendGate: Sendable {
     }
 
     func publishRecipient(_ recipient: CleanupRecipient?) {
-        state.withLock { $0.recipient = recipient }
+        state.withLock {
+            $0.recipient = recipient
+            $0.recipientPublished = true
+        }
     }
 
     /// Legacy stores can notify observers synchronously. Withdraw first, write without holding the send lock,
@@ -104,6 +113,7 @@ final class CleanupSendGate: Sendable {
         state.withLock {
             $0.scope = vocabulary
             $0.recipient = recipient
+            $0.recipientPublished = true
             $0.vocabularyRevision &+= 1
             $0.uncertain = false
         }
@@ -117,17 +127,32 @@ final class CleanupSendGate: Sendable {
         recipient: CleanupRecipient?,
         _ commit: () throws -> Result
     ) rethrows -> Result {
+        try withPublication(commit) { _ in
+            CleanupAuthorityPublication(vocabulary: vocabulary, recipient: recipient)
+        }
+    }
+
+    /// Runs the complete synchronous transaction on its storage worker, then derives authority from its returned
+    /// committed receipt. The projection cannot throw after COMMIT and must do no I/O, await or gate reentry.
+    /// Lock order is send gate, then transaction locks. Callers prepare data and credentials before entering.
+    func withPublication<Result>(
+        _ transaction: () throws -> Result,
+        publication: (Result) -> CleanupAuthorityPublication
+    ) rethrows -> Result {
         try state.withLockUnchecked { current in
             do {
-                let result = try commit()
-                current.scope = vocabulary
+                let result = try transaction()
+                let next = publication(result)
+                current.scope = next.vocabulary
                 current.vocabularyRevision &+= 1
-                current.recipient = recipient
+                current.recipient = next.recipient
+                current.recipientPublished = true
                 current.uncertain = false
                 return result
             } catch {
                 current.scope = .none
                 current.recipient = nil
+                current.recipientPublished = true
                 current.uncertain = true
                 current.vocabularyRevision &+= 1
                 throw error
@@ -147,7 +172,7 @@ final class CleanupSendGate: Sendable {
         scope: AiVocabularyScope,
         recipient: CleanupRecipient,
         kind: CleanupRequestKind,
-        isCurrent: @escaping @Sendable () -> Bool = { true }
+        isCurrent: (@Sendable () -> Bool)? = nil
     ) -> CleanupRequestReceipt {
         CleanupRequestReceipt(
             gate: self, scope: scope, recipient: recipient, kind: kind, isCurrent: isCurrent)
@@ -163,7 +188,11 @@ final class CleanupSendGate: Sendable {
             guard !current.uncertain else { throw CleanupHoldback.noAdmission }
             guard current.vocabularyChanges == 0 else { throw CleanupHoldback.vocabularyChanged }
             guard current.scope.covers(receipt.scope) else { throw CleanupHoldback.vocabularyChanged }
-            guard current.recipient == receipt.recipient, receipt.isCurrent() else {
+            guard current.recipientPublished || receipt.isCurrent != nil else { throw CleanupHoldback.noAdmission }
+            guard !current.recipientPublished || current.recipient == receipt.recipient else {
+                throw CleanupHoldback.recipientChanged
+            }
+            guard receipt.isCurrent?() ?? true else {
                 throw CleanupHoldback.recipientChanged
             }
             return try start()
@@ -176,7 +205,7 @@ struct CleanupRequestReceipt: Sendable, CustomStringConvertible, CustomReflectab
     let scope: AiVocabularyScope
     let recipient: CleanupRecipient
     let kind: CleanupRequestKind
-    fileprivate let isCurrent: @Sendable () -> Bool
+    fileprivate let isCurrent: (@Sendable () -> Bool)?
 
     var description: String { "CleanupRequestReceipt" }
     var customMirror: Mirror { Mirror(self, children: [:]) }

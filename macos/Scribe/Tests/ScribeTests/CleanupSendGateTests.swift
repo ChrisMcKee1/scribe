@@ -134,4 +134,71 @@ final class CleanupSendGateTests: XCTestCase {
         XCTAssertTrue(gate.publishReadVocabulary(scope, after: gate.vocabularyRevision))
         XCTAssertNoThrow(try admitted.check())
     }
+
+    func testPublicationUsesTheCommittedReceiptRatherThanTheRequestedDraft() throws {
+        let gate = CleanupSendGate()
+        let old = try recipient(model: "old")
+        let actual = try recipient(model: "committed")
+        let oldScope = AiVocabularyScope(generation: 1, permittedContent: ["pack": "old"])
+        let actualScope = AiVocabularyScope(generation: 1, permittedContent: ["pack": "committed"])
+        gate.publish(vocabulary: oldScope, recipient: old)
+        let before = gate.receipt(scope: oldScope, recipient: old, kind: .dictation)
+        var committed = false
+        let value = gate.withPublication(
+            {
+                committed = true
+                return CleanupAuthorityPublication(vocabulary: actualScope, recipient: actual)
+            },
+            publication: { receipt in
+                XCTAssertTrue(committed)
+                return receipt
+            })
+        XCTAssertEqual(value.recipient, actual)
+        XCTAssertThrowsError(try before.check())
+        let after = gate.receipt(scope: actualScope, recipient: actual, kind: .dictation)
+        XCTAssertNoThrow(try after.check())
+    }
+
+    func testAFailClosedProjectionStillReturnsTheDurableReceiptWithoutThrowing() throws {
+        let gate = CleanupSendGate()
+        let previous = try recipient()
+        gate.publish(vocabulary: .none, recipient: previous)
+        let admitted = gate.receipt(scope: .none, recipient: previous, kind: .dictation)
+        let receipt = gate.withPublication(
+            { 42 },
+            publication: { _ in CleanupAuthorityPublication(vocabulary: .none, recipient: nil) })
+        XCTAssertEqual(receipt, 42)
+        XCTAssertThrowsError(try admitted.check())
+    }
+
+    func testAThrownTransactionNeverRunsThePostcommitProjection() throws {
+        let gate = CleanupSendGate()
+        var projected = false
+        XCTAssertThrowsError(
+            try gate.withPublication(
+                { () throws -> Int in throw CleanupHoldback.closed },
+                publication: { _ in
+                    projected = true
+                    return CleanupAuthorityPublication(vocabulary: .none, recipient: nil)
+                }))
+        XCTAssertFalse(projected)
+    }
+
+    func testAReceiptWithoutPublishedOrExternalRecipientAuthorityFailsClosed() throws {
+        let gate = CleanupSendGate()
+        let admitted = gate.receipt(scope: .none, recipient: try recipient(), kind: .dictation)
+        XCTAssertThrowsError(try admitted.check()) {
+            XCTAssertEqual($0 as? CleanupHoldback, .noAdmission)
+        }
+    }
+
+    func testAStaleLegacyValidatorCannotOverrideTheCanonicalPublishedRecipient() throws {
+        let gate = CleanupSendGate()
+        let old = try recipient(model: "rollback")
+        gate.publish(vocabulary: .none, recipient: try recipient(model: "canonical"))
+        let admitted = gate.receipt(scope: .none, recipient: old, kind: .dictation, isCurrent: { true })
+        XCTAssertThrowsError(try admitted.check()) {
+            XCTAssertEqual($0 as? CleanupHoldback, .recipientChanged)
+        }
+    }
 }

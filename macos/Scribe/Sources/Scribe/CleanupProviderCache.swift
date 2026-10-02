@@ -62,9 +62,8 @@ final class CleanupProviderCache: Sendable {
 
     /// No credentials or I/O: capture the effective identity at recording/consent admission.
     func captureRecipient() throws -> CleanupRecipient {
-        let recipient = try effectiveRecipient()
-        sendGate.publishRecipient(recipient)
-        return recipient
+        // Recording admission and status readers must not wait behind a storage transaction in the send gate.
+        try effectiveRecipient()
     }
 
     func effectiveRecipient() throws -> CleanupRecipient {
@@ -121,8 +120,14 @@ final class CleanupProviderCache: Sendable {
     /// `provider()` that begins after this returns can be handed anything from before it: a build still running
     /// across the call hands its provider to its own caller once and keeps nothing (`CleanupProviderCacheState`).
     func invalidate() {
-        state.withLock { $0.invalidate() }
+        invalidateCachedProvider()
         sendGate.publishRecipient(try? effectiveRecipient())
+    }
+
+    /// Canonical session publication owns recipient changes. Its later UI/apply notification clears only the cache,
+    /// never republishes an older snapshot or waits on the gate which may cover another storage transaction.
+    func invalidateCachedProvider() {
+        state.withLock { $0.invalidate() }
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
     }
 
