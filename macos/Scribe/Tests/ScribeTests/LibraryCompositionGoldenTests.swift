@@ -119,74 +119,62 @@ private struct GoldenFixture {
     let defaults: StorageTestDefaults
     let service: DictionaryLibraryService
 
-    static let customFiles: [(String, String)] = [
-        (
-            "team-terms.csv",
-            """
-            # name: Team terms
-            # category: Custom
-            pattern,replacement,whole_word,enabled
-            get hub,GitHub Enterprise,true,true
-            kube,Kubernetes,true,true
-            north star,North Star,true,true
-            contoso,Contoso Ltd,true,true
-            pipeline,Pipelines,true,true
-            """
-        ),
-
-        (
-            "team-terms-2.csv",
-            """
-            # name: Team terms v2
-            # category: Custom
-            pattern,replacement,whole_word,enabled
-            kube,K8s,true,true
-            north star,NorthStar,true,true
-            pipeline,Pipeline,true,false
-            """
-        ),
-
-        (
-            "alpha.csv",
-            """
-            # name: Zeta words
-            pattern,replacement
-            contoso,CONTOSO
-            fabrikam,Fabrikam
-            """
-        ),
-
-        (
-            "Zulu Notes.csv",
-            """
-            # name: alpha notes
-            pattern,replacement
-            fabrikam,FabriKam
-            tailspin,Tailspin Toys
-            """
-        ),
-
-        (
-            "release-10.csv",
-            """
-            # name: Release 10 terms
-            pattern,replacement
-            sprint,Sprint 10
-            retro,Retro
-            """
-        ),
-
-        (
-            "release-9.csv",
-            """
-            # name: Release 9 terms
-            pattern,replacement
-            sprint,Sprint 9
-            standup,Stand-up
-            gpt five six terra,GPT 5.6 Terra
-            """
-        ),
-
+    static let customFiles: [GoldenFixtureFile] = [
+        GoldenFixtureFile(
+            fileName: "team-terms.csv",
+            csv: """
+                # name: Team terms
+                # category: Custom
+                pattern,replacement,whole_word,enabled
+                get hub,GitHub Enterprise,true,true
+                kube,Kubernetes,true,true
+                north star,North Star,true,true
+                contoso,Contoso Ltd,true,true
+                pipeline,Pipelines,true,true
+                """),
+        GoldenFixtureFile(
+            fileName: "team-terms-2.csv",
+            csv: """
+                # name: Team terms v2
+                # category: Custom
+                pattern,replacement,whole_word,enabled
+                kube,K8s,true,true
+                north star,NorthStar,true,true
+                pipeline,Pipeline,true,false
+                """),
+        GoldenFixtureFile(
+            fileName: "alpha.csv",
+            csv: """
+                # name: Zeta words
+                pattern,replacement
+                contoso,CONTOSO
+                fabrikam,Fabrikam
+                """),
+        GoldenFixtureFile(
+            fileName: "Zulu Notes.csv",
+            csv: """
+                # name: alpha notes
+                pattern,replacement
+                fabrikam,FabriKam
+                tailspin,Tailspin Toys
+                """),
+        GoldenFixtureFile(
+            fileName: "release-10.csv",
+            csv: """
+                # name: Release 10 terms
+                pattern,replacement
+                sprint,Sprint 10
+                retro,Retro
+                """),
+        GoldenFixtureFile(
+            fileName: "release-9.csv",
+            csv: """
+                # name: Release 9 terms
+                pattern,replacement
+                sprint,Sprint 9
+                standup,Stand-up
+                gpt five six terra,GPT 5.6 Terra
+                """),
     ]
 
     static let personalEntries: [DictionaryEntry] = [
@@ -206,35 +194,29 @@ private struct GoldenFixture {
         "scribe typed azure for me",
     ]
 
-    static let scenarios: [(name: String, enabledIds: [String])] = [
-        (
-            "shipped and custom",
-            [
+    static let scenarios: [GoldenScenario] = [
+        GoldenScenario(
+            name: "shipped and custom",
+            enabledIds: [
                 "release-9", "Zulu Notes", "github", "team-terms-2", "ai-terminology", "alpha",
                 "release-10", "team-terms", "ai-model-names",
-            ]
-        ),
-
-        (
-            "custom only",
-            ["release-9", "Zulu Notes", "team-terms-2", "alpha", "release-10", "team-terms"]
-        ),
-
-        ("default install", ["ai-model-names", "ai-terminology"]),
-
-        (
-            "everything",
-            Array(
+            ]),
+        GoldenScenario(
+            name: "custom only",
+            enabledIds: ["release-9", "Zulu Notes", "team-terms-2", "alpha", "release-10", "team-terms"]),
+        GoldenScenario(name: "default install", enabledIds: ["ai-model-names", "ai-terminology"]),
+        GoldenScenario(
+            name: "everything",
+            enabledIds: Array(
                 customFiles
-                    .map { URL(fileURLWithPath: $0.0).deletingPathExtension().lastPathComponent }
+                    .map { URL(fileURLWithPath: $0.fileName).deletingPathExtension().lastPathComponent }
                     .reversed()
-            ) + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())
-        ),
+            ) + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())),
     ]
 
     static let fixtureKeys: Set<String> = Set(
         customFiles
-            .flatMap { DictionaryLibraryCsv.parse($0.1).entries.map { LibraryTermKey.from($0.pattern).value } }
+            .flatMap { DictionaryLibraryCsv.parse($0.csv).entries.map { LibraryTermKey.from($0.pattern).value } }
             .filter { !$0.isEmpty }
             + personalEntries.map { LibraryTermKey.from($0.pattern).value }
     )
@@ -242,9 +224,9 @@ private struct GoldenFixture {
     static func make() throws -> GoldenFixture {
         let directory = try StorageTestDirectory()
         let defaults = StorageTestDefaults()
-        for (fileName, csv) in customFiles {
-            try csv.write(
-                to: directory.url.appendingPathComponent(fileName, isDirectory: false),
+        for file in customFiles {
+            try file.csv.write(
+                to: directory.url.appendingPathComponent(file.fileName, isDirectory: false),
                 atomically: true,
                 encoding: .utf8)
         }
@@ -258,6 +240,17 @@ private struct GoldenFixture {
         defaults.remove()
         directory.remove()
     }
+}
+
+
+private struct GoldenFixtureFile {
+    let fileName: String
+    let csv: String
+}
+
+private struct GoldenScenario {
+    let name: String
+    let enabledIds: [String]
 }
 
 private enum GoldenSections {
@@ -279,11 +272,11 @@ private enum GoldenSections {
                 lines = []
                 continue
             }
-            guard let currentSection else {
+            guard currentSection != nil else {
                 continue
             }
             if rawLine.isEmpty {
-                sections[currentSection] = lines
+                sections[currentSection!] = lines
                 currentSection = nil
                 lines = []
                 continue
