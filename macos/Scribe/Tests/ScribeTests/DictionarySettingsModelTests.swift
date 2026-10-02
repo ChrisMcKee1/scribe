@@ -426,6 +426,9 @@ final class DictionarySettingsModelTests: XCTestCase {
 
         XCTAssertFalse(succeeded)
         XCTAssertTrue(model.errorMessage?.contains("already in your dictionary") == true)
+    }
+
+    @MainActor
     func testReviewUsageDoesNotOfferEnabledWordPackTermsForCleanup() async throws {
         let store = try makeStore()
         let (service, defaults) = makeWordPackService(store)
