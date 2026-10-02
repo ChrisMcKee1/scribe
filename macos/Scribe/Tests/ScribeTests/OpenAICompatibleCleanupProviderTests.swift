@@ -89,7 +89,6 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, CleanupReasoningEffort.none)
         XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 16)
         XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, 16)
-        XCTAssertEqual(sent.jsonBody["ttl"] as? Int, LocalModelDefaults.keepAliveMinutes * 60)
     }
 
     func testALocalServerThatRejectsTheExtraFieldsFallsBackToPlainRequests() async throws {

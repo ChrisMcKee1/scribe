@@ -41,7 +41,6 @@ protocol DictationCleaning {
     /// The user's switch, read when a dictation reaches cleanup, so turning cleanup off stops every dictation that
     /// has not reached it yet from being sent.
     var isEnabled: Bool { get }
-    var isStartingLocalModel: Bool { get }
 
     /// The provider for the configuration stored now. Building one can read the Keychain, so it never runs on the
     /// main actor.
@@ -49,23 +48,6 @@ protocol DictationCleaning {
 
     /// Drops the cached provider and credential (`CleanupProviderCache.invalidate()`).
     func invalidate()
-
-    /// Starts any background local-model readying work for a recording that just began.
-    func recordingStarted(writingStylePrompt: String)
-
-    /// Waits for local-model readying when the next cleanup request needs it. False means the request should fall back
-    /// rather than wait any longer.
-    func waitForLocalModelIfNeeded() async -> Bool
-
-    /// One local-model request answered.
-    func noteAnswerReceived(from provider: any CleanupProvider)
-
-    /// Turns a pause into a best-effort local-model release once no dictation is using it.
-    func releaseForPause()
-
-    /// Reacts to a cleanup settings change: invalidate the provider cache and release a previous local-app model when
-    /// cleanup stopped using it.
-    func settingsChanged(from previous: CleanupSettingsSnapshot, to current: CleanupSettingsSnapshot)
 }
 
 /// Where a dictation is meant to go, captured when its recording starts.
@@ -203,42 +185,11 @@ struct LiveDictationTranscriber: DictationTranscribing {
     }
 }
 
-@MainActor
-final class LiveDictationCleanup: DictationCleaning {
-    private struct LocalReleaseTarget: Equatable, Sendable {
-        let endpoint: String
-        let model: String
-        let apiKey: String?
-    }
-
+struct LiveDictationCleanup: DictationCleaning {
     let cache: CleanupProviderCache
-    private let localServers: any LocalServerControlling
-    private let localModelLane: AsyncLane
-    private let clock: @Sendable () -> ContinuousClock.Instant
-    private var prewarmTask: Task<Bool, Never>?
-    private var prewarmGeneration: UInt64 = 0
-    private var prewarmOutcome: Bool?
-    private var isStartingLocalModelStorage = false
-    private var lastLocalAnswerAt: ContinuousClock.Instant?
-
-    init(
-        cache: CleanupProviderCache,
-        localServers: any LocalServerControlling = LocalServerClient(),
-        localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
-        clock: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
-    ) {
-        self.cache = cache
-        self.localServers = localServers
-        self.localModelLane = localModelLane
-        self.clock = clock
-    }
 
     var isEnabled: Bool {
         cache.store.isEnabled
-    }
-
-    var isStartingLocalModel: Bool {
-        isStartingLocalModelStorage
     }
 
     func provider() async throws -> any CleanupProvider {
@@ -252,171 +203,6 @@ final class LiveDictationCleanup: DictationCleaning {
 
     func invalidate() {
         cache.invalidate()
-    }
-
-    func recordingStarted(writingStylePrompt: String) {
-        if prewarmOutcome != nil {
-            prewarmTask = nil
-            prewarmOutcome = nil
-        }
-        guard prewarmTask == nil else { return }
-        let snapshot = cache.store.snapshot()
-        guard snapshot.isEnabled else { return }
-        let target = localReleaseTarget(from: snapshot)
-        let localServer = target != nil
-
-        let remoteLocal = snapshot.providerKind == .foundryLocal
-            || (snapshot.providerKind == .openAICompatible && LocalAiServer.isOnThisMac(snapshot.openAIBaseURL))
-            || snapshot.providerKind == .ollama
-        guard localServer || remoteLocal else { return }
-        let lastAnswerAt = lastLocalAnswerAt
-        prewarmGeneration &+= 1
-        let generation = prewarmGeneration
-
-        prewarmTask = Task { [cache, localServers, localModelLane, clock] in
-            if let last = lastAnswerAt,
-                last.duration(to: clock()) < LocalModelDefaults.prewarmAfterIdle,
-                let target
-            {
-                let state =
-                    (try? await localModelLane.run {
-                        await localServers.read(target.endpoint, apiKey: target.apiKey)
-                    }) ?? .failed
-                if state.loaded(for: target.model) != nil {
-                    return true
-                }
-            } else if let last = lastAnswerAt,
-                last.duration(to: clock()) < LocalModelDefaults.prewarmAfterIdle
-            {
-                return true
-            }
-
-            guard let provider = try? cache.provider() else {
-                return false
-            }
-            let request = CleanupRequest(
-                transcript: CleanupPrompt.wrapTranscript(""),
-                writingStylePrompt: CleanupPrompt.systemPrompt(
-                    writingStyle: writingStylePrompt,
-                    useLocalPrompt: provider.usesLocalCleanupPrompt),
-                timeout: ChatCompletionsTransport.seconds(LocalModelDefaults.startWait),
-                maxOutputTokens: 1)
-
-            do {
-                _ = try await provider.clean(request)
-                return true
-            } catch let error as CleanupProviderError {
-                switch error {
-                case .invalidResponse(.emptyCompletion), .invalidResponse(.outputLimitReachedBeforeText):
-                    return true
-                default:
-                    return false
-                }
-            } catch {
-                return false
-            }
-        }
-        isStartingLocalModelStorage = true
-        Task { [weak self] in
-            guard let self, let task = self.prewarmTask else { return }
-            let success = await task.value
-            guard self.prewarmGeneration == generation else { return }
-            self.prewarmOutcome = success
-            self.isStartingLocalModelStorage = false
-        }
-    }
-
-    func waitForLocalModelIfNeeded() async -> Bool {
-        if let outcome = prewarmOutcome {
-            prewarmTask = nil
-            prewarmOutcome = nil
-            if outcome {
-                lastLocalAnswerAt = clock()
-            }
-            return outcome
-        }
-        guard let task = prewarmTask else { return true }
-        do {
-            let success = try await OperationDeadline.run(within: LocalModelDefaults.startWait) {
-                await task.value
-            }
-            prewarmTask = nil
-            prewarmOutcome = nil
-            if success {
-                lastLocalAnswerAt = clock()
-            }
-            return success
-        } catch {
-            task.cancel()
-            prewarmTask = nil
-            prewarmOutcome = nil
-            isStartingLocalModelStorage = false
-            return false
-        }
-    }
-
-    func noteAnswerReceived(from provider: any CleanupProvider) {
-        guard provider.usesLocalCleanupPrompt else { return }
-        lastLocalAnswerAt = clock()
-    }
-
-    func releaseForPause() {
-        guard let target = localReleaseTarget(from: cache.store.snapshot()) else { return }
-        scheduleRelease(of: target)
-    }
-
-    func settingsChanged(from previous: CleanupSettingsSnapshot, to current: CleanupSettingsSnapshot) {
-        prewarmTask?.cancel()
-        prewarmTask = nil
-        prewarmOutcome = nil
-        prewarmGeneration &+= 1
-        isStartingLocalModelStorage = false
-
-        guard let previousTarget = localReleaseTarget(from: previous) else {
-            return
-        }
-        let currentTarget = localReleaseTarget(from: current)
-        if !current.isEnabled || currentTarget != previousTarget {
-            scheduleRelease(of: previousTarget)
-        }
-    }
-
-    private func scheduleRelease(of target: LocalReleaseTarget) {
-        let lane = localModelLane
-        let localServers = localServers
-        Task {
-            do {
-                try await lane.run {
-                    _ = await localServers.unload(target.endpoint, modelID: target.model, apiKey: target.apiKey)
-                }
-            } catch {
-                return
-            }
-        }
-    }
-
-    private func localReleaseTarget(from snapshot: CleanupSettingsSnapshot) -> LocalReleaseTarget? {
-        guard snapshot.isEnabled else { return nil }
-        switch snapshot.providerKind {
-        case .foundryLocal, .microsoftFoundry:
-            return nil
-        case .ollama:
-            guard let model = Self.trimmed(snapshot.ollamaModel) else { return nil }
-            return LocalReleaseTarget(endpoint: LocalAiServer.ollamaAddress, model: model, apiKey: nil)
-        case .openAICompatible:
-            guard LocalAiServer.appAt(snapshot.openAIBaseURL) != .none,
-                let endpoint = Self.trimmed(snapshot.openAIBaseURL),
-                let model = Self.trimmed(snapshot.openAIModel)
-            else {
-                return nil
-            }
-            return LocalReleaseTarget(endpoint: endpoint, model: model, apiKey: cache.store.openAIApiKey())
-        }
-    }
-
-    private static func trimmed(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

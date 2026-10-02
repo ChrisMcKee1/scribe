@@ -501,15 +501,9 @@ final class GatedCleanupProvider: CleanupProvider {
 @MainActor
 final class FakeCleanup: DictationCleaning {
     var isEnabled = false
-    var isStartingLocalModel = false
     var providerError: (any Error)?
     var cleanupProvider: any CleanupProvider
     private(set) var invalidations = 0
-    private(set) var settingsChanges: [(CleanupSettingsSnapshot, CleanupSettingsSnapshot)] = []
-    private(set) var pauseReleases = 0
-    private(set) var recordingStarts: [String] = []
-    var waitForLocalModelResult = true
-    private(set) var answersReceived = 0
 
     init(provider: any CleanupProvider = GatedCleanupProvider()) {
         cleanupProvider = provider
@@ -529,26 +523,6 @@ final class FakeCleanup: DictationCleaning {
 
     func invalidate() {
         invalidations += 1
-    }
-
-    func recordingStarted(writingStylePrompt: String) {
-        recordingStarts.append(writingStylePrompt)
-    }
-
-    func waitForLocalModelIfNeeded() async -> Bool {
-        waitForLocalModelResult
-    }
-
-    func noteAnswerReceived(from provider: any CleanupProvider) {
-        answersReceived += 1
-    }
-
-    func releaseForPause() {
-        pauseReleases += 1
-    }
-
-    func settingsChanged(from previous: CleanupSettingsSnapshot, to current: CleanupSettingsSnapshot) {
-        settingsChanges.append((previous, current))
     }
 }
 

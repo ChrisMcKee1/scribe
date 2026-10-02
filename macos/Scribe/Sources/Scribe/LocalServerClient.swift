@@ -681,10 +681,3 @@ extension LocalServerClient {
         response.statusCode == 401 || response.statusCode == 403
     }
 }
-
-protocol LocalServerControlling: Sendable {
-    func read(_ endpoint: String, apiKey: String?) async -> LocalServerState
-    func unload(_ endpoint: String, modelID: String, apiKey: String?) async -> Bool
-}
-
-extension LocalServerClient: LocalServerControlling {}

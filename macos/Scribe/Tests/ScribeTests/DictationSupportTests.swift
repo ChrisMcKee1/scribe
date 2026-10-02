@@ -243,14 +243,6 @@ final class DictationPresentationTests: XCTestCase {
         XCTAssertTrue(behavior.contains(.canJoinAllSpaces))
     }
 
-    func testThePillCanShowStartingLocalModel() {
-        let pill = OverlayPanelController()
-
-        XCTAssertTrue(pill.render(.startingLocalModel, revision: 1))
-
-        XCTAssertEqual(pill.displayedState, .startingLocalModel)
-    }
-
     /// The tray keeps only the newest presentation too: a stale one changes neither the pill nor the menu.
     func testTheTrayKeepsOnlyTheNewestPresentation() {
         let pill = OverlayPanelController()

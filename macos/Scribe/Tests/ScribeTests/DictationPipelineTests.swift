@@ -176,19 +176,6 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(provider.requests.map(\.transcript), [sent, sent])
     }
 
-    func testWhenTheLocalModelDidNotStartInTimeTheRawTranscriptIsUsed() async throws {
-        let harness = makeHarness()
-        harness.cleanup.isEnabled = true
-        harness.cleanup.waitForLocalModelResult = false
-
-        await harness.dictate()
-        await harness.waitUntilProcessed()
-
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
-        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
-        XCTAssertEqual(harness.cleanup.answersReceived, 0)
-    }
-
     /// A model that returns what it was sent delivers exactly what cleanup off delivers: every replacement is decided
     /// on the transcript, and nothing is matched against the reply. The dictations are ones a written form in the
     /// reply was once taken for a trigger in: "my signature" read as the trigger "my sig" as a vocabulary rule would
