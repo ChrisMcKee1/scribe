@@ -267,48 +267,50 @@ struct DictionarySettingsTab: View {
     }
 
     private var dictionaryGridHeader: some View {
-        Grid(horizontalSpacing: 12, verticalSpacing: 0) {
-            GridRow {
-                Text("On").gridColumnAlignment(.leading)
-                Text("Scribe hears").gridColumnAlignment(.leading)
-                Text("Scribe writes").gridColumnAlignment(.leading)
-                Text("Whole words only").gridColumnAlignment(.leading)
-                Text("Word pack").gridColumnAlignment(.leading)
-                Text("")
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            Text("On")
+                .frame(width: 34, alignment: .leading)
+            Text("Scribe hears")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Scribe writes")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Whole words only")
+                .frame(width: 120, alignment: .leading)
+            Text("Word pack")
+                .frame(width: 150, alignment: .leading)
+            Text("")
+                .frame(width: 32)
         }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
     }
 
     private func dictionaryGridRow(_ entry: DictionaryEntry) -> some View {
-        Grid(horizontalSpacing: 12, verticalSpacing: 0) {
-            GridRow {
-                Toggle("", isOn: binding(for: entry))
-                    .labelsHidden()
-                    .frame(width: 34, alignment: .leading)
-                Text(entry.pattern)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry.replacement.isEmpty ? "(removes these words)" : entry.replacement)
-                    .foregroundStyle(entry.replacement.isEmpty ? .secondary : .primary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: entry.wholeWord ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(entry.wholeWord ? .green : .secondary)
-                    .accessibilityLabel(entry.wholeWord ? "Whole words only" : "Can match inside longer words")
-                    .frame(width: 120, alignment: .leading)
-                wordPackCapsule(for: entry)
-                    .frame(width: 150, alignment: .leading)
-                Button(role: .destructive) {
-                    Task { await model.delete(entry) }
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Delete \(entry.pattern)")
-                .frame(width: 32)
+        HStack(spacing: 12) {
+            Toggle("", isOn: binding(for: entry))
+                .labelsHidden()
+                .frame(width: 34, alignment: .leading)
+            Text(entry.pattern)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(entry.replacement.isEmpty ? "(removes these words)" : entry.replacement)
+                .foregroundStyle(entry.replacement.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: entry.wholeWord ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(entry.wholeWord ? .green : .secondary)
+                .accessibilityLabel(entry.wholeWord ? "Whole words only" : "Can match inside longer words")
+                .frame(width: 120, alignment: .leading)
+            wordPackCapsule(for: entry)
+                .frame(width: 150, alignment: .leading)
+            Button(role: .destructive) {
+                Task { await model.delete(entry) }
+            } label: {
+                Image(systemName: "trash")
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Delete \(entry.pattern)")
+            .frame(width: 32)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 8)

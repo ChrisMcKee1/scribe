@@ -57,19 +57,26 @@ struct SnippetsSettingsTab: View {
 
     private var snippetList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            List(selection: $selectedSnippetID) {
-                ForEach(model.snippets, id: \.id) { snippet in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(snippet.phrase)
-                            .font(.body.weight(.medium))
-                            .lineLimit(1)
-                        Text(snippet.template)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+            ZStack(alignment: .topLeading) {
+                List(selection: $selectedSnippetID) {
+                    ForEach(model.snippets, id: \.id) { snippet in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(snippet.phrase)
+                                .font(.body.weight(.medium))
+                                .lineLimit(1)
+                            Text(snippet.template)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 4)
+                        .tag(Optional(snippet.id))
                     }
-                    .padding(.vertical, 4)
-                    .tag(Optional(snippet.id))
+                }
+                if model.load.isLoaded, model.snippets.isEmpty {
+                    Text("No snippets yet. Add a snippet to get started.")
+                        .foregroundStyle(.secondary)
+                        .padding(10)
                 }
             }
             HStack {
@@ -146,10 +153,6 @@ struct SnippetsSettingsTab: View {
         }
         if let errorMessage = model.errorMessage {
             Text(errorMessage).foregroundStyle(.red).font(.caption)
-        }
-        if model.load.isLoaded, model.snippets.isEmpty, selectedSnippetID != nil {
-            Text("No snippets yet. Add a snippet to get started.")
-                .foregroundStyle(.secondary)
         }
     }
 

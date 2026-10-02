@@ -54,7 +54,7 @@ final class SettingsSnapshotRenderTests: XCTestCase {
             rendered.append(url)
         }
 
-        for section in [SettingsSection.dictation, .aiCleanup] {
+        for section in SettingsSection.allCases {
             drafts.section = section
             let url = outputURL.appendingPathComponent("\(section.rawValue)-dark.png", isDirectory: false)
             try render(section, dependencies: dependencies, appearance: .darkAqua, to: url)
@@ -118,13 +118,17 @@ final class SettingsSnapshotRenderTests: XCTestCase {
         appearance: NSAppearance.Name,
         to url: URL
     ) throws {
+        let colorScheme: ColorScheme = appearance == .darkAqua ? .dark : .light
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: imageSize),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false)
         window.appearance = NSAppearance(named: appearance)
-        window.contentView = NSHostingView(rootView: SnapshotSettingsShell(selection: section, dependencies: dependencies))
+        window.backgroundColor = NSColor.windowBackgroundColor
+        window.contentView = NSHostingView(
+            rootView: SnapshotSettingsShell(selection: section, dependencies: dependencies)
+                .environment(\.colorScheme, colorScheme))
         window.layoutIfNeeded()
 
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
@@ -194,9 +198,11 @@ private struct SnapshotSettingsShell: View {
                     .padding(24)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .background(Color(nsColor: .windowBackgroundColor))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 1_000, height: 760)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var sidebar: some View {

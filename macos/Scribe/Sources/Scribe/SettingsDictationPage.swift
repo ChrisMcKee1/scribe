@@ -93,7 +93,8 @@ private struct SettingsDictationControls: View {
                 }
             }
             .labelsHidden()
-            .frame(maxWidth: 420)
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
                 Button("Sound settings") { openSoundSettings() }

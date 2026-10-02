@@ -100,13 +100,19 @@ struct DiagnosticsSettingsTab: View {
                     }
                 }
                 Spacer()
-                Picker("Window", selection: $model.windowDays) {
-                    Text("24 hours").tag(1.0)
-                    Text("7 days").tag(7.0)
-                    Text("30 days").tag(30.0)
+                HStack(spacing: 8) {
+                    Text("Window")
+                        .font(.callout.weight(.semibold))
+                        .fixedSize()
+                    Picker("Window", selection: $model.windowDays) {
+                        Text("24 hours").tag(1.0)
+                        Text("7 days").tag(7.0)
+                        Text("30 days").tag(30.0)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 260)
                 .onChange(of: model.windowDays) { _ in
                     Task { await model.reload() }
                 }

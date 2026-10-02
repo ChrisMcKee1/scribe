@@ -61,19 +61,26 @@ struct AppProfilesSettingsTab: View {
 
     private var profileList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            List(selection: $selectedProfileID) {
-                ForEach(model.profiles, id: \.id) { profile in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(profile.name)
-                            .font(.body.weight(.medium))
-                            .lineLimit(1)
-                        Text(profile.bundleIdentifiers.joined(separator: ", "))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+            ZStack(alignment: .topLeading) {
+                List(selection: $selectedProfileID) {
+                    ForEach(model.profiles, id: \.id) { profile in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(profile.name)
+                                .font(.body.weight(.medium))
+                                .lineLimit(1)
+                            Text(profile.bundleIdentifiers.joined(separator: ", "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 4)
+                        .tag(Optional(profile.id))
                     }
-                    .padding(.vertical, 4)
-                    .tag(Optional(profile.id))
+                }
+                if model.load.isLoaded, model.profiles.isEmpty {
+                    Text("No app profiles yet. Add a profile to get started.")
+                        .foregroundStyle(.secondary)
+                        .padding(10)
                 }
             }
             HStack {

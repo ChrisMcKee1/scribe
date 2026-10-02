@@ -79,7 +79,14 @@ struct UsageInsightsSettingsTab: View {
                                 .foregroundStyle(.secondary)
                         }
                         SettingsCard { totalsSection(snapshot) }
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), alignment: .top),
+                                GridItem(.flexible(), alignment: .top),
+                            ],
+                            alignment: .leading,
+                            spacing: 12
+                        ) {
                             SettingsCard { topAppsSection(snapshot) }
                             SettingsCard { trendSection(snapshot) }
                             SettingsCard { knownTermsSection(snapshot) }
@@ -137,6 +144,7 @@ struct UsageInsightsSettingsTab: View {
                         y: .value("Dictations", point.dictations))
                 }
                 .frame(height: 160)
+                .chartXAxis(.hidden)
             }
         }
     }
@@ -273,4 +281,3 @@ struct UsageInsightsSettingsTab: View {
         }
     }
 }
-
