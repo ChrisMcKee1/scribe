@@ -20,7 +20,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     ) {
         let window = NSWindow(contentViewController: NSHostingController(rootView: rootView))
         window.title = "Scribe Settings"
-        window.setContentSize(NSSize(width: 720, height: 520))
+        window.setContentSize(NSSize(width: 860, height: 600))
+        window.minSize = NSSize(width: 860, height: 600)
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
         window.isReleasedWhenClosed = false
         window.center()

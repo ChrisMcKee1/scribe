@@ -283,7 +283,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
         }
         switch source {
         case .settings:
-            return fix + " in Settings > AI Cleanup."
+            return fix + " in Settings > AI cleanup."
         case .environment:
             return fix + ". SCRIBE_CLEANUP_PROVIDER is set, so Scribe reads its cleanup settings from environment "
                 + "variables instead of Settings."
@@ -293,7 +293,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
 
 /// Where a configuration came from, which decides where the user is told to fix it.
 enum CleanupConfigurationSource: Sendable, Hashable {
-    /// Settings > AI Cleanup, through `CleanupSettingsStore`.
+    /// Settings > AI cleanup, through `CleanupSettingsStore`.
     case settings
     /// `SCRIBE_CLEANUP_PROVIDER` and its related environment variables.
     case environment

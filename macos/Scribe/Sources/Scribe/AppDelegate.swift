@@ -301,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
         menu.addItem(overlayPositionMenuItem())
         menu.addItem(.separator())
-        let aiCleanupItem = NSMenuItem(title: "AI Cleanup", action: #selector(toggleAiCleanup(_:)), keyEquivalent: "")
+        let aiCleanupItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAiCleanup(_:)), keyEquivalent: "")
         aiCleanupItem.state = isAiCleanupEnabled ? .on : .off
         menu.addItem(aiCleanupItem)
         let pauseItem = NSMenuItem(title: "Pause Dictation", action: #selector(togglePaused(_:)), keyEquivalent: "")
@@ -328,9 +328,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         trayPresenter.statusButton = item.button
     }
 
-    /// Builds the "Overlay Position" submenu: a 9-anchor picker mirroring Windows' overlay position picker.
+    /// Builds the recording indicator position submenu: a 9-anchor picker mirroring Windows.
     private func overlayPositionMenuItem() -> NSMenuItem {
-        let submenuItem = NSMenuItem(title: "Overlay Position", action: nil, keyEquivalent: "")
+        let submenuItem = NSMenuItem(title: "Recording Indicator Position", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         for anchor in OverlayAnchor.allCases {
             let item = NSMenuItem(

@@ -52,7 +52,7 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
 /// Settings-window-backed configuration for AI cleanup, so a user can turn it on and pick and configure a provider
 /// entirely from the GUI instead of setting environment variables before launch.
 ///
-/// Non-secret fields live in `UserDefaults`, under the keys the tray's AI Cleanup item and the AI Cleanup tab share.
+/// Non-secret fields live in `UserDefaults`, under the keys the tray's AI Cleanup item and the AI cleanup page share.
 /// Secrets (the OpenAI-compatible API key and the service principal's client secret) live in a `SecretStore`, the
 /// Keychain in production, and are never written to `UserDefaults`, a plist or an environment variable.
 ///
@@ -73,7 +73,7 @@ struct CleanupSettingsStore: Sendable {
     }
 
     private enum Key {
-        // Shared with AppDelegate's tray "AI Cleanup" checkbox, which pre-dates this store, so the tray toggle and the
+        // Shared with AppDelegate's tray "AI cleanup" checkbox, which pre-dates this store, so the tray toggle and the
         // Settings tab always read and write the exact same flag.
         static let isEnabled = "ScribeAiCleanupEnabled"
         static let providerKind = "ScribeCleanupProviderKind"
@@ -132,7 +132,7 @@ struct CleanupSettingsStore: Sendable {
 
     // MARK: - Settings
 
-    /// Whether AI cleanup is turned on at all. Mirrors the tray "AI Cleanup" checkbox
+    /// Whether AI cleanup is turned on at all. Mirrors the tray "AI cleanup" checkbox
     /// (`AppDelegate.isAiCleanupEnabled`), which reads and writes the same key, so enabling it from either the tray or
     /// Settings updates the other.
     var isEnabled: Bool {

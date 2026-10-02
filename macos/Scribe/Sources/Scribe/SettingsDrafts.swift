@@ -16,7 +16,7 @@ enum SettingsDraftEntry: Hashable, Sendable {
 /// never written anywhere by this type and never logged.
 @MainActor
 final class SettingsDrafts: ObservableObject {
-    @Published var section: SettingsSection? = .overlay
+    @Published var section: SettingsSection? = .dictation
 
     @Published var dictionaryPattern = ""
     @Published var dictionaryReplacement = ""

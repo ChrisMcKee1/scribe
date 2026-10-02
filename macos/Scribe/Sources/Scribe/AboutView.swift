@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+struct SettingsAboutPage: View {
+    let persistenceStore: PersistenceStore
+
+    var body: some View {
+        SettingsPage(title: "About", subtitle: "Version, updates, help, privacy and feedback.") {
+            AboutView(persistenceStore: persistenceStore)
+        }
+    }
+}
+
 /// About tab: version, Open at Login, updates, privacy stance, support and source links, GitHub star, and the
 /// local data location. Direct port of the intent behind Windows' `SectionAbout` in `SettingsWindow.xaml`,
 /// adapted to macOS conventions (Finder rather than File Explorer, no Microsoft Store share card since Scribe for
@@ -15,11 +25,8 @@ struct AboutView: View {
     @State private var updateChecker = UpdateChecker()
     @State private var updateCheckResult: UpdateCheckResult?
     @State private var isCheckingForUpdate = false
-    @StateObject private var loginItem: LoginItemSwitch
-
-    init(persistenceStore: PersistenceStore, loginItemService: any LoginItemService = SystemLoginItemService()) {
+    init(persistenceStore: PersistenceStore) {
         self.persistenceStore = persistenceStore
-        _loginItem = StateObject(wrappedValue: LoginItemSwitch(service: loginItemService))
     }
 
     private var appVersion: String {
@@ -30,7 +37,6 @@ struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 headerCard
-                startupCard
                 updateCard
                 privacyCard
                 starCard
@@ -90,36 +96,6 @@ struct AboutView: View {
                     }
                 }
             }
-        }
-    }
-
-    /// "Open at Login", shown in About beside Updates because this port has no General section. It shows what
-    /// macOS reports and applies a flip at once (see `LoginItemSwitch`).
-    private var startupCard: some View {
-        card {
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle(
-                    "Open Scribe AI at Login",
-                    isOn: Binding(
-                        get: { loginItem.isOn },
-                        set: { requested in
-                            Task { await loginItem.setEnabled(requested) }
-                        })
-                )
-                .font(.headline)
-                .disabled(!loginItem.canFlip)
-                Text(loginItem.message)
-                    .font(.footnote)
-                    .foregroundStyle(loginItem.refusal == nil ? Color.secondary : Color.red)
-                if loginItem.showsOpenLoginItems {
-                    Button("Open Login Items Settings") {
-                        loginItem.openLoginItems()
-                    }
-                }
-            }
-        }
-        .task {
-            await loginItem.refresh()
         }
     }
 
