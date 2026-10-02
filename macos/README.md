@@ -200,7 +200,9 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   Every release waits for readiness, cleanup and Test connection uses in flight (bounded, cancellable), LM Studio copies
   Scribe loaded are tracked and retired by instance id, and a failed unload stays owed. AI cleanup stages the idle time
   for Ollama and LM Studio (10 minutes by default, Never supported); Save applies it, Cancel discards it. A shorter
-  countdown uses the end of the last use, not the time the setting changed. New requests wait for a model resize or
+  nonzero duration (including turning it on from Never) retires the model held under the old retention after active
+  uses finish; a newer use withdraws that retirement and sends the new retention itself. Owned-copy countdowns use
+  the end of the last use, not the time the setting changed. New requests wait for a model resize or
   unload already in progress. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
 - Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and

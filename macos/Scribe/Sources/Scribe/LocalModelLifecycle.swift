@@ -28,6 +28,7 @@ enum LocalModelReleaseReason: Sendable, Equatable {
     case idle
     case pause
     case configurationChanged
+    case retentionShortened
     case freeMemory
     case shutdown
 }
@@ -223,15 +224,26 @@ final class LocalModelLifecycle: Sendable {
 
     // MARK: Idle
 
-    /// Changes the idle time the next countdown uses; zero never frees on idle. A countdown already running is
-    /// recalculated from the end of the last use, so changing the time never postpones a release already owed.
+    /// A shorter nonzero time retires the model kept under the old retention. A newer use cancels that retirement
+    /// and carries the new retention itself. Other changes recalculate owned-copy countdowns from the last use.
     func setIdle(_ idle: Duration) {
         let changed = state.withLock { state -> Bool in
             guard state.idle != idle else { return false }
+            let shorter = idle > .zero && (state.idle == .zero || idle < state.idle)
             state.idle = idle
             state.idleTask?.cancel()
             state.idleTask = nil
             state.idleGeneration &+= 1
+            if shorter, let target = state.served {
+                let revision = state.revision
+                let generation = state.idleGeneration
+                state.idleTask = Task { [weak self] in
+                    guard let self, !Task.isCancelled else { return }
+                    _ = await self.release(
+                        .retentionShortened, target: target, decidedAt: revision, generation: generation)
+                }
+                return false
+            }
             return true
         }
         if changed { scheduleIdleReleaseIfOwed() }
@@ -347,14 +359,14 @@ final class LocalModelLifecycle: Sendable {
             let decision = state.withLock { state -> Decision in
                 guard state.uses == 0 else { return .retry }
                 if reason == .pause, !state.isPaused { return .stop(.notWanted) }
-                let decidedByRevision = reason == .idle || reason == .pause
+                let decidedByRevision = reason == .idle || reason == .pause || reason == .retentionShortened
                 if decidedByRevision, state.revision != revision { return .stop(.notWanted) }
                 if let generation, state.idleGeneration != generation { return .stop(.notWanted) }
                 guard wanted() else { return .stop(.notWanted) }
                 let explicit: LocalModelTarget? = (reason == .idle || reason == .shutdown) ? nil : target
                 let copies: [Copy]
                 switch reason {
-                case .freeMemory, .configurationChanged:
+                case .freeMemory, .configurationChanged, .retentionShortened:
                     copies = state.copies.filter { copy in
                         guard let target else { return false }
                         return Self.sameServer(copy.endpoint, target.endpoint)

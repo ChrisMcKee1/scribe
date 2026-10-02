@@ -44,7 +44,7 @@ implementation outline, not authorization to add a dependency, change a schema o
 | Intel app build and tests pass; speech runtime remains unverified | The `macos-15-intel` CI lane builds, tests and packages a native x86_64 app, asserting the Mach-O architecture. | Verify the external Foundry runtime and speech decoding on Intel hardware before advertising product support. Compiler/package success does not prove the recognizer is available. |
 | Real speech scenario coverage is narrower | `ScribeScenarioTests` uses a stand-in recognizer for capture/pipeline/storage scenarios. The optional manual workflow job runs Foundry Local on clean short fixtures. Windows `Scribe.AsrCheck` also characterizes long audio, channel mix, degraded audio and production decoding. | Add repeatable real-ASR tests for supported Mac models and long/noisy/multichannel fixtures. Hosted CI lacks microphone permissions and only runs the optional short-fixture job; real-device/runtime validation is still needed. |
 | Speech-model selection is present; processor threads remain backend-managed | Advanced queries the installed Foundry catalog, preserves saved aliases not currently listed and explicitly downloads chosen models. Download cancellation and quit reap the child. | Foundry exposes no processor-thread option, so no ineffective thread selector is added. Actual multilingual and alternative-model decode behavior still needs validation. |
-| Configurable local-app idle time is present; Foundry and speech release remain open | AI cleanup offers a staged idle duration for Ollama and LM Studio, default 10 minutes, with Never. Requests carry the stored retention; changing it rebuilds the provider. LM Studio copies loaded by Scribe are retired through the use barrier, using the original idle origin. | Foundry Local supports `foundry model unload <model>`, verified against the installed command help, but its cleanup reload, speech interaction and external runtime ownership still need a safe implementation. Do not describe Foundry release as not applicable. |
+| Configurable local-app idle time is present; Foundry and speech release remain open | AI cleanup offers a staged idle duration for Ollama and LM Studio, default 10 minutes, with Never. Requests carry the stored retention; changing it rebuilds the provider. A shorter nonzero time retires the model held under the old retention after active uses finish, unless a newer use withdraws it. LM Studio copies loaded by Scribe are retired through the use barrier, using the original idle origin. | Foundry Local supports `foundry model unload <model>`, verified against the installed command help, but its cleanup reload, speech interaction and external runtime ownership still need a safe implementation. Do not describe Foundry release as not applicable. |
 | Azure resource API-key authentication is present | Microsoft Foundry has a distinct Keychain-backed API key, taking precedence over Entra sign-in. Test connection uses the candidate settings and credentials. | Persistence, privacy and request authentication are tested. A real resource accepting the key remains a user-configured integration check. |
 | Global cleanup prompt customization is present | Writing style and local/detailed guardrail prompts are staged, with restore-default actions and Save/Discard handling. App profiles retain their writing-style override. | Composition, draft, persistence and search tests cover the request path. Existing vocabulary/template privacy rules stay in effect. |
 | Tray microphone picker is present | `MicrophoneMenu` refreshes devices when opened, shows system default, available and missing saved choices, and links to Sound settings. | Tests pin selection persistence and preservation of unrelated settings. Actual unplug/replug behavior still needs an interactive Mac. |
@@ -102,11 +102,12 @@ real Mac.
   model change and Free memory, never under an in-flight readiness, cleanup or Test connection use (automatic releases
   defer up to 5 minutes, Free memory reports after 30 seconds), tracks LM Studio chosen-size copies for retirement and
   keeps failed unloads owed. AI cleanup stages the idle time (`localModelIdleMinutes`, default 10, 0 never) for Ollama
-  and LM Studio; Test connection uses 180 s for recognized local apps. Foundry Local and speech-memory release
+  and LM Studio. A shorter nonzero duration, including turning it on from Never, retires the model kept under the old
+  time after active uses finish. A newer use withdraws it and carries the new retention itself; lengthening the time
+  or choosing Never unloads nothing. Test connection uses 180 s for recognized local apps. Foundry Local and speech-memory release
   remain unimplemented, not inapplicable.
   Cleanup failure notifications now use plain language and appear once per failure episode, resetting on successful
-  cleanup or a cleanup configuration change. The idle and pause memory-release policy and ownership tracking for
-  LM Studio copies are still open.
+  cleanup or a cleanup configuration change. Real local-runtime release behavior still needs interactive verification.
 - **Rewritten menu bar notices** (0.5.0): applicable Windows dictation and tray notices are wired to the actual
   microphone, capture, recognition, insertion, clipboard, Quick Add and startup events, with plain-language
   templates and episode deciders. The trigger-by-trigger mapping and platform adaptations are below.
@@ -130,11 +131,10 @@ real Mac.
   transactions and atomic file writes instead. The composition golden suite now covers the whole shared
   `composition-golden.txt` corpus, including mixed built-in and custom word-pack winners, badges, Save prompt reports,
   glossary order and finished text.
-- **Models on this PC, the rest of memory release** (0.5.2): idle and pause releases, keeping the release lane safe
-  against every in-flight use, and tracking and retiring LM Studio copies Scribe loads. The recording-time readiness
-  check and bounded readying request for managed Ollama and recognized local Ollama or LM Studio endpoints are
-  ported, as is the "Starting local model" indicator state. Only the retention fields on each request are ported;
-  the full memory-release policy remains open.
+- **Models on this PC, the rest of memory release** (0.5.2): Foundry Local cleanup and speech release/reload, and
+  broader LM Studio candidate/configuration ownership reconciliation remain open. Local-app idle/pause release,
+  use barriers, chosen-size load settlement and shorter-retention retirement are integrated and tested headlessly.
+  The recording-time readiness check and bounded readying request are present, as is "Starting local model".
 - Not applicable on macOS: Remote Desktop typing, Windows text size and
   accent contrast, contrast themes, Velopack and Store packaging, performance flags and memory work that is Windows
   code only.
@@ -291,7 +291,7 @@ copy/toggle/saved notices and recording-time microphone selection warnings are s
 the existing window; the body names the relevant page, rather than introducing a second Settings navigation API.
 Notification authorization, Do Not Disturb, banner/action delivery, real microphone fallback and permission recovery
 remain real-Mac checks; headless tests prove the decisions, data/privacy boundaries and lifecycle wiring, not OS UI
-delivery. Full idle/pause model memory release and LM Studio copy ownership remain a separate open gap.
+delivery. Foundry/speech memory release and broader LM Studio ownership reconciliation remain separate open gaps.
 
 ## Parity at a glance
 
@@ -346,7 +346,7 @@ microphone, real apps, real Foundry Local or Ollama inference, rendering) is nam
 | Updates | Partial | A manual Check for Updates; no automatic updates (Windows: Velopack and the Microsoft Store). |
 | Packaging and signing | Partial | A locally self-signed app bundle with a stable `Scribe Local Dev` identity for development, a disk image, and a Developer ID release pipeline. Notarization is scripted but has not been run with real credentials. CI builds the app bundle on every push, lints its Info.plist, verifies its signature and runs its library listing from inside the bundle. |
 | Processor architectures | Partial | Apple Silicon is the only documented and CI-tested target; x86_64 support is unverified. Windows ships x64 and Arm64. |
-| Local model memory release | Partial | Recording-time readiness is present, but idle/pause release and ownership-aware retirement of LM Studio copies remain open. |
+| Local model memory release | Partial | Ollama/LM Studio readiness, pause/configuration release, shorter-retention retirement, active-use barriers and retirement of tracked Scribe-loaded LM Studio copies are present. Foundry/speech release, broader candidate ownership reconciliation and live runtime checks remain open. |
 | NPU and GPU selection for cleanup | Not applicable | Foundry Local's service chooses the execution provider, as its SDK does on Windows. |
 | Scenario suite on the speech fixtures | Partial | `ScribeScenarioTests` runs the committed fixtures headlessly through capture, silence, the pipeline and storage with a stand-in recognizer; the real recognizer runs only in the optional, hand-dispatched workflow job, which fits a hosted runner, on the clean short fixtures, without Windows' long-audio, channel-mix and degraded-audio sweeps. |
 

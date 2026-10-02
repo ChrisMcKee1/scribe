@@ -195,18 +195,84 @@ final class LocalModelLifecycleTests: XCTestCase {
         next.end()
     }
 
-    func testShorteningIdleUsesTheOriginalEndOfUse() async throws {
+    func testLengtheningOwnedCopyIdleUsesTheOriginalEndOfUse() async throws {
         let clock = ManualClock()
         let lifecycle = make(clock: clock)
         try await owned(lifecycle, "copy")
         await clock.waitForSleepers(1)
         XCTAssertEqual(clock.durations.last, .seconds(600))
         clock.advance(.seconds(400))
-        lifecycle.setIdle(.seconds(300))
+        lifecycle.setIdle(.seconds(900))
         await clock.waitForSleepers(2)
-        XCTAssertEqual(clock.durations.last, .zero)
+        XCTAssertEqual(clock.durations.last, .seconds(500))
         clock.fire()
         _ = await lifecycle.release(.freeMemory, target: target())
+    }
+
+    func testShorterRetentionFreesAnOrdinaryModelAfterItsUseEnds() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        let lease = try await lifecycle.beginUse(target())
+        lifecycle.setIdle(.seconds(60))
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        XCTAssertTrue(fake.models.isEmpty)
+        lease.end()
+        try await fake.modelStarted.wait()
+        XCTAssertEqual(fake.models, ["m"])
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
+    func testANewerUseWithdrawsShorterRetentionRetirement() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        let first = try await lifecycle.beginUse(target())
+        lifecycle.setIdle(.seconds(60))
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        let newer = try await lifecycle.beginUse(target())
+        first.end()
+        newer.end()
+        // Entering the same lane joins the cancelled retirement before observing its effects.
+        let outcome = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(outcome, .nothingToRelease)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testTurningOnRetentionFreesAnOrdinaryModelKeptWithoutALimit() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        let lease = try await lifecycle.beginUse(target())
+        lease.end()
+        lifecycle.setIdle(.seconds(60))
+        try await fake.modelStarted.wait()
+        XCTAssertEqual(fake.models, ["m"])
+    }
+
+    func testNeverWithdrawsAPendingShorterRetentionRetirement() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        let lease = try await lifecycle.beginUse(target())
+        lifecycle.setIdle(.seconds(60))
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        lifecycle.setIdle(.zero)
+        lease.end()
+        _ = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testLengtheningOrdinaryModelRetentionDoesNotUnloadIt() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let lease = try await lifecycle.beginUse(target())
+        lease.end()
+        lifecycle.setIdle(.seconds(900))
+        _ = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertTrue(fake.models.isEmpty)
     }
 
     private func target(_ model: String = "m", key: String? = nil) -> LocalModelTarget {
@@ -418,9 +484,8 @@ final class LocalModelLifecycleTests: XCTestCase {
         for _ in 0..<50 { await Task.yield() }
         XCTAssertEqual(lifecycle.ownedCopies.count, 1, "zero is never")
         lifecycle.setIdle(.seconds(60))
-        await clock.waitForSleepers(1)
-        clock.fire()
-        for _ in 0..<500 where lifecycle.ownedCopies.count > 0 { await Task.yield() }
+        try await fake.modelStarted.wait()
+        _ = await lifecycle.release(.shutdown, target: nil)
         XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
     }
 
