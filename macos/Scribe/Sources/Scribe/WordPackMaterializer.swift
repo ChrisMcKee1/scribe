@@ -1,8 +1,16 @@
 import Foundation
 
 enum WordPackMaterializer {
+    private static let lane = WordPackMaterializationLane()
+
     /// Pending images are idempotent. An outside edit is never overwritten; its pack remains held back for review.
     static func recover(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
+        try await lane.run(root: service.librariesDirectory) {
+            try await recoverInLane(store: store, service: service)
+        }
+    }
+
+    private static func recoverInLane(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
         guard let raw = try await store.loadStringSetting(key: WordPackJournal.key) else { return true }
         guard let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
         else {
@@ -10,7 +18,12 @@ enum WordPackMaterializer {
         }
         do {
             // A rollback build cannot read redo. Keep affected packs off in its projection until every image is installed.
-            let affected = Set(journal.affectedIDs.map { $0.lowercased() })
+            let physicalIDs = journal.images.filter {
+                !$0.relativePath.contains("/") && $0.relativePath.hasSuffix(".csv")
+            }.map {
+                URL(fileURLWithPath: $0.relativePath).deletingPathExtension().lastPathComponent.lowercased()
+            }
+            let affected = Set(journal.affectedIDs.map { $0.lowercased() } + physicalIDs)
             service.settings.enabledLibraryIds = service.settings.enabledLibraryIds.filter {
                 !affected.contains($0.lowercased())
             }
@@ -48,6 +61,12 @@ enum WordPackMaterializer {
 
     static func preserveOutsideChanges(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool
     {
+        try await lane.run(root: service.librariesDirectory) {
+            try await preserveInLane(store: store, service: service)
+        }
+    }
+
+    private static func preserveInLane(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
         guard let raw = try await store.loadStringSetting(key: WordPackJournal.key),
             let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
         else { return false }
@@ -61,6 +80,29 @@ enum WordPackMaterializer {
                     let archive = "conflicts/\(UUID().uuidString)/\(image.relativePath)"
                     _ = try safeURL(root: service.librariesDirectory, relativePath: archive)
                     images.append(WordPackFileImage(relativePath: archive, expectedHash: nil, data: current))
+                }
+
+                /// Actor reentrancy alone does not order file installation and the legacy projection across SQLite awaits.
+                private actor WordPackMaterializationLane {
+                    private var tails: [String: (UUID, Task<Void, Never>)] = [:]
+
+                    func run<T: Sendable>(
+                        root: URL, operation: @escaping @Sendable () async throws -> T
+                    ) async throws -> T {
+                        let key = root.standardizedFileURL.resolvingSymlinksInPath().path
+                        let previous = tails[key]?.1
+                        let id = UUID()
+                        let task = Task {
+                            await previous?.value
+                            return try await operation()
+                        }
+                        let tail = Task { _ = try? await task.value }
+                        tails[key] = (id, tail)
+                        defer {
+                            if tails[key]?.0 == id { tails.removeValue(forKey: key) }
+                        }
+                        return try await task.value
+                    }
                 }
                 images.append(
                     WordPackFileImage(relativePath: image.relativePath, expectedHash: hash, data: image.data))
@@ -104,13 +146,13 @@ enum WordPackMaterializer {
                 !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains(":") && !$0.contains("\0")
             })
         else { throw WordPackError.unsafePath }
-        var url = root.standardizedFileURL
+        var url = root
         var ancestors = [url]
         while url.path != "/" {
             url.deleteLastPathComponent()
             ancestors.append(url)
         }
-        url = root.standardizedFileURL
+        url = root
         for component in components {
             url.appendPathComponent(component)
             ancestors.append(url)

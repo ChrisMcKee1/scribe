@@ -73,14 +73,15 @@ final class LibraryCompositionGoldenTests: XCTestCase {
                 return first + ", library writes \"\($0.written)\", named \"\($0.sourceName)\""
             }
         XCTAssertEqual(report, try golden.requiredSection("\(scenario): Save prompt report"))
-        let vocabulary = CleanupPrompt.composeVocabulary(dictionary, composition.aiEntries)
+        let vocabulary = CleanupPrompt.composeVocabulary(dictionary.filter(\.enabled), composition.aiEntries)
         for (suffix, budget) in [
             ("AI cleanup glossary, on-device", 80), ("AI cleanup glossary, cloud", 5_000),
             ("AI cleanup glossary, cut at 6 terms", 6),
         ] {
             if let expected = golden["\(scenario): \(suffix)"] {
-                XCTAssertEqual(
-                    CleanupPrompt.buildGlossary(vocabulary, maxTerms: budget), expected.joined(separator: "\n"))
+                // The Mac's model-facing preamble is intentionally different; vocabulary lines still match exactly.
+                let rendered = CleanupPrompt.buildGlossary(vocabulary, maxTerms: budget)
+                XCTAssertEqual(Array(rendered.components(separatedBy: "\n").dropFirst()), Array(expected.dropFirst()))
             }
         }
         var effective: [(DictionaryEntry, String)] = []
@@ -91,6 +92,12 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         for rule in composition.rules where seen.insert(rule.key).inserted {
             effective.append((rule.entry, rule.libraryId))
         }
+        var sourceByLine: [String: String] = [:]
+        for (entry, source) in effective {
+            if let line = CleanupPrompt.glossaryLines([entry]).first {
+                sourceByLine[line.key] = sourceByLine[line.key] ?? source
+            }
+        }
         if let expected = golden["\(scenario): every effective rule"] {
             XCTAssertEqual(effective.map { "\($0.0.pattern) => \($0.0.replacement) [\($0.1)]" }, expected)
         }
@@ -100,9 +107,7 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         for (suffix, budget) in [("on-device glossary's 80 lines", 80), ("cloud glossary's included lines", 5_000)] {
             if let expected = golden["\(scenario): sources of the \(suffix)"] {
                 let included = CleanupPrompt.glossaryLines(vocabulary, maxTerms: budget, maxCharacters: 24_000)
-                let sources = included.compactMap { line in
-                    effective.first { CleanupPrompt.glossaryLines([$0.0]).first?.key == line.key }?.1
-                }
+                let sources = included.compactMap { sourceByLine[$0.key] }
                 XCTAssertEqual([summarize(sources)], expected, scenario)
             }
         }
@@ -111,9 +116,7 @@ final class LibraryCompositionGoldenTests: XCTestCase {
             let included = CleanupPrompt.glossaryLines(vocabulary, maxTerms: 5_000, maxCharacters: 24_000)
             let cut = Array(all.dropFirst(included.count))
             XCTAssertEqual(["\(cut.count) of \(all.count) eligible lines cut"], expected)
-            let sources = cut.compactMap { line in
-                effective.first { CleanupPrompt.glossaryLines([$0.0]).first?.key == line.key }?.1
-            }
+            let sources = cut.compactMap { sourceByLine[$0.key] }
             XCTAssertEqual(
                 [summarize(sources)],
                 try golden.requiredSection("\(scenario): lines past the cloud glossary's 24,000 characters, by library")
@@ -123,13 +126,19 @@ final class LibraryCompositionGoldenTests: XCTestCase {
             "\(scenario): shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form"
         if let expected = golden[displacedName] {
             let legacy = CleanupPrompt.composeVocabulary(
-                dictionary, DictionaryLibraryComposer.composeLibraries(composition.enabledLibraries))
+                dictionary.filter(\.enabled), DictionaryLibraryComposer.composeLibraries(composition.enabledLibraries))
             let legacyLines = CleanupPrompt.glossaryLines(legacy, maxTerms: 80, maxCharacters: 24_000)
+            var legacyByLine: [String: DictionaryEntry] = [:]
+            for entry in legacy {
+                if let line = CleanupPrompt.glossaryLines([entry]).first {
+                    legacyByLine[line.key] = legacyByLine[line.key] ?? entry
+                }
+            }
             let localLines = Set(
                 CleanupPrompt.glossaryLines(vocabulary, maxTerms: 80, maxCharacters: 24_000).map(\.key))
             let displaced = legacyLines.compactMap { line -> String? in
                 guard !localLines.contains(line.key),
-                    let entry = legacy.first(where: { CleanupPrompt.glossaryLines([$0]).first?.key == line.key }),
+                    let entry = legacyByLine[line.key],
                     !dictionary.contains(where: { $0.enabled && LibraryTermKey.areSame($0.pattern, entry.pattern) }),
                     composition.enabledLibraries.first(where: { library in
                         library.entries.contains {

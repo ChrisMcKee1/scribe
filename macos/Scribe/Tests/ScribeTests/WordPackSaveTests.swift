@@ -308,6 +308,29 @@ final class WordPackSaveTests: XCTestCase {
         XCTAssertTrue(workspace.hasUnsavedChanges)
         XCTAssertTrue(workspace.draft.find(id)!.pendingDelete)
     }
+
+    func testConcurrentCatalogLoadsSerializeRestartRecovery() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        var workspace = WordPackWorkspace(catalog: try await fixture.service.loadCatalog())
+        let id = try workspace.createLibrary()
+        _ = workspace.rename(id, name: "Concurrent recovery")
+        _ = workspace.addTerm(id, values: TermValues("term", "Term"))
+        let prepared = try await fixture.coordinator.prepare(XCTUnwrap(workspace.captureChangeSet().changeSet))
+        try await fixture.store.commitSettingsParticipants([prepared.participant])
+        let service = fixture.service
+        let catalogs = try await withThrowingTaskGroup(of: LibraryCatalog.self) { group in
+            for _ in 0..<8 { group.addTask { try await service.loadCatalog() } }
+            var results: [LibraryCatalog] = []
+            for try await catalog in group { results.append(catalog) }
+            return results
+        }
+        XCTAssertEqual(catalogs.count, 8)
+        XCTAssertTrue(catalogs.allSatisfy { $0.generation == prepared.journal.generation })
+        XCTAssertTrue(catalogs.allSatisfy { $0.find(id: id)?.library.entries.first?.replacement == "Term" })
+        XCTAssertTrue(fixture.service.settings.enabledLibraryIds.contains(id))
+        XCTAssertNil(try fixture.store.readStringSetting(key: WordPackJournal.key))
+    }
 }
 
 private func expectEqual<T: Equatable>(_ value: T, _ expected: T, file: StaticString = #filePath, line: UInt = #line) {

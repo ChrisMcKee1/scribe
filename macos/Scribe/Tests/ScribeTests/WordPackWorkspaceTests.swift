@@ -98,6 +98,36 @@ final class WordPackWorkspaceTests: XCTestCase {
         XCTAssertTrue(workspace.hasUnsavedChanges)
     }
 
+    func testLegacyMarkerOnlyDemotesWhenTheBuiltInActuallyCompetes() throws {
+        var workspace = Self.workspace()
+        let original = workspace.committed.libraries[0]
+        let builtin = DictionaryLibrary(
+            id: "github", name: "GitHub", category: "Built-in", description: nil,
+            builtIn: true, entries: [TermValues("get hub", "Built-in").dictionaryEntry])
+        var local = workspace.localState
+        local.legacyMarkers = [LegacyMarker(libraryId: "team", key: "get hub")]
+        local.setEnabled(true, for: "github")
+        let custom = DictionaryLibrary(
+            id: original.id, name: original.library.name, category: original.library.category,
+            description: nil, builtIn: false, entries: original.library.entries,
+            fileName: original.fileName, legacyMarkedKeys: [LibraryTermKey.from("get hub")])
+        let items = [
+            CatalogLibrary(
+                library: custom, state: .available, contentHash: original.contentHash, origin: .existing,
+                edits: nil, previousEditsAvailable: false, readErrorCount: 0),
+            CatalogLibrary(
+                library: builtin, state: .available, contentHash: nil, origin: .existing,
+                edits: nil, previousEditsAvailable: false, readErrorCount: 0),
+        ]
+        let active = WordPackComposition.compose(LibraryCatalog(generation: 1, libraries: items, localState: local))
+        XCTAssertEqual(active.entries.first { $0.pattern == "get hub" }?.replacement, "Built-in")
+        local.setEnabled(false, for: "github")
+        let inactive = WordPackComposition.compose(LibraryCatalog(generation: 1, libraries: items, localState: local))
+        XCTAssertEqual(inactive.rules.map(\.entry.pattern), ["kube", "get hub"])
+        workspace.reload(LibraryCatalog(generation: 1, libraries: items, localState: local), deleted: [])
+        XCTAssertEqual(workspace.rowsOf("team").count, 2)
+    }
+
     static func workspace() -> WordPackWorkspace {
         let values = [TermValues("kube", "Kubernetes"), TermValues("get hub", "GitHub")]
         let library = DictionaryLibrary(

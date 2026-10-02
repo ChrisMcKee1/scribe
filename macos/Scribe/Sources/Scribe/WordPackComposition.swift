@@ -11,13 +11,20 @@ enum WordPackComposition {
                 id: $0.id, builtIn: $0.builtIn, fileName: $0.fileName,
                 otherID: $1.id, otherBuiltIn: $1.builtIn, otherFileName: $1.fileName) < 0
         }
+        let builtInRows = Dictionary(
+            grouping: active.filter(\.builtIn).flatMap { $0.library.entries.filter(\.enabled) }
+        ) { LibraryTermKey.from($0.pattern) }
         var tiers: [RuleTier: [ComposedLibraryRule]] = [:]
         for item in active {
             for entry in item.library.entries where entry.enabled {
                 let key = LibraryTermKey.from(entry.pattern)
                 guard !key.isEmpty else { continue }
+                let markerActive = item.library.legacyMarkedKeys.contains(key)
+                    && (builtInRows[key] ?? []).contains {
+                        $0.replacement != entry.replacement || $0.wholeWord != entry.wholeWord
+                    }
                 let tier: RuleTier =
-                    item.library.legacyMarkedKeys.contains(key)
+                    markerActive
                     ? .legacy
                     : (!item.builtIn || item.library.authoredKeys.contains(key) ? .authored : .shipped)
                 tiers[tier, default: []].append(
