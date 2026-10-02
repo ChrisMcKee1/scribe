@@ -128,10 +128,10 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
 
     func testPromptCachingOffAddsExplicitModeToTheBody() async throws {
         let log = RequestLog()
-        let provider = makeProvider(promptCachingEnabled: { false }) { request in
+        let provider = makeProvider(promptCachingEnabled: { false }, { request in
             log.record(request)
             return StubReply.completion(request, "Cleaned text.")
-        }
+        })
 
         _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
 
@@ -141,13 +141,13 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
 
     func testPromptCachingOffNeverRetriesWithoutTheField() async throws {
         let log = RequestLog()
-        let provider = makeProvider(promptCachingEnabled: { false }) { request in
+        let provider = makeProvider(promptCachingEnabled: { false }, { request in
             log.record(request)
             return StubReply.json(
                 request,
                 status: 400,
                 #"{"error":{"message":"prompt_cache_options is not supported on this deployment."}}"#)
-        }
+        })
 
         let error = try await cleanupFailure(of: provider)
 

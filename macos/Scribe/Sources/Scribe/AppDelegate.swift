@@ -480,7 +480,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 recentTranscripts: recent,
                 existing: existing,
                 onSave: { [weak self] result in self?.handleQuickAddSaved(result) },
-                onClose: { [weak self] in self?.quickAddWindowController?.close() },
+                onClose: { [weak self] in
+                    self?.quickAddWindowController?.close()
+                    self?.quickAddWindowController = nil
+                },
                 persistAction: { [weak self] result in
                     guard let self else {
                         throw QuickAddPersistError.noPersistAction
@@ -530,16 +533,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return saved
     }
 
-    /// After a successful save: refreshes the rules so the new one takes effect on the next dictation, repairs the
-    /// retained copy of the transcript the correction came from, and closes the popup. The log says only that a
-    /// rule was saved: rules are dictated content.
+    /// After a successful save: refreshes the rules so the new one takes effect on the next dictation and repairs the
+    /// retained copy of the transcript the correction came from. The popup decides whether this save closes it.
+    /// The log says only that a rule was saved: rules are dictated content.
     private func handleQuickAddSaved(_ result: QuickAddView.SavedResult) {
         refreshPostProcessorRules()
         if let source = result.sourceTranscript, let corrected = result.correctedTranscript {
             lastTranscriptStore.update(original: source, updated: corrected)
         }
         ScribeLog.info(.settings, "Saved a dictionary rule from Quick Add")
-        quickAddWindowController?.close()
     }
 
     /// Shows the one-time welcome window (non-modally, so the tray and dictation stay live behind it), then persists

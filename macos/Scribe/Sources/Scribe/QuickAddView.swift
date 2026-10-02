@@ -15,15 +15,16 @@ struct QuickAddView: View {
     /// (nil when the rule did not change this particular transcript).
     struct SavedResult {
         let entry: DictionaryEntry
+        let savedEntries: [DictionaryEntry]
         let sourceTranscript: String?
         let correctedTranscript: String?
     }
 
-    let recentTranscripts: [String]
-    let existing: [DictionaryEntry]
     let onSave: (SavedResult) -> Void
     let onClose: () -> Void
 
+    @State private var recentTranscripts: [String]
+    @State private var existing: [DictionaryEntry]
     @State private var selectedTranscriptIndex = 0
     @State private var selection: QuickDictionaryAdd.WordRange = .none
     @State private var forms = [""]
@@ -31,6 +32,20 @@ struct QuickAddView: View {
     @State private var wholeWord = true
     @State private var errorMessage: String?
     @State private var isSaving = false
+
+    init(
+        recentTranscripts: [String],
+        existing: [DictionaryEntry],
+        onSave: @escaping (SavedResult) -> Void,
+        onClose: @escaping () -> Void,
+        persistAction: (@MainActor (DictionaryWordEditor.Result) async throws -> [DictionaryEntry])? = nil
+    ) {
+        self.onSave = onSave
+        self.onClose = onClose
+        self.persistAction = persistAction
+        _recentTranscripts = State(initialValue: recentTranscripts)
+        _existing = State(initialValue: existing)
+    }
 
     private var transcript: String {
         recentTranscripts.indices.contains(selectedTranscriptIndex) ? recentTranscripts[selectedTranscriptIndex] : ""
@@ -145,10 +160,13 @@ struct QuickAddView: View {
                 Spacer()
                 Button("Cancel", action: onClose)
                     .accessibilityLabel("Cancel")
-                Button(saveButtonTitle) { save() }
+                Button("Save") { save(closeAfterSave: false) }
+                    .disabled(!editorResult.canSave || plan.kind == .invalid || isSaving)
+                    .accessibilityLabel("Save")
+                Button("Save and close") { save(closeAfterSave: true) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!editorResult.canSave || plan.kind == .invalid || isSaving)
-                    .accessibilityLabel(saveButtonTitle)
+                    .accessibilityLabel("Save and close")
             }
 
             if let errorMessage {
@@ -159,15 +177,11 @@ struct QuickAddView: View {
         .frame(minWidth: 420, idealWidth: 460)
     }
 
-    private var saveButtonTitle: String {
-        editorResult.editedEntry != nil ? "Update Rule" : "Save"
-    }
-
     private func isSelected(_ index: Int) -> Bool {
         !selection.isEmpty && index >= selection.first && index <= selection.last
     }
 
-    private func save() {
+    private func save(closeAfterSave: Bool) {
         guard editorResult.canSave, !isSaving else { return }
 
         let sourceTranscript = transcript.isEmpty ? nil : transcript
@@ -184,11 +198,24 @@ struct QuickAddView: View {
                     throw QuickAddPersistError.noPersistAction
                 }
                 let corrected = sourceTranscript.map { QuickDictionaryAdd.apply($0, entry: saved) }
+                let refreshedTranscript = corrected ?? sourceTranscript
+                if let refreshedTranscript, recentTranscripts.indices.contains(selectedTranscriptIndex) {
+                    recentTranscripts[selectedTranscriptIndex] = refreshedTranscript
+                }
+                merge(savedEntries)
+                selection = .none
+                forms = [""]
+                written = ""
+                wholeWord = true
                 onSave(
                     SavedResult(
                         entry: saved,
+                        savedEntries: savedEntries,
                         sourceTranscript: sourceTranscript,
                         correctedTranscript: (corrected != sourceTranscript) ? corrected : nil))
+                if closeAfterSave {
+                    onClose()
+                }
             } catch {
                 errorMessage = "Couldn't save that rule: \(error.localizedDescription)"
             }
@@ -211,6 +238,16 @@ struct QuickAddView: View {
         Binding(
             get: { forms[index] },
             set: { forms[index] = $0 })
+    }
+
+    private func merge(_ savedEntries: [DictionaryEntry]) {
+        for saved in savedEntries {
+            if let index = existing.firstIndex(where: { $0.id == saved.id }) {
+                existing[index] = saved
+            } else {
+                existing.append(saved)
+            }
+        }
     }
 }
 
