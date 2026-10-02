@@ -39,7 +39,8 @@ struct WordPackJournal: Codable, Equatable, Sendable {
     }
 }
 
-/// All I/O is off the view model. Prepare writes nothing; abort therefore changes nothing.
+/// All I/O is off the view model. Prepare never applies the draft; abort discards only the prepared value.
+/// Catalog adoption and recovery can still settle previously committed content before preparation.
 /// A committed redo record is never aborted, including when its file installation could not finish.
 actor WordPackSaveCoordinator {
     let store: PersistenceStore

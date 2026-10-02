@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum WordPackMaterializer {
@@ -119,6 +120,7 @@ enum WordPackMaterializer {
     }
 
     static func safeURL(root: URL, relativePath: String) throws -> URL {
+        guard root.isFileURL, root.path.hasPrefix("/") else { throw WordPackError.unsafePath }
         let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard !components.isEmpty,
             components.allSatisfy({
@@ -137,11 +139,19 @@ enum WordPackMaterializer {
             ancestors.append(url)
         }
         for ancestor in ancestors {
-            do {
-                let values = try ancestor.resourceValues(forKeys: [.isSymbolicLinkKey])
-                guard values.isSymbolicLink != true else { throw WordPackError.unsafePath }
-            } catch let error as NSError {
-                guard error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError else { throw error }
+            let path = ancestor.path(percentEncoded: false)
+            var info = stat()
+            guard lstat(path, &info) == 0 else {
+                if errno == ENOENT { continue }
+                throw WordPackError.unsafePath
+            }
+            if info.st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK) {
+                // Foundation reintroduces macOS' root aliases even after resolving a per-user scratch path.
+                // Only the root-owned OS aliases are allowed, with their exact system destinations.
+                let target = try FileManager.default.destinationOfSymbolicLink(atPath: path)
+                let systemAlias = ["/var", "/tmp", "/etc"].contains(path)
+                    && ["/private\(path)", "private\(path)"].contains(target)
+                guard systemAlias else { throw WordPackError.unsafePath }
             }
         }
         return url
