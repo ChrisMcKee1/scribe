@@ -270,8 +270,10 @@ final class TranscriptionEngineTests: XCTestCase {
             printf '{"text":"part%s"}\\n' "$count"
             """, in: directory)
         let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
-        let samples = (0..<(65 * 16_000)).map { index in
-            Float((index * 37 % 2_003) - 1_001) / 1_001
+        let sampleCount: Int = 65 * 16_000
+        let samples: [Float] = (0..<sampleCount).map { (index: Int) -> Float in
+            let numerator: Int = (index * 37 % 2_003) - 1_001
+            return Float(numerator) / Float(1_001)
         }
         let expectedSpans = TranscriptionChunker.plan(samples: samples, sampleRate: 16_000)
 

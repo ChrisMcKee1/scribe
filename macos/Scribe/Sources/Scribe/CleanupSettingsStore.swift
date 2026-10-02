@@ -109,7 +109,7 @@ struct CleanupSettingsStore: Sendable {
         static let azureDeployment = "ScribeCleanupAzureDeployment"
         static let azurePromptCaching = "ScribeCleanupAzurePromptCaching"
         static let azureAuthMode = "ScribeCleanupAzureAuthMode"
-        static let azureApiKeySelected = "ScribeCleanupAzureApiKeySelected"
+        static let azureCredentialSelected = "ScribeCleanupAzureApiKeySelected"
         static let azureTenantId = "ScribeCleanupAzureTenantId"
         static let azureClientId = "ScribeCleanupAzureClientId"
         static let writingStyle = "ScribeCleanupWritingStyle"
@@ -286,8 +286,8 @@ struct CleanupSettingsStore: Sendable {
     }
 
     var azureApiKeySelected: Bool {
-        get { defaults.bool(forKey: Key.azureApiKeySelected) }
-        nonmutating set { defaults.set(newValue, forKey: Key.azureApiKeySelected) }
+        get { defaults.bool(forKey: Key.azureCredentialSelected) }
+        nonmutating set { defaults.set(newValue, forKey: Key.azureCredentialSelected) }
     }
 
     var azureTenantId: String {
@@ -346,7 +346,7 @@ struct CleanupSettingsStore: Sendable {
             azureDeployment: defaults.string(forKey: Key.azureDeployment) ?? "",
             azurePromptCaching: (defaults.object(forKey: Key.azurePromptCaching) as? Bool) ?? true,
             azureAuthMode: Self.azureAuthMode(in: defaults),
-            azureApiKeySelected: defaults.bool(forKey: Key.azureApiKeySelected),
+            azureApiKeySelected: defaults.bool(forKey: Key.azureCredentialSelected),
             azureTenantId: defaults.string(forKey: Key.azureTenantId) ?? "",
             azureClientId: defaults.string(forKey: Key.azureClientId) ?? "",
             writingStyle: defaults.string(forKey: Key.writingStyle) ?? "",
