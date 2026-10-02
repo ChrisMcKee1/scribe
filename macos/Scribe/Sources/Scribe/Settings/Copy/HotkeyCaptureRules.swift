@@ -54,9 +54,11 @@ enum HotkeyCaptureRules {
         (toggle ? "Press " : "Hold ") + name(keyCode)
     }
 
-    /// Whether `keyCode` can be a shortcut, and what to say about it.
-    static func evaluate(_ keyCode: UInt16) -> Verdict {
-        let key = name(keyCode)
+    /// Whether `keyCode` can be a shortcut, and what to say about it. `typed` is the character the key types on the
+    /// current layout, which names a printable key in a refusal.
+    static func evaluate(_ keyCode: UInt16, typed: String? = nil) -> Verdict {
+        let character = typed?.trimmingCharacters(in: .whitespaces) ?? ""
+        let key = isPrintable(keyCode) && !character.isEmpty ? character.uppercased() : name(keyCode)
         let copy = SettingsCopy.shortcut
         if keyCode == escape {
             return .refused(copy.cancel.render())
