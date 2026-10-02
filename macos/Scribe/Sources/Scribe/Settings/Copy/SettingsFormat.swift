@@ -54,4 +54,3 @@ enum SettingsFormat {
         return names.formatted(.list(type: .and, width: .standard).locale(locale))
     }
 }
-
