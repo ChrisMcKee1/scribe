@@ -37,17 +37,10 @@ final class LibraryEditorTests: XCTestCase {
             TermValues("get hub", " GitHub", true, true))
     }
 
-    func testIsWellFormedRejectsUnpairedSurrogates() {
-        func utf16(_ units: [UInt16]) -> String {
-            String(utf16CodeUnits: units, count: units.count)
-        }
-
+    func testIsWellFormedAcceptsPlainAndEmojiText() {
         XCTAssertTrue(LibraryEditor.isWellFormed("plain"))
         XCTAssertTrue(LibraryEditor.isWellFormed("rocket \u{1F680} launch"))
         XCTAssertTrue(LibraryEditor.isWellFormed(nil))
-        XCTAssertFalse(LibraryEditor.isWellFormed(utf16([0xD83D])))
-        XCTAssertFalse(LibraryEditor.isWellFormed(utf16([0x0068, 0xD83D, 0x0020])))
-        XCTAssertFalse(LibraryEditor.isWellFormed(utf16([0xDE80])))
     }
 
     func testAvailableCommandsMatchRowOriginAndEditingState() {

@@ -57,7 +57,8 @@ struct LibrarySearch: Sendable {
             options: [.caseInsensitive, .diacriticInsensitive],
             range: nil,
             locale: locale
-        ) == .orderedSame
+        )
+            == .orderedSame
         return emptyLike ? "" : trimmed
     }
 
@@ -67,8 +68,9 @@ struct LibrarySearch: Sendable {
             return false
         }
         let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-        return values.spoken.range(of: normalized, options: options, range: nil, locale: locale) != nil
-            || values.written.range(of: normalized, options: options, range: nil, locale: locale) != nil
+        let spokenMatches = values.spoken.range(of: normalized, options: options, range: nil, locale: locale) != nil
+        let writtenMatches = values.written.range(of: normalized, options: options, range: nil, locale: locale) != nil
+        return spokenMatches || writtenMatches
     }
 
     func search(_ workspace: LibraryWorkspace, query: String?) -> LibrarySearchResult {

@@ -71,17 +71,16 @@ enum LibraryDeciderTestSupport {
             ansiFallback: false,
             invalidBytesReplaced: false)
     ) -> (LibraryCsvDocument, String?) {
-        (
-            LibraryCsvDocument(
-                name: name,
-                category: nil,
-                description: nil,
-                basedOn: basedOn,
-                terms: terms,
-                errors: errors,
-                encoding: encoding,
-                formulaGuardVersion: nil,
-                issues: .none),
-            fileName)
+        let document = LibraryCsvDocument(
+            name: name,
+            category: nil,
+            description: nil,
+            basedOn: basedOn,
+            terms: terms,
+            errors: errors,
+            encoding: encoding,
+            formulaGuardVersion: nil,
+            issues: .none)
+        return (document, fileName)
     }
 }

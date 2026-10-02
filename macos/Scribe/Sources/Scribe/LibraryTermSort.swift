@@ -72,7 +72,12 @@ struct LibraryTermSort: Sendable {
             result = first.compare(second, options: [], range: nil, locale: locale).threeWay
         }
         if result == 0 {
-            result = otherFirst.compare(otherSecond, options: [], range: nil, locale: locale).threeWay
+            result = otherFirst.compare(
+                otherSecond,
+                options: [],
+                range: nil,
+                locale: locale
+            ).threeWay
         }
         return descending ? -result : result
     }
