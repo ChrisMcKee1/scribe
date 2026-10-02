@@ -51,6 +51,7 @@ enum SettingsSearchIndex {
     static let omissions: [SettingsSearchOmission] = [
         SettingsSearchOmission(id: "ai.copilot.model", because: .copilotUnavailable),
         SettingsSearchOmission(id: "advanced.accent", because: .windowsOnly),
+        SettingsSearchOmission(id: "history.recordings", because: .macBehaviour),
     ]
 
     /// Mac entries Windows does not have, with why.
@@ -250,8 +251,6 @@ enum SettingsSearchIndex {
                 "profiles.page", .appProfiles, SettingsCopy.appProfiles.title,
                 ["profile", "per app", "program", "process", "writing style", "line breaks"]),
             entry("history.keep", .history, SettingsCopy.history.keep, ["retention", "delete", "days"]),
-            entry(
-                "history.recordings", .history, SettingsCopy.history.saveRecording, ["audio", "recording", "history"]),
             entry("usage.period", .usage, SettingsCopy.usage.period, ["usage", "range", "statistics"]),
             entry(
                 "advanced.speech-model", .advanced, a.speechModel, ["model", "recognition", "parakeet", "moonshine"]),

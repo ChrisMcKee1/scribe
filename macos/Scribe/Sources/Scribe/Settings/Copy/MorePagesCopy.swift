@@ -99,8 +99,7 @@ struct DiagnosticsCopy: CopyCatalog {
     let supportDetails = CopyItem.added("diagnostics.supportDetails", "Copy support details")
     let supportDetailsHint = CopyItem.added(
         "diagnostics.supportDetailsHint",
-        "Copies your Scribe and macOS versions, your settings choices and your recent timings. It never contains your "
-            + "dictations.")
+        "Copies your Scribe and macOS versions, your settings choices and your recent timings, to attach to a report.")
     let console = CopyItem.added("diagnostics.console", "Open Console")
     let consoleHint = CopyItem.added(
         "diagnostics.consoleHint",
@@ -192,11 +191,6 @@ struct AboutCopy: CopyCatalog {
         because: .thisMac)
     let privacyLink = CopyItem.same("about.privacyLink", "Read the privacy policy")
     let feedback = CopyItem.same("about.feedback", "Feedback")
-    let reportResult = CopyItem.same("about.reportResult", "Report an AI result...")
-    let reportResultHint = CopyItem.same(
-        "about.reportResultHint",
-        "If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it "
-            + "first. Scribe sends nothing by itself. You can also report a result from History.")
     let support = CopyItem.same("about.support", "Support Scribe")
     let star = CopyItem.same("about.star", "Star Scribe on GitHub")
     let starHint = CopyItem.same(

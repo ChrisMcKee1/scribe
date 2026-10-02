@@ -65,7 +65,7 @@ struct AiCleanupCopy: CopyCatalog {
         "Install Foundry Local once with brew install microsoft/foundrylocal/foundrylocal in Terminal.")
     let nothingDownloads = CopyItem.changed(
         "aiCleanup.nothingDownloads",
-        "Scribe downloads nothing itself. Foundry Local downloads the model the first time you use it.",
+        "Foundry Local downloads the model the first time you use it.",
         windows: "Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere "
             + "else for AI cleanup removes what Scribe downloaded for it.",
         because: .staleWindowsCorrected)

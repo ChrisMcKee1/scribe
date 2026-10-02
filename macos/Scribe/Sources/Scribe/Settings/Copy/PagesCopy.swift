@@ -89,14 +89,10 @@ struct HistoryCopy: CopyCatalog {
     let keep90 = CopyItem.same("history.keep90", "For 90 days (default)")
     let keepYear = CopyItem.same("history.keepYear", "For 1 year")
     let keepAlways = CopyItem.same("history.keepAlways", "Until I delete them")
-    let saveRecording = CopyItem.same("history.saveRecording", "Save a recording with each dictation")
-    let saveRecordingHint = CopyItem.changed(
-        "history.saveRecordingHint",
-        "Keeps the audio of each dictation on this Mac for up to 7 days (250 MB in total), then deletes it. Scribe "
-            + "doesn't play recordings back.",
-        windows: "Keeps the audio of each dictation on this PC for up to 7 days (250 MB in total), then deletes it. "
-            + "Scribe doesn't play recordings back.",
-        because: .thisMac)
+    let noRecordings = CopyItem.added(
+        "history.noRecordings",
+        "Scribe doesn't keep recordings. Audio is discarded as soon as it has been turned into text.",
+        because: .macBehaviour)
     let find = CopyItem.same("history.find", "Find a dictation")
     let copy = CopyItem.same("history.copy", "Copy")
     let delete = CopyItem.same("history.delete", "Delete...")
@@ -113,7 +109,6 @@ struct HistoryCopy: CopyCatalog {
     let notUseful = CopyItem.same("history.notUseful", "Not useful")
     let usefulSelected = CopyItem.same("history.usefulSelected", "Useful, selected")
     let notUsefulSelected = CopyItem.same("history.notUsefulSelected", "Not useful, selected")
-    let report = CopyItem.same("history.report", "Report an AI cleanup problem...")
     let ratingFailed = CopyItem.same("history.ratingFailed", "Couldn't save that rating. Try again.")
     let copied = CopyItem.same("history.copied", "Copied the selected dictation.")
     let copyFailed = CopyItem.same("history.copyFailed", "Couldn't copy the dictation. Try again.")
@@ -172,4 +167,12 @@ struct UsageCopy: CopyCatalog {
     let aiSummary = CopyItem.same("usage.aiSummary", "AI summary")
     let getSummary = CopyItem.same("usage.getSummary", "Get summary")
     let summaryFailed = CopyItem.added("usage.summaryFailed", "The AI service returned no usable summary.")
+    let summarySends = CopyItem.added(
+        "usage.summarySends",
+        "Sends only your totals and the names of dictionary words that came up to the AI service you chose for AI "
+            + "cleanup. Your dictations, words that are not in your dictionary, and replacements that are templates, "
+            + "such as a signature, are never sent.",
+        because: .macBehaviour)
+    let summaryNeedsCleanup = CopyItem.added(
+        "usage.summaryNeedsCleanup", "Available only while AI cleanup is on.", because: .macBehaviour)
 }

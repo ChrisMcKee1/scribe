@@ -30,5 +30,12 @@ enum SettingsCopyOmissions {
             windows: "Remote Desktop and virtual machine windows are always typed into",
             because: .windowsOnly),
         CopyOmission(windows: "Windows startup settings", because: .macSystemFeature),
+        CopyOmission(windows: "Save a recording with each dictation", because: .macBehaviour),
+        CopyOmission(windows: "Report an AI result...", because: .macBehaviour),
+        CopyOmission(windows: "Report an AI cleanup problem...", because: .macBehaviour),
+        CopyOmission(windows: "Scribe sends nothing by itself.", because: .macBehaviour),
+        CopyOmission(
+            windows: "Keeps the audio of each dictation on this PC for up to 7 days (250 MB in total)",
+            because: .macBehaviour),
     ]
 }

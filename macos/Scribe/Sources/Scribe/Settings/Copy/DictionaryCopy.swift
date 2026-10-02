@@ -28,7 +28,7 @@ struct DictionaryCopy: CopyCatalog {
     let learn = CopyItem.same("dictionary.learn", "Learn from history")
     let learnTip = CopyItem.changed(
         "dictionary.learnTip",
-        "Suggests words from your recent dictations, found on this Mac. You review every suggestion.",
+        "Suggests words from your recent dictations. You review every suggestion.",
         windows: "Suggests words from your recent dictations. If AI cleanup uses an online service, Scribe asks "
             + "before sending anything.",
         because: .staleWindowsCorrected)
