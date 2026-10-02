@@ -419,7 +419,8 @@ final class LocalServerClient: @unchecked Sendable {
         let response: URLResponse
         let data: Data
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await CleanupHTTP.send(
+                request, session: session, receipt: CleanupSendContext.receipt)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError {

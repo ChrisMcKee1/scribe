@@ -111,10 +111,16 @@ enum CleanupProviderResolver {
     ///   `SCRIBE_AZURE_TENANT_ID`, `SCRIBE_AZURE_CLIENT_ID`: microsoft-foundry config. The client secret always comes
     ///   from the Keychain, saved with `Scribe --set-azure-client-secret <client-id>`, never from the environment.
     static func connection(store: CleanupSettingsStore, environment: [String: String]) throws -> CleanupConnection {
+        try connection(settings: store.snapshot(), environment: environment)
+    }
+
+    static func connection(
+        settings: CleanupSettingsSnapshot, environment: [String: String]
+    ) throws -> CleanupConnection {
         if let providerName = environment["SCRIBE_CLEANUP_PROVIDER"] {
-            return try environmentConnection(providerName, environment: environment, store: store)
+            return try environmentConnection(providerName, environment: environment, settings: settings)
         }
-        return try settingsConnection(store.snapshot())
+        return try settingsConnection(settings)
     }
 
     /// How `makeProvider` comes by the Microsoft Foundry credential for an identity. `make` builds a new one, reading
@@ -204,7 +210,7 @@ enum CleanupProviderResolver {
     // MARK: - Connections
 
     private static func environmentConnection(
-        _ providerName: String, environment: [String: String], store: CleanupSettingsStore
+        _ providerName: String, environment: [String: String], settings: CleanupSettingsSnapshot
     ) throws -> CleanupConnection {
         let source = CleanupConfigurationSource.environment
         switch providerName {
@@ -215,7 +221,7 @@ enum CleanupProviderResolver {
                 authMode: environment["SCRIBE_AZURE_AUTH_MODE"] == "service-principal" ? .servicePrincipal : .azureCli,
                 tenantId: environment["SCRIBE_AZURE_TENANT_ID"],
                 clientId: environment["SCRIBE_AZURE_CLIENT_ID"],
-                secretRevision: store.secretRevision,
+                secretRevision: settings.secretRevision,
                 source: source)
         case "ollama":
             return try ollamaConnection(

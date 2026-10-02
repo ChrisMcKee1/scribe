@@ -244,7 +244,7 @@ struct ChatCompletionsTransport: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await CleanupHTTP.send(request, session: session, receipt: cleanupRequest.receipt)
         } catch {
             throw Self.transportFailure(error)
         }
@@ -306,7 +306,7 @@ struct ChatCompletionsTransport: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await CleanupHTTP.send(request, session: session, receipt: cleanupRequest.receipt)
         } catch {
             throw Self.transportFailure(error)
         }
@@ -381,7 +381,7 @@ struct ChatCompletionsTransport: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await CleanupHTTP.send(request, session: session, receipt: cleanupRequest.receipt)
         } catch {
             throw Self.transportFailure(error)
         }
@@ -416,7 +416,7 @@ struct ChatCompletionsTransport: Sendable {
     /// A failed `URLSession` call as a cleanup failure. A cancelled task stays a `CancellationError`, so a caller can
     /// tell a shutdown from a failure, and a URL error keeps only its code, never the failing URL its user info holds.
     static func transportFailure(_ error: any Error) -> any Error {
-        if error is CancellationError {
+        if error is CancellationError || error is CleanupHoldback {
             return error
         }
         guard let urlError = error as? URLError else {

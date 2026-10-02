@@ -4,6 +4,7 @@ import Foundation
 /// request and is part of no provider's configuration, so a change of writing style or app profile never rebuilds a
 /// provider (see `CleanupProviderCache`).
 struct CleanupRequest: Sendable {
+    let receipt: CleanupRequestReceipt?
     let transcript: String
     /// The whole system prompt, guardrail and writing style (`CleanupPrompt.systemPrompt`).
     let writingStylePrompt: String
@@ -21,20 +22,22 @@ struct CleanupRequest: Sendable {
         writingStylePrompt: String = CleanupPrompt.defaultWritingStyle,
         singleLineMode: Bool = false,
         timeout: TimeInterval? = nil,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        receipt: CleanupRequestReceipt? = nil
     ) {
         self.transcript = transcript
         self.writingStylePrompt = writingStylePrompt
         self.singleLineMode = singleLineMode
         self.timeout = timeout
         self.maxOutputTokens = maxOutputTokens
+        self.receipt = receipt
     }
 
     /// The same request with no output limit.
     func withoutOutputLimit() -> CleanupRequest {
         CleanupRequest(
             transcript: transcript, writingStylePrompt: writingStylePrompt, singleLineMode: singleLineMode,
-            timeout: timeout, maxOutputTokens: nil)
+            timeout: timeout, maxOutputTokens: nil, receipt: receipt)
     }
 }
 
