@@ -88,6 +88,9 @@ jobs:
       - name: App bundle
         if: ${{ !cancelled() && steps.release.outcome == 'success' }}
         run: |
+          # The disposable runner has no dev identity and cannot answer its password prompt.
+          # This protects only a temporary self-signed test identity, not a release certificate.
+          export SCRIBE_KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
           macos/Scribe/scripts/build-app.sh release
           app=macos/Scribe/dist/Scribe.app
           plutil -lint "$app/Contents/Info.plist"
