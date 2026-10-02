@@ -34,6 +34,8 @@ struct CleanupConnection: Hashable, Sendable, CustomStringConvertible, CustomRef
     let target: Target
     let source: CleanupConfigurationSource
     var localModelIdleMinutes = LocalModelDefaults.keepAliveMinutes
+    var localServerApp: LocalServerApp = .none
+    var localContextTokens = 0
 
     var kind: CleanupProviderKind { target.kind }
 
@@ -199,8 +201,8 @@ enum CleanupProviderResolver {
             let localServerApp: LocalServerApp
             if connection.source == .settings {
                 localServerApp =
-                    store.selectedLocalApp != .none
-                    ? store.selectedLocalApp
+                    connection.localServerApp != .none
+                    ? connection.localServerApp
                     : (apiKey == nil ? LocalAiServer.appAt(serviceURL.absoluteString) : .none)
             } else {
                 localServerApp = .none
@@ -214,7 +216,7 @@ enum CleanupProviderResolver {
                 keepAliveMinutes: connection.localModelIdleMinutes,
                 lifecycle: lifecycle ?? factory.localModelLifecycle,
                 localTuning: {
-                    connection.source == .settings ? LocalModelTuning.forSettings(store.snapshot()) : .none
+                    LocalModelTuning(contextTokens: connection.localContextTokens, sendWholeVocabulary: false)
                 },
                 readLocalServer: factory.readLocalServer,
                 session: factory.session)
@@ -303,6 +305,8 @@ enum CleanupProviderResolver {
     private static func settingsConnection(_ settings: CleanupSettingsSnapshot) throws -> CleanupConnection {
         var connection = try settingsTargetConnection(settings)
         connection.localModelIdleMinutes = settings.localModelIdleMinutes
+        connection.localServerApp = settings.selectedLocalApp
+        connection.localContextTokens = LocalModelTuning.forSettings(settings).contextTokens
         return connection
     }
 

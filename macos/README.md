@@ -203,7 +203,10 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   nonzero duration (including turning it on from Never) retires the model held under the old retention after active
   uses finish; a newer use withdraws that retirement and sends the new retention itself. Owned-copy countdowns use
   the end of the last use, not the time the setting changed. New requests wait for a model resize or
-  unload already in progress. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
+  unload already in progress. The next LM Studio request retires tracked copies on that server other than the copy
+  its requests reach, only while it is the sole use; failures stay owed. Test connection loads at its candidate size
+  and key, not the saved settings. Management loads/unloads go to the configured address once, never raced across
+  loopback aliases. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
 - Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and
   suggestion instructions. It never reads saved history or sends expanded snippets/templates. Consent is tied to the

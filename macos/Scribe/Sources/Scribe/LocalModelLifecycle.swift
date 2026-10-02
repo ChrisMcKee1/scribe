@@ -443,8 +443,10 @@ final class LocalModelLifecycle: Sendable {
     }
 
     /// Forgets what the server no longer lists (it unloaded the copy by itself), for the same server only.
-    func forgetUnlisted(endpoint: String, model: String, listed: Set<String>) {
+    func forgetUnlisted(endpoint: String, model: String, listed: Set<String>, ifUnchangedSince revision: UInt64? = nil)
+    {
         state.withLock { state in
+            if let revision, state.revision != revision { return }
             state.copies.removeAll { copy in
                 Self.sameServer(copy.endpoint, endpoint) && !listed.contains(copy.instanceID)
             }
@@ -465,20 +467,44 @@ final class LocalModelLifecycle: Sendable {
         load: @escaping @Sendable (_ endpoint: String, _ model: String, _ contextTokens: Int) async -> String?
     ) async {
         let refusedKey = "\(target.endpoint)|\(target.model)|\(contextTokens)"
-        guard !state.withLock({ $0.refused.contains(refusedKey) }) else { return }
+        let revision = state.withLock { $0.revision }
         let observed = await read(target.endpoint, target.apiKey)
         if observed.reach == .reached {
             let listed = Set(observed.loaded.compactMap { $0.instanceID })
-            forgetUnlisted(endpoint: target.endpoint, model: target.model, listed: listed)
+            forgetUnlisted(endpoint: target.endpoint, model: target.model, listed: listed, ifUnchangedSince: revision)
         }
         let held = observed.reach == .reached ? observed.loaded(for: target.model) : nil
+        if observed.reach == .reached {
+            let retirement = state.withLock { state -> (LifecycleGate, [Copy])? in
+                guard state.uses == 1, state.revision == revision, state.inFlightUnload == nil else { return nil }
+                let copies = state.copies.filter {
+                    Self.sameServer($0.endpoint, target.endpoint) && $0.instanceID != held?.instanceID
+                }
+                guard !copies.isEmpty else { return nil }
+                let gate = LifecycleGate()
+                state.inFlightUnload = gate
+                return (gate, copies)
+            }
+            if let (gate, copies) = retirement {
+                for copy in copies {
+                    if await unload(copy, currentKey: target.apiKey) {
+                        state.withLock { $0.copies.removeAll { $0 == copy } }
+                    } else {
+                        ScribeLog.warning(.cleanup, "An unused local model copy could not be unloaded")
+                    }
+                }
+                finishChange(gate)
+            }
+        }
+        guard contextTokens > 0 else { return }
+        guard !state.withLock({ $0.refused.contains(refusedKey) }) else { return }
         if let held, held.contextTokens == contextTokens {
             state.withLock { _ = $0.refused.remove(refusedKey) }
             return
         }
         if let held, held.remainingTTLSeconds == nil { return }
         let change = state.withLock { state -> LifecycleGate? in
-            guard state.uses == 1, state.inFlightUnload == nil else { return nil }
+            guard state.uses == 1, state.revision == revision, state.inFlightUnload == nil else { return nil }
             let gate = LifecycleGate()
             state.inFlightUnload = gate
             return gate

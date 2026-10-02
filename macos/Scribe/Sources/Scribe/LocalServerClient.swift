@@ -74,9 +74,8 @@ final class LocalServerClient: @unchecked Sendable {
     private let session: URLSession
     private let invalidator: (() -> Void)?
 
-    init(session: URLSession) {
-        self.session = session
-        invalidator = nil
+    convenience init(session: URLSession) {
+        self.init(configuration: Self.makeConfiguration(session.configuration))
     }
 
     init(configuration: URLSessionConfiguration = LocalServerClient.makeConfiguration()) {
@@ -93,8 +92,9 @@ final class LocalServerClient: @unchecked Sendable {
         invalidator?()
     }
 
-    static func makeConfiguration() -> URLSessionConfiguration {
-        let configuration = URLSessionConfiguration.ephemeral
+    static func makeConfiguration(
+        _ configuration: URLSessionConfiguration = .ephemeral
+    ) -> URLSessionConfiguration {
         configuration.connectionProxyDictionary = [:] as [AnyHashable: Any]
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
@@ -136,7 +136,7 @@ final class LocalServerClient: @unchecked Sendable {
     }
 
     func unload(_ endpoint: String, modelID: String, apiKey: String? = nil) async -> Bool {
-        let roots = roots(for: endpoint)
+        let roots = roots(for: endpoint, includeAliases: false)
         guard !roots.isEmpty, !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
         }
@@ -168,7 +168,7 @@ final class LocalServerClient: @unchecked Sendable {
         contextTokens: Int,
         apiKey: String? = nil
     ) async -> String? {
-        let roots = roots(for: endpoint).filter { $0.app == .lmStudio }
+        let roots = roots(for: endpoint, includeAliases: false).filter { $0.app == .lmStudio }
         guard !roots.isEmpty,
             !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             contextTokens > 0
@@ -202,7 +202,7 @@ final class LocalServerClient: @unchecked Sendable {
     }
 
     func unloadInstance(_ endpoint: String, instanceID: String, apiKey: String? = nil) async -> Bool {
-        let roots = roots(for: endpoint).filter { $0.app == .lmStudio }
+        let roots = roots(for: endpoint, includeAliases: false).filter { $0.app == .lmStudio }
         guard !roots.isEmpty, !instanceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
         }
@@ -439,7 +439,7 @@ final class LocalServerClient: @unchecked Sendable {
         let url: URL
     }
 
-    private func roots(for endpoint: String) -> [Root] {
+    private func roots(for endpoint: String, includeAliases: Bool = true) -> [Root] {
         let app = LocalAiServer.appAt(endpoint)
         guard app != .none,
             let uri = URL(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -451,7 +451,9 @@ final class LocalServerClient: @unchecked Sendable {
 
         let originalHost = uri.host(percentEncoded: false)?.lowercased()
         var hosts: [String] = []
-        let orderedHosts = [originalHost, Self.loopbackHosts[0], Self.loopbackHosts[1], "[::1]"]
+        // Racing a load or unload can deliver the mutation more than once, even after the other tasks are cancelled.
+        let orderedHosts =
+            (includeAliases ? [originalHost, Self.loopbackHosts[0], Self.loopbackHosts[1], "[::1]"] : [originalHost])
             .compactMap { $0 }
         for host in orderedHosts {
             if !hosts.contains(where: {

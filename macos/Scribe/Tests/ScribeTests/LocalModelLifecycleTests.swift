@@ -95,6 +95,90 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testReconciliationRetiresOtherOwnedCopiesAndKeepsTheCopyRequestsReach() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "old", model: "previous")
+        try await owned(lifecycle, "current")
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [
+                LocalServerLoadedModel("previous", 1, contextTokens: 8192, instanceID: "old", remainingTTLSeconds: 10),
+                LocalServerLoadedModel("m", 1, contextTokens: 8192, instanceID: "current", remainingTTLSeconds: 10),
+            ])
+        let lease = try await lifecycle.beginUse(target())
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 0, lease: lease, read: { _, _ in held }, load: { _, _, _ in nil })
+        lease.end()
+        XCTAssertEqual(fake.instances.map(\.id), ["old"])
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["current"])
+    }
+
+    func testOtherCopyRetirementWaitsUntilTheReconcilingRequestIsTheOnlyUse() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "old", model: "previous")
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [
+                LocalServerLoadedModel("previous", 1, contextTokens: 8192, instanceID: "old", remainingTTLSeconds: 10)
+            ])
+        let lease = try await lifecycle.beginUse(target())
+        let other = try await lifecycle.beginUse(target("previous"))
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 0, lease: lease, read: { _, _ in held }, load: { _, _, _ in nil })
+        XCTAssertTrue(fake.instances.isEmpty)
+        other.end()
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 0, lease: lease, read: { _, _ in held }, load: { _, _, _ in nil })
+        lease.end()
+        XCTAssertEqual(fake.instances.map(\.id), ["old"])
+    }
+
+    func testAReadOvertakenByAnotherUseDoesNotAuthorizeRetirement() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "old", model: "previous")
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [
+                LocalServerLoadedModel("previous", 1, contextTokens: 8192, instanceID: "old", remainingTTLSeconds: 10)
+            ])
+        let lease = try await lifecycle.beginUse(target())
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 0, lease: lease,
+            read: { _, _ in
+                let intervening = try? await lifecycle.beginUse(lmTarget("previous"))
+                intervening?.end()
+                return held
+            }, load: { _, _, _ in nil })
+        lease.end()
+        XCTAssertTrue(fake.instances.isEmpty)
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["old"])
+    }
+
+    func testARefusedUnusedCopyRetirementStaysOwed() async throws {
+        let fake = FakeUnloads()
+        fake.instanceResult = false
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "old", model: "previous")
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [
+                LocalServerLoadedModel("previous", 1, contextTokens: 8192, instanceID: "old", remainingTTLSeconds: 10)
+            ])
+        let lease = try await lifecycle.beginUse(target())
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 0, lease: lease, read: { _, _ in held }, load: { _, _, _ in nil })
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["old"])
+        fake.instanceResult = true
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 0, lease: lease, read: { _, _ in held }, load: { _, _, _ in nil })
+        lease.end()
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertEqual(fake.instances.map(\.id), ["old", "old"])
+    }
+
     func testAnOpenedGateKeepsNoBookkeepingAfterCancellation() async {
         let gate = LifecycleGate()
         gate.open()
@@ -305,10 +389,13 @@ final class LocalModelLifecycleTests: XCTestCase {
         LocalModelLifecycle(idle: idle, actions: fake.actions, sleeper: clock.sleeper, now: clock.now)
     }
 
-    private func owned(_ lifecycle: LocalModelLifecycle, _ instance: String, key: String? = nil) async throws {
-        let lease = try await lifecycle.beginUse(target(key: key))
+    private func owned(
+        _ lifecycle: LocalModelLifecycle, _ instance: String, model: String = "m", key: String? = nil
+    ) async throws {
+        let destination = target(model, key: key)
+        let lease = try await lifecycle.beginUse(destination)
         await lifecycle.reconcileLMStudio(
-            target: target(key: key), contextTokens: 8192, lease: lease,
+            target: destination, contextTokens: 8192, lease: lease,
             read: { _, _ in .notRunning.reached },
             load: { _, _, _ in instance })
         lease.end()

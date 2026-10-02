@@ -4,6 +4,57 @@ import XCTest
 @testable import Scribe
 
 final class LocalServerClientTests: XCTestCase {
+    func testInjectedSessionConfigurationKeepsTestRoutingButRemovesProxiesAndCaching() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpAdditionalHeaders = ["X-Scribe-Test-Route": "isolated"]
+        configuration.protocolClasses = [StubURLProtocol.self]
+        configuration.connectionProxyDictionary = ["HTTPEnable": 1, "HTTPProxy": "not-local"]
+        configuration.httpShouldSetCookies = true
+        configuration.urlCache = URLCache(memoryCapacity: 1024, diskCapacity: 0)
+        let safe = LocalServerClient.makeConfiguration(configuration)
+        XCTAssertEqual(safe.connectionProxyDictionary?.count, 0)
+        XCTAssertFalse(safe.httpShouldSetCookies)
+        XCTAssertNil(safe.urlCache)
+        XCTAssertEqual(safe.httpAdditionalHeaders?["X-Scribe-Test-Route"] as? String, "isolated")
+        XCTAssertTrue(safe.protocolClasses?.first == StubURLProtocol.self)
+    }
+
+    func testMutatingRequestsUseOnlyTheConfiguredAddressOnce() async {
+        let log = RequestLog()
+        let client = makeClient { request in
+            log.record(request)
+            switch request.url?.path {
+            case "/api/v1/chat":
+                return StubReply.json(request, status: 200, #"{"model_instance_id":"owned-copy"}"#)
+            default:
+                return StubReply.json(request, status: 200, "{}")
+            }
+        }
+        let instance = await client.loadWithContext(
+            "http://localhost:1234/v1", modelID: "m", contextTokens: 8192, apiKey: "local-key")
+        XCTAssertEqual(instance, "owned-copy")
+        let freed = await client.unloadInstance("http://localhost:1234/v1", instanceID: "owned-copy")
+        XCTAssertTrue(freed)
+        let unloaded = await client.unload("http://localhost:11434/v1", modelID: "m")
+        XCTAssertTrue(unloaded)
+        XCTAssertEqual(
+            log.all.filter { $0.method == "POST" }.map(\.path),
+            ["/api/v1/chat", "/api/v1/models/unload", "/api/generate"])
+        XCTAssertTrue(log.all.allSatisfy { $0.host == "localhost" })
+    }
+
+    func testARefusedMutationDoesNotTryOtherLoopbackAddresses() async {
+        let log = RequestLog()
+        let client = makeClient { request in
+            log.record(request)
+            throw URLError(.cannotConnectToHost)
+        }
+        let instance = await client.loadWithContext("http://localhost:1234/v1", modelID: "m", contextTokens: 8192)
+        XCTAssertNil(instance)
+        XCTAssertEqual(log.count, 1)
+        XCTAssertEqual(log.all.first?.host, "localhost")
+    }
+
     private func makeClient(_ handler: @escaping StubURLProtocol.Handler) -> LocalServerClient {
         let route = StubURLProtocol.register(handler)
         let configuration = LocalServerClient.makeConfiguration()

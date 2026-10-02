@@ -5,6 +5,56 @@ import os
 @testable import Scribe
 
 final class CleanupProviderCacheTests: XCTestCase {
+    @MainActor
+    func testLMStudioCandidateUsesItsOwnContextAppAndKeyWithoutSaving() async throws {
+        let rig = try makeRig(
+            reply: { request in
+                if request.url?.path == "/api/v1/chat" {
+                    return StubReply.json(request, status: 200, #"{"model_instance_id":"candidate-copy"}"#)
+                }
+                return StubReply.completion(request, "ok")
+            },
+            readLocalServer: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) })
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .none
+        rig.store.lmStudioContextTokens = 4096
+        var settings = CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load()
+        settings.selectedLocalApp = .lmStudio
+        settings.openAIBaseURL = "http://127.0.0.1:1234/v1"
+        settings.lmStudioContextTokens = 8192
+        let candidate = CleanupConnectionCandidate(
+            settings: settings, openAIApiKey: "candidate-key", azureClientSecret: nil, azureApiKey: nil,
+            writingStyle: "", frontierPrompt: "", localPrompt: "")
+
+        let check = await rig.cache.checkConnection(candidate: candidate)
+
+        XCTAssertTrue(check.reachable, check.message)
+        XCTAssertEqual(rig.requests.all.map(\.path), ["/api/v1/chat", "/v1/chat/completions"])
+        let load = try XCTUnwrap(rig.requests.all.first)
+        XCTAssertEqual(load.jsonBody["context_length"] as? Int, 8192)
+        XCTAssertEqual(load.jsonBody["store"] as? Bool, false)
+        XCTAssertEqual(load.header("Authorization"), "Bearer candidate-key")
+        XCTAssertEqual(rig.requests.all.last?.header("Authorization"), "Bearer candidate-key")
+        XCTAssertEqual(rig.cache.lifecycle.ownedCopies.map(\.instanceID), ["candidate-copy"])
+        XCTAssertEqual(rig.store.selectedLocalApp, .none)
+        XCTAssertEqual(rig.store.lmStudioContextTokens, 4096)
+        XCTAssertEqual(rig.fixture.apiKeys.writes, 0)
+    }
+
+    func testContextAndLocalAppChangesRebuildRatherThanMutateAnExistingProvider() async throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 4096
+        let first = try rig.cache.provider()
+        rig.store.lmStudioContextTokens = 8192
+        let second = try rig.cache.provider()
+        XCTAssertFalse((first as AnyObject) === (second as AnyObject))
+        rig.store.selectedLocalApp = .none
+        let third = try rig.cache.provider()
+        XCTAssertFalse((second as AnyObject) === (third as AnyObject))
+    }
+
     func testChangingIdleTimeRebuildsTheRetentionSentByTheProvider() async throws {
         let rig = try makeRig()
         rig.store.providerKind = .ollama

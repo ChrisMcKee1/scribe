@@ -38,16 +38,13 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         lifecycle: LocalModelLifecycle? = nil,
         localTuning: @escaping @Sendable () -> LocalModelTuning = { .none },
         loadLocalContext:
-            @escaping @Sendable (
-                _ endpoint: String,
-                _ model: String,
-                _ contextTokens: Int
-            ) async -> String? = {
-                endpoint,
-                model,
-                contextTokens in
-                await LocalServerClient().loadWithContext(endpoint, modelID: model, contextTokens: contextTokens)
-            },
+            (
+                @Sendable (
+                    _ endpoint: String,
+                    _ model: String,
+                    _ contextTokens: Int
+                ) async -> String?
+            )? = nil,
         readLocalServer: @escaping @Sendable (_ endpoint: String, _ apiKey: String?) async -> LocalServerState = {
             endpoint,
             apiKey in
@@ -69,7 +66,12 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.lifecycle = lifecycle ?? LocalModelLifecycle(idle: .zero, actions: .connected(to: session))
         self.localTuning = localTuning
         self.localServerEndpoint = self.serviceURL.absoluteString
-        self.loadLocalContext = loadLocalContext
+        self.loadLocalContext =
+            loadLocalContext
+            ?? { endpoint, model, contextTokens in
+                await LocalServerClient(session: session).loadWithContext(
+                    endpoint, modelID: model, contextTokens: contextTokens, apiKey: apiKey)
+            }
         self.readLocalServer = readLocalServer
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
@@ -178,7 +180,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         let target = lifecycleTarget
         let timeout = self.timeout
         let work: @Sendable () async throws -> ChatCompletionsTransport.Completion = {
-            if localServerApp == .lmStudio, contextTokens > 0 {
+            if localServerApp == .lmStudio, contextTokens > 0 || !lifecycle.ownedCopies.isEmpty {
                 if let lease, let target {
                     await lifecycle.reconcileLMStudio(
                         target: target, contextTokens: contextTokens, lease: lease,
