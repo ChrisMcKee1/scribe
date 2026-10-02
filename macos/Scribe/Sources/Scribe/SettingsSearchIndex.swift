@@ -79,10 +79,13 @@ enum SettingsSearchIndex {
             ["typing", "trailing space", "spacing"]),
         entry(
             "dictation.indicator", .dictation, "dictation.indicator", "Show the recording indicator",
-            ["overlay", "pill", "recording", "indicator"]),
+            ["overlay", "pill", "recording", "indicator", "hide", "show", "visibility"]),
         entry(
             "dictation.indicator.position", .dictation, "dictation.indicator.position", "Where it appears",
             ["overlay", "pill", "position", "anchor", "recording", "indicator"]),
+        entry(
+            "dictation.indicator.preview", .dictation, "dictation.indicator.position", "Preview on screen",
+            ["overlay", "pill", "position", "anchor", "recording", "indicator", "preview"]),
         entry(
             "dictation.startup", .dictation, "dictation.startup", "Start Scribe when you log in",
             ["startup", "boot", "launch", "login", "sign in"]),

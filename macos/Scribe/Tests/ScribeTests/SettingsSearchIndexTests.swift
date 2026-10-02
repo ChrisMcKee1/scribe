@@ -11,6 +11,8 @@ final class SettingsSearchIndexTests: XCTestCase {
         assertSearch("silence", contains: "Stop when I stop talking", on: .dictation)
         assertSearch("overlay", contains: "Show the recording indicator", on: .dictation)
         assertSearch("pill", contains: "Show the recording indicator", on: .dictation)
+        assertSearch("hide indicator", contains: "Show the recording indicator", on: .dictation)
+        assertSearch("preview", contains: "Preview on screen", on: .dictation)
         assertSearch("library", contains: "Word packs", on: .dictionary)
         assertSearch("libraries", contains: "Word packs", on: .dictionary)
         assertSearch("vocabulary", contains: "Word packs", on: .dictionary)

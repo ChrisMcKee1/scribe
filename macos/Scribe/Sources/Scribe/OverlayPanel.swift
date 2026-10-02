@@ -198,6 +198,12 @@ private struct OutcomeTextView: View {
 /// full-screen app's space, never steals keyboard focus (so the focused app keeps typing focus for injection), and
 /// repositions itself to the configured `OverlayAnchor` whenever it appears.
 @MainActor
+final class RecordingIndicatorPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+@MainActor
 final class OverlayPanelController {
     private let session = DictationSessionModel()
     private var panel: NSPanel?
@@ -205,7 +211,63 @@ final class OverlayPanelController {
     private let pillSize = NSSize(width: 280, height: 52)
     private var displayedStateValue: OverlayState = .hidden
     private var hiddenRevision: UInt64?
-    var anchor: OverlayAnchor = .bottomCenter
+    private var visibilityRevision: UInt64 = 0
+    private var preview = OverlayPreviewGate()
+    private(set) var previewTask: Task<Void, Never>?
+    private let previewWait: @MainActor () async -> Void
+    private let presentsPanel: Bool
+    var anchor: OverlayAnchor = .bottomCenter {
+        didSet { cancelPreview() }
+    }
+
+    init(
+        defaults: UserDefaults = .standard,
+        presentsPanel: Bool = true,
+        previewWait: @escaping @MainActor () async -> Void = {
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch is CancellationError {
+                // A new presentation or the settings window ending owns the indicator now.
+            } catch {
+                ScribeLog.warning(.overlay, "Indicator preview wait failed", .failure(error))
+            }
+        }
+    ) {
+        self.presentsPanel = presentsPanel
+        self.previewWait = previewWait
+        preview.enabled = defaults.object(forKey: OverlayAnchorSelection.showDefaultsKey) as? Bool ?? true
+    }
+
+    var showIndicator: Bool {
+        get { preview.enabled }
+        set {
+            preview.enabled = newValue
+            cancelPreview()
+        }
+    }
+
+    var displayedAnchor: OverlayAnchor { preview.candidate ?? anchor }
+    var isPreviewing: Bool { preview.candidate != nil }
+
+    @discardableResult
+    func previewAnchor(_ anchor: OverlayAnchor) -> Bool {
+        guard let token = preview.begin(at: anchor) else { return false }
+        previewTask?.cancel()
+        updatePanel()
+        previewTask = Task { [weak self, previewWait] in
+            await previewWait()
+            guard let self, self.preview.end(token) else { return }
+            self.updatePanel()
+        }
+        return true
+    }
+
+    func cancelPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        preview.cancel()
+        updatePanel()
+    }
 
     var displayedState: OverlayState {
         displayedStateValue
@@ -222,10 +284,21 @@ final class OverlayPanelController {
     @discardableResult
     func render(_ state: OverlayState, revision: UInt64) -> Bool {
         guard revisions.admit(revision) else { return false }
+        previewTask?.cancel()
+        previewTask = nil
+        preview.render(state)
+        updatePanel()
+        return true
+    }
+
+    private func updatePanel() {
+        visibilityRevision &+= 1
+        let state = preview.state
         displayedStateValue = state
+        guard presentsPanel else { return }
         guard state != .hidden else {
-            hidePanel(for: revision)
-            return true
+            hidePanel(for: visibilityRevision)
+            return
         }
 
         hiddenRevision = nil
@@ -244,7 +317,6 @@ final class OverlayPanelController {
         } else {
             panel.alphaValue = 1
         }
-        return true
     }
 
     private var prefersReducedMotion: Bool {
@@ -290,7 +362,7 @@ final class OverlayPanelController {
         if let panel { return panel }
 
         let hostingController = NSHostingController(rootView: OverlayPillView(session: session))
-        let newPanel = NSPanel(
+        let newPanel = RecordingIndicatorPanel(
             contentRect: NSRect(origin: .zero, size: pillSize),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
@@ -304,6 +376,7 @@ final class OverlayPanelController {
         newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         newPanel.isMovableByWindowBackground = false
         newPanel.hidesOnDeactivate = false
+        newPanel.ignoresMouseEvents = true
         panel = newPanel
         return newPanel
     }
@@ -311,7 +384,7 @@ final class OverlayPanelController {
     private func reposition(_ panel: NSPanel) {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         guard let visibleFrame = screen?.visibleFrame else { return }
-        let origin = anchor.origin(for: pillSize, in: visibleFrame)
+        let origin = displayedAnchor.origin(for: pillSize, in: visibleFrame)
         panel.setFrameOrigin(origin)
     }
 }

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct SettingsDictationPage: View {
+    @ObservedObject var drafts: SettingsDrafts
     let overlayPanelController: OverlayPanelController
     let hotkeyStore: HotkeySettingsStore
     let audioDeviceStore: AudioDeviceStore
@@ -14,18 +15,21 @@ struct SettingsDictationPage: View {
             subtitle: "Your microphone, your shortcuts, and what you see while you dictate."
         ) {
             SettingsDictationControls(
-                overlayPanelController: overlayPanelController,
+                drafts: drafts,
                 hotkeyStore: hotkeyStore,
                 audioDeviceStore: audioDeviceStore,
                 onHotkeyChanged: onHotkeyChanged,
                 onTryDictation: onTryDictation)
         }
+        .onAppear {
+            drafts.configureIndicator(controller: overlayPanelController)
+        }
     }
 }
 
 private struct SettingsDictationControls: View {
+    @ObservedObject private var drafts: SettingsDrafts
     @StateObject private var input: InputSettingsModel
-    @StateObject private var overlay: OverlayAnchorSelection
     @StateObject private var loginItem = LoginItemSwitch()
     @State private var isRecording = false
     @State private var localMonitor: Any?
@@ -33,19 +37,19 @@ private struct SettingsDictationControls: View {
     private let onTryDictation: () -> Void
 
     init(
-        overlayPanelController: OverlayPanelController,
+        drafts: SettingsDrafts,
         hotkeyStore: HotkeySettingsStore,
         audioDeviceStore: AudioDeviceStore,
         onHotkeyChanged: @escaping (CGKeyCode) -> Void,
         onTryDictation: @escaping () -> Void
     ) {
         self.onTryDictation = onTryDictation
+        self.drafts = drafts
         _input = StateObject(
             wrappedValue: InputSettingsModel(
                 hotkeyStore: hotkeyStore,
                 deviceStore: audioDeviceStore,
                 onHotkeyChanged: onHotkeyChanged))
-        _overlay = StateObject(wrappedValue: OverlayAnchorSelection(controller: overlayPanelController))
     }
 
     var body: some View {
@@ -70,10 +74,11 @@ private struct SettingsDictationControls: View {
         .onAppear {
             input.reload()
             input.refreshDevices()
-            overlay.reload()
+            drafts.indicator?.reload()
         }
         .onDisappear {
             stopRecording()
+            drafts.indicator?.cancelPreview()
         }
     }
 
@@ -195,9 +200,17 @@ private struct SettingsDictationControls: View {
 
     private var recordingIndicatorCard: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Show the recording indicator").cardTitle()
-            Text("A small bar with a live sound level appears while Scribe listens.")
-                .cardDescription()
+            Toggle(
+                "Show the recording indicator",
+                isOn: Binding(
+                    get: { drafts.indicator?.showIndicator ?? true },
+                    set: { drafts.indicator?.showIndicator = $0 })
+            )
+            .cardTitle()
+            Text(
+                "Shows listening, processing and the result. Save applies this choice; Discard keeps your saved choice."
+            )
+            .cardDescription()
         }
     }
 
@@ -209,21 +222,31 @@ private struct SettingsDictationControls: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                 ForEach(OverlayAnchor.allCases, id: \.self) { anchor in
                     Button {
-                        overlay.select(anchor)
+                        drafts.indicator?.select(anchor)
                     } label: {
                         Text(anchor.displayName)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                             .background(
-                                overlay.anchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
+                                drafts.indicator?.anchor == anchor
+                                    ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
                             )
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            Text("Selected: \(overlay.anchor.displayName)")
+            Text("Selected: \(drafts.indicator?.anchor.displayName ?? OverlayAnchor.bottomCenter.displayName)")
                 .cardDescription()
+            Button("Preview on screen") { drafts.indicator?.preview() }
+            Text(
+                "Preview shows for two seconds, even when the indicator is off. Finish a dictation and wait for its "
+                    + "result to disappear before previewing. Save applies the position; Discard keeps your saved position."
+            )
+            .cardDescription()
+            if let message = drafts.indicator?.previewMessage {
+                Text(message).cardDescription()
+            }
         }
     }
 
@@ -292,8 +315,15 @@ private struct SettingsDictationControls: View {
 @MainActor
 final class OverlayAnchorSelection: ObservableObject {
     static let defaultsKey = "ScribeOverlayAnchor"
+    static let showDefaultsKey = "ScribeShowOverlay"
 
-    @Published private(set) var anchor: OverlayAnchor
+    @Published var anchor: OverlayAnchor
+    @Published var showIndicator: Bool
+    @Published private(set) var previewMessage: String?
+    private var savedAnchor: OverlayAnchor
+    private var savedShowIndicator: Bool
+
+    var hasUnsavedChanges: Bool { anchor != savedAnchor || showIndicator != savedShowIndicator }
 
     private let controller: OverlayPanelController
     private let defaults: UserDefaults
@@ -303,20 +333,52 @@ final class OverlayAnchorSelection: ObservableObject {
         self.controller = controller
         self.defaults = defaults
         anchor = controller.anchor
+        savedAnchor = controller.anchor
+        showIndicator = controller.showIndicator
+        savedShowIndicator = controller.showIndicator
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification) { [weak self] in
             self?.reload()
         }
     }
 
     func select(_ anchor: OverlayAnchor) {
-        controller.anchor = anchor
-        defaults.set(anchor.rawValue, forKey: Self.defaultsKey)
-        reload()
+        self.anchor = anchor
+        cancelPreview()
+    }
+
+    func preview() {
+        previewMessage =
+            controller.previewAnchor(anchor)
+            ? nil : "Finish the current dictation or wait for its result to disappear, then preview again."
+    }
+
+    func cancelPreview() {
+        controller.cancelPreview()
+        previewMessage = nil
+    }
+
+    func save() {
+        let selectedAnchor = anchor
+        let selectedShow = showIndicator
+        controller.anchor = selectedAnchor
+        controller.showIndicator = selectedShow
+        defaults.set(selectedAnchor.rawValue, forKey: Self.defaultsKey)
+        defaults.set(selectedShow, forKey: Self.showDefaultsKey)
+        savedAnchor = selectedAnchor
+        savedShowIndicator = selectedShow
+        cancelPreview()
+    }
+
+    func discard() {
+        cancelPreview()
+        anchor = controller.anchor
+        showIndicator = controller.showIndicator
+        savedAnchor = anchor
+        savedShowIndicator = showIndicator
     }
 
     func reload() {
-        if controller.anchor != anchor {
-            anchor = controller.anchor
-        }
+        guard !hasUnsavedChanges else { return }
+        discard()
     }
 }

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// A kind of entry a Settings tab adds from its drafts.
@@ -8,7 +9,8 @@ enum SettingsDraftEntry: Hashable, Sendable {
 }
 
 /// What the user has typed into Settings but not saved yet (a new dictionary rule, snippet or app profile, and the
-/// two secret fields), the word pack workspace, plus the section that was showing. The app owns this rather than
+/// two secret fields), recording indicator choices, the word pack workspace, plus the section that was showing.
+/// The app owns this rather than
 /// the window: page navigation keeps pending input, and a normal close asks to save, discard or keep editing.
 /// Already-immediate macOS settings are not staged here; each tab reads those when it appears.
 ///
@@ -32,6 +34,17 @@ final class SettingsDrafts: ObservableObject {
 
     @Published var openAIApiKey = ""
     @Published var azureClientSecret = ""
+    @Published private(set) var indicator: OverlayAnchorSelection?
+    private var indicatorObservation: AnyCancellable?
+
+    func configureIndicator(controller: OverlayPanelController, defaults: UserDefaults = .standard) {
+        guard indicator == nil else { return }
+        let model = OverlayAnchorSelection(controller: controller, defaults: defaults)
+        indicator = model
+        indicatorObservation = model.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
 
     // The app owns this draft too: changing pages must not destroy a word pack edit.
     @Published var wordPackWorkspace = LibraryWorkspace(libraries: [])
@@ -48,6 +61,7 @@ final class SettingsDrafts: ObservableObject {
 
     var unsavedSections: [String] {
         var sections: [String] = []
+        if indicator?.hasUnsavedChanges == true { sections.append("Dictation") }
         if wordPackWorkspace.hasUnsavedChanges { sections.append("Word packs") }
         if !dictionaryPattern.isEmpty || !dictionaryReplacement.isEmpty { sections.append("Dictionary") }
         if !snippetPhrase.isEmpty || !snippetTemplate.isEmpty { sections.append("Voice snippets") }
@@ -83,6 +97,8 @@ final class SettingsDrafts: ObservableObject {
     }
 
     func windowClosed() {
+        indicator?.cancelPreview()
+        indicator?.reload()
         wordPackLoadRevision &+= 1
         wordPacksLoading = false
         if !wordPackWorkspace.hasUnsavedChanges { wordPacksLoaded = false }
@@ -120,6 +136,7 @@ final class SettingsDrafts: ObservableObject {
 
     func discard() {
         guard !isBusy else { return }
+        indicator?.discard()
         wordPackWorkspace.discard()
         dictionaryPattern = ""
         dictionaryReplacement = ""
@@ -241,6 +258,7 @@ extension SettingsDrafts {
                 }
                 onChanged()
             }
+            drafts.indicator?.save()
         }
     }
 

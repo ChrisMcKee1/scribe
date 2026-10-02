@@ -357,6 +357,7 @@ private struct SnapshotSettingsShell: View {
         switch selection {
         case .dictation:
             SettingsDictationPage(
+                drafts: dependencies.drafts,
                 overlayPanelController: dependencies.overlayPanelController,
                 hotkeyStore: HotkeySettingsStore(defaults: dependencies.defaults),
                 audioDeviceStore: AudioDeviceStore(defaults: dependencies.defaults),

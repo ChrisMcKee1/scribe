@@ -5,6 +5,37 @@ import XCTest
 
 @MainActor
 final class SettingsUnsavedChangesTests: XCTestCase {
+    func testIndicatorDraftSaveDiscardAndFailedValidation() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let controller = OverlayPanelController(defaults: fixture.defaults.defaults, presentsPanel: false)
+        let drafts = SettingsDrafts()
+        drafts.configureIndicator(controller: controller, defaults: fixture.defaults.defaults)
+        drafts.configureSave(store: fixture.store, libraries: fixture.libraries, onChanged: {})
+        drafts.indicator?.select(.topRight)
+        drafts.indicator?.showIndicator = false
+        XCTAssertEqual(drafts.unsavedSections, ["Dictation"])
+        drafts.section = .history
+        XCTAssertEqual(drafts.indicator?.anchor, .topRight)
+        drafts.snippetPhrase = "incomplete"
+        let failed = await drafts.save()
+        XCTAssertFalse(failed)
+        XCTAssertTrue(controller.showIndicator)
+        XCTAssertEqual(controller.anchor, .bottomCenter)
+        drafts.snippetPhrase = ""
+        let saved = await drafts.save()
+        XCTAssertTrue(saved)
+        XCTAssertFalse(drafts.hasUnsavedChanges)
+        XCTAssertFalse(controller.showIndicator)
+        XCTAssertEqual(controller.anchor, .topRight)
+        drafts.indicator?.select(.center)
+        drafts.indicator?.showIndicator = true
+        drafts.discard()
+        XCTAssertEqual(drafts.indicator?.anchor, .topRight)
+        XCTAssertEqual(drafts.indicator?.showIndicator, false)
+        XCTAssertFalse(drafts.hasUnsavedChanges)
+    }
+
     func testNavigationAndSavedLoadsAreNotEdits() {
         let drafts = SettingsDrafts()
         drafts.section = .dictionary
