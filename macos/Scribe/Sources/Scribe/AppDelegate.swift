@@ -290,6 +290,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let current = CleanupSettingsStore.live.snapshot()
         let previous = cleanupSettings
         cleanupSettings = current
+        if previous != current {
+            dictationController.cleanupConfigurationChanged()
+        }
         if CleanupInvalidation.shouldInvalidate(from: previous, to: current) {
             dictationController.invalidateCleanup()
             ScribeLog.info(.cleanup, "Dropped the cached cleanup provider after a settings change")

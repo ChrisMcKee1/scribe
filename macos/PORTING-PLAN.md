@@ -62,6 +62,14 @@ real Mac.
 - **Context size and the whole vocabulary** (0.5.3): `TokenEstimate` and `ContextBudget` fit requests to a local
   model's context, with the Context size setting (Ollama through its own chat API, LM Studio by loading at a size)
   and the whole-vocabulary switch, off by default.
+- **Local model readiness and cleanup notices**: for managed Ollama and recognized Ollama or LM Studio addresses on
+  this Mac, a recording checks whether the selected model is resident at the needed context size, sends one fixed
+  readying request only when necessary, and waits at most 30 seconds. Cloud and unknown endpoints are never readied;
+  the pill says "Starting local model" only while the local model is starting, and readiness failure types the
+  recognized text without sending cleanup. The readying request carries no dictation, vocabulary or templates.
+  Cleanup failure notifications now use plain language and appear once per failure episode, resetting on successful
+  cleanup or a cleanup configuration change. The idle and pause memory-release policy and ownership tracking for
+  LM Studio copies are still open.
 - **Another AI service: Chat Completions or Responses** (0.5.3): the API choice, address path stripping, Responses
   always `store=false`, and an address ending in `/completions` refused with the reason.
 - **Word packs** (0.5.0): the shared fixtures under `tests/fixtures/libraries` drive the term key, id, built-in
@@ -83,9 +91,11 @@ real Mac.
   transactions and atomic file writes instead. The composition golden suite now covers the whole shared
   `composition-golden.txt` corpus, including mixed built-in and custom word-pack winners, badges, Save prompt reports,
   glossary order and finished text.
-- **Models on this PC, the rest of memory release** (0.5.2): the one release lane that never frees a model under a
-  use, the readying request when a recording starts, the "Starting local model" state on the indicator, and
-  tracking of the LM Studio copies Scribe loads. Only the retention fields on each request are ported.
+- **Models on this PC, the rest of memory release** (0.5.2): idle and pause releases, keeping the release lane safe
+  against every in-flight use, and tracking and retiring LM Studio copies Scribe loads. The recording-time readiness
+  check and bounded readying request for managed Ollama and recognized local Ollama or LM Studio endpoints are
+  ported, as is the "Starting local model" indicator state. Only the retention fields on each request are ported;
+  the full memory-release policy remains open.
 - Not applicable on macOS: mouse button shortcuts and their hook, Remote Desktop typing, Windows text size and
   accent contrast, contrast themes, Velopack and Store packaging, performance flags and memory work that is Windows
   code only.

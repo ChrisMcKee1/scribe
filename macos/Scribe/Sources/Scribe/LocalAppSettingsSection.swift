@@ -81,7 +81,13 @@ final class LocalAppSettingsModel: ObservableObject {
         guard app != .none, let endpoint else {
             return
         }
-        _ = await client.unload(endpoint, modelID: model)
+        do {
+            _ = try await LocalModelDefaults.sharedLane.run {
+                await client.unload(endpoint, modelID: model)
+            }
+        } catch {
+            ScribeLog.warning(.cleanup, "Could not free the local model", .failure(error))
+        }
         await refresh(for: app, endpoint: endpoint)
     }
 }

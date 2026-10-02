@@ -59,6 +59,7 @@ enum OverlayState: Equatable, Sendable {
     case hidden
     case listening(level: Double)
     case processing
+    case startingLocalModel
     case notice(OverlayNotice)
 }
 
@@ -84,7 +85,7 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
         switch self {
         case .typed: return "Typed"
         case .typedWithoutCleanup: return "Typed without AI cleanup"
-        case .cleanupFellBack: return "Cleanup failed, raw text used"
+        case .cleanupFellBack: return "AI cleanup failed, raw text used"
         case .microphoneUnavailable: return "Microphone unavailable"
         case .microphoneAccessNeeded: return "Microphone access needed"
         case .microphoneStoppedEarly: return "Microphone stopped early"

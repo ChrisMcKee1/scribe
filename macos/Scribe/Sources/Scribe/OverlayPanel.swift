@@ -41,7 +41,7 @@ struct OverlayPillView: View {
             EmptyView()
         case .listening(let level):
             OverlayLevelBarsView(level: level)
-        case .processing:
+        case .processing, .startingLocalModel:
             ProcessingDotsView()
         case .notice(let notice):
             if let outcome = notice.pillOutcome {
@@ -68,6 +68,15 @@ struct OverlayPillView: View {
             Text("Processing…")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.white)
+        case .startingLocalModel:
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Starting local model…")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                Text("This can take time")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.78))
+            }
         case .notice(let notice):
             if let outcome = notice.pillOutcome {
                 OutcomeTextView(outcome: outcome)
@@ -94,7 +103,7 @@ struct OverlayPillView: View {
                 }
             }
             return Color.white.opacity(0.18)
-        case .hidden, .processing:
+        case .hidden, .processing, .startingLocalModel:
             return Color.white.opacity(0.18)
         }
     }

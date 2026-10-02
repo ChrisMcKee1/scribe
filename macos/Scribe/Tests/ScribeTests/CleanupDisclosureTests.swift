@@ -21,11 +21,14 @@ final class CleanupDisclosureTests: XCTestCase {
         XCTAssertFalse(text.localizedCaseInsensitiveContains("only the transcribed text"))
     }
 
-    func testTheConnectionCheckDisclosureSaysItCarriesNoVocabulary() {
+    func testConnectionAndLocalReadyingDisclosureExcludesDictatedContent() {
         let text = CleanupDisclosure.whatCleanupNeverSends
 
-        XCTAssertTrue(text.contains("test request"))
+        XCTAssertTrue(text.contains("Test Connection sends a short request"))
         XCTAssertTrue(text.contains("none of your vocabulary"))
+        XCTAssertTrue(text.contains("Ollama or LM Studio on this Mac"))
+        XCTAssertTrue(text.contains("fixed readying request"))
+        XCTAssertTrue(text.contains("Neither request contains dictated text or vocabulary"))
         XCTAssertTrue(text.contains("snippet templates"))
         XCTAssertTrue(text.contains("audio never leaves this Mac"))
     }

@@ -23,6 +23,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     private let localModelLane: AsyncLane
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
+    private let readLocalServer: @Sendable (String) async -> LocalServerState
 
     init(
         model: String = CleanupSettingsStore.defaultOllamaModel,
@@ -30,6 +31,9 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
         keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
         localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
         timeout: TimeInterval = 30,
+        readLocalServer: @escaping @Sendable (String) async -> LocalServerState = { endpoint in
+            await LocalServerClient().read(endpoint)
+        },
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
         self.model = model
@@ -40,6 +44,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
         self.localModelLane = localModelLane
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
+        self.readLocalServer = readLocalServer
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
@@ -58,5 +63,34 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
         }
         return CleanupResponse(
             cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        try await localModelLane.run {
+            try await LocalModelReadiness.prepare(
+                isResident: {
+                    let state = await self.readLocalServer(Self.defaultBaseURL.absoluteString)
+                    guard state.reach == .reached else { throw LocalModelReadinessError.unavailable }
+                    return state.loaded(for: self.model) != nil
+                },
+                isCurrent: isCurrent,
+                onStarting: onStarting,
+                start: {
+                    _ = try await self.transport.complete(
+                        LocalModelReadiness.request,
+                        at: self.completionsURL,
+                        model: self.model,
+                        bearerToken: nil,
+                        temperature: CleanupSampling.onDeviceTemperature,
+                        reasoningEffort: CleanupReasoningEffort.none,
+                        includeLegacyMaxTokens: true,
+                        keepAlive: self.keepAliveMinutes > 0 ? "\(self.keepAliveMinutes)m" : nil,
+                        defaultTimeout: self.timeout,
+                        provider: .ollama)
+                })
+        }
     }
 }

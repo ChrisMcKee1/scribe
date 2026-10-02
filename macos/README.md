@@ -174,6 +174,10 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   built once per configuration and reused across dictations, Test Connection sends a real
   cleanup request for a test word and passes only if the model answers with text, and em and en
   dashes are rewritten out of the model's answer
+- For Ollama and LM Studio on this Mac, each recording checks whether the selected model is resident at the needed
+  context size; only a missing or differently sized model gets a fixed local readying request. It contains no dictated
+  text or vocabulary, has a bounded wait, and a failure leaves dictation text intact while cleanup is skipped. Cleanup
+  failure notifications use plain language and are suppressed until cleanup recovers or its configuration changes.
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, and an opt-in AI summary that sends only your
   totals and the recurring terms that are dictionary spellings: never a word mined from your dictations,
@@ -255,8 +259,9 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
 the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
 call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
-recognition; the Settings page structure, Find a setting and the Word packs editor now match Windows; the "Starting
-local model" state and the full memory release of Ollama and LM Studio models are not ported; and there is no
+recognition; the Settings page structure, Find a setting and the Word packs editor now match Windows; automatic
+readiness for Ollama and LM Studio, including the "Starting local model" state, is now ported, but the full idle and
+pause memory-release policy for those models is not; and there is no
 auto-update story yet. Dev
 builds use a local self-signed certificate, and public releases use the Developer ID pipeline documented above. Since
 Windows 0.4.3 the port has gained the space after each dictation, the new recording indicator, Ollama and LM Studio

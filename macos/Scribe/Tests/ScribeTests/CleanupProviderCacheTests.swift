@@ -32,6 +32,8 @@ final class CleanupProviderCacheTests: XCTestCase {
             StubReply.completion($0, "Cleaned.")
         },
         checkTimer: (@Sendable (Duration) async throws -> Void)? = nil,
+        readinessTimer: (@Sendable (Duration) async throws -> Void)? = nil,
+        readLocalServer: (@Sendable (String, String?) async -> LocalServerState)? = nil,
         foundryStatus: FoundryLocalStatusSource? = nil,
         azureCliLaunch: AzureCliCredentialProvider.Launch? = nil
     ) throws -> Rig {
@@ -53,13 +55,14 @@ final class CleanupProviderCacheTests: XCTestCase {
         let fixture = makeCleanupStore(apiKeys: apiKeys, clientSecrets: clientSecrets)
         let factory = CleanupProviderFactory.testing(
             session: session, foundryStatus: foundryStatus ?? fakeFoundryStatus.source, azureCli: azureCli,
-            azureCliLaunch: azureCliLaunch, azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock)
+            azureCliLaunch: azureCliLaunch, azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock,
+            readLocalServer: readLocalServer)
         let realTimer: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
         let timer: @Sendable (Duration) async throws -> Void = checkTimer ?? realTimer
         let cache = CleanupProviderCache(
             store: fixture.store, environment: environment, factory: factory,
             checkDeadline: { kind in checkDeadline ?? CleanupProviderCache.checkDeadline(for: kind) },
-            checkTimer: timer)
+            checkTimer: timer, readinessTimer: readinessTimer ?? realTimer)
         return Rig(
             fixture: fixture, cache: cache, requests: requests, azureCli: azureCli, foundryStatus: fakeFoundryStatus,
             clock: clock)
@@ -793,5 +796,177 @@ final class CleanupProviderCacheTests: XCTestCase {
 
             XCTAssertEqual(try rig.cache.provider().displayName, kind.providerName, "\(kind)")
         }
+    }
+
+    // MARK: - Recording readiness
+
+    @MainActor
+    private func prepare(_ cache: CleanupProviderCache) async -> LocalModelPreparationResult {
+        await cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+    }
+
+    @MainActor
+    func testAResidentLocalModelNeedsNoReadyingRequest() async throws {
+        let state = LocalServerState(
+            reach: .reached, models: [], loaded: [LocalServerLoadedModel("local-model", 1)])
+        let rig = try makeRig(readLocalServer: { _, _ in state })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+        XCTAssertEqual(rig.store.snapshot().selectedLocalApp, .lmStudio)
+        XCTAssertEqual(LocalAiServer.appAt(rig.store.snapshot().openAIBaseURL), .lmStudio)
+        let connection = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        XCTAssertEqual(connection.source, .settings)
+        XCTAssertEqual(connection.kind, .openAICompatible)
+        let provider = try rig.cache.provider()
+        XCTAssertTrue(provider is OpenAICompatibleCleanupProvider)
+
+        let result = await prepare(rig.cache)
+
+        XCTAssertEqual(result, .resident)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testConcurrentRecordingsShareReadyingThroughTheLocalModelLane() async throws {
+        let reads = LockedValue<Int>()
+        let rig = try makeRig(readLocalServer: { _, _ in
+            let count = (reads.value ?? 0) + 1
+            reads.set(count)
+            let loaded = count > 1 ? [LocalServerLoadedModel("local-model", 1)] : []
+            return LocalServerState(reach: .reached, models: [], loaded: loaded, failureDetail: nil)
+        })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+
+        let cache = rig.cache
+        async let first = cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        async let second = cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        let results = await [first, second]
+
+        XCTAssertEqual(results.filter { $0 == .resident }.count, 1)
+        XCTAssertEqual(results.filter { $0 == .started }.count, 1)
+        XCTAssertEqual(reads.value, 2)
+        XCTAssertEqual(rig.requests.count, 1, "the second recording should observe the first one's readying request")
+    }
+
+    @MainActor
+    func testAColdLocalModelGetsOneFixedReadyingRequestWithoutUserContent() async throws {
+        let rig = try makeRig(
+            readLocalServer: { _, _ in
+                LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+            })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+        let starting = LockedValue<Bool>()
+
+        let result = await rig.cache.prepareLocalModel(
+            isCurrent: { true },
+            onStarting: { starting.set(true) })
+
+        XCTAssertEqual(result, .started)
+        XCTAssertEqual(starting.value, true)
+        XCTAssertEqual(rig.requests.count, 1)
+        let wire = try XCTUnwrap(rig.requests.all.first?.bodyText)
+        XCTAssertTrue(wire.contains("ok"))
+        XCTAssertTrue(wire.contains("Return only OK."))
+        for privateText in ["transcript-canary", "snippet-canary", "vocabulary-canary"] {
+            XCTAssertFalse(wire.contains(privateText))
+        }
+    }
+
+    @MainActor
+    func testAConfigurationChangeAfterTheResidencyReadSendsNoReadyingRequest() async throws {
+        let storeBox = LockedValue<CleanupSettingsStore>()
+        let rig = try makeRig(
+            readLocalServer: { _, _ in
+                storeBox.value?.openAIModel = "changed-model"
+                return LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+            })
+        storeBox.set(rig.store)
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+        let starting = LockedValue<Bool>()
+
+        let result = await rig.cache.prepareLocalModel(
+            isCurrent: { true },
+            onStarting: { starting.set(true) })
+
+        XCTAssertEqual(result, .configurationChanged)
+        XCTAssertFalse(result.permitsCleanup)
+        XCTAssertEqual(starting.value, nil)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testCloudProvidersAreNeverReadiedOrTouchedByTheLocalManager() async throws {
+        let localReads = LockedValue<Int>()
+        let rig = try makeRig(readLocalServer: { _, _ in
+            localReads.set((localReads.value ?? 0) + 1)
+            return .failed
+        })
+        configureMicrosoftFoundry(rig.store)
+        rig.store.isEnabled = true
+
+        let result = await prepare(rig.cache)
+
+        XCTAssertEqual(result, .notApplicable)
+        XCTAssertEqual(localReads.value, nil)
+        XCTAssertEqual(rig.requests.count, 0)
+        XCTAssertEqual(rig.azureCli.launches, 0)
+    }
+
+    @MainActor
+    func testReadinessTimeoutCancelsItsLocalReadAndReturnsARealTimeout() async throws {
+        let read = HeldWork()
+        let rig = try makeRig(
+            readinessTimer: { _ in
+                await read.waitUntilStarted()
+                throw OperationDeadlineError.exceeded(seconds: 30)
+            },
+            readLocalServer: { _, _ in
+                do {
+                    try await read.hold()
+                } catch {}
+                return .failed
+            })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+
+        let result = await prepare(rig.cache)
+
+        XCTAssertEqual(result, .timedOut)
+        XCTAssertTrue(read.sawCancellation)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testCancellingReadinessCancelsItsLocalRead() async throws {
+        let read = HeldWork()
+        let rig = try makeRig(readLocalServer: { _, _ in
+            do {
+                try await read.hold()
+            } catch {}
+            return .failed
+        })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+
+        let cache = rig.cache
+        let preparing = Task {
+            await cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        }
+        await read.waitUntilStarted()
+        preparing.cancel()
+
+        let result = await preparing.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertTrue(read.sawCancellation)
+        XCTAssertEqual(rig.requests.count, 0)
     }
 }

@@ -448,6 +448,38 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(provider.requests.count, 1, "a provider that could not be built was sent a request")
     }
 
+    func testLocalReadinessFailureFallsBackToRawTranscriptWithoutSendingCleanup() async throws {
+        let harness = makeHarness()
+        harness.cleanup.isEnabled = true
+        harness.cleanup.readinessResult = .failed
+        harness.transcriber.defaultText = "keep every word"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(harness.fakeInjector.texts, ["keep every word "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+        XCTAssertTrue(harness.cleanup.gated?.requests.isEmpty == true)
+        XCTAssertTrue(harness.presenter.noticesShown().contains(.typedWithoutCleanup))
+    }
+
+    func testPillNamesTheLocalModelWhileItIsStarting() async throws {
+        let harness = makeHarness()
+        let readiness = DictationGate<LocalModelPreparationResult>()
+        harness.cleanup.isEnabled = true
+        harness.cleanup.readinessGate = readiness
+
+        _ = try await harness.pressAdmitted()
+        await harness.waitUntilLive()
+        harness.release()
+        await waitUntil("local model readiness is visible") {
+            harness.lastOverlay == .startingLocalModel
+        }
+
+        readiness.open(.started)
+        await harness.waitUntilProcessed()
+    }
+
     /// With cleanup switched off nothing is sent, and the switch is read when the dictation reaches cleanup.
     func testCleanupSwitchedOffSendsNothing() async throws {
         let harness = makeHarness()

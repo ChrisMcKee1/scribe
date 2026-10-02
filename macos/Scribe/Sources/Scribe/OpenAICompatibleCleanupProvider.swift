@@ -17,6 +17,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     private let localModelLane: AsyncLane
     private let localTuning: @Sendable () -> LocalModelTuning
     private let localServerEndpoint: String?
+    private let readLocalServer: @Sendable (_ endpoint: String, _ apiKey: String?) async -> LocalServerState
     private let loadLocalContext: @Sendable (_ endpoint: String, _ model: String, _ contextTokens: Int) async -> String?
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
@@ -45,6 +46,11 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                 contextTokens in
                 await LocalServerClient().loadWithContext(endpoint, modelID: model, contextTokens: contextTokens)
             },
+        readLocalServer: @escaping @Sendable (_ endpoint: String, _ apiKey: String?) async -> LocalServerState = {
+            endpoint,
+            apiKey in
+            await LocalServerClient().read(endpoint, apiKey: apiKey)
+        },
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
@@ -61,6 +67,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.localTuning = localTuning
         self.localServerEndpoint = self.serviceURL.absoluteString
         self.loadLocalContext = loadLocalContext
+        self.readLocalServer = readLocalServer
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
@@ -96,10 +103,37 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         }
     }
 
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        guard localServerApp != .none, let endpoint = localServerEndpoint else { return .notApplicable }
+        let requestedContext = ContextBudget.sanitize(localTuning().contextTokens)
+        return try await localModelLane.run {
+            try await LocalModelReadiness.prepare(
+                isResident: {
+                    let state = await self.readLocalServer(endpoint, self.apiKey)
+                    guard state.reach == .reached else { throw LocalModelReadinessError.unavailable }
+                    guard let loaded = state.loaded(for: self.model) else { return false }
+                    return requestedContext == 0 || loaded.contextTokens == requestedContext
+                },
+                isCurrent: isCurrent,
+                onStarting: onStarting,
+                start: {
+                    _ = try await self.complete(
+                        LocalModelReadiness.request,
+                        plain: false,
+                        local: true,
+                        acquireLane: false)
+                })
+        }
+    }
+
     private func complete(
         _ request: CleanupRequest,
         plain: Bool,
-        local: Bool
+        local: Bool,
+        acquireLane: Bool = true
     ) async throws -> ChatCompletionsTransport.Completion {
         let tuning = localTuning()
         let keepAlive = localServerApp == .ollama && keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil
@@ -151,7 +185,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                 defaultTimeout: timeout,
                 provider: .openAICompatible)
         }
-        return local ? try await localModelLane.run(work) : try await work()
+        return local && acquireLane ? try await localModelLane.run(work) : try await work()
     }
 }
 

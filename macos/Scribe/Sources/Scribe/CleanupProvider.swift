@@ -62,10 +62,23 @@ protocol CleanupProvider: Sendable {
     var usesLocalCleanupPrompt: Bool { get }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse
+
+    /// Checks and, only when needed, starts the local model for the configuration bound to this provider.
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult
 }
 
 extension CleanupProvider {
     var usesLocalCleanupPrompt: Bool { false }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        .notApplicable
+    }
 }
 
 enum CleanupReasoningEffort {

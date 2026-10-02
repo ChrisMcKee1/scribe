@@ -110,8 +110,8 @@ struct DictationNotice: Equatable, Sendable {
     /// own outcome to report.
     static let cleanupFellBack = DictationNotice(
         kind: .cleanupFellBack,
-        title: "AI cleanup could not be used",
-        body: "AI cleanup failed or gave a reply that could not be used for this dictation.",
+        title: "AI cleanup did not run",
+        body: "Check AI cleanup in Settings before trying again.",
         recoveryText: nil,
         settingsPane: nil)
 

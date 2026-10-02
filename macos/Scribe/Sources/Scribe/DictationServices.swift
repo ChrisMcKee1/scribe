@@ -46,11 +46,26 @@ protocol DictationCleaning {
     /// main actor.
     func provider() async throws -> any CleanupProvider
 
+    /// Checks and, only when needed, starts the local model for the configuration stored now.
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult
+
     /// The cleanup settings stored now, for request shaping that belongs outside the provider cache.
     func currentSettings() -> CleanupSettingsSnapshot
 
     /// Drops the cached provider and credential (`CleanupProviderCache.invalidate()`).
     func invalidate()
+}
+
+extension DictationCleaning {
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        .notApplicable
+    }
 }
 
 /// Where a dictation is meant to go, captured when its recording starts.
@@ -203,6 +218,21 @@ struct LiveDictationCleanup: DictationCleaning {
         return try await Task.detached(priority: .userInitiated) {
             try cache.provider()
         }.value
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        let cache = cache
+        let work = Task.detached(priority: .userInitiated) {
+            await cache.prepareLocalModel(isCurrent: isCurrent, onStarting: onStarting)
+        }
+        return await withTaskCancellationHandler {
+            await work.value
+        } onCancel: {
+            work.cancel()
+        }
     }
 
     func currentSettings() -> CleanupSettingsSnapshot {

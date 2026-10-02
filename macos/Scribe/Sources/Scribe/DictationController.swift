@@ -111,6 +111,7 @@ private struct LiveRecording {
     /// The app profiles as they stood at activation, when the rules had loaded by then.
     var profiles: [AppProfile]?
     var deadline: Task<Void, Never>?
+    var localModelPreparation: LocalModelPreparation?
 }
 
 /// A stopped recording admitted to processing, with everything captured when it started. Its samples are sealed off
@@ -123,6 +124,7 @@ private struct AdmittedDictation: Sendable {
     let sealing: Task<CapturedAudio?, Never>
     let stopReason: DictationStopReason
     let lease: ForegroundActivity.Lease
+    let localModelPreparation: LocalModelPreparation?
 }
 
 /// Where a cancelled dictation stopped, for the log.
@@ -284,6 +286,7 @@ final class DictationController {
     private(set) var shutdownProgress = ShutdownProgress.notStarted
     private var recording: LiveRecording?
     private var dictations: [RecordingID: Task<Void, Never>] = [:]
+    private var localModelPreparations: [RecordingID: LocalModelPreparation] = [:]
     private let transcriptionTurns = DictationTurns()
     private let deliveryTurns = DictationTurns()
     private var revision: UInt64 = 0
@@ -291,6 +294,7 @@ final class DictationController {
     private var level = 0.0
     private var lastLevelAt: ContinuousClock.Instant?
     private var notices = DictationNoticeSchedule()
+    private var cleanupNoticeEpisode = CleanupNoticeEpisode()
     private var nextNoticeID: UInt64 = 0
     private var noticeTimer: Task<Void, Never>?
     private var shutdown: Task<DictationShutdownReport, Never>?
@@ -398,6 +402,16 @@ final class DictationController {
         services.cleanup.invalidate()
     }
 
+    /// A new cleanup configuration starts a fresh notice episode and makes every old readiness check stale.
+    func cleanupConfigurationChanged() {
+        _ = cleanupNoticeEpisode.apply(.configurationChanged)
+        recording?.localModelPreparation?.cancel()
+        for preparation in localModelPreparations.values {
+            preparation.cancel()
+        }
+        present()
+    }
+
     /// Clear history started a new recovery generation: a notice about text kept before it, on the pill or waiting
     /// for it, offers text that is gone, and leaves.
     func recoveryWasCleared() {
@@ -486,8 +500,19 @@ final class DictationController {
         levelMeter.reset()
         level = 0
         lastLevelAt = nil
+        let preparation =
+            services.cleanup.isEnabled
+            ? LocalModelPreparation { [weak self] in
+                guard let self, !self.isClosing,
+                    self.recording?.id == id || self.dictations[id] != nil
+                else { return }
+                self.present()
+            }
+            : nil
         recording = LiveRecording(
-            id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin())
+            id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin(),
+            localModelPreparation: preparation)
+        preparation?.start(using: services.cleanup)
         ScribeLog.info(
             .dictation, "Recording admitted", .integer("dictation", id.rawValue), .name("trigger", trigger),
             .name("gesture", trigger.gesture), .flag("stopsOnSilence", policy.stopsOnSilence),
@@ -618,7 +643,10 @@ final class DictationController {
 
         let dictation = AdmittedDictation(
             id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles, sealing: sealing,
-            stopReason: reason, lease: ended.lease)
+            stopReason: reason, lease: ended.lease, localModelPreparation: ended.localModelPreparation)
+        if let preparation = ended.localModelPreparation {
+            localModelPreparations[id] = preparation
+        }
         transcriptionTurns.enroll(id)
         deliveryTurns.enroll(id)
         dictations[id] = Task { [weak self] in
@@ -726,15 +754,19 @@ final class DictationController {
                     pass.text,
                     dictationText: raw,
                     dictation: dictation,
+                    readiness: dictation.localModelPreparation,
                     profile: profile,
                     singleLine: singleLine)
                 guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
                 report.cleanupOutcome = stage.outcome
                 report.cleanupDuration = stage.requestDuration?.seconds
                 if stage.outcome == .fellBack {
+                    let firstFailure = cleanupNoticeEpisode.apply(.failed)
                     let pillIsBusy = recording != nil || notices.shown != nil || !notices.waiting.isEmpty
                     if pillIsBusy {
-                        notify(.cleanupFellBack)
+                        if firstFailure {
+                            notify(.cleanupFellBack)
+                        }
                         cleanupFallbackWasNotified = true
                     }
                 }
@@ -809,6 +841,9 @@ final class DictationController {
                 targetApp: target?.bundleIdentifier ?? target?.processName),
             dictationID: id.rawValue)
         services.reports.publish(report)
+        if report.cleanupOutcome == .cleaned || report.cleanupOutcome == .unchanged {
+            _ = cleanupNoticeEpisode.apply(.recovered)
+        }
         announce(
             injection,
             cleanupOutcome: report.cleanupOutcome,
@@ -823,11 +858,22 @@ final class DictationController {
         _ sent: String,
         dictationText raw: String,
         dictation: AdmittedDictation,
+        readiness: LocalModelPreparation?,
         profile: AppProfile?,
         singleLine: Bool
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
+        if let readiness {
+            let result = await readiness.wait()
+            guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
+            guard result.permitsCleanup else {
+                ScribeLog.warning(
+                    .cleanup, "Local model was not ready, so the raw transcript is used",
+                    .integer("dictation", id.rawValue), .name("readiness", result))
+                return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+            }
+        }
         let provider: any CleanupProvider
         do {
             provider = try await services.cleanup.provider()
@@ -883,6 +929,7 @@ final class DictationController {
         switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: sent) {
         case .accepted(let cleaned):
             let outcome: DictationCleanupOutcome = cleaned == sent ? .unchanged : .cleaned
+            _ = cleanupNoticeEpisode.apply(.recovered)
             ScribeLog.info(
                 .cleanup, "AI cleanup finished", .integer("dictation", id.rawValue), .name("outcome", outcome),
                 .duration("cleanup", elapsed))
@@ -1045,6 +1092,8 @@ final class DictationController {
         transcriptionTurns.finish(dictation.id)
         deliveryTurns.finish(dictation.id)
         dictations[dictation.id] = nil
+        dictation.localModelPreparation?.cancel()
+        localModelPreparations[dictation.id] = nil
         dictation.lease.end()
         showNextNoticeOrPresent()
     }
@@ -1084,7 +1133,9 @@ final class DictationController {
                 .overlay, "The pill is taken, so a notice is posted as a notification", .name("kind", kind),
                 .name("stage", stage))
             if let fallback = Self.fallbackNotification(for: kind) {
-                notify(fallback)
+                if fallback.kind != .cleanupFellBack || cleanupNoticeEpisode.apply(.failed) {
+                    notify(fallback)
+                }
             }
         case .rejected(let rejection):
             checkpoints.rejectedNotices += 1
@@ -1154,12 +1205,14 @@ final class DictationController {
             if recording.phase == .live {
                 return .listening(level: level)
             }
-            return dictations.isEmpty ? .hidden : .processing
+            if dictations.isEmpty { return .hidden }
+            return localModelPreparations.values.contains(where: \.isStarting) ? .startingLocalModel : .processing
         }
         if let shown = notices.shown {
             return .notice(shown.notice.kind)
         }
-        return dictations.isEmpty ? .hidden : .processing
+        if dictations.isEmpty { return .hidden }
+        return localModelPreparations.values.contains(where: \.isStarting) ? .startingLocalModel : .processing
     }
 
     /// Hands the current state to the presenter under the next revision, and returns that revision. Once shutdown has
@@ -1212,6 +1265,7 @@ final class DictationController {
         if let discarded {
             recording = nil
             discarded.deadline?.cancel()
+            discarded.localModelPreparation?.cancel()
             discardedSeal = services.capture.retire(owner: discarded.id)
             discarded.lease.end()
             ScribeLog.info(
@@ -1222,6 +1276,10 @@ final class DictationController {
         // away every later update, so nothing a stopping dictation does can show again.
         presentClosed()
         let running = Array(dictations.values)
+        recording?.localModelPreparation?.cancel()
+        for preparation in localModelPreparations.values {
+            preparation.cancel()
+        }
         ScribeLog.info(
             .dictation, "Shutting down: nothing new starts and dictations in progress are stopped",
             .flag("recording", discarded != nil), .count("processing", running.count))

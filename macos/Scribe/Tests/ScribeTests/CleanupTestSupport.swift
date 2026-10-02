@@ -687,7 +687,8 @@ extension CleanupProviderFactory {
         azureCliLaunch: AzureCliCredentialProvider.Launch? = nil,
         azureCliSearchPath: [String] = [],
         lane: AsyncLane = AsyncLane(),
-        clock: TestClock = TestClock()
+        clock: TestClock = TestClock(),
+        readLocalServer: (@Sendable (String, String?) async -> LocalServerState)? = nil
     ) -> CleanupProviderFactory {
         let missing: AzureCliCredentialProvider.Launch = { _ in throw ProcessRunnerError.launchFailed(errno: ENOENT) }
         let launch = azureCliLaunch ?? azureCli?.launch ?? missing
@@ -697,6 +698,9 @@ extension CleanupProviderFactory {
             azureCliSearchPath: azureCliSearchPath,
             azureCliLane: lane,
             azureCliLaunch: launch,
+            readLocalServer: readLocalServer ?? { endpoint, apiKey in
+                await LocalServerClient(session: session).read(endpoint, apiKey: apiKey)
+            },
             now: clock.now,
             monotonicNow: clock.monotonicNow)
     }

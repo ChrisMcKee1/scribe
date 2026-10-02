@@ -501,6 +501,8 @@ final class GatedCleanupProvider: CleanupProvider {
 @MainActor
 final class FakeCleanup: DictationCleaning {
     var isEnabled = false
+    var readinessResult: LocalModelPreparationResult = .notApplicable
+    var readinessGate: DictationGate<LocalModelPreparationResult>?
     var providerError: (any Error)?
     var cleanupProvider: any CleanupProvider
     var settings = CleanupSettingsSnapshot(
@@ -540,6 +542,25 @@ final class FakeCleanup: DictationCleaning {
             throw providerError
         }
         return cleanupProvider
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        guard await isCurrent() else { return .configurationChanged }
+        if let readinessGate {
+            await onStarting()
+            do {
+                return try await readinessGate.wait()
+            } catch {
+                return .cancelled
+            }
+        }
+        if readinessResult == .started {
+            await onStarting()
+        }
+        return readinessResult
     }
 
     func currentSettings() -> CleanupSettingsSnapshot {

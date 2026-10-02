@@ -27,6 +27,7 @@ final class CleanupProviderCache: Sendable {
     private let factory: CleanupProviderFactory
     private let deadlineForCheck: @Sendable (CleanupProviderKind) -> Duration
     private let checkTimer: @Sendable (Duration) async throws -> Void
+    private let readinessTimer: @Sendable (Duration) async throws -> Void
     private let state = OSAllocatedUnfairLock(initialState: CleanupProviderCacheState())
 
     /// - Parameters:
@@ -39,13 +40,15 @@ final class CleanupProviderCache: Sendable {
         checkDeadline: @escaping @Sendable (CleanupProviderKind) -> Duration = {
             CleanupProviderCache.checkDeadline(for: $0)
         },
-        checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        readinessTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.store = store
         self.environment = environment
         self.factory = factory
         self.deadlineForCheck = checkDeadline
         self.checkTimer = checkTimer
+        self.readinessTimer = readinessTimer
     }
 
     /// The provider for the configuration stored now: the cached one when the configuration matches, otherwise a new
@@ -63,6 +66,73 @@ final class CleanupProviderCache: Sendable {
     func invalidate() {
         state.withLock { $0.invalidate() }
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
+    }
+
+    /// Starts only a known local model. Building the provider, waiting for the shared model lane, checking residency
+    /// and the one-token readying request all share the 30 second deadline. A cloud or unknown endpoint is never
+    /// probed. The request uses a fixed token and prompt, with no admitted vocabulary or dictated content.
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        let connection: CleanupConnection
+        do {
+            connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+        } catch {
+            return .notApplicable
+        }
+        guard Self.isRecognizedLocal(connection, selectedApp: store.snapshot().selectedLocalApp) else {
+            return .notApplicable
+        }
+        do {
+            return try await OperationDeadline.run(within: LocalModelDefaults.startWait, sleep: readinessTimer) {
+                try Task.checkCancellation()
+                let provider = try self.entry(for: connection).provider
+                guard await self.isCurrent(connection, requested: isCurrent) else { return .configurationChanged }
+                let result = try await provider.prepareLocalModel(
+                    isCurrent: {
+                        await self.isCurrent(connection, requested: isCurrent)
+                    },
+                    onStarting: onStarting)
+                guard await self.isCurrent(connection, requested: isCurrent) else { return .configurationChanged }
+                return result
+            }
+        } catch is CancellationError {
+            return .cancelled
+        } catch is OperationDeadlineError {
+            ScribeLog.warning(.cleanup, "Local model did not become ready within the allowed time")
+            return .timedOut
+        } catch {
+            ScribeLog.warning(.cleanup, "Local model readiness failed", .failure(error))
+            return .failed
+        }
+    }
+
+    private static func isRecognizedLocal(
+        _ connection: CleanupConnection,
+        selectedApp: LocalServerApp
+    ) -> Bool {
+        switch connection.target {
+        case .ollama:
+            return true
+        case .openAICompatible(let serviceURL, _, _, _):
+            guard connection.source == .settings, selectedApp != .none else { return false }
+            return LocalAiServer.appAt(serviceURL.absoluteString) == selectedApp
+        case .foundryLocal, .microsoftFoundry:
+            return false
+        }
+    }
+
+    private func isCurrent(
+        _ connection: CleanupConnection,
+        requested: @escaping @MainActor @Sendable () async -> Bool
+    ) async -> Bool {
+        guard await requested(), store.isEnabled,
+            let current = try? CleanupProviderResolver.connection(store: store, environment: environment)
+        else {
+            return false
+        }
+        return current == connection
     }
 
     /// Test Connection: a real cleanup request for a one-word transcript, with the default writing style, through the

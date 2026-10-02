@@ -72,6 +72,7 @@ struct CleanupProviderFactory: Sendable {
     var azureCliSearchPath: [String]
     var azureCliLane: AsyncLane
     var azureCliLaunch: AzureCliCredentialProvider.Launch
+    var readLocalServer: @Sendable (_ endpoint: String, _ apiKey: String?) async -> LocalServerState
     /// Wall-clock time, for token expiry.
     var now: @Sendable () -> Date
     /// Elapsed time, for how long Foundry Local's endpoint is trusted.
@@ -84,6 +85,9 @@ struct CleanupProviderFactory: Sendable {
             azureCliSearchPath: ProcessRunner.defaultSearchPath(),
             azureCliLane: AzureCliCredentialProvider.processLane,
             azureCliLaunch: AzureCliCredentialProvider.launchThroughProcessRunner,
+            readLocalServer: { endpoint, apiKey in
+                await LocalServerClient().read(endpoint, apiKey: apiKey)
+            },
             now: { Date() },
             monotonicNow: { ContinuousClock.now })
     }
@@ -139,7 +143,10 @@ enum CleanupProviderResolver {
                 modelAlias: modelAlias, status: factory.foundryLocalStatus, session: factory.session,
                 now: factory.monotonicNow)
         case .ollama(let model):
-            return ManagedOllamaCleanupProvider(model: model, session: factory.session)
+            return ManagedOllamaCleanupProvider(
+                model: model,
+                readLocalServer: { endpoint in await factory.readLocalServer(endpoint, nil) },
+                session: factory.session)
         case .openAICompatible(let serviceURL, let model, let keySource, let apiStyle):
             let apiKey: String?
             switch keySource {
@@ -166,6 +173,7 @@ enum CleanupProviderResolver {
                 localTuning: {
                     connection.source == .settings ? LocalModelTuning.forSettings(store.snapshot()) : .none
                 },
+                readLocalServer: factory.readLocalServer,
                 session: factory.session)
         case .microsoftFoundry(let inferenceBase, let deployment, let identity):
             let credential = try credentialSource(identity) {
