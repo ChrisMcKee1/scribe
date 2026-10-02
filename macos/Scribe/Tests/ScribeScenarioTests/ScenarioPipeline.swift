@@ -233,6 +233,7 @@ final class ScenarioCleanupSource: DictationCleaning {
         selectedLocalApp: .none,
         openAIBaseURL: "",
         openAIModel: "",
+        openAIApiStyle: .chatCompletions,
         ollamaContextTokens: 0,
         lmStudioContextTokens: 0,
         foundryLocalSendWholeVocabulary: false,
@@ -243,6 +244,7 @@ final class ScenarioCleanupSource: DictationCleaning {
         azureAuthMode: .azureCli,
         azureTenantId: "",
         azureClientId: "",
+        otherServiceApiStyle: .chatCompletions,
         secretRevision: "")
     private(set) var invalidations = 0
 

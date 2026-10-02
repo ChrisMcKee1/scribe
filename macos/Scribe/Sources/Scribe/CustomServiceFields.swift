@@ -6,8 +6,9 @@ enum CustomServiceFields {
     struct Fields: Sendable, Equatable {
         var endpoint: String?
         var model: String?
+        var apiStyle: CustomAPIStyle = .chatCompletions
 
-        static let none = Fields(endpoint: nil, model: nil)
+        static let none = Fields(endpoint: nil, model: nil, apiStyle: .chatCompletions)
     }
 
     static func savedApp(values: CleanupSettingsValues, hasSavedAPIKey: Bool) -> LocalServerApp {
@@ -44,9 +45,15 @@ enum CustomServiceFields {
 
     static func otherService(values: CleanupSettingsValues, hasSavedAPIKey: Bool) -> Fields {
         if savedApp(values: values, hasSavedAPIKey: hasSavedAPIKey) == .none {
-            return Fields(endpoint: trimmed(values.openAIBaseURL), model: trimmed(values.openAIModel))
+            return Fields(
+                endpoint: trimmed(values.openAIBaseURL),
+                model: trimmed(values.openAIModel),
+                apiStyle: values.openAIApiStyle)
         }
-        return Fields(endpoint: trimmed(values.otherServiceBaseURL), model: trimmed(values.otherServiceModel))
+        return Fields(
+            endpoint: trimmed(values.otherServiceBaseURL),
+            model: trimmed(values.otherServiceModel),
+            apiStyle: values.otherServiceApiStyle)
     }
 
     static func forSave(
@@ -57,7 +64,8 @@ enum CustomServiceFields {
     ) -> (stored: Fields, remembered: Fields) {
         let remembered = Fields(
             endpoint: trimmed(otherService.endpoint),
-            model: trimmed(otherService.model))
+            model: trimmed(otherService.model),
+            apiStyle: CustomServiceAddress.effective(otherService.endpoint, chosen: otherService.apiStyle))
         guard app != .none else {
             return (remembered, .none)
         }
@@ -71,7 +79,8 @@ enum CustomServiceFields {
         return (
             Fields(
                 endpoint: storedEndpoint,
-                model: trimmed(appModel)
+                model: trimmed(appModel),
+                apiStyle: .chatCompletions
             ),
             remembered
         )

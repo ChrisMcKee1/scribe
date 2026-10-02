@@ -78,18 +78,21 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         assertNotConfigured(fixture.store, .openAIModelMissing)
     }
 
-    func testOpenAICompatibleResolvesWithItsCompletionsURLAndTheSecretRevision() throws {
+    func testOpenAICompatibleResolvesWithItsServiceURLAndTheSecretRevision() throws {
         let fixture = makeCleanupStore()
         fixture.store.providerKind = .openAICompatible
         fixture.store.openAIBaseURL = "https://openrouter.ai/api/v1"
         fixture.store.openAIModel = "some/model"
+        fixture.store.openAIApiStyle = .responses
         try fixture.store.setOpenAIApiKey("sk-test")
 
         XCTAssertEqual(
             try connection(fixture.store).target,
             .openAICompatible(
-                completionsURL: URL(string: "https://openrouter.ai/api/v1/chat/completions")!, model: "some/model",
-                apiKey: .secretStore(revision: fixture.store.secretRevision)))
+                serviceURL: URL(string: "https://openrouter.ai/api/v1")!,
+                model: "some/model",
+                apiKey: .secretStore(revision: fixture.store.secretRevision),
+                apiStyle: .responses))
         let provider = try makeProvider(fixture.store)
         XCTAssertEqual(provider.id, "openai-compatible")
         XCTAssertEqual(provider.displayName, "OpenAI-compatible endpoint")
@@ -250,8 +253,10 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         XCTAssertEqual(
             resolved.target,
             .openAICompatible(
-                completionsURL: URL(string: "http://127.0.0.1:1234/v1/chat/completions")!, model: "local-model",
-                apiKey: .environment))
+                serviceURL: URL(string: "http://127.0.0.1:1234/v1")!,
+                model: "local-model",
+                apiKey: .environment,
+                apiStyle: .chatCompletions))
         PrivacyCanary.assertAbsent(from: String(describing: resolved))
         XCTAssertEqual(log.all.first?.header("Authorization"), "Bearer \(PrivacyCanary.secret)")
     }

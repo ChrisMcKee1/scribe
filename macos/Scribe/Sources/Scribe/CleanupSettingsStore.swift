@@ -42,6 +42,7 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var selectedLocalApp: LocalServerApp
     var openAIBaseURL: String
     var openAIModel: String
+    var openAIApiStyle: CustomAPIStyle
     var ollamaContextTokens: Int
     var lmStudioContextTokens: Int
     var foundryLocalSendWholeVocabulary: Bool
@@ -53,6 +54,7 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var azureAuthMode: AzureAuthMode
     var azureTenantId: String
     var azureClientId: String
+    var otherServiceApiStyle: CustomAPIStyle
     var secretRevision: String
 }
 
@@ -90,6 +92,7 @@ struct CleanupSettingsStore: Sendable {
         static let selectedLocalApp = "ScribeCleanupSelectedLocalApp"
         static let openAIBaseURL = "ScribeCleanupOpenAIBaseURL"
         static let openAIModel = "ScribeCleanupOpenAIModel"
+        static let openAIApiStyle = "ScribeCleanupOpenAIApiStyle"
         static let ollamaContextTokens = "ScribeCleanupOllamaContextTokens"
         static let lmStudioContextTokens = "ScribeCleanupLmStudioContextTokens"
         static let foundryLocalSendWholeVocabulary = "ScribeCleanupFoundryLocalSendWholeVocabulary"
@@ -97,6 +100,7 @@ struct CleanupSettingsStore: Sendable {
         static let lmStudioSendWholeVocabulary = "ScribeCleanupLmStudioSendWholeVocabulary"
         static let otherServiceBaseURL = "ScribeCleanupOtherServiceBaseURL"
         static let otherServiceModel = "ScribeCleanupOtherServiceModel"
+        static let otherServiceApiStyle = "ScribeCleanupOtherServiceApiStyle"
         static let azureEndpoint = "ScribeCleanupAzureEndpoint"
         static let azureDeployment = "ScribeCleanupAzureDeployment"
         static let azurePromptCaching = "ScribeCleanupAzurePromptCaching"
@@ -192,6 +196,11 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue, forKey: Key.openAIModel) }
     }
 
+    var openAIApiStyle: CustomAPIStyle {
+        get { CustomAPIStyle(rawValue: defaults.string(forKey: Key.openAIApiStyle) ?? "") ?? .chatCompletions }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.openAIApiStyle) }
+    }
+
     var ollamaContextTokens: Int {
         get { defaults.integer(forKey: Key.ollamaContextTokens) }
         nonmutating set { defaults.set(newValue, forKey: Key.ollamaContextTokens) }
@@ -225,6 +234,13 @@ struct CleanupSettingsStore: Sendable {
     var otherServiceModel: String {
         get { defaults.string(forKey: Key.otherServiceModel) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.otherServiceModel) }
+    }
+
+    var otherServiceApiStyle: CustomAPIStyle {
+        get {
+            CustomAPIStyle(rawValue: defaults.string(forKey: Key.otherServiceApiStyle) ?? "") ?? .chatCompletions
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.otherServiceApiStyle) }
     }
 
     var azureEndpoint: String {
@@ -282,6 +298,8 @@ struct CleanupSettingsStore: Sendable {
             selectedLocalApp: LocalServerApp(rawValue: defaults.string(forKey: Key.selectedLocalApp) ?? "") ?? .none,
             openAIBaseURL: defaults.string(forKey: Key.openAIBaseURL) ?? "",
             openAIModel: defaults.string(forKey: Key.openAIModel) ?? "",
+            openAIApiStyle: CustomAPIStyle(rawValue: defaults.string(forKey: Key.openAIApiStyle) ?? "")
+                ?? .chatCompletions,
             ollamaContextTokens: defaults.integer(forKey: Key.ollamaContextTokens),
             lmStudioContextTokens: defaults.integer(forKey: Key.lmStudioContextTokens),
             foundryLocalSendWholeVocabulary: defaults.bool(forKey: Key.foundryLocalSendWholeVocabulary),
@@ -293,6 +311,8 @@ struct CleanupSettingsStore: Sendable {
             azureAuthMode: Self.azureAuthMode(in: defaults),
             azureTenantId: defaults.string(forKey: Key.azureTenantId) ?? "",
             azureClientId: defaults.string(forKey: Key.azureClientId) ?? "",
+            otherServiceApiStyle: CustomAPIStyle(rawValue: defaults.string(forKey: Key.otherServiceApiStyle) ?? "")
+                ?? .chatCompletions,
             secretRevision: defaults.string(forKey: Key.secretRevision) ?? "")
     }
 

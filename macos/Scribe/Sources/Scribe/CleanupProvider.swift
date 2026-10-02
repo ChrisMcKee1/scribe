@@ -243,6 +243,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
     case ollamaModelMissing
     case openAIEndpointMissing
     case openAIEndpointInvalid
+    case openAIOldCompletionsPath
     case openAIModelMissing
     case azureEndpointMissing
     case azureEndpointInvalid
@@ -263,6 +264,9 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
             fix = "Enter the endpoint's base URL and its model"
         case .openAIEndpointInvalid:
             fix = "Enter an endpoint address that starts with http:// or https:// and names a host"
+        case .openAIOldCompletionsPath:
+            fix = "Enter the service base address, or one ending in /chat/completions or /responses. The older "
+                + "/completions path is not supported"
         case .azureEndpointInvalid:
             fix =
                 "Enter the Microsoft Foundry endpoint as an https:// address that names the resource (for example "

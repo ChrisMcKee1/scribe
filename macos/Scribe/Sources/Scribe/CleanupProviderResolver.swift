@@ -11,7 +11,11 @@ struct CleanupConnection: Hashable, Sendable, CustomStringConvertible, CustomRef
     enum Target: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
         case foundryLocal(modelAlias: String)
         case ollama(model: String)
-        case openAICompatible(completionsURL: URL, model: String, apiKey: CleanupSecretSource)
+        case openAICompatible(
+            serviceURL: URL,
+            model: String,
+            apiKey: CleanupSecretSource,
+            apiStyle: CustomAPIStyle)
         case microsoftFoundry(inferenceBase: URL, deployment: String, identity: AzureIdentity)
 
         var kind: CleanupProviderKind {
@@ -136,7 +140,7 @@ enum CleanupProviderResolver {
                 now: factory.monotonicNow)
         case .ollama(let model):
             return ManagedOllamaCleanupProvider(model: model, session: factory.session)
-        case .openAICompatible(let completionsURL, let model, let keySource):
+        case .openAICompatible(let serviceURL, let model, let keySource, let apiStyle):
             let apiKey: String?
             switch keySource {
             case .environment:
@@ -149,14 +153,15 @@ enum CleanupProviderResolver {
                 localServerApp =
                     store.selectedLocalApp != .none
                     ? store.selectedLocalApp
-                    : (apiKey == nil ? LocalAiServer.appForChatCompletionsURL(completionsURL) : .none)
+                    : (apiKey == nil ? LocalAiServer.appAt(serviceURL.absoluteString) : .none)
             } else {
                 localServerApp = .none
             }
             return OpenAICompatibleCleanupProvider(
                 model: model,
                 apiKey: apiKey,
-                completionsURL: completionsURL,
+                serviceURL: serviceURL,
+                apiStyle: apiStyle,
                 localServerApp: localServerApp,
                 localTuning: {
                     connection.source == .settings ? LocalModelTuning.forSettings(store.snapshot()) : .none
@@ -218,7 +223,7 @@ enum CleanupProviderResolver {
         case "openai-compatible":
             return try openAICompatibleConnection(
                 baseURL: environment["SCRIBE_CLEANUP_BASE_URL"], model: environment["SCRIBE_CLEANUP_MODEL"],
-                apiKey: .environment, source: source)
+                apiKey: .environment, source: source, apiStyle: .chatCompletions)
         default:
             return try foundryLocalConnection(
                 modelAlias: environment["SCRIBE_FOUNDRY_CLEANUP_MODEL"]
@@ -236,8 +241,11 @@ enum CleanupProviderResolver {
             return try ollamaConnection(model: settings.ollamaModel, source: source)
         case .openAICompatible:
             return try openAICompatibleConnection(
-                baseURL: settings.openAIBaseURL, model: settings.openAIModel,
-                apiKey: .secretStore(revision: settings.secretRevision), source: source)
+                baseURL: settings.openAIBaseURL,
+                model: settings.openAIModel,
+                apiKey: .secretStore(revision: settings.secretRevision),
+                source: source,
+                apiStyle: settings.openAIApiStyle)
         case .microsoftFoundry:
             return try microsoftFoundryConnection(
                 endpoint: settings.azureEndpoint,
@@ -269,21 +277,36 @@ enum CleanupProviderResolver {
     }
 
     private static func openAICompatibleConnection(
-        baseURL: String?, model: String?, apiKey: CleanupSecretSource, source: CleanupConfigurationSource
+        baseURL: String?,
+        model: String?,
+        apiKey: CleanupSecretSource,
+        source: CleanupConfigurationSource,
+        apiStyle: CustomAPIStyle
     ) throws -> CleanupConnection {
         guard let baseText = trimmed(baseURL) else {
             throw CleanupProviderError.notConfigured(.openAIEndpointMissing, source: source)
         }
+        if CustomServiceAddress.namesOldCompletions(baseText) {
+            throw CleanupProviderError.notConfigured(.openAIOldCompletionsPath, source: source)
+        }
         guard let base = URL(string: baseText),
-            let completionsURL = OpenAICompatibleEndpoint.chatCompletionsURL(for: base)
+            let scheme = base.scheme?.lowercased(),
+            (scheme == "http" || scheme == "https"),
+            base.host?.isEmpty == false
         else {
             throw CleanupProviderError.notConfigured(.openAIEndpointInvalid, source: source)
         }
         guard let model = trimmed(model) else {
             throw CleanupProviderError.notConfigured(.openAIModelMissing, source: source)
         }
+        let style = CustomServiceAddress.effective(baseText, chosen: apiStyle)
         return CleanupConnection(
-            target: .openAICompatible(completionsURL: completionsURL, model: model, apiKey: apiKey), source: source)
+            target: .openAICompatible(
+                serviceURL: CustomServiceAddress.baseURL(base),
+                model: model,
+                apiKey: apiKey,
+                apiStyle: style),
+            source: source)
     }
 
     private static func microsoftFoundryConnection(

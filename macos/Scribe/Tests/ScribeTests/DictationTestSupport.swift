@@ -511,6 +511,7 @@ final class FakeCleanup: DictationCleaning {
         selectedLocalApp: .none,
         openAIBaseURL: "",
         openAIModel: "",
+        openAIApiStyle: .chatCompletions,
         ollamaContextTokens: 0,
         lmStudioContextTokens: 0,
         foundryLocalSendWholeVocabulary: false,
@@ -521,6 +522,7 @@ final class FakeCleanup: DictationCleaning {
         azureAuthMode: .azureCli,
         azureTenantId: "",
         azureClientId: "",
+        otherServiceApiStyle: .chatCompletions,
         secretRevision: "")
     private(set) var invalidations = 0
 
