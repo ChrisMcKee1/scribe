@@ -48,17 +48,15 @@ extension WordPackWorkspace {
             }
         }
         if library.builtIn {
+            var owners: [LibraryTermKey: [Int64]] = [:]
+            for row in rows { owners[row.row.key, default: []].append(row.rowID) }
             for row in rows {
-                for other in rows where other.rowID != row.rowID {
-                    if other.row.key == row.row.key
-                        || other.row.key == LibraryTermKey.from(row.row.values.spoken)
-                    {
-                        issues.append(
-                            LibraryValidationIssue(
-                                libraryID: library.id, rowID: row.rowID, kind: .duplicateSpoken,
-                                field: .spoken, otherRowID: other.rowID))
-                        break
-                    }
+                let met = (owners[row.row.key] ?? []) + (owners[LibraryTermKey.from(row.row.values.spoken)] ?? [])
+                if let other = met.first(where: { $0 != row.rowID }) {
+                    issues.append(
+                        LibraryValidationIssue(
+                            libraryID: library.id, rowID: row.rowID, kind: .duplicateSpoken,
+                            field: .spoken, otherRowID: other))
                 }
             }
         }
@@ -71,9 +69,11 @@ extension WordPackWorkspace {
         let old = baseline.libraries.first { $0.id == libraryID }
         if field == .name && value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             kind = .emptyName
-        } else if field == .name && state.libraries.contains(where: {
-            $0.id != libraryID && !$0.pendingDelete && $0.name.caseInsensitiveCompare(value) == .orderedSame
-        }) && value != old?.name {
+        } else if field == .name
+            && state.libraries.contains(where: {
+                $0.id != libraryID && !$0.pendingDelete && $0.name.caseInsensitiveCompare(value) == .orderedSame
+            }) && value != old?.name
+        {
             kind = .duplicateName
         } else if value.contains("\"") {
             let kept: String?

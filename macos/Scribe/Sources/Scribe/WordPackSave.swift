@@ -69,6 +69,10 @@ actor WordPackSaveCoordinator {
         var images: [WordPackFileImage] = []
         for draft in changes.libraries {
             let old = catalog.find(id: draft.id)
+            guard let expected = changes.expectedContent[draft.id],
+                expected.existed == (old != nil), expected.hash == old?.contentHash,
+                expected.fileName == old?.fileName
+            else { throw WordPackError.outsideChange }
             let path = draft.builtIn ? "edits/\(draft.id).json" : (old?.fileName ?? "\(draft.id).csv")
             let url = try WordPackMaterializer.safeURL(root: service.librariesDirectory, relativePath: path)
             let current = try WordPackMaterializer.readIfPresent(url)
@@ -133,7 +137,19 @@ actor WordPackSaveCoordinator {
         local.health = .ok
         local.normalize()
         // Old builds consume this projection. Withheld packs still apply locally in the new model.
-        let projection = local.enabledIds.filter { local.aiPermissions[$0.lowercased()] != false }
+        var projectionGroups: [String: [String]] = [:]
+        for item in catalog.libraries where !changes.libraries.contains(where: { $0.id == item.id && $0.pendingDelete }) {
+            let key = item.builtIn ? item.id : item.fileName.map {
+                URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
+            } ?? item.id
+            projectionGroups[key, default: []].append(item.id)
+        }
+        for draft in changes.libraries where !draft.pendingDelete && catalog.find(id: draft.id) == nil {
+            projectionGroups[draft.id, default: []].append(draft.id)
+        }
+        let projection = projectionGroups.filter { _, ids in
+            ids.allSatisfy { local.enabledIdSet.contains($0.lowercased()) && local.aiPermissions[$0.lowercased()] != false }
+        }.map(\.key).sorted()
         local.legacyEnabledIds = projection
         let id = UUID()
         let journal = WordPackJournal(
@@ -169,7 +185,9 @@ actor WordPackSaveCoordinator {
     func commit(
         _ prepared: WordPackPreparedSave, alongside participants: [StoredSettingsParticipant] = []
     ) async -> WordPackCommitOutcome {
-        guard preparations[prepared.id] != nil else { return .notCommitted }
+        guard let held = preparations[prepared.id],
+            held.participant == prepared.participant, held.changes == prepared.changes
+        else { return .notCommitted }
         do {
             try await store.commitSettingsParticipants(participants + [prepared.participant])
         } catch {
@@ -200,6 +218,21 @@ actor WordPackSaveCoordinator {
 
     func recentlyDeleted() async throws -> [RecentlyDeletedWordPack] {
         try Self.decodeDeleted(await store.loadStringSetting(key: WordPackJournal.deletedKey))
+    }
+
+    /// Explicit recovery choice: keep every outside image in a separate backup, then finish the already committed Save.
+    func preserveOutsideChangesAndFinish() async throws -> WordPackCommitOutcome {
+        guard try await WordPackMaterializer.preserveOutsideChanges(store: store, service: service) else {
+            return .savedPendingRecovery
+        }
+        return try await WordPackMaterializer.recover(store: store, service: service) ? .saved : .savedPendingRecovery
+    }
+
+    func previousBuiltInEdits(_ libraryID: String) throws -> BuiltInLibraryEdits? {
+        let path = "edits/\(libraryID).previous.json"
+        let url = try WordPackMaterializer.safeURL(root: service.librariesDirectory, relativePath: path)
+        guard let data = try WordPackMaterializer.readIfPresent(url) else { return nil }
+        return BuiltInLibraryOverlay.read(libraryID: libraryID, data: data).edits
     }
 
     static func decodeDeleted(_ raw: String?) throws -> [RecentlyDeletedWordPack] {

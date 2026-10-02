@@ -92,6 +92,15 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     func enabledLibraryEntries() -> [DictionaryEntry] {
+        if let persistenceStore,
+            let raw = try? persistenceStore.readStringSetting(key: Self.libraryStateKey),
+            let state = try? decodeState(raw)
+        {
+            let catalog = LibraryCatalog(
+                generation: state.generation, libraries: decorate(libraries: loadCatalogLibraries(), with: state),
+                localState: state)
+            return compose(catalog: catalog).entries
+        }
         let enabledIDs = settings.enabledLibraryIds
         guard !enabledIDs.isEmpty else { return [] }
 
@@ -195,7 +204,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     private func loadCatalogLibraries() -> [CatalogLibrary] {
-        let builtIns = loadBuiltIns()
+        let builtIns = loadBuiltIns() + loadRetiredBuiltIns()
         let customs = loadCustomLibraries()
         let libraries = sortCatalogLibraries(builtIns + customs)
         guard let persistenceStore else { return libraries }
@@ -294,17 +303,42 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     private func loadCustomLibraries() -> [CatalogLibrary] {
-        let fileURLs = libraryFiles()
+        let fileURLs = libraryFiles().sorted { $0.lastPathComponent < $1.lastPathComponent }
         guard !fileURLs.isEmpty else {
             return []
         }
 
+        private func loadRetiredBuiltIns() -> [CatalogLibrary] {
+            let root = librariesDirectory.appendingPathComponent("edits", isDirectory: true)
+            let files = (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+            let shipped = Set(BuiltInDictionaryLibraries.all.map { $0.id.lowercased() })
+            return files.compactMap { url in
+                let id = url.deletingPathExtension().lastPathComponent
+                guard url.pathExtension == "json", !shipped.contains(id.lowercased()),
+                    !id.hasSuffix(".previous"), !id.contains(".backup-"),
+                    let data = try? Data(contentsOf: url)
+                else { return nil }
+                let result = BuiltInLibraryOverlay.read(libraryID: id, data: data)
+                let entries = result.edits?.terms.compactMap { $0.value?.dictionaryEntry } ?? []
+                let library = DictionaryLibrary(
+                    id: id, name: BuiltInDictionaryLibraries.humanize(id), category: "Built-in",
+                    description: nil, builtIn: true, entries: entries)
+                return CatalogLibrary(
+                    library: library, state: result.state, contentHash: LibraryContentHash(data: data),
+                    origin: .retiredBuiltIn, edits: result.edits, previousEditsAvailable: false, readErrorCount: 0)
+            }
+        }
+
         var libraries: [CatalogLibrary] = []
+        let builtInIDs = Set(BuiltInDictionaryLibraries.all.map { $0.id.lowercased() })
+        var taken = Array(builtInIDs) + fileURLs.map { $0.deletingPathExtension().lastPathComponent }
         for fileURL in fileURLs where fileURL.pathExtension.lowercased() == "csv" {
-            let id = fileURL.deletingPathExtension().lastPathComponent
-            guard !id.isEmpty, let data = try? Data(contentsOf: fileURL) else {
+            let stem = fileURL.deletingPathExtension().lastPathComponent
+            guard !stem.isEmpty, let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
+            let id = builtInIDs.contains(stem.lowercased()) ? LibraryNaming.remapID(stem: stem, takenIDs: taken) : stem
+            taken.append(id)
 
             let file = DictionaryLibraryCsv.parseManaged(data)
             let state: LibraryFileState
@@ -358,9 +392,40 @@ final class DictionaryLibraryService: @unchecked Sendable {
         let raw = try await persistenceStore.loadStringSetting(key: Self.libraryStateKey)
         var state = try decodeState(raw) ?? migratedState(for: libraries)
         state.normalize()
-        let synced = state.health == .ok && synchronizeLegacyProjection(state: &state, libraries: libraries)
-        if raw == nil || synced {
-            try await saveState(state)
+        let pending = try await persistenceStore.loadStringSetting(key: WordPackJournal.key)
+        let synced = pending == nil && state.health == .ok && synchronizeLegacyProjection(state: &state, libraries: libraries)
+        var replaced = false
+        if pending == nil && state.health == .ok {
+            for library in libraries where library.state == .available || library.state == .partlyReadable {
+                let key = library.id.lowercased()
+                let accepted = state.acceptedContent[key]
+                let changed = library.builtIn
+                    ? accepted != library.contentHash?.value
+                    : accepted == nil || accepted != library.contentHash?.value
+                if changed && (state.enabledIdSet.contains(key) || state.aiPermissions[key] == true) {
+                    state.setEnabled(false, for: library.id)
+                    state.setAIPermission(false, for: library.id)
+                    replaced = true
+                }
+            }
+            if replaced {
+                state.generation += 1
+                state.legacyEnabledIds = state.enabledIds.filter { state.aiPermissions[$0.lowercased()] != false }
+                settings.enabledLibraryIds = Set(state.legacyEnabledIds)
+            }
+        }
+        if raw == nil || synced || replaced {
+            let value = String(decoding: try JSONEncoder().encode(state), as: UTF8.self)
+            do {
+                try await persistenceStore.commitSettingsParticipants([
+                    StoredSettingsParticipant(
+                        checks: [StoredSettingCheck(key: Self.libraryStateKey, expected: raw)],
+                        writes: [StoredSettingWrite(key: Self.libraryStateKey, value: value)])
+                ])
+            } catch StoredSettingsCommitError.conflict {
+                return try decodeState(await persistenceStore.loadStringSetting(key: Self.libraryStateKey))
+                    ?? unreadableState()
+            }
         }
         return state
     }
@@ -373,6 +438,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
             return unreadableState()
         }
         do {
+            if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let version = object["version"] as? Int, version > 1
+            {
+                var newer = unreadableState()
+                newer.health = .newer
+                return newer
+            }
             var state = try JSONDecoder().decode(LibraryLocalState.self, from: data)
             state.normalize()
             return state
@@ -400,6 +472,12 @@ final class DictionaryLibraryService: @unchecked Sendable {
         state.health = .ok
         state.enabledIds = settings.enabledLibraryIds.sorted()
         state.legacyEnabledIds = state.enabledIds
+        for library in libraries where !library.builtIn {
+            let stem = library.fileName.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }
+            if let stem, settings.enabledLibraryIds.contains(stem), stem != library.id {
+                state.enabledIds.append(library.id)
+            }
+        }
         for library in libraries where !library.builtIn {
             state.aiPermissions[library.id.lowercased()] = true
             state.setAcceptedContent(library.contentHash, for: library.id)
@@ -430,7 +508,12 @@ final class DictionaryLibraryService: @unchecked Sendable {
             return false
         }
 
-        let groups = Dictionary(uniqueKeysWithValues: libraries.map { ($0.id.lowercased(), [$0.id.lowercased()]) })
+        let groups = Dictionary(grouping: libraries) {
+            if !$0.builtIn, let file = $0.fileName {
+                return URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent.lowercased()
+            }
+            return $0.id.lowercased()
+        }.mapValues { $0.map { $0.id.lowercased() } }
         var enabled = state.enabledIdSet
         for added in currentLegacy.subtracting(previousLegacy) {
             enabled.formUnion(groups[added] ?? [])
@@ -478,54 +561,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     func compose(catalog: LibraryCatalog) -> LibraryComposition {
-        let activeLibraries = catalog.libraries.filter {
-            isEnabled($0.id, in: catalog.localState) && isUsable($0.state)
-        }
-        var rulesByTier: [RuleTier: [ComposedLibraryRule]] = [.authored: [], .shipped: [], .legacy: []]
-
-        for library in activeLibraries {
-            for entry in library.library.entries where entry.enabled {
-                let key = LibraryTermKey.from(entry.pattern)
-                guard !key.isEmpty else { continue }
-                let tier: RuleTier
-                if library.library.legacyMarkedKeys.contains(key) {
-                    tier = .legacy
-                } else if !library.builtIn || library.library.authoredKeys.contains(key) {
-                    tier = .authored
-                } else {
-                    tier = .shipped
-                }
-                rulesByTier[tier, default: []].append(
-                    ComposedLibraryRule(entry: entry, libraryId: library.id, key: key, tier: tier))
-            }
-        }
-
-        var seen = Set<LibraryTermKey>()
-        var rules: [ComposedLibraryRule] = []
-        for tier in [RuleTier.authored, .shipped, .legacy] {
-            for rule in rulesByTier[tier, default: []] where seen.insert(rule.key).inserted {
-                rules.append(rule)
-            }
-        }
-
-        let aiEntries = rules.filter { rule in
-            guard let library = library(named: rule.libraryId, in: activeLibraries) else {
-                return false
-            }
-            return isAIPermitted(library, state: catalog.localState)
-        }.map(\.entry)
-
-        let aiExcluded = Set(
-            activeLibraries
-                .filter { !isAIPermitted($0, state: catalog.localState) }
-                .map { $0.id.lowercased() }
-        )
-        return LibraryComposition(
-            rules: rules,
-            entries: rules.map(\.entry),
-            aiEntries: aiEntries,
-            aiExcludedLibraryIds: aiExcluded,
-            enabledLibraries: activeLibraries.map(\.library))
+        WordPackComposition.compose(catalog)
     }
 
     private func library(named id: String, in libraries: [CatalogLibrary]) -> CatalogLibrary? {
@@ -546,16 +582,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
         }
 
         let key = library.id.lowercased()
-        let accepted = state.acceptedContent[key]
-        if library.builtIn {
-            if let accepted, accepted != library.contentHash?.value {
-                return false
-            }
-        } else {
-            guard let accepted, accepted == library.contentHash?.value else {
-                return false
-            }
-        }
+        guard contentIsAccepted(library, state: state) else { return false }
 
         if let chosen = state.aiPermissions[key] {
             return chosen
@@ -564,6 +591,12 @@ final class DictionaryLibraryService: @unchecked Sendable {
             return false
         }
         return defaultAIPermission(for: library.origin, builtIn: library.builtIn, sourcePermission: nil)
+    }
+
+    private func contentIsAccepted(_ library: CatalogLibrary, state: LibraryLocalState) -> Bool {
+        let accepted = state.acceptedContent[library.id.lowercased()]
+        if library.builtIn { return accepted == library.contentHash?.value }
+        return accepted != nil && accepted == library.contentHash?.value
     }
 
     private func defaultAIPermission(for origin: LibraryOrigin, builtIn: Bool, sourcePermission: Bool?) -> Bool {

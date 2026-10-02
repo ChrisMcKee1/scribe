@@ -194,6 +194,84 @@ final class WordPackSaveTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.root)
         XCTAssertThrowsError(try WordPackMaterializer.safeURL(root: fixture.root, relativePath: "linked/term.csv"))
     }
+
+    func testAFileCreatedAtADraftNewIDBeforePrepareIsNotOverwritten() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        var workspace = WordPackWorkspace(catalog: try await fixture.service.loadCatalog())
+        let id = try workspace.createLibrary()
+        _ = workspace.rename(id, name: "Mine")
+        let changes = try XCTUnwrap(workspace.captureChangeSet().changeSet)
+        let url = fixture.root.appendingPathComponent("\(id).csv")
+        let outside = Data("pattern,replacement\nterm,Outside\n".utf8)
+        try outside.write(to: url)
+        do {
+            _ = try await fixture.coordinator.prepare(changes)
+            XCTFail("A new draft id must not take an outside file")
+        } catch {
+            XCTAssertEqual(error as? WordPackError, .outsideChange)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), outside)
+    }
+
+    func testExplicitConflictRecoveryKeepsOutsideBytesAndFinishesCommittedSave() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        var workspace = WordPackWorkspace(catalog: try await fixture.service.loadCatalog())
+        let id = try workspace.createLibrary()
+        _ = workspace.rename(id, name: "Mine")
+        _ = workspace.addTerm(id, values: TermValues("term", "Mine"))
+        let prepared = try await fixture.coordinator.prepare(XCTUnwrap(workspace.captureChangeSet().changeSet))
+        let url = fixture.root.appendingPathComponent("\(id).csv")
+        let outside = Data("pattern,replacement\nterm,Outside\n".utf8)
+        try outside.write(to: url)
+        expectEqual(await fixture.coordinator.commit(prepared), .savedPendingRecovery)
+        expectEqual(try await fixture.coordinator.preserveOutsideChangesAndFinish(), .saved)
+        let enumerator = FileManager.default.enumerator(
+            at: fixture.root.appendingPathComponent("conflicts"), includingPropertiesForKeys: nil)
+        let backups = (enumerator?.allObjects as? [URL] ?? []).filter { $0.pathExtension == "csv" }
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertEqual(try Data(contentsOf: backups[0]), outside)
+        expectEqual(try await fixture.service.loadCatalog().find(id: id)?.library.entries.first?.replacement, "Mine")
+    }
+
+    func testExplicitBrokenEditsRecoveryIsStagedAndBacksUpTheBrokenDocument() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        let url = BuiltInLibraryOverlay.editsURL(root: fixture.root, id: "github")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let broken = Data("{broken".utf8)
+        try broken.write(to: url)
+        var workspace = WordPackWorkspace(catalog: try await fixture.service.loadCatalog())
+        XCTAssertFalse(workspace.canEditContent("github"))
+        try workspace.recoverBuiltIn("github", previous: nil)
+        XCTAssertEqual(try Data(contentsOf: url), broken)
+        let prepared = try await fixture.coordinator.prepare(XCTUnwrap(workspace.captureChangeSet().changeSet))
+        expectEqual(await fixture.coordinator.commit(prepared), .saved)
+        let files = try FileManager.default.contentsOfDirectory(at: url.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+        let backup = try XCTUnwrap(files.first { $0.lastPathComponent.hasPrefix("github.backup-") })
+        XCTAssertEqual(try Data(contentsOf: backup), broken)
+        expectEqual(try await fixture.service.loadCatalog().find(id: "github")?.state, .available)
+    }
+
+    func testHandPlacedBuiltInTwinGetsStableLogicalIdentityAndKeepsPhysicalPrecedence() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        fixture.service.settings.enabledLibraryIds = ["github"]
+        try Data("pattern,replacement\nunique twin,Twin\n".utf8).write(
+            to: fixture.root.appendingPathComponent("github.csv"))
+        let catalog = try await fixture.service.loadCatalog()
+        let twin = try XCTUnwrap(catalog.find(id: "custom-github"))
+        XCTAssertEqual(twin.fileName, "github.csv")
+        XCTAssertTrue(catalog.localState.enabledIdSet.contains(twin.id))
+        var workspace = WordPackWorkspace(catalog: catalog)
+        _ = workspace.setAIPermission(twin.id, permitted: false)
+        let prepared = try await fixture.coordinator.prepare(XCTUnwrap(workspace.captureChangeSet().changeSet))
+        expectEqual(await fixture.coordinator.commit(prepared), .saved)
+        XCTAssertFalse(fixture.service.settings.enabledLibraryIds.contains("github"))
+        expectTrue(try await fixture.service.loadVocabulary().entries.contains { $0.pattern == "unique twin" })
+        expectFalse(try await fixture.service.loadVocabulary().aiEntries.contains { $0.pattern == "unique twin" })
+    }
 }
 
 private func expectEqual<T: Equatable>(_ value: T, _ expected: T, file: StaticString = #filePath, line: UInt = #line) {

@@ -2,7 +2,7 @@ import Foundation
 
 enum WordPackCoverageKind: Sendable {
     case redundant
-    case override
+    case different
 }
 
 struct WordPackCoverage: Sendable {
@@ -21,7 +21,7 @@ struct WordPackCoverage: Sendable {
             else { return nil }
             return WordPackCoverage(
                 entry: entry, written: rule.entry.replacement, sourceName: source.name,
-                kind: entry.replacement == rule.entry.replacement ? .redundant : .override)
+                kind: entry.replacement == rule.entry.replacement ? .redundant : .different)
         }
     }
 }

@@ -62,7 +62,7 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         }
         XCTAssertEqual(badges, try golden.requiredSection("\(scenario): Dictionary page library badges (what covers each personal entry)"))
         let redundant = coverage.filter { $0.kind == .redundant }.count
-        let overrides = coverage.filter { $0.kind == .override }.count
+        let overrides = coverage.filter { $0.kind == .different }.count
         let report = ["\(redundant) redundant, \(overrides) override"] + coverage.map {
             let kind = $0.kind == .redundant ? "Redundant" : "Override"
             let first = "\(kind) \($0.entry.pattern) -> \"\($0.entry.replacement)\""
@@ -99,16 +99,52 @@ final class LibraryCompositionGoldenTests: XCTestCase {
                 XCTAssertEqual([summarize(sources)], expected, scenario)
             }
         }
+        if let expected = golden["\(scenario): eligible lines past the cloud glossary's 24,000 characters"] {
+            let all = CleanupPrompt.glossaryLines(vocabulary)
+            let included = CleanupPrompt.glossaryLines(vocabulary, maxTerms: 5_000, maxCharacters: 24_000)
+            let cut = Array(all.dropFirst(included.count))
+            XCTAssertEqual(["\(cut.count) of \(all.count) eligible lines cut"], expected)
+            let sources = cut.compactMap { line in
+                effective.first { CleanupPrompt.glossaryLines([$0.0]).first?.key == line.key }?.1
+            }
+            XCTAssertEqual(
+                [summarize(sources)],
+                try golden.requiredSection("\(scenario): lines past the cloud glossary's 24,000 characters, by library"))
+        }
+        let displacedName =
+            "\(scenario): shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form"
+        if let expected = golden[displacedName] {
+            let legacy = CleanupPrompt.composeVocabulary(
+                dictionary, DictionaryLibraryComposer.composeLibraries(composition.enabledLibraries))
+            let legacyLines = CleanupPrompt.glossaryLines(legacy, maxTerms: 80, maxCharacters: 24_000)
+            let localLines = Set(
+                CleanupPrompt.glossaryLines(vocabulary, maxTerms: 80, maxCharacters: 24_000).map(\.key))
+            let displaced = legacyLines.compactMap { line -> String? in
+                guard !localLines.contains(line.key),
+                    let entry = legacy.first(where: { CleanupPrompt.glossaryLines([$0]).first?.key == line.key }),
+                    !dictionary.contains(where: { $0.enabled && LibraryTermKey.areSame($0.pattern, entry.pattern) }),
+                    composition.enabledLibraries.first(where: { library in
+                        library.entries.contains {
+                            $0.enabled && LibraryTermKey.areSame($0.pattern, entry.pattern)
+                        }
+                    })?.builtIn == true
+                else { return nil }
+                return entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            XCTAssertEqual([displaced.isEmpty ? "(none)" : displaced.joined(separator: ", ")], expected)
+        }
     }
 
     private static func summarize(_ sources: [String]) -> String {
-        var order: [String] = []
-        var counts: [String: Int] = [:]
+        var runs: [(String, Int)] = []
         for source in sources {
-            if counts[source] == nil { order.append(source) }
-            counts[source, default: 0] += 1
+            if runs.last?.0 == source {
+                runs[runs.count - 1].1 += 1
+            } else {
+                runs.append((source, 1))
+            }
         }
-        return order.map { "\($0) x\(counts[$0]!)" }.joined(separator: ", ")
+        return runs.map { "\($0.0) x\($0.1)" }.joined(separator: ", ")
     }
 
     private static func describeLibrary(_ library: DictionaryLibrary) -> String {

@@ -59,6 +59,7 @@ struct DraftLibrary: Equatable, Sendable {
     var origin: LibraryOrigin = .existing
     var resetEdits = false
     var recovering = false
+    var creationName: String?
 
     init(
         id: String,

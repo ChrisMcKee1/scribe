@@ -27,12 +27,20 @@ struct LibraryChangeSet: Equatable, Sendable {
     let draftRevision: Int64
     let expectedGeneration: Int64
     let libraries: [DraftLibrary]
+    let expectedContent: [String: WordPackExpectedContent]
     let localState: LibraryLocalState
     let recentlyDeleted: [RecentlyDeletedWordPack]
     let purgeIDs: Set<UUID>
     let restoreIDs: Set<UUID>
+    let hasLocalChanges: Bool
 
-    var isEmpty: Bool { libraries.isEmpty && purgeIDs.isEmpty && restoreIDs.isEmpty }
+    var isEmpty: Bool { libraries.isEmpty && purgeIDs.isEmpty && restoreIDs.isEmpty && !hasLocalChanges }
+}
+
+struct WordPackExpectedContent: Equatable, Sendable {
+    let existed: Bool
+    let fileName: String?
+    let hash: LibraryContentHash?
 }
 
 /// Deleted content is retained for 30 days from commit, never from the draft's Delete click.

@@ -132,9 +132,10 @@ enum LibraryEditsJSON {
                     position += 1
                 }
                 let literal = String(decoding: bytes[start..<position], as: UTF8.self)
-                guard literal.range(
-                    of: #"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#,
-                    options: .regularExpression) != nil
+                guard
+                    literal.range(
+                        of: #"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#,
+                        options: .regularExpression) != nil
                 else { throw WordPackError.invalidEdits }
                 return .number(literal)
             }
@@ -157,7 +158,10 @@ enum LibraryEditsJSON {
                     if escaped == 117 {
                         guard position + 4 <= bytes.count else { throw WordPackError.invalidEdits }
                         let digits = bytes[position..<(position + 4)]
-                        guard digits.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) })
+                        guard
+                            digits.allSatisfy({
+                                (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+                            })
                         else { throw WordPackError.invalidEdits }
                         position += 4
                     } else if ![34, 47, 92, 98, 102, 110, 114, 116].contains(escaped) {

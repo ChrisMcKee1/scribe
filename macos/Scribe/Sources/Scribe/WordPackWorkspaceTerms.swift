@@ -144,13 +144,14 @@ extension WordPackWorkspace {
             throw WordPackError.unavailable
         }
         let before = state
+        let historyCount = undoHistory.count
         for id in otherIDs where id != libraryID {
             for row in rowsOf(id) where LibraryTermKey.areSame(row.row.values.spoken, source.row.values.spoken) {
                 try setTermEnabled(id, rowID: row.rowID, enabled: false)
             }
         }
         if state != before {
-            undoHistory.removeAll { $0.before == before || $0.label == "Turn off term" }
+            undoHistory.removeLast(undoHistory.count - historyCount)
             undoHistory.append(WordPackUndoEntry(label: "Turn off in other word packs", before: before, after: state))
         }
     }
@@ -182,7 +183,9 @@ extension WordPackWorkspace {
                 guard choice == .useFilesVersion, operation.kind != .alreadyHere else { continue }
                 let old = next.libraries[index].rows[matched]
                 let values = LibraryImportPlanner.filesVersion(existing: old.row.values, file: operation.fileRow)
-                let row = next.libraries[index].builtIn ? BuiltInLibraryOverlay.edit(old.row, values: values) : .custom(values)
+                let row =
+                    next.libraries[index].builtIn
+                    ? BuiltInLibraryOverlay.edit(old.row, values: values) : .custom(values)
                 next.libraries[index].rows[matched] = DraftTermRow(
                     rowID: old.rowID, row: row, removalIntent: false, legacyEmpty: values.written.isEmpty)
                 next.local.legacyMarkers.removeAll { $0.libraryId == id && $0.termKey == old.row.key }

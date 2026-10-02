@@ -65,8 +65,10 @@ struct WordPackWorkspace: Equatable, Sendable {
     var unsavedLibraryIDs: [String] {
         state.libraries.filter { library in
             if let old = baseline.libraries.first(where: { $0.id == library.id }) {
-                return old != library || enabled(library.id) != baseline.local.enabledIdSet.contains(library.id.lowercased())
-                    || state.local.aiPermissions[library.id.lowercased()] != baseline.local.aiPermissions[library.id.lowercased()]
+                return old != library
+                    || enabled(library.id) != baseline.local.enabledIdSet.contains(library.id.lowercased())
+                    || state.local.aiPermissions[library.id.lowercased()]
+                        != baseline.local.aiPermissions[library.id.lowercased()]
                     || state.local.legacyMarkers != baseline.local.legacyMarkers
             }
             return !virgin(library)
@@ -87,6 +89,7 @@ struct WordPackWorkspace: Equatable, Sendable {
         guard let library = draft.find(libraryID) else { return false }
         return !isReadOnly && !library.pendingDelete && library.fileState == .available
             && !conflictingLibraryIDs.contains(libraryID.lowercased())
+            && library.origin != .retiredBuiltIn
     }
 
     func showsAIPermission(_ libraryID: String) -> Bool {
@@ -108,7 +111,8 @@ struct WordPackWorkspace: Equatable, Sendable {
     mutating func createLibrary() throws -> String {
         try ensureWritable()
         let name = LibraryNaming.uniqueName(LibraryNaming.newLibraryBaseName, takenNames: names)
-        return create(name: name, category: "Custom", description: nil, basedOn: nil, origin: .created, permission: false)
+        return create(
+            name: name, category: "Custom", description: nil, basedOn: nil, origin: .created, permission: false)
     }
 
     @discardableResult
@@ -159,6 +163,7 @@ struct WordPackWorkspace: Equatable, Sendable {
         }
         var next = state
         next.local.setAIPermission(permitted, for: libraryID)
+        if next.local.health == .unreadable { next.local.health = .ok }
         if let item = committed.find(id: libraryID) {
             next.local.setAcceptedContent(item.contentHash, for: libraryID)
         }
@@ -181,6 +186,7 @@ struct WordPackWorkspace: Equatable, Sendable {
     mutating func duplicate(_ libraryID: String) throws -> String {
         try ensureWritable()
         guard let source = draft.find(libraryID), canEditContent(libraryID) else { throw WordPackError.unavailable }
+        let before = state
         let name = LibraryNaming.uniqueName(source.name + " - Copy", takenNames: names)
         let id = create(
             name: name, category: source.category, description: source.description, basedOn: source.id,
@@ -188,7 +194,8 @@ struct WordPackWorkspace: Equatable, Sendable {
         let rows = source.rows.map { newRow(.custom($0.row.values), legacyEmpty: $0.row.values.written.isEmpty) }
         var next = state
         next.libraries[index(id)!].rows = rows
-        change(next, label: "Duplicate word pack")
+        change(next)
+        undoHistory.append(WordPackUndoEntry(label: "Duplicate word pack", before: before, after: state))
         return id
     }
 
@@ -218,6 +225,7 @@ struct WordPackWorkspace: Equatable, Sendable {
     mutating func restoreDeleted(_ id: UUID) throws -> String {
         try ensureWritable()
         guard let deleted = recentlyDeleted.first(where: { $0.id == id }) else { throw WordPackError.unavailable }
+        let before = state
         let name = LibraryNaming.uniqueName(deleted.name, takenNames: names)
         let libraryID = create(
             name: name, category: deleted.category, description: deleted.description,
@@ -227,7 +235,8 @@ struct WordPackWorkspace: Equatable, Sendable {
             newRow(.custom($0), legacyEmpty: $0.written.isEmpty)
         }
         next.restoreIDs.insert(id)
-        change(next, label: "Restore word pack")
+        change(next)
+        undoHistory.append(WordPackUndoEntry(label: "Restore word pack", before: before, after: state))
         return libraryID
     }
 
@@ -284,7 +293,7 @@ struct WordPackWorkspace: Equatable, Sendable {
     }
 
     func virgin(_ library: DraftLibrary) -> Bool {
-        library.origin == .created && library.name.hasPrefix(LibraryNaming.newLibraryBaseName)
+        library.origin == .created && library.name == library.creationName
             && library.rows.allSatisfy { $0.row.values.spoken.isEmpty && $0.row.values.written.isEmpty }
             && library.category == "Custom" && library.description == nil && !library.pendingDelete
             && state.local.aiPermissions[library.id.lowercased()] != true && enabled(library.id)
@@ -300,6 +309,7 @@ struct WordPackWorkspace: Equatable, Sendable {
             DraftLibrary(
                 id: id, name: name, category: category, description: description,
                 builtIn: false, rows: [], basedOn: basedOn, origin: origin))
+        if origin == .created { next.libraries[next.libraries.count - 1].creationName = name }
         next.local.setEnabled(true, for: id)
         next.local.setAIPermission(permission, for: id)
         change(next)

@@ -126,7 +126,8 @@ enum BuiltInLibraryOverlay {
         var rowsByKey: [LibraryTermKey: LibraryRow] = [:]
         for row in rows {
             guard rowsByKey[row.key] == nil, canonical(row) else { throw WordPackError.invalidEdits }
-            let expected = row.edit.flatMap { rowOf(shipped: shippedByKey[row.key], edit: $0) }
+            let expected =
+                row.edit.flatMap { rowOf(shipped: shippedByKey[row.key], edit: $0) }
                 ?? shippedByKey[row.key].map(shippedRow)
             guard expected == row else { throw WordPackError.invalidEdits }
             rowsByKey[row.key] = row
@@ -178,7 +179,8 @@ enum BuiltInLibraryOverlay {
 
     private static func canonical(_ row: LibraryRow) -> Bool {
         guard row.origin != .custom else { return false }
-        return (row.edit.flatMap { rowOf(shipped: row.shipped, edit: $0) }
+        return
+            (row.edit.flatMap { rowOf(shipped: row.shipped, edit: $0) }
             ?? row.shipped.map(shippedRow)) == row
     }
 

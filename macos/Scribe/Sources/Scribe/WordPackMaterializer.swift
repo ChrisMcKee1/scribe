@@ -8,6 +8,11 @@ enum WordPackMaterializer {
             return false
         }
         do {
+            // A rollback build cannot read redo. Keep affected packs off in its projection until every image is installed.
+            let affected = Set(journal.affectedIDs.map { $0.lowercased() })
+            service.settings.enabledLibraryIds = service.settings.enabledLibraryIds.filter {
+                !affected.contains($0.lowercased())
+            }
             for image in journal.images {
                 let url = try safeURL(root: service.librariesDirectory, relativePath: image.relativePath)
                 let current = try readIfPresent(url)
@@ -38,6 +43,38 @@ enum WordPackMaterializer {
         } catch {
             return false
         }
+    }
+
+    static func preserveOutsideChanges(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
+        guard let raw = try await store.loadStringSetting(key: WordPackJournal.key),
+            let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
+        else { return false }
+        var images: [WordPackFileImage] = []
+        for image in journal.images {
+            let url = try safeURL(root: service.librariesDirectory, relativePath: image.relativePath)
+            let current = try readIfPresent(url)
+            let hash = current.map { LibraryContentHash(data: $0) }
+            if hash != image.expectedHash && hash != image.data.map({ LibraryContentHash(data: $0) }) {
+                if let current {
+                    let archive = "conflicts/\(UUID().uuidString)/\(image.relativePath)"
+                    _ = try safeURL(root: service.librariesDirectory, relativePath: archive)
+                    images.append(WordPackFileImage(relativePath: archive, expectedHash: nil, data: current))
+                }
+                images.append(
+                    WordPackFileImage(relativePath: image.relativePath, expectedHash: hash, data: image.data))
+            } else {
+                images.append(image)
+            }
+        }
+        let repaired = WordPackJournal(
+            version: journal.version, id: journal.id, generation: journal.generation,
+            affectedIDs: journal.affectedIDs, enabledProjection: journal.enabledProjection, images: images)
+        try await store.commitSettingsParticipants([
+            StoredSettingsParticipant(
+                checks: [StoredSettingCheck(key: WordPackJournal.key, expected: raw)],
+                writes: [StoredSettingWrite(key: WordPackJournal.key, value: try repaired.encoded())])
+        ])
+        return true
     }
 
     static func heldBackIDs(_ raw: String?) -> Set<String>? {

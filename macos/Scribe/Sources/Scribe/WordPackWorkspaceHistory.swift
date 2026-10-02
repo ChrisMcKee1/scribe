@@ -2,6 +2,7 @@ import Foundation
 
 extension WordPackWorkspace {
     mutating func undo() {
+        guard !isReadOnly else { return }
         while let entry = undoHistory.popLast() {
             let next = applying(entry, undoing: true)
             guard next != state else { continue }
@@ -15,6 +16,7 @@ extension WordPackWorkspace {
     }
 
     mutating func redo() {
+        guard !isReadOnly else { return }
         while let entry = redoHistory.popLast() {
             let next = applying(entry, undoing: false)
             guard next != state else { continue }
@@ -88,7 +90,9 @@ extension WordPackWorkspace {
         let markerKeys = Set(from.local.legacyMarkers + to.local.legacyMarkers)
         for marker in markerKeys {
             let old = from.libraries.first { $0.id == marker.libraryId }?.rows.first { $0.row.key == marker.termKey }
-            let currentRow = current.libraries.first { $0.id == marker.libraryId }?.rows.first { $0.row.key == marker.termKey }
+            let currentRow = current.libraries.first { $0.id == marker.libraryId }?.rows.first {
+                $0.row.key == marker.termKey
+            }
             guard old == currentRow else { continue }
             result.local.legacyMarkers.removeAll { $0 == marker }
             if to.local.legacyMarkers.contains(marker) { result.local.legacyMarkers.append(marker) }
@@ -117,8 +121,17 @@ extension WordPackWorkspace {
         for library in state.libraries where virgin(library) { local.removeState(for: library.id) }
         let changes = LibraryChangeSet(
             draftRevision: revision, expectedGeneration: committed.generation,
-            libraries: libraries, localState: local, recentlyDeleted: state.deleted,
-            purgeIDs: state.purgeIDs, restoreIDs: state.restoreIDs)
+            libraries: libraries,
+            expectedContent: Dictionary(
+                uniqueKeysWithValues: libraries.map {
+                    let item = committed.find(id: $0.id)
+                    return (
+                        $0.id,
+                        WordPackExpectedContent(existed: item != nil, fileName: item?.fileName, hash: item?.contentHash))
+                }),
+            localState: local, recentlyDeleted: state.deleted,
+            purgeIDs: state.purgeIDs, restoreIDs: state.restoreIDs,
+            hasLocalChanges: local != baseline.local)
         return LibraryCaptureResult(changeSet: changes, issues: [])
     }
 

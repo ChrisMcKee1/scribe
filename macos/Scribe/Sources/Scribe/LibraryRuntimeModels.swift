@@ -130,8 +130,18 @@ struct LibraryLocalState: Codable, Equatable, Sendable {
         enabledIds = Self.normalizedIDs(enabledIds)
         legacyEnabledIds = Self.normalizedIDs(legacyEnabledIds)
         aiUpgradeNotice = Self.normalizedIDs(aiUpgradeNotice)
-        aiPermissions = Dictionary(uniqueKeysWithValues: aiPermissions.map { ($0.key.lowercased(), $0.value) })
-        acceptedContent = Dictionary(uniqueKeysWithValues: acceptedContent.map { ($0.key.lowercased(), $0.value) })
+        if Set(aiPermissions.keys.map { $0.lowercased() }).count != aiPermissions.count
+            || Set(acceptedContent.keys.map { $0.lowercased() }).count != acceptedContent.count
+        {
+            aiPermissions = [:]
+            acceptedContent = [:]
+            enabledIds = []
+            health = .unreadable
+            aiPermissionsLost = true
+        } else {
+            aiPermissions = Dictionary(uniqueKeysWithValues: aiPermissions.map { ($0.key.lowercased(), $0.value) })
+            acceptedContent = Dictionary(uniqueKeysWithValues: acceptedContent.map { ($0.key.lowercased(), $0.value) })
+        }
         var seen = Set<String>()
         legacyMarkers = legacyMarkers.filter {
             let libraryId = $0.libraryId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

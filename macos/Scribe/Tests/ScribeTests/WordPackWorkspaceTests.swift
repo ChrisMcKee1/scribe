@@ -26,7 +26,8 @@ final class WordPackWorkspaceTests: XCTestCase {
         workspace.undo()
         XCTAssertEqual(workspace.validate().first?.kind, .emptyWrittenWithoutIntent)
         let document = DictionaryLibraryCsv.parseImport(Data("pattern,replacement\nerm,\n".utf8))
-        let plan = try LibraryImportPlanner.plan(document: document, target: .existing(libraryID: "team"), draft: workspace.draft)
+        let plan = try LibraryImportPlanner.plan(
+            document: document, target: .existing(libraryID: "team"), draft: workspace.draft)
         _ = try workspace.applyImport(plan, choice: .keepMine)
         XCTAssertTrue(workspace.rowsOf("team").last!.legacyEmpty)
     }
@@ -38,9 +39,11 @@ final class WordPackWorkspaceTests: XCTestCase {
         _ = workspace.editTerm("team", rowID: before[1].rowID, values: TermValues("get hub", "GH"))
         _ = workspace.addTerm("team", values: TermValues("vm", "VM"))
         workspace.undo()
-        XCTAssertEqual(workspace.rowsOf("team").map { $0.row.values }, [
-            TermValues("kube", "Kubernetes"), TermValues("get hub", "GH"), TermValues("vm", "VM"),
-        ])
+        XCTAssertEqual(
+            workspace.rowsOf("team").map { $0.row.values },
+            [
+                TermValues("kube", "Kubernetes"), TermValues("get hub", "GH"), TermValues("vm", "VM"),
+            ])
         workspace.redo()
         XCTAssertEqual(workspace.rowsOf("team").count, 2)
 
@@ -67,7 +70,8 @@ final class WordPackWorkspaceTests: XCTestCase {
     func testImportIsStagedUndoableAndStalePlanIsRefused() throws {
         var workspace = Self.workspace()
         let document = DictionaryLibraryCsv.parseImport(Data("pattern,replacement\nkube,K8s\nhelm,Helm\n".utf8))
-        let plan = try LibraryImportPlanner.plan(document: document, target: .existing(libraryID: "team"), draft: workspace.draft)
+        let plan = try LibraryImportPlanner.plan(
+            document: document, target: .existing(libraryID: "team"), draft: workspace.draft)
         _ = try workspace.applyImport(plan, choice: .useFilesVersion)
         XCTAssertEqual(workspace.rowsOf("team").first?.row.values.written, "K8s")
         XCTAssertThrowsError(try workspace.applyImport(plan, choice: .keepMine))
@@ -81,6 +85,17 @@ final class WordPackWorkspaceTests: XCTestCase {
         var workspace = WordPackWorkspace(catalog: LibraryCatalog(generation: 1, libraries: [], localState: local))
         XCTAssertThrowsError(try workspace.createLibrary())
         XCTAssertNil(workspace.captureChangeSet().changeSet)
+    }
+
+    func testPreviewAndExportUseDraftWithoutChangingCommittedContent() throws {
+        var workspace = Self.workspace()
+        let row = workspace.rowsOf("team")[0]
+        _ = workspace.editTerm("team", rowID: row.rowID, values: TermValues("kube", "K8s"))
+        XCTAssertEqual(try workspace.preview().entries.first?.replacement, "K8s")
+        let exported = DictionaryLibraryCsv.parseImport(try workspace.exportSharing("team"))
+        XCTAssertEqual(exported.terms.first?.written, "K8s")
+        XCTAssertEqual(workspace.committed.find(id: "team")?.library.entries.first?.replacement, "Kubernetes")
+        XCTAssertTrue(workspace.hasUnsavedChanges)
     }
 
     static func workspace() -> WordPackWorkspace {
