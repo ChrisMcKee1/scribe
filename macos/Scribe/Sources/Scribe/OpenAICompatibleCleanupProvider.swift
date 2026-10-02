@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A cleanup provider for any OpenAI-compatible `/v1/chat/completions` endpoint the user brings: LM Studio,
 /// OpenRouter, a self-hosted server, or Ollama addressed by hand. The managed providers (Foundry Local, Ollama) and
@@ -9,9 +10,11 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     let model: String
     /// `{base}/v1/chat/completions`, from `OpenAICompatibleEndpoint.chatCompletionsURL(for:)`.
     let completionsURL: URL
+    let usesLocalCleanupPrompt: Bool
     private let apiKey: String?
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
+    private let plainRequests = OSAllocatedUnfairLock(initialState: false)
 
     init(
         id: String = "openai-compatible",
@@ -27,17 +30,52 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.model = model
         self.apiKey = apiKey
         self.completionsURL = completionsURL
+        self.usesLocalCleanupPrompt = LocalAiServer.isOnThisMac(completionsURL.absoluteString)
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
-        // No temperature: a bring-your-own endpoint can serve a reasoning model, which rejects or ignores one.
-        let completion = try await transport.complete(
-            request, at: completionsURL, model: model, bearerToken: apiKey, temperature: nil,
-            defaultTimeout: timeout, provider: .openAICompatible)
-        return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+        let local = usesLocalCleanupPrompt
+        let plain = local && plainRequests.withLock { $0 }
+
+        do {
+            let completion = try await transport.complete(
+                request,
+                at: completionsURL,
+                model: model,
+                bearerToken: apiKey,
+                temperature: local ? CleanupSampling.onDeviceTemperature : nil,
+                reasoningEffort: local && !plain ? CleanupReasoningEffort.none : nil,
+                includeLegacyMaxTokens: local && !plain,
+                defaultTimeout: timeout,
+                provider: .openAICompatible)
+            return CleanupResponse(
+                cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+        } catch let error as CleanupProviderError {
+            guard local, !plain, case .rejected(let status, _, _) = error, status == 400 || status == 422 else {
+                throw error
+            }
+
+            plainRequests.withLock { $0 = true }
+            do {
+                let completion = try await transport.complete(
+                    request,
+                    at: completionsURL,
+                    model: model,
+                    bearerToken: apiKey,
+                    temperature: CleanupSampling.onDeviceTemperature,
+                    reasoningEffort: nil,
+                    includeLegacyMaxTokens: false,
+                    defaultTimeout: timeout,
+                    provider: .openAICompatible)
+                return CleanupResponse(
+                    cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+            } catch {
+                plainRequests.withLock { $0 = false }
+                throw error
+            }
+        }
     }
 }
 
@@ -88,6 +126,8 @@ struct ChatCompletionsTransport: Sendable {
         model: String,
         bearerToken: String?,
         temperature: Double?,
+        reasoningEffort: String? = nil,
+        includeLegacyMaxTokens: Bool = false,
         defaultTimeout: TimeInterval,
         provider: CleanupProviderKind
     ) async throws -> Completion {
@@ -107,7 +147,9 @@ struct ChatCompletionsTransport: Sendable {
                     ChatCompletionRequest.Message(role: "user", content: cleanupRequest.transcript),
                 ],
                 temperature: temperature,
+                reasoningEffort: reasoningEffort,
                 maxCompletionTokens: cleanupRequest.maxOutputTokens,
+                maxTokens: includeLegacyMaxTokens ? cleanupRequest.maxOutputTokens : nil,
                 stream: false))
 
         let started = ContinuousClock.now
@@ -182,16 +224,22 @@ struct ChatCompletionRequest: Encodable, Sendable {
     let messages: [Message]
     /// Left out of the body when `nil`.
     let temperature: Double?
+    /// Left out of the body when `nil`.
+    let reasoningEffort: String?
     /// Left out of the body when `nil`. `max_completion_tokens` rather than the older `max_tokens`, which reasoning
     /// deployments refuse; it is the field Windows' OpenAI client sends for the same limit.
     let maxCompletionTokens: Int?
+    /// Left out of the body when `nil`. Local servers on this Mac still read the older field.
+    let maxTokens: Int?
     let stream: Bool
 
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case temperature
+        case reasoningEffort = "reasoning_effort"
         case maxCompletionTokens = "max_completion_tokens"
+        case maxTokens = "max_tokens"
         case stream
     }
 }

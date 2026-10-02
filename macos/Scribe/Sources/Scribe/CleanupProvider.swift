@@ -68,6 +68,10 @@ extension CleanupProvider {
     var usesLocalCleanupPrompt: Bool { false }
 }
 
+enum CleanupReasoningEffort {
+    static let none = "none"
+}
+
 /// The sampling temperature the on-device models get: low, so a small instruct model edits faithfully rather than
 /// paraphrasing (Windows sends 0.1 to Foundry Local). Microsoft Foundry and bring-your-own endpoints get none, because
 /// the reasoning models they often serve reject or ignore the parameter.
@@ -437,7 +441,12 @@ enum CleanupPrompt {
         semicolons, colons, question marks, and parentheses, according to sentence structure. Do not \
         use dash punctuation to join clauses; use a comma, colon, semicolon, or period instead. Break \
         long run-on speech into properly formed sentences, and start a new paragraph when the topic \
-        shifts. Separate paragraphs with one blank line. Remove filler words and false starts (such as \
+        shifts. Separate paragraphs with one blank line. When the speaker lists several items, steps, \
+        or options, write them as a list with one item per line, starting each line with "- ", or with \
+        "1.", "2." and so on when the order matters, and keep the sentence before the list as its \
+        introduction. Keep a short message, a single request, or a sentence that only mentions a few \
+        things in passing as ordinary sentences. Never add headings, bold text, or labels the speaker \
+        did not say, and keep every point they made. Remove filler words and false starts (such as \
         "um", "uh", "you know", and "like") and fix small grammar slips, while keeping the meaning, \
         intent, and vocabulary. When the speaker corrects themselves mid-speech (for example "I meant \
         to go to the store, I mean the park"), keep only the corrected version and drop what it \

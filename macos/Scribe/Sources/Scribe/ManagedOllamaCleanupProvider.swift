@@ -13,6 +13,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
 
     let id = "managed-ollama"
     let displayName = "Ollama"
+    let usesLocalCleanupPrompt = true
     /// `qwen2.5:3b` is the best-quality result benchmarked on Ollama (0.632 avg score) and is very close to Foundry
     /// Local's default `qwen2.5-1.5b`, making this a legitimate alternate choice rather than a downgrade. See
     /// CLEANUP-MODEL-BENCHMARK.md.
@@ -38,7 +39,11 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         let completion = try await transport.complete(
             request, at: completionsURL, model: model, bearerToken: nil,
-            temperature: CleanupSampling.onDeviceTemperature, defaultTimeout: timeout, provider: .ollama)
+            temperature: CleanupSampling.onDeviceTemperature,
+            reasoningEffort: CleanupReasoningEffort.none,
+            includeLegacyMaxTokens: true,
+            defaultTimeout: timeout,
+            provider: .ollama)
         return CleanupResponse(
             cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
     }
