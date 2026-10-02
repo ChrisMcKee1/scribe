@@ -15,19 +15,28 @@ struct SettingsDictionaryPage: View {
     let onChanged: @MainActor () -> Void
     let drafts: SettingsDrafts
     let requestedTab: DictionaryTab?
+    @StateObject private var aiSuggestions: AIDictionarySuggestionModel
 
     init(
         persistenceStore: PersistenceStore,
         dictionaryLibraryService: DictionaryLibraryService,
         onChanged: @escaping @MainActor () -> Void,
         drafts: SettingsDrafts,
-        requestedTab: DictionaryTab? = nil
+        requestedTab: DictionaryTab? = nil,
+        pipelineReportStore: PipelineReportStore,
+        aiSuggestionService: AIDictionarySuggestionService? = nil
     ) {
         self.persistenceStore = persistenceStore
         self.dictionaryLibraryService = dictionaryLibraryService
         self.onChanged = onChanged
         self.drafts = drafts
         self.requestedTab = requestedTab
+        _aiSuggestions = StateObject(
+            wrappedValue: AIDictionarySuggestionModel(
+                reports: pipelineReportStore,
+                access: .live(persistenceStore),
+                service: aiSuggestionService,
+                onChanged: onChanged))
     }
 
     @State private var selectedTab: DictionaryTab = .yourWords
@@ -55,6 +64,7 @@ struct SettingsDictionaryPage: View {
                         dictionaryLibraryService: dictionaryLibraryService,
                         onChanged: childChanged,
                         drafts: drafts,
+                        aiSuggestions: aiSuggestions,
                         browseWordPacks: { selectedTab = .wordPacks })
                 }
             case .wordPacks:
@@ -152,6 +162,7 @@ private struct DictionaryTabHeader: View {
 struct DictionarySettingsTab: View {
     @StateObject private var model: DictionarySettingsModel
     @ObservedObject private var drafts: SettingsDrafts
+    @ObservedObject private var aiSuggestions: AIDictionarySuggestionModel
 
     private let dictionaryLibraryService: DictionaryLibraryService
     private let browseWordPacks: () -> Void
@@ -165,11 +176,13 @@ struct DictionarySettingsTab: View {
         dictionaryLibraryService: DictionaryLibraryService,
         onChanged: @escaping @MainActor () -> Void,
         drafts: SettingsDrafts,
+        aiSuggestions: AIDictionarySuggestionModel,
         browseWordPacks: @escaping () -> Void
     ) {
         self.dictionaryLibraryService = dictionaryLibraryService
         self.browseWordPacks = browseWordPacks
         _drafts = ObservedObject(wrappedValue: drafts)
+        _aiSuggestions = ObservedObject(wrappedValue: aiSuggestions)
         _model = StateObject(
             wrappedValue: DictionarySettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged)
         )
@@ -244,6 +257,33 @@ struct DictionarySettingsTab: View {
                 },
                 onCancel: { editorEntry = nil })
         }
+        .alert(
+            item: Binding(
+                get: { aiSuggestions.consent },
+                set: { if $0 == nil { aiSuggestions.cancelConsent() } }
+            )
+        ) { consent in
+            Alert(
+                title: Text("Send recent dictation text for AI suggestions?"),
+                message: Text(consent.message),
+                primaryButton: .default(Text("Send and continue")) {
+                    aiSuggestions.requestSuggestions()
+                },
+                secondaryButton: .cancel {
+                    aiSuggestions.cancelConsent()
+                })
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { aiSuggestions.isReviewPresented },
+                set: { if !$0 { aiSuggestions.dismissReview() } }
+            )
+        ) {
+            AIDictionarySuggestionReview(model: aiSuggestions)
+        }
+        .onDisappear {
+            aiSuggestions.cancel()
+        }
     }
 
     private var toolbar: some View {
@@ -258,6 +298,13 @@ struct DictionarySettingsTab: View {
                 Task { await model.learnFromHistory() }
             }
             .disabled(model.isLearning)
+
+            Button(aiSuggestions.isRequesting ? "Asking AI..." : "Suggest with AI") {
+                aiSuggestions.prepareConsent()
+            }
+            .disabled(!aiSuggestions.canSuggest)
+            .help(
+                "Use raw recognized text from the latest Try dictation report. Review suggestions before adding them.")
 
             Button("Clean up unused words...") {
                 Task { await model.reviewUsage() }
@@ -393,12 +440,75 @@ struct DictionarySettingsTab: View {
         if let statusMessage = model.statusMessage {
             Text(statusMessage).foregroundStyle(.secondary).font(.caption)
         }
+        if !aiSuggestions.hasBoundCompletion {
+            Text(
+                "AI suggestions use only raw recognized text from the latest Try dictation report, not saved history. "
+                    + "The request may also include applicable dictionary and permitted word pack vocabulary. "
+                    + "Snippet templates are never sent. Suggestions stay disabled until the saved-provider request "
+                    + "handoff can enforce recipient checks and cancellation."
+            )
+            .foregroundStyle(.secondary)
+            .font(.caption)
+        }
+        if let errorMessage = aiSuggestions.errorMessage {
+            Text(errorMessage).foregroundStyle(.red).font(.caption)
+        }
+        if let statusMessage = aiSuggestions.statusMessage {
+            Text(statusMessage).foregroundStyle(.secondary).font(.caption)
+        }
         if model.load.isLoaded, model.entries.isEmpty {
             Text("No words yet. Add a word or learn from history to get started.")
                 .foregroundStyle(.secondary)
         } else if !searchText.isEmpty, filteredEntries.isEmpty {
             Text("No words match \"\(searchText)\".")
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private struct AIDictionarySuggestionReview: View {
+        @ObservedObject var model: AIDictionarySuggestionModel
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Review AI suggestions")
+                    .font(.headline)
+                Text("Choose the spoken forms to add. Nothing is saved until you select Add.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                List(model.suggestions, id: \.pattern) { entry in
+                    Toggle(
+                        isOn: Binding(
+                            get: { model.selectedSpokenForms.contains(Self.key(entry.pattern)) },
+                            set: { model.toggleSelection(for: entry, selected: $0) }
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Scribe hears: \(entry.pattern)")
+                            Text("Scribe writes: \(entry.replacement)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                .frame(minHeight: 180)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { model.dismissReview() }
+                    Button(model.isCommitting ? "Adding..." : "Add selected") {
+                        Task { await model.commitSelectedSuggestions() }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!model.canCommitSelection)
+                }
+            }
+            .padding()
+            .frame(width: 500, height: 420)
+        }
+
+        private static func key(_ value: String) -> String {
+            value.trimmingCharacters(in: .whitespacesAndNewlines).folding(
+                options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
         }
     }
 

@@ -238,7 +238,8 @@ struct SettingsView: View {
                 dictionaryLibraryService: dictionaryLibraryService,
                 onChanged: onProfilesOrRulesChanged,
                 drafts: drafts,
-                requestedTab: dictionarySearchTab)
+                requestedTab: dictionarySearchTab,
+                pipelineReportStore: pipelineReportStore)
         case .voiceSnippets:
             SettingsVoiceSnippetsPage(
                 persistenceStore: persistenceStore,
