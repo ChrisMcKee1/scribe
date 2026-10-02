@@ -32,8 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var ruleRefresher = RuleSetRefresher<DictationRuleSnapshot>(
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
-            let libraryEntries = await self?.enabledLibraryEntries() ?? []
-            return await DictationRuleSnapshot.compile(rules, libraryEntries: libraryEntries)
+            let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
+            return await DictationRuleSnapshot.compile(
+                rules,
+                libraryEntries: vocabulary.entries,
+                cleanupVocabularyEntries: vocabulary.aiEntries)
         },
         apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
@@ -46,11 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let transcriptionEngine = TranscriptionEngine()
     private lazy var textInjector = TextInjector(logSink: { line in ScribeLog.legacyUnshapedLine(line) })
     private lazy var hotkeyManager = HotkeyManager()
-    let dictionaryLibraryService = DictionaryLibraryService()
+    private lazy var dictionaryLibraryService = DictionaryLibraryService(persistenceStore: persistenceStore)
+    private lazy var cleanupVocabularySource: any CleanupVocabularyLibrarySource = dictionaryLibraryService
     private let lastTranscriptStore = LastTranscriptStore()
     let pipelineReportStore = PipelineReportStore()
     private let overlayPanelController = OverlayPanelController()
     private lazy var trayPresenter = TrayPresenter(overlay: overlayPanelController)
+    private var interruptionMonitor: DictationInterruptionMonitor?
     private lazy var notifier: any DictationNotifying = Self.makeNotifier(recovery: lastTranscriptStore)
     private lazy var startupNotices = StartupNotices { [weak self] notice in
         self?.notifier.notify(notice)
@@ -84,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkAccessibility()
         requestMicrophoneAccessIfNeeded()
         configureHotkey()
+        interruptionMonitor = DictationInterruptionMonitor { [weak self] in
+            self?.dictationController.handleSessionInterruption()
+        }
         observeSettingsAndActivation()
         showWelcomeIfFirstRun()
     }
@@ -131,6 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             isPaused: UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey))
         controller.triggers = hotkeyManager
         return controller
+    }
+
+    private func cleanupVocabularyEntries() async -> [DictionaryEntry] {
+        await cleanupVocabularySource.cleanupVocabularyEntries()
     }
 
     private static func makeNotifier(recovery: LastTranscriptStore) -> any DictationNotifying {
@@ -183,9 +195,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await ruleRefresher.refresh() }
     }
 
-    /// Which dictionary libraries are switched on, read on the main actor where Settings changes them.
-    private func enabledLibraryEntries() -> [DictionaryEntry] {
-        dictionaryLibraryService.enabledLibraryEntries()
+    /// The committed word pack vocabulary snapshot every dictation reads, including the AI-permitted subset.
+    private func loadLibraryVocabulary() async throws -> LibraryVocabulary {
+        try await dictionaryLibraryService.loadVocabulary()
     }
 
     private func installRules(_ snapshot: DictationRuleSnapshot) {
@@ -474,12 +486,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 recentTranscripts: recent,
                 existing: existing,
                 onSave: { [weak self] result in self?.handleQuickAddSaved(result) },
-                onClose: { [weak self] in self?.quickAddWindowController?.close() },
-                persistAction: { [weak self] entry in
+                onClose: { [weak self] in
+                    self?.quickAddWindowController?.close()
+                    self?.quickAddWindowController = nil
+                },
+                persistAction: { [weak self] result in
                     guard let self else {
                         throw QuickAddPersistError.noPersistAction
                     }
-                    return try await self.persistQuickAddEntry(entry)
+                    return try await self.persistQuickAddEntries(result)
                 }))
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Add to Dictionary"
@@ -499,24 +514,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Writes the entry (insert for a new rule, update in place for an existing one, keyed by a non-zero id) and
     /// returns the row's id, mirroring Windows' `persist` delegate. The write waits on the storage queue, not the
     /// main actor.
-    private func persistQuickAddEntry(_ entry: DictionaryEntry) async throws -> Int64 {
-        if entry.id != 0 {
-            try await persistenceStore.saveDictionaryEntry(entry)
-            return entry.id
+    private func persistQuickAddEntries(_ result: DictionaryWordEditor.Result) async throws -> [DictionaryEntry] {
+        let inserts = result.addedEntries
+        let updates = result.editedEntry.map { [$0] } ?? []
+        try await persistenceStore.saveDictionaryChanges(inserts: inserts, updates: updates)
+
+        var saved: [DictionaryEntry] = []
+        if let updated = result.editedEntry {
+            saved.append(updated)
         }
-        return try await persistenceStore.addDictionaryEntry(entry)
+        if !inserts.isEmpty {
+            let existing = try await persistenceStore.loadAllDictionaryEntries()
+            for inserted in inserts {
+                if let savedEntry = existing.first(where: {
+                    $0.pattern == inserted.pattern
+                        && $0.replacement == inserted.replacement
+                        && $0.wholeWord == inserted.wholeWord
+                        && $0.enabled == inserted.enabled
+                }) {
+                    saved.append(savedEntry)
+                }
+            }
+        }
+        return saved
     }
 
-    /// After a successful save: refreshes the rules so the new one takes effect on the next dictation, repairs the
-    /// retained copy of the transcript the correction came from, and closes the popup. The log says only that a
-    /// rule was saved: rules are dictated content.
+    /// After a successful save: refreshes the rules so the new one takes effect on the next dictation and repairs the
+    /// retained copy of the transcript the correction came from. The popup decides whether this save closes it.
+    /// The log says only that a rule was saved: rules are dictated content.
     private func handleQuickAddSaved(_ result: QuickAddView.SavedResult) {
         refreshPostProcessorRules()
         if let source = result.sourceTranscript, let corrected = result.correctedTranscript {
             lastTranscriptStore.update(original: source, updated: corrected)
         }
         ScribeLog.info(.settings, "Saved a dictionary rule from Quick Add")
-        quickAddWindowController?.close()
     }
 
     /// Shows the one-time welcome window (non-modally, so the tray and dictation stay live behind it), then persists

@@ -109,7 +109,8 @@ private struct DictionaryTabHeader: View {
             .frame(minWidth: 180, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selectedTab == tab ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
+                    .fill(
+                        selectedTab == tab ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -130,7 +131,7 @@ struct DictionarySettingsTab: View {
     private let browseWordPacks: () -> Void
 
     @State private var searchText = ""
-    @State private var showingAddWordSheet = false
+    @State private var editorEntry: DictionaryEntry?
     @State private var enabledWordPackSpokenForms: Set<String> = []
 
     init(
@@ -174,8 +175,11 @@ struct DictionarySettingsTab: View {
                 .frame(minHeight: 260)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(SettingsDictionaryPageLogic.enabledSummary(enabled: enabledCount, total: model.entries.count, noun: "word"))
-                    .cardDescription()
+                Text(
+                    SettingsDictionaryPageLogic.enabledSummary(
+                        enabled: enabledCount, total: model.entries.count, noun: "word")
+                )
+                .cardDescription()
                 Text("AI cleanup receives the text after your words and word packs have already been applied.")
                     .cardDescription()
             }
@@ -183,9 +187,6 @@ struct DictionarySettingsTab: View {
         .onAppear {
             reloadWordPackCoverage()
             Task { await model.reload() }
-        }
-        .sheet(isPresented: $showingAddWordSheet) {
-            AddDictionaryWordSheet(model: model, drafts: drafts)
         }
         .sheet(
             isPresented: Binding(
@@ -202,12 +203,26 @@ struct DictionarySettingsTab: View {
                     onCancel: { model.cleanupReport = nil })
             }
         }
+        .sheet(item: $editorEntry) { entry in
+            DictionaryWordEditorView(
+                existing: model.entries,
+                title: entry.id == 0 ? "Add word" : "Edit word",
+                initialReplacement: entry.replacement,
+                initialForms: entry.pattern.isEmpty ? [""] : [entry.pattern],
+                onSave: { forms, replacement in
+                    if entry.id == 0 {
+                        return await model.addWords(replacement: replacement, forms: forms)
+                    }
+                    return await model.editWord(entry, replacement: replacement, forms: forms)
+                },
+                onCancel: { editorEntry = nil })
+        }
     }
 
     private var toolbar: some View {
         HStack(alignment: .center, spacing: 8) {
             Button {
-                showingAddWordSheet = true
+                editorEntry = DictionaryEntry(pattern: "", replacement: "")
             } label: {
                 Label("Add word", systemImage: "plus")
             }
@@ -280,6 +295,8 @@ struct DictionarySettingsTab: View {
                 .frame(width: 150, alignment: .leading)
             Text("")
                 .frame(width: 32)
+            Text("")
+                .frame(width: 32)
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
@@ -303,6 +320,14 @@ struct DictionarySettingsTab: View {
                 .frame(width: 120, alignment: .leading)
             wordPackCapsule(for: entry)
                 .frame(width: 150, alignment: .leading)
+            Button {
+                editorEntry = entry
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Edit \(entry.pattern)")
+            .frame(width: 32)
             Button(role: .destructive) {
                 Task { await model.delete(entry) }
             } label: {
@@ -397,53 +422,6 @@ struct DictionarySettingsTab: View {
             return
         }
         Task { await model.saveTemplate(to: url) }
-    }
-}
-
-private struct AddDictionaryWordSheet: View {
-    @ObservedObject var model: DictionarySettingsModel
-    @ObservedObject var drafts: SettingsDrafts
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Add word")
-                .font(.title2.weight(.semibold))
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Scribe hears").cardTitle()
-                TextField("For example, dot net", text: $drafts.dictionaryPattern)
-                    .textFieldStyle(.roundedBorder)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Scribe writes").cardTitle()
-                TextField("For example, .NET", text: $drafts.dictionaryReplacement)
-                    .textFieldStyle(.roundedBorder)
-            }
-            Toggle("Whole words only", isOn: $drafts.dictionaryWholeWord)
-            Text("Turn this off only when Scribe should replace text inside longer words.")
-                .cardDescription()
-
-            if let errorMessage = model.errorMessage {
-                Text(errorMessage).foregroundStyle(.red).font(.caption)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button(model.isAdding ? "Adding..." : "Add word") {
-                    Task {
-                        await model.addFromDrafts()
-                        if drafts.dictionaryPattern.isEmpty, drafts.dictionaryReplacement.isEmpty {
-                            dismiss()
-                        }
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!model.canAdd)
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
     }
 }
 
@@ -543,8 +521,10 @@ struct DictionaryWordPacksSettingsTab: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Word packs")
                         .cardTitle()
-                    Text("Switch on ready-made word packs for vocabulary such as Azure, GitHub and programming languages. Your words always win.")
-                        .cardDescription()
+                    Text(
+                        "Switch on ready-made word packs for vocabulary such as Azure, GitHub and programming languages. Your words always win."
+                    )
+                    .cardDescription()
                 }
                 Spacer()
                 Button("Import word pack CSV...") { showingImporter = true }
@@ -594,8 +574,11 @@ struct DictionaryWordPacksSettingsTab: View {
             }
             .frame(minHeight: 320)
 
-            Text(SettingsDictionaryPageLogic.enabledSummary(enabled: enabledCount, total: wordPacks.count, noun: "word pack"))
-                .cardDescription()
+            Text(
+                SettingsDictionaryPageLogic.enabledSummary(
+                    enabled: enabledCount, total: wordPacks.count, noun: "word pack")
+            )
+            .cardDescription()
         }
         .onAppear(perform: reload)
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in

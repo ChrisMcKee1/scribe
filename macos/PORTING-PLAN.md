@@ -2,11 +2,10 @@
 
 ## Current baseline
 
-- Status: most of the Windows 0.4.3 feature set is present on macOS; "Parity at a glance" below says, area by
+- Status: most of the Windows 0.4.3 feature set is present on macOS, and the 'Windows 0.4.4 to 0.5.4 parity pass' section below says what has been carried over since; "Parity at a glance" below says, area by
   area, what is present, partial, missing or not applicable. The larger gaps: the default speech model is
-  English-only, there is no voice activity detection and no chunked decode of long recordings, AI cleanup has no
-  dictionary glossary (with cleanup on, the dictionary's one-line rules correct the transcript the model is sent
-  instead) and no GitHub Copilot provider (Windows-only: it shells to the Copilot CLI and its Settings
+  English-only, there is no voice activity detection and no chunked decode of long recordings, there is no
+  GitHub Copilot provider (Windows-only: it shells to the Copilot CLI and its Settings
   panel offers a WinGet install), there is no log file or diagnostics export, and updates stop at a manual update
   check. Packaging now has stable local dev signing plus a Developer ID release pipeline that still needs real
   credentials to verify end to end.
@@ -24,10 +23,72 @@
 - The rows of the detailed checklist further down say how each feature is built and what of it is verified only
   by tests; follow-ups are called out inline per row.
 
+## Windows 0.4.4 to 0.5.4 parity pass
+
+The port was at Windows 0.4.3. This pass (branch `macos/parity-0.5.4`, built from three streams that each went
+green on the macOS CI) brings the changes below over. Everything here is proven by the unit and scenario tests on
+the CI runners; anything behind a permission, a real Mac UI, a real Ollama or LM Studio, or rendering still needs a
+real Mac.
+
+**Ported**
+
+- **A space after each dictation** (0.4.4): one insertion step adds it, only the target gets it, on by default for
+  every install, with an Input tab switch (`DictationInsertion.swift`, `TypingSettingsStore.swift`).
+- **Screen lock or sleep ends a dictation** (0.4.4): `DictationInterruptionMonitor` watches display sleep, session
+  resign and the screen-locked notification, and ends the recording through the normal stop path with a distinct
+  `sessionInterrupted` reason.
+- **Microphone default**: checked, no change needed; an absent saved choice already follows the system default.
+- **The recording indicator** (0.5.0, 0.5.1): the level bars follow the voice (`PillLevelMeter`, `PillLevelBars`),
+  and a dictation's outcome shows as typed, typed without AI cleanup, nothing typed or not all typed
+  (`PillOutcome`, `PillTiming`), with Reduce Motion in place of Windows' animation effects.
+- **Add word takes several ways of saying a word** (0.5.2): `DictionaryWordEditor` and its sheet, in the Dictionary
+  tab and Quick Add, which now has Save and Save and close.
+- **Writing style writes lists as lists** (0.5.2).
+- **Microsoft Foundry**: asks for the least reasoning a deployment accepts, and has the prompt cache switch (off
+  sends `prompt_cache_options` explicit and never retries without it), 0.5.1 and 0.5.2.
+- **AI cleanup on this PC with Ollama or LM Studio** (0.5.2 to 0.5.4): `LocalServerClient` finds each app at its own
+  default address only, lists its chat models, reads and frees what it holds in memory, and tries every address
+  `localhost` names at once (the 0.5.4 fix). Settings, AI cleanup, On this PC offers Let Scribe manage it, Ollama
+  and LM Studio with a model list read from the app, Check again and Free memory; another AI service is remembered
+  beside an app.
+- **Requests to a model on this PC** (0.5.2): short instructions, temperature 0.1, reasoning off, the output ceiling
+  also as `max_tokens` with the one plain retry for a strict server, `keep_alive` and `ttl`, and the sanitizer that
+  removes what small models wrap around an answer.
+- **Glossary of mentioned terms and its disclosure** (0.5.2): the model is now told the dictionary and word pack
+  terms a dictation appears to mention (budgets 5,000 terms and 24,000 characters, 80 terms for an on-device
+  style), never a snippet body or a template-like replacement, and Settings says what is sent
+  (`VocabularyMentions`, `CleanupDisclosure`). The existing `correctVocabulary` split stays: safe replacements are
+  still made in the text sent.
+- **Context size and the whole vocabulary** (0.5.3): `TokenEstimate` and `ContextBudget` fit requests to a local
+  model's context, with the Context size setting (Ollama through its own chat API, LM Studio by loading at a size)
+  and the whole-vocabulary switch, off by default.
+- **Another AI service: Chat Completions or Responses** (0.5.3): the API choice, address path stripping, Responses
+  always `store=false`, and an address ending in `/completions` refused with the reason.
+- **Word packs** (0.5.0), the model only: the shared fixtures under `tests/fixtures/libraries` drive the term key,
+  id, built-in precedence and list order; the CSV format 2 codec and lint; a committed SQLite catalog with AI
+  permission bound to content; the vocabulary snapshot (`LibraryVocabulary`, `entries` for dictation and
+  `aiEntries` for the cleanup glossary); dictionary cleanup never switches a word pack off or copies its terms; and
+  the pure editor logic (`LibraryEditor`, `LibrarySearch`, `LibraryTermSort`, `LibraryImportPlanner`).
+
+**Not ported yet**
+
+- The **Settings redesign** (0.5.0): Find a setting, the Word packs editor page (the model above has no UI yet),
+  the footer's unsaved-changes handling, Test connection beyond what exists, History search over every dictation,
+  and the rewritten tray notices. The eleven-page layout and Try dictation page are present on this branch.
+- **Word packs**: the full `LibraryWorkspace` (undo and redo, change sets, review of built-in updates), the whole
+  composition-golden corpus, and the library journal (macOS keeps SQLite transactions instead).
+- **Models on this PC, the rest of memory release** (0.5.2): the one release lane that never frees a model under a
+  use, the readying request when a recording starts, the "Starting local model" state on the indicator, and
+  tracking of the LM Studio copies Scribe loads. Only the retention fields on each request are ported.
+- Not applicable on macOS: mouse button shortcuts and their hook, Remote Desktop typing, Windows text size and
+  accent contrast, contrast themes, Velopack and Store packaging, performance flags and memory work that is Windows
+  code only.
+
+The rows of the tables below that say otherwise (the glossary, the AI cleanup providers, dictionary libraries, the
+overlay pill, Quick add) describe the 0.4.3 state; this section is newer.
 Windows quick-add follow-up: the "Tray quick add to dictionary" row below covers the original flow.
 Windows now offers **Save** to refresh the corrected dictation and keep editing, plus **Save and
-close**. macOS `QuickAddView.swift` has not yet adopted those separate actions or the refreshed
-word-chip and recent-picker state between saves.
+close**. macOS `QuickAddView.swift` now has the separate **Save** and **Save and close** actions.
 
 Windows 0.4.3 follow-up (2026-09-23): these Windows behavior changes may have made the matching rows
 below stale. Nothing under `macos/Scribe` was changed for them unless a bullet says macOS now matches or carries a

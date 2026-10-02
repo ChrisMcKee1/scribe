@@ -9,7 +9,7 @@ import Foundation
 enum BuiltInDictionaryLibraries {
     private static let cached: [DictionaryLibrary] = load()
 
-    /// All built-in libraries, ordered by category then name.
+    /// All built-in libraries, ordered in the frozen precedence order.
     static var all: [DictionaryLibrary] { cached }
 
     private static func load() -> [DictionaryLibrary] {
@@ -27,12 +27,12 @@ enum BuiltInDictionaryLibraries {
         var libraries: [DictionaryLibrary] = []
         for fileURL in fileURLs where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
-            guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            guard !id.isEmpty, let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
 
-            let file = DictionaryLibraryCsv.parse(text)
-            guard !file.entries.isEmpty else { continue }
+            let file = DictionaryLibraryCsv.parseManaged(data)
+            guard !file.terms.isEmpty else { continue }
 
             libraries.append(
                 DictionaryLibrary(
@@ -41,14 +41,10 @@ enum BuiltInDictionaryLibraries {
                     category: file.category ?? "General",
                     description: file.description,
                     builtIn: true,
-                    entries: file.entries))
+                    entries: file.terms.map(\.dictionaryEntry)))
         }
 
-        return libraries.sorted {
-            $0.category.localizedCaseInsensitiveCompare($1.category) == .orderedSame
-                ? $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                : $0.category.localizedCaseInsensitiveCompare($1.category) == .orderedAscending
-        }
+        return LibraryPrecedence.order(libraries)
     }
 
     /// Checked in an order that keeps `Bundle.module` off the hot path for a packaged, signed

@@ -37,7 +37,9 @@ struct HistorySettingsTab: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone.")
+            Text(
+                "This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone."
+            )
         }
     }
 
@@ -109,8 +111,10 @@ struct HistorySettingsTab: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("History list")
                 .cardTitle()
-            Text("The macOS port can store and clear dictation history, but this page does not yet include the Windows history table with search, copy, per-item delete and feedback buttons.")
-                .cardDescription()
+            Text(
+                "The macOS port can store and clear dictation history, but this page does not yet include the Windows history table with search, copy, per-item delete and feedback buttons."
+            )
+            .cardDescription()
         }
     }
 

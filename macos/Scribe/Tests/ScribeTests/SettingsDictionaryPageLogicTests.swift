@@ -14,9 +14,12 @@ final class SettingsDictionaryPageLogicTests: XCTestCase {
 
     func testWordPackRowsSortByNameThenId() {
         let rows = SettingsDictionaryPageLogic.wordPackRows([
-            DictionaryLibrary(id: "z", name: "Zulu", category: "Built-in", description: nil, builtIn: true, entries: []),
-            DictionaryLibrary(id: "b", name: "Alpha", category: "Built-in", description: nil, builtIn: true, entries: []),
-            DictionaryLibrary(id: "a", name: "Alpha", category: "Built-in", description: nil, builtIn: true, entries: []),
+            DictionaryLibrary(
+                id: "z", name: "Zulu", category: "Built-in", description: nil, builtIn: true, entries: []),
+            DictionaryLibrary(
+                id: "b", name: "Alpha", category: "Built-in", description: nil, builtIn: true, entries: []),
+            DictionaryLibrary(
+                id: "a", name: "Alpha", category: "Built-in", description: nil, builtIn: true, entries: []),
         ])
 
         XCTAssertEqual(rows.map(\.id), ["a", "b", "z"])
@@ -47,7 +50,10 @@ final class SettingsDictionaryPageLogicTests: XCTestCase {
     }
 
     func testEnabledSummaryUsesSingularAndPluralNouns() {
-        XCTAssertEqual(SettingsDictionaryPageLogic.enabledSummary(enabled: 1, total: 1, noun: "word"), "1 of 1 word is on.")
-        XCTAssertEqual(SettingsDictionaryPageLogic.enabledSummary(enabled: 2, total: 3, noun: "word pack"), "2 of 3 word packs are on.")
+        XCTAssertEqual(
+            SettingsDictionaryPageLogic.enabledSummary(enabled: 1, total: 1, noun: "word"), "1 of 1 word is on.")
+        XCTAssertEqual(
+            SettingsDictionaryPageLogic.enabledSummary(enabled: 2, total: 3, noun: "word pack"),
+            "2 of 3 word packs are on.")
     }
 }

@@ -202,7 +202,8 @@ final class DictationNoticeScheduleTests: XCTestCase {
     func testEveryNoticeHasARoleAndOnlyTheSilentFallbacksNotifyInstead() {
         XCTAssertEqual(OverlayNotice.stillProcessing.role, .feedback)
         XCTAssertEqual(
-            OverlayNotice.allCases.filter(\.notifiesWhenThePillIsBusy), [.cleanupFellBack, .transcriptionFailed])
+            OverlayNotice.allCases.filter(\.notifiesWhenThePillIsBusy),
+            [.typedWithoutCleanup, .cleanupFellBack, .transcriptionFailed])
         for notice in OverlayNotice.allCases where notice.notifiesWhenThePillIsBusy {
             XCTAssertEqual(notice.role, .informational)
         }
@@ -320,9 +321,12 @@ final class CleanupInvalidationTests: XCTestCase {
     private func snapshot(enabled: Bool = true, deployment: String = "gpt-6") -> CleanupSettingsSnapshot {
         CleanupSettingsSnapshot(
             isEnabled: enabled, providerKind: .microsoftFoundry, foundryLocalModelAlias: "qwen", ollamaModel: "qwen",
-            openAIBaseURL: "", openAIModel: "", azureEndpoint: "https://example.openai.azure.com",
-            azureDeployment: deployment, azureAuthMode: .azureCli, azureTenantId: "", azureClientId: "",
-            secretRevision: "1")
+            selectedLocalApp: .none, openAIBaseURL: "", openAIModel: "", openAIApiStyle: .chatCompletions,
+            ollamaContextTokens: 0, lmStudioContextTokens: 0, foundryLocalSendWholeVocabulary: false,
+            ollamaSendWholeVocabulary: false, lmStudioSendWholeVocabulary: false,
+            azureEndpoint: "https://example.openai.azure.com", azureDeployment: deployment,
+            azureAuthMode: .azureCli, azureTenantId: "", azureClientId: "",
+            otherServiceApiStyle: .chatCompletions, secretRevision: "1")
     }
 
     func testTurningCleanupOffOrChangingItsProviderDropsTheCache() {

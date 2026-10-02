@@ -3,7 +3,7 @@ import Foundation
 /// A single user-dictionary substitution applied during post-processing. When `wholeWord` is set
 /// the pattern matches on word boundaries; otherwise it's a plain case-insensitive phrase
 /// replacement. Mirrors `Scribe.Core.Models.DictionaryEntry` on Windows.
-struct DictionaryEntry: Equatable {
+struct DictionaryEntry: Equatable, Identifiable {
     let id: Int64
     var pattern: String
     var replacement: String

@@ -39,13 +39,22 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var providerKind: CleanupProviderKind
     var foundryLocalModelAlias: String
     var ollamaModel: String
+    var selectedLocalApp: LocalServerApp
     var openAIBaseURL: String
     var openAIModel: String
+    var openAIApiStyle: CustomAPIStyle
+    var ollamaContextTokens: Int
+    var lmStudioContextTokens: Int
+    var foundryLocalSendWholeVocabulary: Bool
+    var ollamaSendWholeVocabulary: Bool
+    var lmStudioSendWholeVocabulary: Bool
     var azureEndpoint: String
     var azureDeployment: String
+    var azurePromptCaching = true
     var azureAuthMode: AzureAuthMode
     var azureTenantId: String
     var azureClientId: String
+    var otherServiceApiStyle: CustomAPIStyle
     var secretRevision: String
 }
 
@@ -79,10 +88,22 @@ struct CleanupSettingsStore: Sendable {
         static let providerKind = "ScribeCleanupProviderKind"
         static let foundryLocalModelAlias = "ScribeCleanupFoundryLocalModelAlias"
         static let ollamaModel = "ScribeCleanupOllamaModel"
+        static let lmStudioModel = "ScribeCleanupLmStudioModel"
+        static let selectedLocalApp = "ScribeCleanupSelectedLocalApp"
         static let openAIBaseURL = "ScribeCleanupOpenAIBaseURL"
         static let openAIModel = "ScribeCleanupOpenAIModel"
+        static let openAIApiStyle = "ScribeCleanupOpenAIApiStyle"
+        static let ollamaContextTokens = "ScribeCleanupOllamaContextTokens"
+        static let lmStudioContextTokens = "ScribeCleanupLmStudioContextTokens"
+        static let foundryLocalSendWholeVocabulary = "ScribeCleanupFoundryLocalSendWholeVocabulary"
+        static let ollamaSendWholeVocabulary = "ScribeCleanupOllamaSendWholeVocabulary"
+        static let lmStudioSendWholeVocabulary = "ScribeCleanupLmStudioSendWholeVocabulary"
+        static let otherServiceBaseURL = "ScribeCleanupOtherServiceBaseURL"
+        static let otherServiceModel = "ScribeCleanupOtherServiceModel"
+        static let otherServiceApiStyle = "ScribeCleanupOtherServiceApiStyle"
         static let azureEndpoint = "ScribeCleanupAzureEndpoint"
         static let azureDeployment = "ScribeCleanupAzureDeployment"
+        static let azurePromptCaching = "ScribeCleanupAzurePromptCaching"
         static let azureAuthMode = "ScribeCleanupAzureAuthMode"
         static let azureTenantId = "ScribeCleanupAzureTenantId"
         static let azureClientId = "ScribeCleanupAzureClientId"
@@ -155,6 +176,16 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue, forKey: Key.ollamaModel) }
     }
 
+    var lmStudioModel: String {
+        get { defaults.string(forKey: Key.lmStudioModel) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.lmStudioModel) }
+    }
+
+    var selectedLocalApp: LocalServerApp {
+        get { LocalServerApp(rawValue: defaults.string(forKey: Key.selectedLocalApp) ?? "") ?? .none }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.selectedLocalApp) }
+    }
+
     var openAIBaseURL: String {
         get { defaults.string(forKey: Key.openAIBaseURL) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.openAIBaseURL) }
@@ -165,6 +196,53 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue, forKey: Key.openAIModel) }
     }
 
+    var openAIApiStyle: CustomAPIStyle {
+        get { CustomAPIStyle(rawValue: defaults.string(forKey: Key.openAIApiStyle) ?? "") ?? .chatCompletions }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.openAIApiStyle) }
+    }
+
+    var ollamaContextTokens: Int {
+        get { defaults.integer(forKey: Key.ollamaContextTokens) }
+        nonmutating set { defaults.set(newValue, forKey: Key.ollamaContextTokens) }
+    }
+
+    var lmStudioContextTokens: Int {
+        get { defaults.integer(forKey: Key.lmStudioContextTokens) }
+        nonmutating set { defaults.set(newValue, forKey: Key.lmStudioContextTokens) }
+    }
+
+    var foundryLocalSendWholeVocabulary: Bool {
+        get { defaults.bool(forKey: Key.foundryLocalSendWholeVocabulary) }
+        nonmutating set { defaults.set(newValue, forKey: Key.foundryLocalSendWholeVocabulary) }
+    }
+
+    var ollamaSendWholeVocabulary: Bool {
+        get { defaults.bool(forKey: Key.ollamaSendWholeVocabulary) }
+        nonmutating set { defaults.set(newValue, forKey: Key.ollamaSendWholeVocabulary) }
+    }
+
+    var lmStudioSendWholeVocabulary: Bool {
+        get { defaults.bool(forKey: Key.lmStudioSendWholeVocabulary) }
+        nonmutating set { defaults.set(newValue, forKey: Key.lmStudioSendWholeVocabulary) }
+    }
+
+    var otherServiceBaseURL: String {
+        get { defaults.string(forKey: Key.otherServiceBaseURL) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.otherServiceBaseURL) }
+    }
+
+    var otherServiceModel: String {
+        get { defaults.string(forKey: Key.otherServiceModel) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.otherServiceModel) }
+    }
+
+    var otherServiceApiStyle: CustomAPIStyle {
+        get {
+            CustomAPIStyle(rawValue: defaults.string(forKey: Key.otherServiceApiStyle) ?? "") ?? .chatCompletions
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.otherServiceApiStyle) }
+    }
+
     var azureEndpoint: String {
         get { defaults.string(forKey: Key.azureEndpoint) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.azureEndpoint) }
@@ -173,6 +251,16 @@ struct CleanupSettingsStore: Sendable {
     var azureDeployment: String {
         get { defaults.string(forKey: Key.azureDeployment) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.azureDeployment) }
+    }
+
+    var azurePromptCaching: Bool {
+        get {
+            guard let stored = defaults.object(forKey: Key.azurePromptCaching) as? Bool else {
+                return true
+            }
+            return stored
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.azurePromptCaching) }
     }
 
     var azureAuthMode: AzureAuthMode {
@@ -207,13 +295,24 @@ struct CleanupSettingsStore: Sendable {
             foundryLocalModelAlias: defaults.string(forKey: Key.foundryLocalModelAlias)
                 ?? Self.defaultFoundryLocalModelAlias,
             ollamaModel: defaults.string(forKey: Key.ollamaModel) ?? Self.defaultOllamaModel,
+            selectedLocalApp: LocalServerApp(rawValue: defaults.string(forKey: Key.selectedLocalApp) ?? "") ?? .none,
             openAIBaseURL: defaults.string(forKey: Key.openAIBaseURL) ?? "",
             openAIModel: defaults.string(forKey: Key.openAIModel) ?? "",
+            openAIApiStyle: CustomAPIStyle(rawValue: defaults.string(forKey: Key.openAIApiStyle) ?? "")
+                ?? .chatCompletions,
+            ollamaContextTokens: defaults.integer(forKey: Key.ollamaContextTokens),
+            lmStudioContextTokens: defaults.integer(forKey: Key.lmStudioContextTokens),
+            foundryLocalSendWholeVocabulary: defaults.bool(forKey: Key.foundryLocalSendWholeVocabulary),
+            ollamaSendWholeVocabulary: defaults.bool(forKey: Key.ollamaSendWholeVocabulary),
+            lmStudioSendWholeVocabulary: defaults.bool(forKey: Key.lmStudioSendWholeVocabulary),
             azureEndpoint: defaults.string(forKey: Key.azureEndpoint) ?? "",
             azureDeployment: defaults.string(forKey: Key.azureDeployment) ?? "",
+            azurePromptCaching: (defaults.object(forKey: Key.azurePromptCaching) as? Bool) ?? true,
             azureAuthMode: Self.azureAuthMode(in: defaults),
             azureTenantId: defaults.string(forKey: Key.azureTenantId) ?? "",
             azureClientId: defaults.string(forKey: Key.azureClientId) ?? "",
+            otherServiceApiStyle: CustomAPIStyle(rawValue: defaults.string(forKey: Key.otherServiceApiStyle) ?? "")
+                ?? .chatCompletions,
             secretRevision: defaults.string(forKey: Key.secretRevision) ?? "")
     }
 

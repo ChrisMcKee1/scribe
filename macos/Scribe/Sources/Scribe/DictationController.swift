@@ -44,6 +44,8 @@ enum DictationStopReason: String, Equatable, Sendable {
     case bindingChanged
     /// The event tap was disabled and, re-read afterwards, the key had been released meanwhile.
     case tapResynchronized
+    /// The session locked or slept while the dictation was live.
+    case sessionInterrupted
     /// Scribe is quitting; the recording is discarded.
     case shutdown
 }
@@ -215,6 +217,9 @@ final class DictationController {
         var toggleKeyStopsOnSilence: @MainActor @Sendable () -> Bool = { false }
         /// Line-break handling when no app profile overrides it.
         var newlineMode: NewlineInjectionMode = .smartFlatten
+        /// Whether the target gets one trailing space after each dictation. Read for the dictation being inserted, so
+        /// a change applies to the next delivery that reaches insertion.
+        var addSpaceAfterDictation: @MainActor @Sendable () -> Bool = { true }
         /// How long a notice stays on the pill.
         var noticeDuration: Duration = .milliseconds(1_800)
         /// A press while this many dictations are still processing is turned away, which bounds the audio held.
@@ -282,7 +287,9 @@ final class DictationController {
     private let transcriptionTurns = DictationTurns()
     private let deliveryTurns = DictationTurns()
     private var revision: UInt64 = 0
-    private var levelDbfs = AudioLevelMeasurement.toDbfs(0)
+    private var levelMeter = PillLevelMeter()
+    private var level = 0.0
+    private var lastLevelAt: ContinuousClock.Instant?
     private var notices = DictationNoticeSchedule()
     private var nextNoticeID: UInt64 = 0
     private var noticeTimer: Task<Void, Never>?
@@ -379,6 +386,13 @@ final class DictationController {
         }
     }
 
+    /// The session locked or slept while a dictation was live or opening. Ends it through the normal stop path so
+    /// what was already captured is still processed.
+    func handleSessionInterruption() {
+        guard let current = recording else { return }
+        endRecording(current.id, reason: .sessionInterrupted)
+    }
+
     /// Drops the cached cleanup provider and credential, for when cleanup is switched off or its settings change.
     func invalidateCleanup() {
         services.cleanup.invalidate()
@@ -401,12 +415,14 @@ final class DictationController {
             return
         }
         switch event.kind {
-        case .level(let level):
+        case .level(let measurement):
             guard current.phase == .live else {
                 checkpoints.ignoredCaptureEvents += 1
                 return
             }
-            levelDbfs = level.rmsDbfs
+            let now = services.clock.now
+            level = levelMeter.update(measurement.peakAmplitude, sincePrevious: lastLevelAt?.duration(to: now) ?? .zero)
+            lastLevelAt = now
             present()
         case .stopRequested(let ending):
             let reason: DictationStopReason
@@ -467,7 +483,9 @@ final class DictationController {
         notices.yieldToRecording()
         noticeTimer?.cancel()
         noticeTimer = nil
-        levelDbfs = AudioLevelMeasurement.toDbfs(0)
+        levelMeter.reset()
+        level = 0
+        lastLevelAt = nil
         recording = LiveRecording(
             id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin())
         ScribeLog.info(
@@ -694,6 +712,7 @@ final class DictationController {
         // snippet template or template-like replacement ever reaches a provider, a dash the user wrote survives, no
         // rule runs twice, and a reply that is the text sent gives exactly the cleanup-off text.
         let post: TextPostProcessingResult
+        var cleanupFallbackWasNotified = false
         var postDuration = Duration.zero
         if services.cleanup.isEnabled {
             let vocabularyStarted = clock.now
@@ -703,12 +722,21 @@ final class DictationController {
                 post = rules.postProcess(raw)
             } else {
                 report.sentText = pass.text
-                let stage = await cleanUp(pass.text, dictation: dictation, profile: profile, singleLine: singleLine)
+                let stage = await cleanUp(
+                    pass.text,
+                    dictationText: raw,
+                    dictation: dictation,
+                    profile: profile,
+                    singleLine: singleLine)
                 guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
                 report.cleanupOutcome = stage.outcome
                 report.cleanupDuration = stage.requestDuration?.seconds
                 if stage.outcome == .fellBack {
-                    postOutcome(.cleanupFellBack, about: id, stage: .cleanup)
+                    let pillIsBusy = recording != nil || notices.shown != nil || !notices.waiting.isEmpty
+                    if pillIsBusy {
+                        notify(.cleanupFellBack)
+                        cleanupFallbackWasNotified = true
+                    }
                 }
                 let finishStarted = clock.now
                 if let cleaned = stage.text {
@@ -738,16 +766,21 @@ final class DictationController {
         // Delivery in dictation order. The check after the wait is the last one: recovery and delivery follow with
         // no suspension in between.
         guard await deliveryTurns.waitForTurn(id), mayContinue else { return stopped(dictation, at: .beforeDelivery) }
-        services.recovery.set(insertion)
-        let recoveryGeneration = services.recovery.generation
         let deliveryStarted = clock.now
-        let injection: InjectionResult
-        if let destination = target?.injection {
-            injection = await services.injector.inject(text: insertion, into: destination, shiftReturnLineBreaks: true)
-        } else {
+        let injector = services.injector
+        let insertionResult = await DictationInsertion.insert(
+            insertion,
+            addSpaceAfterDictation: configuration.addSpaceAfterDictation(),
+            recovery: services.recovery
+        ) { typed in
+            if let destination = target?.injection {
+                return await injector.inject(text: typed, into: destination, shiftReturnLineBreaks: true)
+            }
             // A target that could not be captured is never taken to mean "wherever focus is now".
-            injection = InjectionResult(delivery: .targetUnknown)
+            return InjectionResult(delivery: .targetUnknown)
         }
+        let recoveryGeneration = insertionResult.recoveryGeneration
+        let injection = insertionResult.injection
         report.injectionDuration = deliveryStarted.duration(to: clock.now).seconds
         report.injectionResult = injection
         ScribeLog.log(
@@ -772,16 +805,26 @@ final class DictationController {
                 sampleCount: summary.sampleCount,
                 decodeMilliseconds: decode.seconds * 1_000,
                 cleanupMilliseconds: report.cleanupDuration.map { $0 * 1_000 },
-                transcriptText: insertion,
+                transcriptText: insertionResult.recorded,
                 targetApp: target?.bundleIdentifier ?? target?.processName),
             dictationID: id.rawValue)
         services.reports.publish(report)
-        announce(injection, of: dictation, transcript: insertion, recoveryGeneration: recoveryGeneration)
+        announce(
+            injection,
+            cleanupOutcome: report.cleanupOutcome,
+            cleanupFallbackWasNotified: cleanupFallbackWasNotified,
+            of: dictation,
+            transcript: insertionResult.recorded,
+            recoveryGeneration: recoveryGeneration)
     }
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
     private func cleanUp(
-        _ sent: String, dictation: AdmittedDictation, profile: AppProfile?, singleLine: Bool
+        _ sent: String,
+        dictationText raw: String,
+        dictation: AdmittedDictation,
+        profile: AppProfile?,
+        singleLine: Bool
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
@@ -798,12 +841,29 @@ final class DictationController {
         }
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
 
+        let settings = services.cleanup.currentSettings()
+        let tuning = LocalModelTuning.forSettings(settings)
         let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
+        let promptWithoutGlossary = CleanupPrompt.systemPrompt(
+            writingStyle: style,
+            useLocalPrompt: provider.usesLocalCleanupPrompt)
+        let outputCeiling = cleanupOutputCeiling(for: settings, transcript: sent)
+        let glossary = cleanupGlossary(
+            vocabulary: services.rules.cleanupVocabulary,
+            rawDictation: raw,
+            correctedText: sent,
+            promptWithoutGlossary: promptWithoutGlossary,
+            tuning: tuning,
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            outputCeiling: outputCeiling)
         let request = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript(sent),
             writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: style, useLocalPrompt: provider.usesLocalCleanupPrompt),
-            singleLineMode: singleLine)
+                writingStyle: style,
+                useLocalPrompt: provider.usesLocalCleanupPrompt,
+                glossary: glossary),
+            singleLineMode: singleLine,
+            maxOutputTokens: outputCeiling)
         let started = clock.now
         let response: CleanupResponse
         do {
@@ -833,6 +893,61 @@ final class DictationController {
                 .integer("dictation", id.rawValue), .name("reason", reason), .duration("cleanup", elapsed))
             return CleanupStage(outcome: .fellBack, text: nil, requestDuration: elapsed)
         }
+    }
+
+    private func cleanupGlossary(
+        vocabulary: CleanupVocabulary,
+        rawDictation: String,
+        correctedText: String,
+        promptWithoutGlossary: String,
+        tuning: LocalModelTuning,
+        useLocalPrompt: Bool,
+        outputCeiling: Int?
+    ) -> String? {
+        let defaultGlossary = vocabulary.glossary(
+            maxTerms: CleanupPrompt.glossaryTermBudget(useLocalPrompt: useLocalPrompt),
+            mode: .mentioned,
+            dictation: rawDictation)
+
+        let selectedContext = ContextBudget.sanitize(tuning.contextTokens)
+        let context =
+            selectedContext > 0
+            ? selectedContext
+            : (tuning.sendWholeVocabulary ? ContextBudget.assumedContextTokens : 0)
+        guard context > 0, let outputCeiling else {
+            return defaultGlossary
+        }
+
+        let budget = ContextBudget.vocabularyTokens(
+            context,
+            instructions: promptWithoutGlossary,
+            transcript: correctedText,
+            outputCeiling: outputCeiling)
+        let maxTerms =
+            tuning.sendWholeVocabulary
+            ? .max
+            : CleanupPrompt.glossaryTermBudget(useLocalPrompt: useLocalPrompt)
+        return vocabulary.glossary(
+            mode: .mentioned,
+            everything: tuning.sendWholeVocabulary,
+            dictation: rawDictation,
+            tokenBudget: budget,
+            maxTerms: maxTerms)
+    }
+
+    private func cleanupOutputCeiling(for settings: CleanupSettingsSnapshot, transcript: String) -> Int? {
+        switch settings.selectedLocalApp {
+        case .none:
+            return nil
+        case .ollama, .lmStudio:
+            return estimateCleanupOutputTokens(transcript)
+        }
+    }
+
+    private func estimateCleanupOutputTokens(_ text: String) -> Int {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        let estimate = Int(Double(words) * 2.5) + 128
+        return min(max(estimate, 64), 4096)
     }
 
     private func recognitionFailed(_ dictation: AdmittedDictation, _ error: any Error, report failure: PipelineReport) {
@@ -878,17 +993,28 @@ final class DictationController {
     /// The pill's notice and, when the text did not go in, a notification with the transcript to copy. Both are
     /// refused when Clear history has removed that transcript since it was kept.
     private func announce(
-        _ injection: InjectionResult, of dictation: AdmittedDictation, transcript: String, recoveryGeneration: UInt64
+        _ injection: InjectionResult,
+        cleanupOutcome: DictationCleanupOutcome,
+        cleanupFallbackWasNotified: Bool,
+        of dictation: AdmittedDictation,
+        transcript: String,
+        recoveryGeneration: UInt64
     ) {
         let id = dictation.id
         switch injection.delivery {
-        case .accessibility, .pasted, .typed, .nothingToInsert:
+        case .accessibility, .pasted, .typed:
             if dictation.stopReason == .deviceFault {
                 postOutcome(.microphoneStoppedEarly, about: id, stage: .capture)
             } else if dictation.stopReason == .durationLimit {
                 postOutcome(.durationLimitReached, about: id, stage: .capture)
+            } else if cleanupOutcome == .fellBack {
+                if !cleanupFallbackWasNotified {
+                    postOutcome(.typedWithoutCleanup, about: id, stage: .delivery)
+                }
+            } else {
+                postOutcome(.typed, about: id, stage: .delivery)
             }
-        case .cancelled:
+        case .nothingToInsert, .cancelled:
             return
         case .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .failed:
             postOutcome(
@@ -975,7 +1101,7 @@ final class DictationController {
 
     private static func fallbackNotification(for kind: OverlayNotice) -> DictationNotice? {
         switch kind {
-        case .cleanupFellBack: return .cleanupFellBack
+        case .cleanupFellBack, .typedWithoutCleanup: return .cleanupFellBack
         case .transcriptionFailed: return .transcriptionFailed
         default: return nil
         }
@@ -988,7 +1114,8 @@ final class DictationController {
         notices.didShow(outcome, token: revision &+ 1)
         let token = present()
         let clock = services.clock
-        let until = clock.now.advanced(by: configuration.noticeDuration)
+        let hold = outcome.kind.pillOutcome?.hold ?? configuration.noticeDuration
+        let until = clock.now.advanced(by: hold)
         noticeTimer = Task { [weak self] in
             do {
                 try await clock.sleep(until: until)
@@ -1025,7 +1152,7 @@ final class DictationController {
     private var overlayState: OverlayState {
         if let recording {
             if recording.phase == .live {
-                return .listening(levelDbfs: levelDbfs)
+                return .listening(level: level)
             }
             return dictations.isEmpty ? .hidden : .processing
         }

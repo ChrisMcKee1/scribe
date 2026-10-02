@@ -13,10 +13,22 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.providerKind, .foundryLocal)
         XCTAssertEqual(store.foundryLocalModelAlias, "qwen2.5-1.5b")
         XCTAssertEqual(store.ollamaModel, "qwen2.5:3b")
+        XCTAssertEqual(store.lmStudioModel, "")
+        XCTAssertEqual(store.selectedLocalApp, .none)
         XCTAssertEqual(store.openAIBaseURL, "")
         XCTAssertEqual(store.openAIModel, "")
+        XCTAssertEqual(store.openAIApiStyle, .chatCompletions)
+        XCTAssertEqual(store.ollamaContextTokens, 0)
+        XCTAssertEqual(store.lmStudioContextTokens, 0)
+        XCTAssertFalse(store.foundryLocalSendWholeVocabulary)
+        XCTAssertFalse(store.ollamaSendWholeVocabulary)
+        XCTAssertFalse(store.lmStudioSendWholeVocabulary)
+        XCTAssertEqual(store.otherServiceBaseURL, "")
+        XCTAssertEqual(store.otherServiceModel, "")
+        XCTAssertEqual(store.otherServiceApiStyle, .chatCompletions)
         XCTAssertEqual(store.azureEndpoint, "")
         XCTAssertEqual(store.azureDeployment, "")
+        XCTAssertTrue(store.azurePromptCaching)
         XCTAssertEqual(store.azureAuthMode, .azureCli)
         XCTAssertEqual(store.azureTenantId, "")
         XCTAssertEqual(store.azureClientId, "")
@@ -34,21 +46,41 @@ final class CleanupSettingsStoreTests: XCTestCase {
         store.providerKind = .microsoftFoundry
         store.foundryLocalModelAlias = "qwen2.5-3b"
         store.ollamaModel = "llama3.2:1b"
+        store.lmStudioModel = "google/gemma-4-e2b"
+        store.selectedLocalApp = .ollama
         store.openAIBaseURL = "http://localhost:1234"
         store.openAIModel = "local-model"
+        store.openAIApiStyle = .responses
+        store.ollamaContextTokens = 32768
+        store.lmStudioContextTokens = 16384
+        store.foundryLocalSendWholeVocabulary = true
+        store.ollamaSendWholeVocabulary = true
+        store.lmStudioSendWholeVocabulary = false
+        store.otherServiceBaseURL = "https://openrouter.ai/api/v1"
+        store.otherServiceModel = "openai/gpt-5-mini"
+        store.otherServiceApiStyle = .responses
         store.azureEndpoint = endpoint
         store.azureDeployment = "gpt-5-mini"
+        store.azurePromptCaching = false
         store.azureAuthMode = .servicePrincipal
         store.azureTenantId = "11111111-1111-1111-1111-111111111111"
         store.azureClientId = "client-1"
 
+        XCTAssertEqual(store.lmStudioModel, "google/gemma-4-e2b")
+        XCTAssertEqual(store.selectedLocalApp, .ollama)
+        XCTAssertEqual(store.otherServiceBaseURL, "https://openrouter.ai/api/v1")
+        XCTAssertEqual(store.otherServiceModel, "openai/gpt-5-mini")
         XCTAssertEqual(
             store.snapshot(),
             CleanupSettingsSnapshot(
                 isEnabled: true, providerKind: .microsoftFoundry, foundryLocalModelAlias: "qwen2.5-3b",
-                ollamaModel: "llama3.2:1b", openAIBaseURL: "http://localhost:1234", openAIModel: "local-model",
-                azureEndpoint: endpoint, azureDeployment: "gpt-5-mini", azureAuthMode: .servicePrincipal,
-                azureTenantId: "11111111-1111-1111-1111-111111111111", azureClientId: "client-1", secretRevision: ""))
+                ollamaModel: "llama3.2:1b", selectedLocalApp: .ollama, openAIBaseURL: "http://localhost:1234",
+                openAIModel: "local-model", openAIApiStyle: .responses, ollamaContextTokens: 32768,
+                lmStudioContextTokens: 16384, foundryLocalSendWholeVocabulary: true,
+                ollamaSendWholeVocabulary: true, lmStudioSendWholeVocabulary: false, azureEndpoint: endpoint,
+                azureDeployment: "gpt-5-mini", azurePromptCaching: false, azureAuthMode: .servicePrincipal,
+                azureTenantId: "11111111-1111-1111-1111-111111111111", azureClientId: "client-1",
+                otherServiceApiStyle: .responses, secretRevision: ""))
         XCTAssertEqual(fixture.defaults.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)
         XCTAssertTrue(fixture.defaults.bool(forKey: "ScribeAiCleanupEnabled"))
         XCTAssertNotEqual(UserDefaults.standard.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)

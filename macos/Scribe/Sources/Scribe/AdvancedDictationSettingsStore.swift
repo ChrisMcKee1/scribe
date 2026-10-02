@@ -33,6 +33,7 @@ enum DictationControllerConfigurationFactory {
     @MainActor
     static func live(
         advanced: AdvancedDictationSettingsStore = .live,
+        typing: TypingSettingsStore = .live,
         toggleKeyStopsOnSilence: @escaping @MainActor @Sendable () -> Bool = {
             HotkeySettingsStore.live.autoStopOnSilence
         }
@@ -40,6 +41,7 @@ enum DictationControllerConfigurationFactory {
         var configuration = DictationController.Configuration()
         configuration.newlineMode = advanced.newlineMode
         configuration.toggleKeyStopsOnSilence = toggleKeyStopsOnSilence
+        configuration.addSpaceAfterDictation = { typing.addSpaceAfterDictation }
         return configuration
     }
 }

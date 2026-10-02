@@ -60,4 +60,51 @@ final class CleanupResponseGuardTests: XCTestCase {
 
         XCTAssertEqual(result, .accepted("Hello world."))
     }
+
+    func testSmallModelRewriteAnnouncementIsStripped() {
+        let result = CleanupResponseGuard.sanitize(
+            candidate: "Here is the rewritten transcript:\n\nWe need to ship the build by Thursday.",
+            original: "um so we need to uh ship the build by friday no thursday")
+
+        XCTAssertEqual(result, .accepted("We need to ship the build by Thursday."))
+    }
+
+    func testSmallModelWrapperTagsAreStripped() {
+        let result = CleanupResponseGuard.sanitize(
+            candidate: "<rewritten_transcript>\nWe need to ship the build by Thursday.\n</rewritten_transcript>",
+            original: "um so we need to uh ship the build by friday no thursday")
+
+        XCTAssertEqual(result, .accepted("We need to ship the build by Thursday."))
+    }
+
+    func testTrailingCommentaryIsRemoved() {
+        let result = CleanupResponseGuard.sanitize(
+            candidate: """
+                We need to ship the build by Thursday.
+
+                ---
+
+                This version maintains the original meaning while removing filler words.
+                """,
+            original: "um so we need to uh ship the build by friday no thursday")
+
+        XCTAssertEqual(result, .accepted("We need to ship the build by Thursday."))
+    }
+
+    func testADictationThatOpensLikeAnAnnouncementKeepsItsFirstLine() {
+        let answer = "Here's the revised text for the email:\nHi Bob, we ship Thursday."
+        let result = CleanupResponseGuard.sanitize(
+            candidate: answer,
+            original: "um so here's the revised text for the email hi bob we ship thursday")
+
+        XCTAssertEqual(result, .accepted(answer))
+    }
+
+    func testATagTheDictationItselfContainsIsKept() {
+        let result = CleanupResponseGuard.sanitize(
+            candidate: "<output>Done</output>",
+            original: "wrap the value in an output tag like <output>done</output>")
+
+        XCTAssertEqual(result, .accepted("<output>Done</output>"))
+    }
 }

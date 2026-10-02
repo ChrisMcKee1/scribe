@@ -1,13 +1,13 @@
 import Charts
 import SwiftUI
 
-
 struct SettingsUsagePage: View {
     let persistenceStore: PersistenceStore
     let onChanged: @MainActor () -> Void
 
     var body: some View {
-        SettingsPage(title: "Usage", subtitle: "How much you've dictated, and words you might add to your dictionary.") {
+        SettingsPage(title: "Usage", subtitle: "How much you've dictated, and words you might add to your dictionary.")
+        {
             UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged)
         }
     }

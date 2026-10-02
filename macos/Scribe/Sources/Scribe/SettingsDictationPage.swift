@@ -57,6 +57,9 @@ private struct SettingsDictationControls: View {
             SettingsCard { shortcutCard }
             SettingsCard { autoStopCard }
 
+            SettingsGroupHeader("Text insertion")
+            SettingsCard { InputTypingSettingsSection() }
+
             SettingsGroupHeader("Recording indicator")
             SettingsCard { recordingIndicatorCard }
             SettingsCard { recordingPositionCard }

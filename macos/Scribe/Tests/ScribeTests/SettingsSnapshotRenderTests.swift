@@ -10,7 +10,8 @@ final class SettingsSnapshotRenderTests: XCTestCase {
     private let imageSize = CGSize(width: 1_000, height: 760)
 
     func testRenderSettingsPagesToPNGs() throws {
-        guard let outputRoot = ProcessInfo.processInfo.environment["SCRIBE_RENDER_SETTINGS_DIR"], !outputRoot.isEmpty else {
+        guard let outputRoot = ProcessInfo.processInfo.environment["SCRIBE_RENDER_SETTINGS_DIR"], !outputRoot.isEmpty
+        else {
             throw XCTSkip("Set SCRIBE_RENDER_SETTINGS_DIR to render Settings snapshots.")
         }
 
@@ -81,10 +82,22 @@ final class SettingsSnapshotRenderTests: XCTestCase {
                     providerKind: snapshot.providerKind,
                     foundryLocalModelAlias: snapshot.foundryLocalModelAlias,
                     ollamaModel: snapshot.ollamaModel,
+                    lmStudioModel: store.lmStudioModel,
+                    selectedLocalApp: snapshot.selectedLocalApp,
                     openAIBaseURL: snapshot.openAIBaseURL,
                     openAIModel: snapshot.openAIModel,
+                    openAIApiStyle: snapshot.openAIApiStyle,
+                    ollamaContextTokens: snapshot.ollamaContextTokens,
+                    lmStudioContextTokens: snapshot.lmStudioContextTokens,
+                    foundryLocalSendWholeVocabulary: snapshot.foundryLocalSendWholeVocabulary,
+                    ollamaSendWholeVocabulary: snapshot.ollamaSendWholeVocabulary,
+                    lmStudioSendWholeVocabulary: snapshot.lmStudioSendWholeVocabulary,
+                    otherServiceBaseURL: store.otherServiceBaseURL,
+                    otherServiceModel: store.otherServiceModel,
+                    otherServiceApiStyle: snapshot.otherServiceApiStyle,
                     azureEndpoint: snapshot.azureEndpoint,
                     azureDeployment: snapshot.azureDeployment,
+                    azurePromptCaching: snapshot.azurePromptCaching,
                     azureAuthMode: snapshot.azureAuthMode,
                     azureTenantId: snapshot.azureTenantId,
                     azureClientId: snapshot.azureClientId)
@@ -96,10 +109,38 @@ final class SettingsSnapshotRenderTests: XCTestCase {
                     store.foundryLocalModelAlias = new.foundryLocalModelAlias
                 }
                 if new.ollamaModel != old.ollamaModel { store.ollamaModel = new.ollamaModel }
+                if new.lmStudioModel != old.lmStudioModel { store.lmStudioModel = new.lmStudioModel }
+                if new.selectedLocalApp != old.selectedLocalApp { store.selectedLocalApp = new.selectedLocalApp }
                 if new.openAIBaseURL != old.openAIBaseURL { store.openAIBaseURL = new.openAIBaseURL }
                 if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
+                if new.openAIApiStyle != old.openAIApiStyle { store.openAIApiStyle = new.openAIApiStyle }
+                if new.ollamaContextTokens != old.ollamaContextTokens {
+                    store.ollamaContextTokens = new.ollamaContextTokens
+                }
+                if new.lmStudioContextTokens != old.lmStudioContextTokens {
+                    store.lmStudioContextTokens = new.lmStudioContextTokens
+                }
+                if new.foundryLocalSendWholeVocabulary != old.foundryLocalSendWholeVocabulary {
+                    store.foundryLocalSendWholeVocabulary = new.foundryLocalSendWholeVocabulary
+                }
+                if new.ollamaSendWholeVocabulary != old.ollamaSendWholeVocabulary {
+                    store.ollamaSendWholeVocabulary = new.ollamaSendWholeVocabulary
+                }
+                if new.lmStudioSendWholeVocabulary != old.lmStudioSendWholeVocabulary {
+                    store.lmStudioSendWholeVocabulary = new.lmStudioSendWholeVocabulary
+                }
+                if new.otherServiceBaseURL != old.otherServiceBaseURL {
+                    store.otherServiceBaseURL = new.otherServiceBaseURL
+                }
+                if new.otherServiceModel != old.otherServiceModel { store.otherServiceModel = new.otherServiceModel }
+                if new.otherServiceApiStyle != old.otherServiceApiStyle {
+                    store.otherServiceApiStyle = new.otherServiceApiStyle
+                }
                 if new.azureEndpoint != old.azureEndpoint { store.azureEndpoint = new.azureEndpoint }
                 if new.azureDeployment != old.azureDeployment { store.azureDeployment = new.azureDeployment }
+                if new.azurePromptCaching != old.azurePromptCaching {
+                    store.azurePromptCaching = new.azurePromptCaching
+                }
                 if new.azureAuthMode != old.azureAuthMode { store.azureAuthMode = new.azureAuthMode }
                 if new.azureTenantId != old.azureTenantId { store.azureTenantId = new.azureTenantId }
                 if new.azureClientId != old.azureClientId { store.azureClientId = new.azureClientId }
@@ -162,7 +203,10 @@ final class SettingsSnapshotRenderTests: XCTestCase {
         for y in sampleY {
             for x in sampleX {
                 if let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
-                    colors.insert(String(format: "%.2f/%.2f/%.2f/%.2f", color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent))
+                    colors.insert(
+                        String(
+                            format: "%.2f/%.2f/%.2f/%.2f", color.redComponent, color.greenComponent,
+                            color.blueComponent, color.alphaComponent))
                 }
             }
         }
@@ -238,9 +282,14 @@ private struct SnapshotSettingsShell: View {
         case .aiCleanup:
             SettingsPage(
                 title: "AI cleanup",
-                subtitle: "Optional. An AI model fixes punctuation, grammar and repeated words before Scribe types. Dictation works without it."
+                subtitle:
+                    "Optional. An AI model fixes punctuation, grammar and repeated words before Scribe types. Dictation works without it."
             ) {
-                CleanupSettingsTab(drafts: dependencies.drafts, access: dependencies.cleanupAccess)
+                CleanupSettingsTab(
+                    drafts: dependencies.drafts,
+                    persistenceStore: dependencies.persistenceStore,
+                    dictionaryLibraryService: dependencies.dictionaryLibraryService,
+                    access: dependencies.cleanupAccess)
             }
         case .dictionary:
             SettingsDictionaryPage(

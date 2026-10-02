@@ -68,6 +68,10 @@ extension CleanupProvider {
     var usesLocalCleanupPrompt: Bool { false }
 }
 
+enum CleanupReasoningEffort {
+    static let none = "none"
+}
+
 /// The sampling temperature the on-device models get: low, so a small instruct model edits faithfully rather than
 /// paraphrasing (Windows sends 0.1 to Foundry Local). Microsoft Foundry and bring-your-own endpoints get none, because
 /// the reasoning models they often serve reject or ignore the parameter.
@@ -239,6 +243,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
     case ollamaModelMissing
     case openAIEndpointMissing
     case openAIEndpointInvalid
+    case openAIOldCompletionsPath
     case openAIModelMissing
     case azureEndpointMissing
     case azureEndpointInvalid
@@ -259,6 +264,10 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
             fix = "Enter the endpoint's base URL and its model"
         case .openAIEndpointInvalid:
             fix = "Enter an endpoint address that starts with http:// or https:// and names a host"
+        case .openAIOldCompletionsPath:
+            fix =
+                "Enter the service base address, or one ending in /chat/completions or /responses. "
+                + "The older /completions path is not supported"
         case .azureEndpointInvalid:
             fix =
                 "Enter the Microsoft Foundry endpoint as an https:// address that names the resource (for example "
@@ -431,32 +440,54 @@ extension CleanupProviderError {
 /// Ported from Windows' `Scribe.Core.Cleanup.CleanupPrompt` (`src/Scribe.Core/Cleanup/CleanupPrompt.cs`),
 /// which is the benchmark-validated default (see docs/model-leaderboard.md on the Windows side).
 enum CleanupPrompt {
+    static let maxGlossaryTermsLocal = 80
+    static let maxGlossaryTermsCloud = 5_000
+    static let maxGlossaryChars = 24_000
+    static let maxGlossaryTermChars = TextPostProcessor.vocabularyReplacementLimit
+    static let glossaryHeader =
+        "Preferred vocabulary. When the transcript refers to any of these, use the exact spelling shown here. Treat "
+        + "this list as a style guide rather than a closed set, and apply it regardless of the writing style above:\n"
+    static let glossaryHeaderTokens = TokenEstimate.vocabulary(glossaryHeader)
+
     static let defaultWritingStyle = """
-        Write in the speaker's language using clear, natural, well-structured prose. Never translate \
-        the dictation unless explicitly asked to. Use correct punctuation, meaning commas, periods, \
-        semicolons, colons, question marks, and parentheses, according to sentence structure. Do not \
-        use dash punctuation to join clauses; use a comma, colon, semicolon, or period instead. Break \
-        long run-on speech into properly formed sentences, and start a new paragraph when the topic \
-        shifts. Separate paragraphs with one blank line. Remove filler words and false starts (such as \
-        "um", "uh", "you know", and "like") and fix small grammar slips, while keeping the meaning, \
-        intent, and vocabulary. When the speaker corrects themselves mid-speech (for example "I meant \
-        to go to the store, I mean the park"), keep only the corrected version and drop what it \
-        replaced. If the same thing is said more than once, or restated in slightly different words, \
-        merge it into a single clear statement instead of writing both. Always put a single space \
-        between sentences. Keep the identity of technical terms, product names, model names, code, and \
-        URLs unchanged. Never substitute a different product, version, or spelling, but do write them \
-        the way they are normally written down. Write numbers the way they are normally written rather \
-        than spelled out: use digits for quantities, measurements, prices, percentages, phone numbers, \
-        and version numbers (for example "twenty three" becomes "23" and "five point five" becomes \
-        "5.5"). Keep model and version identifiers together with no inserted spaces (for example, write \
-        "GPT-5.6", not "GPT-5. 6"), but keep a small number as a word where that reads more naturally \
-        (for example "one or two ideas"). Spell out a number that begins a sentence, or reword the \
-        sentence so it doesn't start with one. Format clock times as digits with a colon, adding AM or \
-        PM when spoken (for example "three thirty p m" becomes "3:30 PM"). Write dates, calendar \
-        months, and years in their normal written form (for example "july third twenty twenty six" \
-        becomes "July 3, 2026"). Write acronyms spoken letter by letter in capitals with no spaces or \
-        periods (for example "a p i" becomes "API"). Only reformat what was actually spoken, and never \
-        invent or change a value that was not said.
+        Write in the speaker's language using clear, natural, well-structured text. Never \
+        translate the dictation unless I explicitly ask you to. Use correct punctuation, meaning \
+        commas, periods, semicolons, colons, question marks, and parentheses, according to \
+        sentence structure. Do not use dash punctuation to join clauses; use a comma, colon, \
+        semicolon, or period instead. That governs the punctuation you are choosing: never delete \
+        an em or en dash that was already in the text you were given. Break long run-on speech into \
+        properly formed sentences, and start a new paragraph when the topic shifts. Separate \
+        paragraphs with one blank line. When I list several items, steps, or options, write them as \
+        a list with one item per line, starting each line with "- ", or with "1.", "2." and so on \
+        when the order matters, and keep the sentence I said before the list as its introduction. \
+        Keep a short message, a single request, or a sentence that only mentions a few things in \
+        passing as ordinary sentences. Never add headings, bold text, or labels I did not say, and \
+        keep every point I made. Remove filler words and false starts (such as "um", "uh", "you \
+        know", and "like") and fix small grammar slips, while keeping my meaning, intent, and \
+        vocabulary. When I correct myself mid-speech (for example "I meant to go to the store, I \
+        mean the park"), keep only the corrected version and drop what it replaced. If I say the \
+        same thing more than once, or restate a point in slightly different words, merge it into a \
+        single clear statement instead of writing both. Always put a single space between sentences. \
+        Keep the identity of technical terms, product names, model names, code, and URLs unchanged. \
+        Never substitute a different product, version, or spelling, but do write them the way they \
+        are normally written down. Write numbers the way they are normally written rather than \
+        spelled out: use digits for quantities, measurements, prices, percentages, phone numbers, \
+        and version numbers (for example "twenty three" becomes "23" and "five point five" \
+        becomes "5.5"). Keep model and version identifiers together with no inserted spaces (for \
+        example, write "GPT-5.6", not "GPT-5. 6"), but keep a small number as a word where that \
+        reads more naturally (for example "one or two ideas"). When I name a model, library, or \
+        product whose written form you are unsure of, follow the pattern of the ones you do know \
+        rather than leaving it as spelled-out speech: "gpt five six terra" is written \
+        "GPT-5.6-Terra", "claude opus four point eight" is "Claude Opus 4.8", "qwen three \
+        fourteen b" is "Qwen3-14B". New models are released constantly, so an unfamiliar name is \
+        far more likely to be a real product I said than a mistake. Spell out a number that begins a \
+        sentence, or reword the sentence so it doesn't start with one. Format clock times as digits \
+        with a colon, adding AM or PM when I say it (for example "three thirty p m" becomes \
+        "3:30 PM"). Write dates, calendar months, and years in their normal written form (for \
+        example "july third twenty twenty six" becomes "July 3, 2026"). Write acronyms spoken \
+        letter by letter in capitals with no spaces or periods (for example "a p i" becomes \
+        "API"). Only reformat what I actually spoke, and never invent or change a value I did not \
+        say.
         """
 
     /// Guardrail preamble for capable cloud/frontier models (Microsoft Foundry, OpenAI-compatible
@@ -509,12 +540,35 @@ enum CleanupPrompt {
         capitalization are fixed, and the request is kept as a request rather than answered.
         """
 
+    static func glossaryTermBudget(useLocalPrompt: Bool) -> Int {
+        useLocalPrompt ? maxGlossaryTermsLocal : maxGlossaryTermsCloud
+    }
+
+    static func composeVocabulary(_ personal: [DictionaryEntry], _ libraries: [DictionaryEntry]) -> [DictionaryEntry] {
+        libraries.isEmpty ? personal : DictionaryLibraryComposer.merge(baseEntries: personal, libraryEntries: libraries)
+    }
+
+    static func buildGlossary(_ entries: [DictionaryEntry]?, maxTerms: Int = maxGlossaryTermsCloud) -> String {
+        guard let entries else {
+            return ""
+        }
+        let lines = glossaryLines(entries, maxTerms: maxTerms, maxCharacters: maxGlossaryChars)
+        guard !lines.isEmpty else {
+            return ""
+        }
+        return renderGlossary(lines)
+    }
+
     /// Combines a guardrail preamble with the (possibly user-customized) writing style into the
     /// full system prompt sent to the model. `useLocalPrompt` selects the terser guardrail meant
     /// for small on-device models; see `FoundryLocalCleanupProvider`.
-    static func systemPrompt(writingStyle: String, useLocalPrompt: Bool) -> String {
+    static func systemPrompt(writingStyle: String, useLocalPrompt: Bool, glossary: String? = nil) -> String {
         let guardrail = useLocalPrompt ? defaultLocalPrompt : defaultFrontierPrompt
-        return guardrail + "\n\nWriting style:\n" + writingStyle
+        var prompt = guardrail + "\n\nWriting style:\n" + writingStyle
+        if let glossary, !glossary.isEmpty {
+            prompt += "\n\n" + glossary
+        }
+        return prompt
     }
 
     /// Wraps the raw transcript in the `<transcript>` tags the guardrail preambles above reference,
@@ -536,4 +590,181 @@ enum CleanupPrompt {
         }
         return result
     }
+
+    static func countGlossary(_ entries: [DictionaryEntry]?, maxTerms: Int = maxGlossaryTermsCloud) -> GlossaryCount {
+        let entries = entries ?? []
+        let eligible = glossaryLines(entries, maxTerms: .max, maxCharacters: .max).count
+        let included = glossaryLines(entries, maxTerms: maxTerms, maxCharacters: maxGlossaryChars).count
+        return GlossaryCount(included: included, eligible: eligible)
+    }
+
+    static func glossaryLines(
+        _ entries: [DictionaryEntry],
+        maxTerms: Int = .max,
+        maxCharacters: Int = .max
+    ) -> [GlossaryLineInfo] {
+        guard maxTerms > 0 else {
+            return []
+        }
+
+        var lines: [GlossaryLineInfo] = []
+        var seen = Set<String>()
+        var characters = 0
+        for entry in entries where TextPostProcessor.isVocabulary(entry) {
+            let canonical = normalizeTerm(entry.replacement)
+            guard !canonical.isEmpty else {
+                continue
+            }
+
+            let normalizedPattern = normalizeTerm(entry.pattern)
+            let spoken =
+                !normalizedPattern.isEmpty && normalizedPattern.caseInsensitiveCompare(canonical) != .orderedSame
+                ? normalizedPattern : nil
+            let key = spoken.map { canonical + "|" + $0 } ?? canonical
+            if !seen.insert(key.lowercased()).inserted {
+                continue
+            }
+
+            let text = glossaryLine(canonical: canonical, spoken: spoken)
+            if characters + text.count + 1 > maxCharacters {
+                break
+            }
+
+            characters += text.count + 1
+            lines.append(GlossaryLineInfo(key: key, text: text, tokens: TokenEstimate.vocabulary(text) + 1))
+            if lines.count >= maxTerms {
+                break
+            }
+        }
+        return lines
+    }
+
+    static func renderGlossary(_ lines: [GlossaryLineInfo]) -> String {
+        guard !lines.isEmpty else {
+            return ""
+        }
+        return glossaryHeader + lines.map(\.text).joined(separator: "\n")
+    }
+
+    static func takeWhileFits(_ lines: [GlossaryLineInfo], room: Int, maxTerms: Int) -> [GlossaryLineInfo] {
+        guard room > 0, maxTerms > 0 else {
+            return []
+        }
+
+        var used = 0
+        var kept: [GlossaryLineInfo] = []
+        kept.reserveCapacity(min(lines.count, maxTerms))
+        for line in lines.prefix(maxTerms) {
+            if used + line.tokens > room {
+                break
+            }
+            used += line.tokens
+            kept.append(line)
+        }
+        return kept
+    }
+
+    static func fitGlossary(
+        _ all: [GlossaryLineInfo],
+        mentioned: [GlossaryLineInfo],
+        everything: Bool,
+        tokenBudget: Int,
+        maxTerms: Int
+    ) -> [GlossaryLineInfo] {
+        let room = tokenBudget - glossaryHeaderTokens
+        guard room > 0, maxTerms > 0 else {
+            return []
+        }
+
+        if !everything {
+            return takeWhileFits(mentioned, room: room, maxTerms: maxTerms)
+        }
+
+        if all.count <= maxTerms && tokens(all) <= room {
+            return all
+        }
+
+        let kept = takeWhileFits(mentioned, room: room, maxTerms: maxTerms)
+        let keptKeys = Set(kept.map(\.key))
+        var left = room - tokens(kept)
+        var lines: [GlossaryLineInfo] = []
+        var inRun = Set<String>()
+
+        for line in all {
+            let mentionedHere = keptKeys.contains(line.key)
+            let cost = mentionedHere ? 0 : line.tokens
+            let termsAfter = lines.count + 1 + (kept.count - inRun.count - (mentionedHere ? 1 : 0))
+            if cost > left || termsAfter > maxTerms {
+                break
+            }
+
+            left -= cost
+            lines.append(line)
+            if mentionedHere {
+                inRun.insert(line.key)
+            }
+        }
+
+        for line in kept where !inRun.contains(line.key) {
+            lines.append(line)
+        }
+
+        return lines
+    }
+
+    static func tokens(_ lines: [GlossaryLineInfo]) -> Int {
+        lines.reduce(0) { $0 + $1.tokens }
+    }
+
+    private static func glossaryLine(canonical: String, spoken: String?) -> String {
+        if let spoken {
+            return "- \(canonical) (transcribed as \"\(spoken)\")"
+        }
+        return "- \(canonical)"
+    }
+
+    private static func normalizeTerm(_ value: String?) -> String {
+        guard let value, !value.isEmpty else {
+            return ""
+        }
+
+        var normalized = String()
+        normalized.reserveCapacity(value.count)
+        var lastWasSpace = false
+        for scalar in value.unicodeScalars {
+            if scalar == "\"" || scalar == "`" {
+                continue
+            }
+
+            if CharacterSet.controlCharacters.contains(scalar)
+                || CharacterSet.whitespacesAndNewlines.contains(scalar)
+            {
+                if !normalized.isEmpty && !lastWasSpace {
+                    normalized.append(" ")
+                    lastWasSpace = true
+                }
+                continue
+            }
+
+            normalized.unicodeScalars.append(scalar)
+            lastWasSpace = false
+        }
+
+        let trimmed = normalized.trimmingCharacters(in: .whitespaces)
+        if trimmed.count <= maxGlossaryTermChars {
+            return trimmed
+        }
+        return String(trimmed.prefix(maxGlossaryTermChars)).trimmingCharacters(in: .whitespaces)
+    }
+}
+
+struct GlossaryCount: Equatable, Sendable {
+    let included: Int
+    let eligible: Int
+}
+
+struct GlossaryLineInfo: Equatable, Sendable {
+    let key: String
+    let text: String
+    let tokens: Int
 }

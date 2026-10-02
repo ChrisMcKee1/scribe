@@ -6,20 +6,25 @@ final class SettingsSectionTests: XCTestCase {
     func testSettingsSectionsMatchWindowsOrderLabelsAndGroups() {
         XCTAssertEqual(
             SettingsSection.allCases,
-            [.dictation, .tryDictation, .aiCleanup, .dictionary, .voiceSnippets, .appProfiles, .history, .usage, .advanced, .diagnostics, .about])
-        XCTAssertEqual(SettingsSection.allCases.map(\.label), [
-            "Dictation",
-            "Try dictation",
-            "AI cleanup",
-            "Dictionary",
-            "Voice snippets",
-            "App profiles",
-            "History",
-            "Usage",
-            "Advanced",
-            "Diagnostics",
-            "About"
-        ])
+            [
+                .dictation, .tryDictation, .aiCleanup, .dictionary, .voiceSnippets, .appProfiles, .history, .usage,
+                .advanced, .diagnostics, .about,
+            ])
+        XCTAssertEqual(
+            SettingsSection.allCases.map(\.label),
+            [
+                "Dictation",
+                "Try dictation",
+                "AI cleanup",
+                "Dictionary",
+                "Voice snippets",
+                "App profiles",
+                "History",
+                "Usage",
+                "Advanced",
+                "Diagnostics",
+                "About",
+            ])
         XCTAssertEqual(SettingsSection.topLevel, [.dictation, .tryDictation, .aiCleanup])
         XCTAssertEqual(SettingsSection.personalize, [.dictionary, .voiceSnippets, .appProfiles])
         XCTAssertEqual(SettingsSection.review, [.history, .usage])

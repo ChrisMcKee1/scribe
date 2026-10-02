@@ -148,8 +148,8 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   on the main thread
 - User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), voice
   snippets, and per-app profiles (writing style + newline mode by focused app)
-- AI cleanup across four providers: Foundry Local (default), managed Ollama, any
-  OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service-principal auth,
+- AI cleanup across Foundry Local (default), Ollama and LM Studio at their own addresses (with a model list
+  read from the app), any OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service-principal auth,
   secrets in Keychain, an https resource or pasted Foundry project URL works). Each provider is
   built once per configuration and reused across dictations, Test Connection sends a real
   cleanup request for a test word and passes only if the model answers with text, and em and en
@@ -235,7 +235,11 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
 the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
 call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
-recognition; AI cleanup is sent no glossary of your dictionary terms (Windows sends up to 5,000 with every cloud
-request; whether macOS should is an open decision, because it changes what leaves the Mac); and there is no
-auto-update story yet. Dev builds use a local self-signed certificate, and public releases use the Developer ID
-pipeline documented above.
+recognition; the Settings page structure now matches Windows, but Find a setting and the Word packs editor page are
+not built, so word packs have their model and editing logic but no editor yet; the "Starting local model" state and
+the full memory release of Ollama and LM Studio models are not ported; and there is no auto-update story yet. Dev
+builds use a local self-signed certificate, and public releases use the Developer ID pipeline documented above. Since
+Windows 0.4.3 the port has gained the space after each dictation, the new recording indicator, Ollama and LM Studio
+under "On this PC", the mentioned-terms glossary disclosed in Settings, context size, the Chat Completions or
+Responses choice for another AI service, and the word pack model; see "Windows 0.4.4 to 0.5.4 parity pass" in
+`PORTING-PLAN.md`.

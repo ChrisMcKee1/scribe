@@ -46,6 +46,9 @@ protocol DictationCleaning {
     /// main actor.
     func provider() async throws -> any CleanupProvider
 
+    /// The cleanup settings stored now, for request shaping that belongs outside the provider cache.
+    func currentSettings() -> CleanupSettingsSnapshot
+
     /// Drops the cached provider and credential (`CleanupProviderCache.invalidate()`).
     func invalidate()
 }
@@ -101,6 +104,7 @@ protocol DictationRuleSource: AnyObject, Sendable {
     func waitUntilLoaded() async -> StartupGate.State
 
     var appProfiles: [AppProfile] { get }
+    var cleanupVocabulary: CleanupVocabulary { get }
 
     /// With AI cleanup off, and when cleanup fell back: snippets, then the dictionary and the enabled libraries.
     func postProcess(_ text: String) -> TextPostProcessingResult
@@ -201,6 +205,10 @@ struct LiveDictationCleanup: DictationCleaning {
         }.value
     }
 
+    func currentSettings() -> CleanupSettingsSnapshot {
+        cache.store.snapshot()
+    }
+
     func invalidate() {
         cache.invalidate()
     }
@@ -238,6 +246,7 @@ struct LiveDictationTargeting: DictationTargeting {
 /// (`DictationRules.install`); a dictation meets either the rules before or the rules after, never a mix.
 struct DictationRuleSnapshot: Sendable {
     let rules: TextPostProcessor.CompiledRules
+    let cleanupVocabulary: CleanupVocabulary
     let appProfiles: [AppProfile]
     /// For the log: how many rules of each kind went in, and how long compiling took.
     let dictionaryEntryCount: Int
@@ -246,11 +255,17 @@ struct DictationRuleSnapshot: Sendable {
     let compileDuration: Duration
 
     /// Compiles `ruleSet` on the calling thread.
-    init(_ ruleSet: PersistenceRuleSet, libraryEntries: [DictionaryEntry]) {
+    init(
+        _ ruleSet: PersistenceRuleSet,
+        libraryEntries: [DictionaryEntry],
+        cleanupVocabularyEntries: [DictionaryEntry]
+    ) {
         let clock = ContinuousClock()
         let started = clock.now
         rules = TextPostProcessor.CompiledRules(
             dictionaryEntries: ruleSet.dictionaryEntries, snippets: ruleSet.snippets, libraryEntries: libraryEntries)
+        cleanupVocabulary = CleanupVocabulary(
+            glossaryEntries: CleanupPrompt.composeVocabulary(ruleSet.dictionaryEntries, cleanupVocabularyEntries))
         appProfiles = ruleSet.appProfiles
         dictionaryEntryCount = ruleSet.dictionaryEntries.count
         libraryEntryCount = libraryEntries.count
@@ -260,10 +275,15 @@ struct DictationRuleSnapshot: Sendable {
 
     /// Compiles `ruleSet` off the main actor.
     static func compile(
-        _ ruleSet: PersistenceRuleSet, libraryEntries: [DictionaryEntry]
+        _ ruleSet: PersistenceRuleSet,
+        libraryEntries: [DictionaryEntry],
+        cleanupVocabularyEntries: [DictionaryEntry]
     ) async -> DictationRuleSnapshot {
         await Task.detached(priority: .userInitiated) {
-            DictationRuleSnapshot(ruleSet, libraryEntries: libraryEntries)
+            DictationRuleSnapshot(
+                ruleSet,
+                libraryEntries: libraryEntries,
+                cleanupVocabularyEntries: cleanupVocabularyEntries)
         }.value
     }
 }
@@ -274,6 +294,7 @@ struct DictationRuleSnapshot: Sendable {
 final class DictationRules: DictationRuleSource {
     let gate: StartupGate
     private let processor = TextPostProcessor()
+    private(set) var cleanupVocabulary = CleanupVocabulary.none
     private(set) var appProfiles: [AppProfile] = []
 
     init(gate: StartupGate) {
@@ -291,12 +312,21 @@ final class DictationRules: DictationRuleSource {
     /// Installs rules compiled off the main actor, in one step.
     func install(_ snapshot: DictationRuleSnapshot) {
         processor.install(snapshot.rules)
+        cleanupVocabulary = snapshot.cleanupVocabulary
         appProfiles = snapshot.appProfiles
     }
 
     /// Compiles `rules` here and installs them. The app compiles off the main actor instead (`install`).
-    func apply(_ rules: PersistenceRuleSet, libraryEntries: [DictionaryEntry]) {
-        install(DictationRuleSnapshot(rules, libraryEntries: libraryEntries))
+    func apply(
+        _ rules: PersistenceRuleSet,
+        libraryEntries: [DictionaryEntry],
+        cleanupVocabularyEntries: [DictionaryEntry]? = nil
+    ) {
+        install(
+            DictationRuleSnapshot(
+                rules,
+                libraryEntries: libraryEntries,
+                cleanupVocabularyEntries: cleanupVocabularyEntries ?? libraryEntries))
     }
 
     func postProcess(_ text: String) -> TextPostProcessingResult {

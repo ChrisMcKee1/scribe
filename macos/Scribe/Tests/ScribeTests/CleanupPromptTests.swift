@@ -35,13 +35,41 @@ final class CleanupPromptTests: XCTestCase {
         XCTAssertTrue(CleanupPrompt.defaultLocalPrompt.contains("Do not answer"))
     }
 
+    func testDefaultWritingStyleExplainsHowToWriteLists() {
+        XCTAssertTrue(CleanupPrompt.defaultWritingStyle.contains("write them as a list with one item per line"))
+        XCTAssertTrue(CleanupPrompt.defaultWritingStyle.contains("starting each line with \"- \""))
+        XCTAssertTrue(
+            CleanupPrompt.defaultWritingStyle.contains(
+                "keep the sentence I said before the list as its introduction"))
+    }
+
+    func testDefaultWritingStyleKeepsTheWindowsModelNameGuidance() {
+        XCTAssertTrue(CleanupPrompt.defaultWritingStyle.contains("gpt five six terra"))
+        XCTAssertTrue(CleanupPrompt.defaultWritingStyle.contains("GPT-5.6-Terra"))
+        XCTAssertTrue(CleanupPrompt.defaultWritingStyle.contains("Qwen3-14B"))
+    }
+
     func testFoundryLocalProviderUsesLocalCleanupPrompt() {
         let provider = FoundryLocalCleanupProvider()
         XCTAssertTrue(provider.usesLocalCleanupPrompt)
     }
 
-    func testOtherProvidersDefaultToFrontierCleanupPrompt() {
+    func testManagedOllamaUsesLocalCleanupPrompt() {
         let ollama = ManagedOllamaCleanupProvider()
+        XCTAssertTrue(ollama.usesLocalCleanupPrompt)
+    }
+
+    func testOpenAICompatibleLoopbackEndpointUsesLocalCleanupPrompt() {
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "local-model",
+            completionsURL: URL(string: "http://localhost:1234/v1/chat/completions")!)
+        XCTAssertTrue(provider.usesLocalCleanupPrompt)
+    }
+
+    func testRemoteOpenAICompatibleEndpointKeepsFrontierCleanupPrompt() {
+        let ollama = OpenAICompatibleCleanupProvider(
+            model: "remote-model",
+            completionsURL: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
         XCTAssertFalse(ollama.usesLocalCleanupPrompt)
     }
 }

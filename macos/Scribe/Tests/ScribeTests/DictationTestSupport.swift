@@ -503,6 +503,27 @@ final class FakeCleanup: DictationCleaning {
     var isEnabled = false
     var providerError: (any Error)?
     var cleanupProvider: any CleanupProvider
+    var settings = CleanupSettingsSnapshot(
+        isEnabled: false,
+        providerKind: .foundryLocal,
+        foundryLocalModelAlias: CleanupSettingsStore.defaultFoundryLocalModelAlias,
+        ollamaModel: CleanupSettingsStore.defaultOllamaModel,
+        selectedLocalApp: .none,
+        openAIBaseURL: "",
+        openAIModel: "",
+        openAIApiStyle: .chatCompletions,
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
+        azureEndpoint: "",
+        azureDeployment: "",
+        azureAuthMode: .azureCli,
+        azureTenantId: "",
+        azureClientId: "",
+        otherServiceApiStyle: .chatCompletions,
+        secretRevision: "")
     private(set) var invalidations = 0
 
     init(provider: any CleanupProvider = GatedCleanupProvider()) {
@@ -519,6 +540,10 @@ final class FakeCleanup: DictationCleaning {
             throw providerError
         }
         return cleanupProvider
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        settings
     }
 
     func invalidate() {
@@ -850,11 +875,12 @@ final class DictationHarness {
     /// Applies rules as the app's refresher would; `libraries` are the entries of the switched-on libraries.
     func load(
         dictionary: [DictionaryEntry] = [], snippets: [Snippet] = [], profiles: [AppProfile] = [],
-        libraries: [DictionaryEntry] = [], openingGate: Bool = true
+        libraries: [DictionaryEntry] = [], cleanupLibraries: [DictionaryEntry]? = nil, openingGate: Bool = true
     ) {
         rules.apply(
             PersistenceRuleSet(dictionaryEntries: dictionary, snippets: snippets, appProfiles: profiles),
-            libraryEntries: libraries)
+            libraryEntries: libraries,
+            cleanupVocabularyEntries: cleanupLibraries ?? libraries)
         if openingGate {
             gate.open(.ready)
         }

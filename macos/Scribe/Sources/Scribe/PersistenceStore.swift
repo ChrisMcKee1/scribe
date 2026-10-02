@@ -678,6 +678,58 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    func loadStringSetting(key: String) async throws -> String? {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readSetting(key: key, session)
+        }
+    }
+
+    func saveStringSetting(key: String, value: String?) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.writeSetting(key: key, value: value, session)
+        }
+    }
+
+    func readStringSetting(key: String) throws -> String? {
+        try owner.withSession(.foreground) { session in
+            try Self.readSetting(key: key, session)
+        }
+    }
+
+    func writeStringSetting(key: String, value: String?) throws {
+        try owner.withSession(.foreground) { session in
+            try Self.writeSetting(key: key, value: value, session)
+        }
+    }
+
+    private static func readSetting(key: String, _ session: SQLiteSession) throws -> String? {
+        try session.withStatement("SELECT value FROM settings WHERE key = ?1;", .read) { statement in
+            try statement.bind(key, at: 1)
+            guard try statement.step() else {
+                return nil
+            }
+            return statement.text(at: 0)
+        }
+    }
+
+    private static func writeSetting(key: String, value: String?, _ session: SQLiteSession) throws {
+        if let value {
+            try session.withStatement(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES (?1, ?2);",
+                .write
+            ) { statement in
+                try statement.bind(key, at: 1)
+                try statement.bind(value, at: 2)
+                try statement.run()
+            }
+        } else {
+            try session.withStatement("DELETE FROM settings WHERE key = ?1;", .write) { statement in
+                try statement.bind(key, at: 1)
+                try statement.run()
+            }
+        }
+    }
+
     // MARK: - Housekeeping (StorageMaintenance)
 
     /// Whether a foreground caller is waiting for the connection right now.
@@ -904,6 +956,21 @@ final class PersistenceStore: Sendable {
             return
         }
         try owner.withSession(.foreground) { session in
+            try session.transaction(.write) {
+                try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+            }
+        }
+        if !updates.isEmpty {
+            removedText.record()
+        }
+    }
+
+    /// `applyDictionaryChanges(inserts:updates:)` for main-actor callers.
+    func saveDictionaryChanges(inserts: [DictionaryEntry], updates: [DictionaryEntry]) async throws {
+        guard !inserts.isEmpty || !updates.isEmpty else {
+            return
+        }
+        try await owner.withSessionAsync(.foreground) { session in
             try session.transaction(.write) {
                 try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
             }

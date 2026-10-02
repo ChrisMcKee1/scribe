@@ -84,7 +84,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         "voice": .voiceSnippets,
         "appprofiles": .appProfiles,
         "profiles": .appProfiles,
-        "usageinsights": .usage
+        "usageinsights": .usage,
     ]
 
     private static func normalize(_ value: String) -> String {
@@ -150,7 +150,10 @@ struct SettingsView: View {
         case .tryDictation:
             SettingsTryDictationPage(pipelineReportStore: pipelineReportStore)
         case .aiCleanup:
-            SettingsAICleanupPage(drafts: drafts)
+            SettingsAICleanupPage(
+                drafts: drafts,
+                persistenceStore: persistenceStore,
+                dictionaryLibraryService: dictionaryLibraryService)
         case .dictionary:
             SettingsDictionaryPage(
                 persistenceStore: persistenceStore,

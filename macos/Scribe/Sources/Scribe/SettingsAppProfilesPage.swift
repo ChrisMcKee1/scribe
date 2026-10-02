@@ -10,7 +10,9 @@ struct SettingsAppProfilesPage: View {
             title: "App profiles",
             subtitle: "Use a different writing style or line-break rule in specific apps, like Outlook or Teams."
         ) {
-            SettingsCard { AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged, drafts: drafts) }
+            SettingsCard {
+                AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged, drafts: drafts)
+            }
         }
     }
 }
@@ -113,13 +115,18 @@ struct AppProfilesSettingsTab: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Writing style for these apps").cardTitle()
-                    Text(profile.writingStylePrompt?.isEmpty == false ? profile.writingStylePrompt! : "Uses your main writing style.")
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                    Text(
+                        profile.writingStylePrompt?.isEmpty == false
+                            ? profile.writingStylePrompt! : "Uses your main writing style."
+                    )
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
                 }
-                labeledReadOnlyValue(title: "Line breaks in these apps", value: profile.newlineHandling?.label ?? "Uses your main line-break setting.")
+                labeledReadOnlyValue(
+                    title: "Line breaks in these apps",
+                    value: profile.newlineHandling?.label ?? "Uses your main line-break setting.")
             } else {
                 Text("New profile")
                     .font(.title3.weight(.semibold))
@@ -146,7 +153,8 @@ struct AppProfilesSettingsTab: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Line breaks in these apps").cardTitle()
                     Picker("Line breaks", selection: $drafts.profileNewlineMode) {
-                        ForEach([NewlineInjectionMode.smartFlatten, .alwaysFlatten, .keepNewlines], id: \.self) { mode in
+                        ForEach([NewlineInjectionMode.smartFlatten, .alwaysFlatten, .keepNewlines], id: \.self) {
+                            mode in
                             Text(mode.label).tag(mode)
                         }
                     }
@@ -185,8 +193,8 @@ struct AppProfilesSettingsTab: View {
     }
 }
 
-private extension NewlineInjectionMode {
-    var label: String {
+extension NewlineInjectionMode {
+    fileprivate var label: String {
         switch self {
         case .smartFlatten: return "Smart Flatten"
         case .alwaysFlatten: return "Always Flatten"

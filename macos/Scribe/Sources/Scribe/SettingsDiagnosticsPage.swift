@@ -5,7 +5,9 @@ struct SettingsDiagnosticsPage: View {
     let persistenceStore: PersistenceStore
 
     var body: some View {
-        SettingsPage(title: "Diagnostics", subtitle: "Get help, see what went wrong, and check how fast dictation runs.") {
+        SettingsPage(
+            title: "Diagnostics", subtitle: "Get help, see what went wrong, and check how fast dictation runs."
+        ) {
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
         }
     }
@@ -55,8 +57,10 @@ struct DiagnosticsSettingsTab: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Report a problem").cardTitle()
-                    Text("Opens GitHub to report a problem or suggest a feature. Do not include dictations, recordings, keys or secrets in a public report.")
-                        .cardDescription()
+                    Text(
+                        "Opens GitHub to report a problem or suggest a feature. Do not include dictations, recordings, keys or secrets in a public report."
+                    )
+                    .cardDescription()
                 }
                 Spacer()
                 Button("Report a problem") {
@@ -66,8 +70,10 @@ struct DiagnosticsSettingsTab: View {
             Divider()
             VStack(alignment: .leading, spacing: 4) {
                 Text("Save diagnostics").cardTitle()
-                Text("The macOS port does not create a diagnostics zip yet. Use this page for timings, system shape and local paths, and read any details before sharing them.")
-                    .cardDescription()
+                Text(
+                    "The macOS port does not create a diagnostics zip yet. Use this page for timings, system shape and local paths, and read any details before sharing them."
+                )
+                .cardDescription()
             }
         }
     }
@@ -75,12 +81,16 @@ struct DiagnosticsSettingsTab: View {
     private var diagnosticDataCard: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Logs").cardTitle()
-            Text("Scribe for macOS writes app events to Apple unified logging with subsystem com.scribe.macos. Dictation text is not logged by Scribe.")
-                .cardDescription()
+            Text(
+                "Scribe for macOS writes app events to Apple unified logging with subsystem com.scribe.macos. Dictation text is not logged by Scribe."
+            )
+            .cardDescription()
             Text("AI cleanup problems").cardTitle()
                 .padding(.top, 8)
-            Text("Cleanup failures are surfaced on the dictation result and in the pipeline report for this session. There is not yet a stored macOS failure list like Windows has.")
-                .cardDescription()
+            Text(
+                "Cleanup failures are surfaced on the dictation result and in the pipeline report for this session. There is not yet a stored macOS failure list like Windows has."
+            )
+            .cardDescription()
         }
     }
 
@@ -120,7 +130,8 @@ struct DiagnosticsSettingsTab: View {
 
             if let snapshot = model.stats {
                 HStack(alignment: .top, spacing: 16) {
-                    metricBlock(title: "Speech recognition", typical: snapshot.decodeMs?.p50, p95: snapshot.decodeMs?.p95)
+                    metricBlock(
+                        title: "Speech recognition", typical: snapshot.decodeMs?.p50, p95: snapshot.decodeMs?.p95)
                     metricBlock(title: "AI cleanup", typical: snapshot.cleanupMs?.p50, p95: snapshot.cleanupMs?.p95)
                     metricBlock(title: "Both", typical: snapshot.combinedMs?.p50, p95: snapshot.combinedMs?.p95)
                 }
@@ -132,10 +143,14 @@ struct DiagnosticsSettingsTab: View {
         DisclosureGroup("Speed details") {
             VStack(alignment: .leading, spacing: 12) {
                 if let snapshot = model.stats {
-                    Text("\(snapshot.count) dictation(s), \(String(format: "%.1f s", snapshot.totalAudioSeconds)) of audio, longest \(String(format: "%.1f s", snapshot.longestAudioSeconds)).")
-                        .cardDescription()
-                    Text("Best real-time factor: \(String(format: "%.3fx", snapshot.fastestRtf)). P50 \(String(format: "%.3fx", snapshot.rtfP50)), P95 \(String(format: "%.3fx", snapshot.rtfP95)).")
-                        .cardDescription()
+                    Text(
+                        "\(snapshot.count) dictation(s), \(String(format: "%.1f s", snapshot.totalAudioSeconds)) of audio, longest \(String(format: "%.1f s", snapshot.longestAudioSeconds))."
+                    )
+                    .cardDescription()
+                    Text(
+                        "Best real-time factor: \(String(format: "%.3fx", snapshot.fastestRtf)). P50 \(String(format: "%.3fx", snapshot.rtfP50)), P95 \(String(format: "%.3fx", snapshot.rtfP95))."
+                    )
+                    .cardDescription()
                     metricSummary("Speech recognition", snapshot.decodeMs)
                     metricSummary("AI cleanup", snapshot.cleanupMs)
                     metricSummary("Recognition plus AI cleanup", snapshot.combinedMs)
@@ -157,16 +172,20 @@ struct DiagnosticsSettingsTab: View {
     private var thisMacCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(systemSummary).cardDescription()
-            Text("Speech recognition uses the Foundry Local command-line recognizer when available, with whisper.cpp as a developer fallback.")
-                .cardDescription()
+            Text(
+                "Speech recognition uses the Foundry Local command-line recognizer when available, with whisper.cpp as a developer fallback."
+            )
+            .cardDescription()
         }
     }
 
     private var dataFileCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Scribe data file").cardTitle()
-            Text("Never send or share this file. It holds your dictation history, dictionary, snippets, app profiles and saved cleanup settings.")
-                .cardDescription()
+            Text(
+                "Never send or share this file. It holds your dictation history, dictionary, snippets, app profiles and saved cleanup settings."
+            )
+            .cardDescription()
             HStack {
                 Text(persistenceStore.databaseURL.path)
                     .font(.system(.footnote, design: .monospaced))
@@ -185,7 +204,8 @@ struct DiagnosticsSettingsTab: View {
     private var systemSummary: String {
         let info = ProcessInfo.processInfo
         let memoryGB = Double(info.physicalMemory) / 1_073_741_824.0
-        return "\(info.operatingSystemVersionString), \(info.processorCount) processor(s), \(String(format: "%.1f GB", memoryGB)) memory."
+        return
+            "\(info.operatingSystemVersionString), \(info.processorCount) processor(s), \(String(format: "%.1f GB", memoryGB)) memory."
     }
 
     private func metricBlock(title: String, typical: Double?, p95: Double?) -> some View {

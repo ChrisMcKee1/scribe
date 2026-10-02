@@ -30,7 +30,8 @@ private struct TryDictationInputCard: View {
                 .padding(6)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor)))
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
@@ -62,7 +63,9 @@ struct PlaygroundSettingsTab: View {
                 }
 
                 resultSection(title: "What Scribe typed") {
-                    monospaceText(report.finalText?.isEmpty == false ? report.finalText! : report.postProcessing?.text ?? "(no text)")
+                    monospaceText(
+                        report.finalText?.isEmpty == false
+                            ? report.finalText! : report.postProcessing?.text ?? "(no text)")
                 }
 
                 resultSection(title: changesTitle(for: report)) {

@@ -54,49 +54,36 @@ enum OverlayAnchor: String, CaseIterable, Codable {
     }
 }
 
-/// The visual states the recording pill can display. Mirrors Windows' `Scribe.Overlay.OverlayState`, with the one
-/// failure state split into notices that each name the stage they come from.
+/// The visual states the recording pill can display.
 enum OverlayState: Equatable, Sendable {
-    /// Hidden / parked (no pill visible).
     case hidden
-    /// Capturing microphone input: pulsing red dot and live level meter.
-    case listening(levelDbfs: Float)
-    /// Transcribing or AI-polishing: bouncing dots.
+    case listening(level: Double)
     case processing
-    /// A short notice about how a dictation went, shown for a moment and then taken down.
     case notice(OverlayNotice)
 }
 
 /// What a notice on the pill says. Each one belongs to the stage it describes, so a failed insertion never reads as
 /// a failed cleanup.
 enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
-    /// AI cleanup did not produce usable text, so the raw transcript went in instead.
+    case typed
+    case typedWithoutCleanup
     case cleanupFellBack
-    /// The microphone could not be opened.
     case microphoneUnavailable
-    /// macOS has not given Scribe the microphone.
     case microphoneAccessNeeded
-    /// The input device stopped part way; what was heard before it stopped went in.
     case microphoneStoppedEarly
-    /// No speech recognizer is installed where Scribe looks.
     case recognizerMissing
-    /// The speech recognizer failed.
     case transcriptionFailed
-    /// Nothing was inserted, because focus moved or the target could not be confirmed; the transcript is kept.
     case textKept
-    /// Typing stopped part way; the transcript is kept.
     case partlyInserted
-    /// The target stopped answering during an insertion, so the text may or may not be there.
     case mayNotBeInserted
-    /// Scribe is not trusted for Accessibility, so nothing could be inserted.
     case accessibilityNeeded
-    /// The recording reached its duration ceiling and was transcribed.
     case durationLimitReached
-    /// A new recording was turned away because earlier dictations are still being processed.
     case stillProcessing
 
     var label: String {
         switch self {
+        case .typed: return "Typed"
+        case .typedWithoutCleanup: return "Typed without AI cleanup"
         case .cleanupFellBack: return "Cleanup failed, raw text used"
         case .microphoneUnavailable: return "Microphone unavailable"
         case .microphoneAccessNeeded: return "Microphone access needed"
@@ -112,14 +99,40 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
         }
     }
 
-    /// Whether the notice reports a failure (red) rather than something the user should know (neutral).
     var isFailure: Bool {
         switch self {
-        case .durationLimitReached, .stillProcessing, .microphoneStoppedEarly:
+        case .typed, .typedWithoutCleanup, .durationLimitReached, .stillProcessing, .microphoneStoppedEarly:
             return false
         case .cleanupFellBack, .microphoneUnavailable, .microphoneAccessNeeded, .recognizerMissing,
             .transcriptionFailed, .textKept, .partlyInserted, .mayNotBeInserted, .accessibilityNeeded:
             return true
+        }
+    }
+
+    var pillOutcome: PillOutcome? {
+        switch self {
+        case .typed:
+            return PillOutcome(kind: .typed, detail: "")
+        case .typedWithoutCleanup, .cleanupFellBack:
+            return PillOutcome(kind: .typedWithoutCleanup, detail: PillOutcome.cleanupDidNotRun)
+        case .textKept:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.recoveryStep)
+        case .partlyInserted:
+            return PillOutcome(kind: .partlyTyped, detail: PillOutcome.recoveryStep)
+        case .mayNotBeInserted:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.recoveryStep)
+        case .accessibilityNeeded:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.accessibilityStep)
+        case .microphoneUnavailable:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.microphoneStep)
+        case .microphoneAccessNeeded:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.microphoneAccessStep)
+        case .recognizerMissing:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.recognizerStep)
+        case .transcriptionFailed:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.transcriptionStep)
+        case .microphoneStoppedEarly, .durationLimitReached, .stillProcessing:
+            return nil
         }
     }
 }

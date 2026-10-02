@@ -15,10 +15,22 @@ final class CleanupSettingsBackingFake {
         providerKind: .foundryLocal,
         foundryLocalModelAlias: "qwen2.5-1.5b",
         ollamaModel: "qwen2.5:3b",
+        lmStudioModel: "google/gemma-4-e2b",
+        selectedLocalApp: .none,
         openAIBaseURL: "",
         openAIModel: "",
+        openAIApiStyle: .chatCompletions,
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
+        otherServiceBaseURL: "",
+        otherServiceModel: "",
+        otherServiceApiStyle: .chatCompletions,
         azureEndpoint: "",
         azureDeployment: "",
+        azurePromptCaching: true,
         azureAuthMode: .azureCli,
         azureTenantId: "",
         azureClientId: "")
@@ -135,6 +147,19 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertTrue(backing.stored.isEnabled)
     }
 
+    @MainActor
+    func testThePromptCacheSwitchStoresTheNewestChoice() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        let model = makeModel(backing)
+
+        model.values.azurePromptCaching = false
+
+        XCTAssertFalse(backing.stored.azurePromptCaching)
+        backing.storeFromElsewhere { $0.azurePromptCaching = true }
+        XCTAssertTrue(model.values.azurePromptCaching)
+    }
+
     /// The re-read on appear goes through the same path as a tray change, and must not store back what it read.
     @MainActor
     func testReReadingOnAppearShowsStoredValuesWithoutWritingThemBack() {
@@ -249,6 +274,78 @@ final class CleanupSettingsModelTests: XCTestCase {
         backing.configured.insert(.openAICompatible)
 
         XCTAssertFalse(model.isDisabled(.connectionTest))
+    }
+
+    @MainActor
+    func testChoosingOnThisMacMovesAnotherAIServiceIntoRememberedFields() {
+        let backing = openAICompatibleBacking()
+        backing.apiKey = "sk-test"
+        let model = makeModel(backing)
+        model.refreshSecretState()
+
+        model.setLocalAppChoice(.ollama)
+
+        XCTAssertEqual(model.providerSelection, .onThisMac)
+        XCTAssertEqual(model.localAppChoice, .ollama)
+        XCTAssertEqual(backing.stored.providerKind, .openAICompatible)
+        XCTAssertEqual(backing.stored.openAIBaseURL, LocalAiServer.ollamaAddress)
+        XCTAssertEqual(backing.stored.openAIModel, "qwen2.5:3b")
+        XCTAssertEqual(backing.stored.otherServiceBaseURL, "http://localhost:1234")
+        XCTAssertEqual(backing.stored.otherServiceModel, "local-model")
+    }
+
+    @MainActor
+    func testChoosingAnotherAIServiceBringsBackItsRememberedFields() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        backing.stored.providerKind = .openAICompatible
+        backing.stored.openAIBaseURL = LocalAiServer.ollamaAddress
+        backing.stored.openAIModel = "gemma4:e4b"
+        backing.stored.ollamaModel = "gemma4:e4b"
+        backing.stored.otherServiceBaseURL = "https://openrouter.ai/api/v1"
+        backing.stored.otherServiceModel = "openai/gpt-5-mini"
+        let model = makeModel(backing)
+
+        model.setProviderSelection(.otherService)
+
+        XCTAssertEqual(model.providerSelection, .otherService)
+        XCTAssertEqual(backing.stored.openAIBaseURL, "https://openrouter.ai/api/v1")
+        XCTAssertEqual(backing.stored.openAIModel, "openai/gpt-5-mini")
+    }
+
+    @MainActor
+    func testAFoundryLocalChoiceHidesTheLocalAppStatusWorkflow() {
+        let backing = CleanupSettingsBackingFake()
+        let model = makeModel(backing)
+
+        XCTAssertEqual(model.providerSelection, .onThisMac)
+        XCTAssertEqual(model.localAppChoice, .letScribeManageIt)
+        XCTAssertTrue(model.showsConnectionTest)
+
+        model.setLocalAppChoice(.lmStudio)
+        XCTAssertFalse(model.showsConnectionTest)
+        XCTAssertEqual(backing.stored.openAIBaseURL, LocalAiServer.lmStudioAddress)
+    }
+
+    @MainActor
+    func testLocalTuningFieldsAreStoredPerAppChoice() {
+        let backing = CleanupSettingsBackingFake()
+        let model = makeModel(backing)
+
+        model.setLocalAppChoice(.ollama)
+        model.setLocalContextTokens(32768, for: .ollama)
+        model.setSendsWholeVocabulary(true, for: .ollama)
+        model.setLocalAppChoice(.lmStudio)
+        model.setLocalContextTokens(16384, for: .lmStudio)
+        model.setSendsWholeVocabulary(false, for: .lmStudio)
+        model.setLocalAppChoice(.letScribeManageIt)
+        model.setSendsWholeVocabulary(true, for: .letScribeManageIt)
+
+        XCTAssertEqual(backing.stored.ollamaContextTokens, 32768)
+        XCTAssertTrue(backing.stored.ollamaSendWholeVocabulary)
+        XCTAssertEqual(backing.stored.lmStudioContextTokens, 16384)
+        XCTAssertFalse(backing.stored.lmStudioSendWholeVocabulary)
+        XCTAssertTrue(backing.stored.foundryLocalSendWholeVocabulary)
     }
 
     /// Settings is rebuilt on every open; a key typed but not saved lives in the drafts, which outlive the tab.
