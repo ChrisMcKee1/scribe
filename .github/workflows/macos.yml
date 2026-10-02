@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-26]
+        runner: [macos-15, macos-26, macos-15-intel]
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -95,6 +95,12 @@ jobs:
           app=macos/Scribe/dist/Scribe.app
           plutil -lint "$app/Contents/Info.plist"
           codesign --verify --strict --verbose=2 "$app"
+          expected_arch=$(uname -m)
+          actual_arch=$(lipo -archs "$app/Contents/MacOS/Scribe")
+          if [ "$actual_arch" != "$expected_arch" ]; then
+            echo "::error::The packaged executable is $actual_arch, but this runner is $expected_arch."
+            exit 1
+          fi
           bin=$(swift build --package-path macos/Scribe -c release --show-bin-path)
           mv "$bin/ScribeMac_Scribe.bundle" "$RUNNER_TEMP/ScribeMac_Scribe.bundle"
           trap 'mv "$RUNNER_TEMP/ScribeMac_Scribe.bundle" "$bin/ScribeMac_Scribe.bundle"' EXIT
