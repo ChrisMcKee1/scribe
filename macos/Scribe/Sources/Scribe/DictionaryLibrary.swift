@@ -13,6 +13,25 @@ struct DictionaryLibrary: Equatable {
     let description: String?
     let builtIn: Bool
     let entries: [DictionaryEntry]
+    let fileName: String?
+
+    init(
+        id: String,
+        name: String,
+        category: String,
+        description: String?,
+        builtIn: Bool,
+        entries: [DictionaryEntry],
+        fileName: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.description = description
+        self.builtIn = builtIn
+        self.entries = entries
+        self.fileName = fileName
+    }
 
     /// Only the entries whose `enabled` flag is set.
     var enabledEntries: [DictionaryEntry] { entries.filter(\.enabled) }

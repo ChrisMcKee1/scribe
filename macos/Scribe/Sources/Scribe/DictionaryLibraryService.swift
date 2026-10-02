@@ -92,16 +92,16 @@ final class DictionaryLibraryService {
 
     /// All libraries, built-in first then custom. Malformed custom files are skipped.
     func libraries() -> [DictionaryLibrary] {
-        BuiltInDictionaryLibraries.all + loadCustom()
+        LibraryPrecedence.order(BuiltInDictionaryLibraries.all + loadCustom())
     }
 
     /// The de-duplicated entries of every library the user has switched on (per `settings`), for
     /// layering on top of the base dictionary. Empty when nothing is enabled.
     func enabledLibraryEntries() -> [DictionaryEntry] {
-        let enabledIds = settings.enabledLibraryIds
-        guard !enabledIds.isEmpty else { return [] }
+        let enabledIDs = settings.enabledLibraryIds
+        guard !enabledIDs.isEmpty else { return [] }
 
-        let matching = libraries().filter { enabledIds.contains($0.id) }
+        let matching = LibraryPrecedence.enabled(libraries(), enabledIDs: enabledIDs)
         return DictionaryLibraryComposer.composeLibraries(matching)
     }
 
@@ -119,13 +119,21 @@ final class DictionaryLibraryService {
         }
 
         let trimmedSuggestion = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = file.name ?? (trimmedSuggestion?.isEmpty == false ? trimmedSuggestion : nil) ?? "Imported library"
+        let name =
+            file.name ?? (trimmedSuggestion?.isEmpty == false ? trimmedSuggestion : nil)
+            ?? LibraryNaming.importedLibraryBaseName
         let category = file.category ?? "Custom"
 
         try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
-        let id = uniqueId(baseSlug: slugify(name))
+        let id = LibraryNaming.newCustomID(name: name, takenIDs: allKnownIDs())
         let library = DictionaryLibrary(
-            id: id, name: name, category: category, description: file.description, builtIn: false, entries: file.entries
+            id: id,
+            name: name,
+            category: category,
+            description: file.description,
+            builtIn: false,
+            entries: file.entries,
+            fileName: "\(id).csv"
         )
 
         // Re-export through the library writer so the stored file is normalized and always
@@ -166,11 +174,15 @@ final class DictionaryLibraryService {
 
         var libraries: [DictionaryLibrary] = []
         for fileURL in fileURLs.sorted(by: {
-            $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending
+            $0.lastPathComponent.compare(
+                $1.lastPathComponent,
+                options: [.caseInsensitive, .literal]) == .orderedAscending
         })
         where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
-            guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+            guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                continue
+            }
 
             let file = DictionaryLibraryCsv.parse(text)
             guard !file.entries.isEmpty else { continue }
@@ -182,42 +194,18 @@ final class DictionaryLibraryService {
                     category: file.category ?? "Custom",
                     description: file.description,
                     builtIn: false,
-                    entries: file.entries))
+                    entries: file.entries,
+                    fileName: fileURL.lastPathComponent))
         }
         return libraries
     }
 
-    // Ensures the new custom library's id collides with neither a built-in id nor an existing file.
-    private func uniqueId(baseSlug: String) -> String {
-        let builtinIds = Set(BuiltInDictionaryLibraries.all.map { $0.id.lowercased() })
-
-        var candidate = baseSlug
-        var n = 2
-        while builtinIds.contains(candidate.lowercased())
-            || fileManager.fileExists(atPath: librariesDirectory.appendingPathComponent("\(candidate).csv").path)
-        {
-            candidate = "\(baseSlug)-\(n)"
-            n += 1
-        }
-        return candidate
-    }
-
-    // Lowercase, alphanumerics kept, every other run collapsed to a single hyphen; a safe file
-    // name and stable id derived from the library's display name.
-    private func slugify(_ value: String) -> String {
-        var result = ""
-        var pendingDash = false
-        for scalar in value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().unicodeScalars {
-            if CharacterSet.alphanumerics.contains(scalar) {
-                if pendingDash, !result.isEmpty {
-                    result.append("-")
-                }
-                result.unicodeScalars.append(scalar)
-                pendingDash = false
-            } else {
-                pendingDash = true
-            }
-        }
-        return result.isEmpty ? "library" : result
+    private func allKnownIDs() -> [String] {
+        let builtIn = BuiltInDictionaryLibraries.all.map(\.id)
+        let custom =
+            ((try? fileManager.contentsOfDirectory(at: librariesDirectory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension.lowercased() == "csv" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+        return builtIn + custom
     }
 }

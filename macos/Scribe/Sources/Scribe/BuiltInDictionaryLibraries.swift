@@ -9,7 +9,7 @@ import Foundation
 enum BuiltInDictionaryLibraries {
     private static let cached: [DictionaryLibrary] = load()
 
-    /// All built-in libraries, ordered by category then name.
+    /// All built-in libraries, ordered in the frozen precedence order.
     static var all: [DictionaryLibrary] { cached }
 
     private static func load() -> [DictionaryLibrary] {
@@ -44,11 +44,7 @@ enum BuiltInDictionaryLibraries {
                     entries: file.entries))
         }
 
-        return libraries.sorted {
-            $0.category.localizedCaseInsensitiveCompare($1.category) == .orderedSame
-                ? $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                : $0.category.localizedCaseInsensitiveCompare($1.category) == .orderedAscending
-        }
+        return LibraryPrecedence.order(libraries)
     }
 
     /// Checked in an order that keeps `Bundle.module` off the hot path for a packaged, signed
