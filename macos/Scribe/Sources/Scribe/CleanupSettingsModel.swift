@@ -11,6 +11,7 @@ struct CleanupSettingsValues: Equatable {
     var selectedLocalApp: LocalServerApp
     var openAIBaseURL: String
     var openAIModel: String
+    var openAIApiStyle: CustomAPIStyle
     var ollamaContextTokens: Int
     var lmStudioContextTokens: Int
     var foundryLocalSendWholeVocabulary: Bool
@@ -18,6 +19,7 @@ struct CleanupSettingsValues: Equatable {
     var lmStudioSendWholeVocabulary: Bool
     var otherServiceBaseURL: String
     var otherServiceModel: String
+    var otherServiceApiStyle: CustomAPIStyle
     var azureEndpoint: String
     var azureDeployment: String
     var azureAuthMode: AzureAuthMode
@@ -65,6 +67,7 @@ extension CleanupSettingsAccess {
                     selectedLocalApp: store.selectedLocalApp,
                     openAIBaseURL: store.openAIBaseURL,
                     openAIModel: store.openAIModel,
+                    openAIApiStyle: store.openAIApiStyle,
                     ollamaContextTokens: store.ollamaContextTokens,
                     lmStudioContextTokens: store.lmStudioContextTokens,
                     foundryLocalSendWholeVocabulary: store.foundryLocalSendWholeVocabulary,
@@ -72,6 +75,7 @@ extension CleanupSettingsAccess {
                     lmStudioSendWholeVocabulary: store.lmStudioSendWholeVocabulary,
                     otherServiceBaseURL: store.otherServiceBaseURL,
                     otherServiceModel: store.otherServiceModel,
+                    otherServiceApiStyle: store.otherServiceApiStyle,
                     azureEndpoint: store.azureEndpoint,
                     azureDeployment: store.azureDeployment,
                     azureAuthMode: store.azureAuthMode,
@@ -89,6 +93,7 @@ extension CleanupSettingsAccess {
                 if new.selectedLocalApp != old.selectedLocalApp { store.selectedLocalApp = new.selectedLocalApp }
                 if new.openAIBaseURL != old.openAIBaseURL { store.openAIBaseURL = new.openAIBaseURL }
                 if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
+                if new.openAIApiStyle != old.openAIApiStyle { store.openAIApiStyle = new.openAIApiStyle }
                 if new.ollamaContextTokens != old.ollamaContextTokens {
                     store.ollamaContextTokens = new.ollamaContextTokens
                 }
@@ -109,6 +114,9 @@ extension CleanupSettingsAccess {
                 }
                 if new.otherServiceModel != old.otherServiceModel {
                     store.otherServiceModel = new.otherServiceModel
+                }
+                if new.otherServiceApiStyle != old.otherServiceApiStyle {
+                    store.otherServiceApiStyle = new.otherServiceApiStyle
                 }
                 if new.azureEndpoint != old.azureEndpoint { store.azureEndpoint = new.azureEndpoint }
                 if new.azureDeployment != old.azureDeployment { store.azureDeployment = new.azureDeployment }
@@ -245,6 +253,10 @@ final class CleanupSettingsModel: ObservableObject {
         providerSelection == .otherService ? values.openAIModel : values.otherServiceModel
     }
 
+    var otherServiceApiStyle: CustomAPIStyle {
+        providerSelection == .otherService ? values.openAIApiStyle : values.otherServiceApiStyle
+    }
+
     var showsConnectionTest: Bool {
         providerSelection != .onThisMac || localAppChoice == .letScribeManageIt
     }
@@ -267,6 +279,7 @@ final class CleanupSettingsModel: ObservableObject {
             updated.selectedLocalApp = .none
             updated.openAIBaseURL = other.endpoint ?? ""
             updated.openAIModel = other.model ?? ""
+            updated.openAIApiStyle = other.apiStyle
             values = updated
         case .microsoftFoundry:
             var updated = values
@@ -295,8 +308,10 @@ final class CleanupSettingsModel: ObservableObject {
             updated.selectedLocalApp = choice.serverApp
             updated.openAIBaseURL = saved.stored.endpoint ?? ""
             updated.openAIModel = saved.stored.model ?? ""
+            updated.openAIApiStyle = saved.stored.apiStyle
             updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
             updated.otherServiceModel = saved.remembered.model ?? ""
+            updated.otherServiceApiStyle = saved.remembered.apiStyle
             values = updated
         }
     }
@@ -329,8 +344,10 @@ final class CleanupSettingsModel: ObservableObject {
             updated.selectedLocalApp = .ollama
             updated.openAIBaseURL = saved.stored.endpoint ?? ""
             updated.openAIModel = saved.stored.model ?? ""
+            updated.openAIApiStyle = saved.stored.apiStyle
             updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
             updated.otherServiceModel = saved.remembered.model ?? ""
+            updated.otherServiceApiStyle = saved.remembered.apiStyle
         case .lmStudio:
             updated.lmStudioModel = model
             let saved = CustomServiceFields.forSave(
@@ -342,8 +359,10 @@ final class CleanupSettingsModel: ObservableObject {
             updated.selectedLocalApp = .lmStudio
             updated.openAIBaseURL = saved.stored.endpoint ?? ""
             updated.openAIModel = saved.stored.model ?? ""
+            updated.openAIApiStyle = saved.stored.apiStyle
             updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
             updated.otherServiceModel = saved.remembered.model ?? ""
+            updated.otherServiceApiStyle = saved.remembered.apiStyle
         }
         values = updated
     }
@@ -417,6 +436,13 @@ final class CleanupSettingsModel: ObservableObject {
             updated.providerKind = .openAICompatible
         }
         updated.selectedLocalApp = .none
+        values = updated
+    }
+
+    func setOtherServiceAPIStyle(_ style: CustomAPIStyle) {
+        var updated = values
+        updated.openAIApiStyle = style
+        updated.otherServiceApiStyle = style
         values = updated
     }
 

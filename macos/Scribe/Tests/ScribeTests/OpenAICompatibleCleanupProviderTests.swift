@@ -195,6 +195,31 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(log.all.first?.url?.path, "/v1/chat/completions")
     }
 
+    func testResponsesRequestsGoToResponsesAndSetStoreFalse() async throws {
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "test-model",
+            serviceURL: URL(string: "https://ai.example.invalid/v1")!,
+            apiStyle: .responses,
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.json(
+                    request,
+                    """
+                    {"output":[{"type":"message","content":[{"type":"output_text","text":"Cleaned."}]}]}
+                    """
+                )
+            })
+
+        _ = try await provider.clean(
+            CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse.", maxOutputTokens: 16))
+
+        let sent = try XCTUnwrap(log.all.first)
+        XCTAssertEqual(sent.url?.path, "/v1/responses")
+        XCTAssertEqual(sent.jsonBody["store"] as? Bool, false)
+        XCTAssertEqual(sent.jsonBody["max_output_tokens"] as? Int, 16)
+    }
+
     func testWithoutAKeyNoAuthorizationIsSent() async throws {
         let log = RequestLog()
         let provider = makeProvider(apiKey: "") { request in

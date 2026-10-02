@@ -8,8 +8,8 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     let id: String
     let displayName: String
     let model: String
-    /// `{base}/v1/chat/completions`, from `OpenAICompatibleEndpoint.chatCompletionsURL(for:)`.
-    let completionsURL: URL
+    let serviceURL: URL
+    let apiStyle: CustomAPIStyle
     let usesLocalCleanupPrompt: Bool
     let localServerApp: LocalServerApp
     private let apiKey: String?
@@ -27,7 +27,9 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         displayName: String = "OpenAI-compatible endpoint",
         model: String,
         apiKey: String? = nil,
-        completionsURL: URL,
+        completionsURL: URL? = nil,
+        serviceURL: URL? = nil,
+        apiStyle: CustomAPIStyle = .chatCompletions,
         localServerApp: LocalServerApp = .none,
         keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
         localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
@@ -49,13 +51,14 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.displayName = displayName
         self.model = model
         self.apiKey = apiKey
-        self.completionsURL = completionsURL
-        self.usesLocalCleanupPrompt = LocalAiServer.isOnThisMac(completionsURL.absoluteString)
+        self.serviceURL = serviceURL ?? OpenAICompatibleEndpoint.serviceURL(for: completionsURL!) ?? completionsURL!
+        self.apiStyle = apiStyle
+        self.usesLocalCleanupPrompt = LocalAiServer.isOnThisMac(self.serviceURL.absoluteString)
         self.localServerApp = localServerApp
         self.keepAliveMinutes = keepAliveMinutes
         self.localModelLane = localModelLane
         self.localTuning = localTuning
-        self.localServerEndpoint = OpenAICompatibleEndpoint.serviceURL(for: completionsURL)?.absoluteString
+        self.localServerEndpoint = self.serviceURL.absoluteString
         self.loadLocalContext = loadLocalContext
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
@@ -102,7 +105,8 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         let ttl = localServerApp == .lmStudio && keepAliveMinutes > 0 ? keepAliveMinutes * 60 : nil
         let contextTokens = ContextBudget.sanitize(tuning.contextTokens)
         let transport = self.transport
-        let completionsURL = self.completionsURL
+        let serviceURL = self.serviceURL
+        let apiStyle = self.apiStyle
         let model = self.model
         let apiKey = self.apiKey
         let localServerApp = self.localServerApp
@@ -117,16 +121,25 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
             if localServerApp == .ollama, contextTokens > 0 {
                 return try await transport.completeOllama(
                     request,
-                    at: completionsURL,
+                    at: serviceURL,
                     model: model,
                     keepAlive: keepAlive,
                     contextTokens: contextTokens,
                     defaultTimeout: timeout)
             }
 
+            if apiStyle == .responses {
+                return try await transport.completeResponses(
+                    request,
+                    at: serviceURL.appendingPathComponent("responses"),
+                    model: model,
+                    bearerToken: apiKey,
+                    defaultTimeout: timeout)
+            }
+
             return try await transport.complete(
                 request,
-                at: completionsURL,
+                at: serviceURL.appendingPathComponent("chat/completions"),
                 model: model,
                 bearerToken: apiKey,
                 temperature: local ? CleanupSampling.onDeviceTemperature : nil,
@@ -203,7 +216,8 @@ struct ChatCompletionsTransport: Sendable {
         contextTokens: Int,
         defaultTimeout: TimeInterval
     ) async throws -> Completion {
-        guard let chatURL = OpenAICompatibleEndpoint.serviceURL(for: url)?.appendingPathComponent("chat") else {
+        let chatURL = url.appendingPathComponent("chat")
+        if chatURL.scheme == nil {
             throw CleanupProviderError.transport(URLError(.badURL))
         }
         var request = URLRequest(url: chatURL)
@@ -251,6 +265,68 @@ struct ChatCompletionsTransport: Sendable {
         guard !text.isEmpty else {
             throw CleanupProviderError.invalidResponse(
                 decoded.doneReason == "length" ? .outputLimitReachedBeforeText : .emptyCompletion)
+        }
+
+        let elapsed = started.duration(to: .now)
+        ScribeLog.debug(
+            .cleanup,
+            "Cleanup request finished",
+            .name("provider", CleanupProviderKind.openAICompatible),
+            .duration("elapsed", elapsed),
+            .count("characters", text.count))
+        return Completion(text: text, latency: Self.seconds(elapsed))
+    }
+
+    func completeResponses(
+        _ cleanupRequest: CleanupRequest,
+        at url: URL,
+        model: String,
+        bearerToken: String?,
+        defaultTimeout: TimeInterval
+    ) async throws -> Completion {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("******", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(
+            ResponsesRequest(
+                model: model,
+                input: [
+                    .init(role: "system", content: cleanupRequest.writingStylePrompt),
+                    .init(role: "user", content: cleanupRequest.transcript),
+                ],
+                maxOutputTokens: cleanupRequest.maxOutputTokens,
+                store: false))
+
+        let started = ContinuousClock.now
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw Self.transportFailure(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CleanupProviderError.invalidResponse(.notHTTP)
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw CleanupProviderError.rejected(
+                status: httpResponse.statusCode,
+                provider: .openAICompatible,
+                reply: CleanupServiceReply(errorBody: data))
+        }
+        guard let decoded = try? JSONDecoder().decode(ResponsesResponse.self, from: data) else {
+            throw CleanupProviderError.invalidResponse(.undecodable)
+        }
+
+        let text = CleanupPrompt.stripTranscriptTags(decoded.text ?? "")
+        guard !text.isEmpty else {
+            throw CleanupProviderError.invalidResponse(.emptyCompletion)
         }
 
         let elapsed = started.duration(to: .now)
@@ -414,6 +490,25 @@ struct ChatCompletionResponse: Decodable {
     let choices: [Choice]
 }
 
+struct ResponsesRequest: Encodable, Sendable {
+    struct Message: Encodable, Sendable {
+        let role: String
+        let content: String
+    }
+
+    let model: String
+    let input: [Message]
+    let maxOutputTokens: Int?
+    let store: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case input
+        case maxOutputTokens = "max_output_tokens"
+        case store
+    }
+}
+
 struct OllamaChatRequest: Encodable, Sendable {
     struct Options: Encodable, Sendable {
         let numContext: Int
@@ -447,6 +542,44 @@ struct OllamaChatRequest: Encodable, Sendable {
 struct OllamaChatResponse: Decodable {
     struct Message: Decodable {
         let content: String?
+    }
+
+    struct ResponsesResponse: Decodable {
+        struct Output: Decodable {
+            struct Content: Decodable {
+                let type: String?
+                let text: String?
+            }
+
+            let type: String?
+            let text: String?
+            let content: [Content]?
+        }
+
+        let outputText: String?
+        let output: [Output]?
+
+        var text: String? {
+            if let outputText, !outputText.isEmpty {
+                return outputText
+            }
+            for item in output ?? [] {
+                if let text = item.text, !text.isEmpty {
+                    return text
+                }
+                for content in item.content ?? [] {
+                    if let text = content.text, !text.isEmpty {
+                        return text
+                    }
+                }
+            }
+            return nil
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case outputText = "output_text"
+            case output
+        }
     }
 
     let message: Message

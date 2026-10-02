@@ -267,6 +267,24 @@ struct CleanupProviderSettingsSection: View {
                 text: Binding(
                     get: { model.otherServiceEndpoint },
                     set: { model.setOtherServiceEndpoint($0) }))
+            Text(CustomAPIStyleText.addressHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if CustomAPIStyleText.canChoose(model.otherServiceEndpoint) {
+                Picker(
+                    "API",
+                    selection: Binding(
+                        get: { model.otherServiceApiStyle },
+                        set: { model.setOtherServiceAPIStyle($0) })
+                ) {
+                    ForEach(CustomAPIStyleText.choices) { style in
+                        Text(CustomAPIStyleText.name(of: style)).tag(style)
+                    }
+                }
+            }
+            Text(CustomAPIStyleText.hint(model.otherServiceEndpoint))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             TextField(
                 "Model",
                 text: Binding(

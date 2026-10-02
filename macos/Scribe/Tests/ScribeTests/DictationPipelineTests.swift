@@ -140,6 +140,7 @@ final class DictationPipelineTests: XCTestCase {
             selectedLocalApp: .ollama,
             openAIBaseURL: LocalAiServer.ollamaAddress,
             openAIModel: "gemma4:e4b",
+            openAIApiStyle: .chatCompletions,
             ollamaContextTokens: 32768,
             lmStudioContextTokens: 0,
             foundryLocalSendWholeVocabulary: false,
@@ -150,6 +151,7 @@ final class DictationPipelineTests: XCTestCase {
             azureAuthMode: .azureCli,
             azureTenantId: "",
             azureClientId: "",
+            otherServiceApiStyle: .chatCompletions,
             secretRevision: "")
         let provider = try XCTUnwrap(harness.cleanup.gated)
         harness.transcriber.defaultText = "spoken term 119 and spoken term 0"
