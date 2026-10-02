@@ -722,6 +722,25 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    /// The maintenance lane expires deleted pack content without touching a prepared/committed recovery.
+    func purgeExpiredDeletedWordPacks(now: Date) throws -> Int {
+        let count = try owner.withSession(.maintenance) { session in
+            try session.transaction(.maintenance) {
+                guard try Self.readSetting(key: WordPackJournal.key, session) == nil,
+                    let raw = try Self.readSetting(key: WordPackJournal.deletedKey, session)
+                else { return 0 }
+                let deleted = try WordPackSaveCoordinator.decodeDeleted(raw)
+                let kept = deleted.filter { !$0.expired(at: now) }
+                guard kept.count != deleted.count else { return 0 }
+                let value = String(decoding: try JSONEncoder().encode(kept), as: UTF8.self)
+                try Self.writeSetting(key: WordPackJournal.deletedKey, value: value, session)
+                return deleted.count - kept.count
+            }
+        }
+        if count > 0 { removedText.record() }
+        return count
+    }
+
     func writeStringSetting(key: String, value: String?) throws {
         try owner.withSession(.foreground) { session in
             try Self.writeSetting(key: key, value: value, session)

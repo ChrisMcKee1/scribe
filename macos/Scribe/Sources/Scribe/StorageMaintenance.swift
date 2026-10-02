@@ -522,6 +522,14 @@ final class StorageMaintenance: @unchecked Sendable {
 
         report.retention = applyRetention()
         if !shouldYield {
+            do {
+                let deleted = try store.purgeExpiredDeletedWordPacks(now: now())
+                if deleted > 0 {
+                    ScribeLog.info(.persistence, "Expired deleted word packs", .count("removed", deleted))
+                }
+            } catch {
+                ScribeLog.warning(.persistence, "Word pack retention failed", .failure(error))
+            }
             report.reclaim = reclaim()
             report.checkpoint = checkpointIfOwed()
         } else {

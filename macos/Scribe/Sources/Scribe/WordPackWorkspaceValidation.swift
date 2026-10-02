@@ -22,6 +22,11 @@ extension WordPackWorkspace {
             issues.append(LibraryValidationIssue(libraryID: library.id, rowID: nil, kind: .tooManyTerms))
         }
         var spoken: [LibraryTermKey: Int64] = [:]
+        let oldRows = (baseline.libraries.first { $0.id == library.id }?.rows ?? []).reduce(
+            into: [Int64: DraftTermRow]()
+        ) { result, row in
+            result[row.rowID] = row
+        }
         for draftRow in rows {
             let values = draftRow.row.values
             let key = LibraryTermKey.from(values.spoken)
@@ -39,7 +44,7 @@ extension WordPackWorkspace {
             if values.written.isEmpty && !draftRow.removalIntent && !draftRow.legacyEmpty {
                 issue(.emptyWrittenWithoutIntent, .written)
             }
-            let old = baseline.libraries.first { $0.id == library.id }?.rows.first { $0.rowID == draftRow.rowID }
+            let old = oldRows[draftRow.rowID]
             if values.spoken.utf16.count > LibraryLimits.maxFieldLength && values.spoken != old?.row.values.spoken {
                 issue(.fieldTooLong, .spoken)
             }

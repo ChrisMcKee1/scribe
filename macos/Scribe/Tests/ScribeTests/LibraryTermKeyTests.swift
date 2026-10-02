@@ -42,6 +42,18 @@ final class LibraryTermKeyTests: XCTestCase {
         XCTAssertFalse(text.localizedCaseInsensitiveContains("star"))
         XCTAssertTrue(text.contains("10"))
     }
+
+    func testVocabularyMergeUsesTheSharedTermKeyForEveryNonemptyFixturePair() throws {
+        let fixture = try JSONDecoder().decode(TermKeyFixture.self, from: LibraryFixtureSupport.json("term-keys.json"))
+        for item in fixture.same {
+            guard !LibraryTermKey.from(item.a).isEmpty, !LibraryTermKey.from(item.b).isEmpty else { continue }
+            let entries = DictionaryLibraryComposer.merge(
+                baseEntries: [DictionaryEntry(pattern: item.a, replacement: "First")],
+                libraryEntries: [DictionaryEntry(pattern: item.b, replacement: "Second")])
+            XCTAssertEqual(entries.count, item.same ? 1 : 2, item.note)
+            XCTAssertEqual(entries.first?.replacement, "First", item.note)
+        }
+    }
 }
 
 private struct TermKeyFixture: Decodable {

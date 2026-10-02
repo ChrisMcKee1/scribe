@@ -64,6 +64,11 @@ actor WordPackSaveCoordinator {
         let rawState = try await store.loadStringSetting(key: DictionaryLibraryService.libraryStateKey)
         let rawDeleted = try await store.loadStringSetting(key: WordPackJournal.deletedKey)
         var deleted = try Self.decodeDeleted(rawDeleted)
+        for id in changes.restoreIDs.union(changes.purgeIDs) {
+            guard let expected = changes.recentlyDeleted.first(where: { $0.id == id }),
+                deleted.contains(expected), !expected.expired(at: now)
+            else { throw WordPackError.staleCatalog }
+        }
         let rawReceipt = try await store.loadStringSetting(key: WordPackJournal.receiptKey)
         var local = changes.localState
         local.generation = catalog.generation + 1

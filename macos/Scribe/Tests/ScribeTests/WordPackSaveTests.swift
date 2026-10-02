@@ -331,6 +331,24 @@ final class WordPackSaveTests: XCTestCase {
         XCTAssertTrue(fixture.service.settings.enabledLibraryIds.contains(id))
         XCTAssertNil(try fixture.store.readStringSetting(key: WordPackJournal.key))
     }
+
+    func testMaintenanceExpiresDeletedPacksAndOwesTheCheckpointWithoutAnotherSettingsSave() throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        let when = Date(timeIntervalSince1970: 1_800_000_000)
+        let deleted = RecentlyDeletedWordPack(
+            id: UUID(), libraryID: "terms", name: "Terms", category: "Custom", description: nil,
+            basedOn: nil, values: [TermValues("term", "Term")], deletedAt: when)
+        let raw = String(decoding: try JSONEncoder().encode([deleted]), as: UTF8.self)
+        try fixture.store.writeStringSetting(key: WordPackJournal.deletedKey, value: raw)
+        XCTAssertEqual(try fixture.store.purgeExpiredDeletedWordPacks(now: when.addingTimeInterval(29 * 86_400)), 0)
+        let before = fixture.store.removedTextCount
+        XCTAssertEqual(try fixture.store.purgeExpiredDeletedWordPacks(now: when.addingTimeInterval(30 * 86_400)), 1)
+        XCTAssertGreaterThan(fixture.store.removedTextCount, before)
+        let kept = try WordPackSaveCoordinator.decodeDeleted(
+            fixture.store.readStringSetting(key: WordPackJournal.deletedKey))
+        XCTAssertTrue(kept.isEmpty)
+    }
 }
 
 private func expectEqual<T: Equatable>(_ value: T, _ expected: T, file: StaticString = #filePath, line: UInt = #line) {

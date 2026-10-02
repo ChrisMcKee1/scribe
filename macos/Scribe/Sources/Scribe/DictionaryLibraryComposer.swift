@@ -22,10 +22,10 @@ enum DictionaryLibraryComposer {
     }
 
     private static func deduplicate(_ entries: [DictionaryEntry]) -> [DictionaryEntry] {
-        var seen = Set<String>()
+        var seen = Set<LibraryTermKey>()
         var result: [DictionaryEntry] = []
         for entry in entries {
-            let key = entry.pattern.trimmingCharacters(in: .whitespaces).lowercased()
+            let key = LibraryTermKey.from(entry.pattern)
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
                 result.append(entry)
