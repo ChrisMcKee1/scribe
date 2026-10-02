@@ -56,9 +56,7 @@ struct LibrarySearch: Sendable {
             "",
             options: [.caseInsensitive, .diacriticInsensitive],
             range: nil,
-            locale: locale
-        )
-            == .orderedSame
+            locale: locale) == .orderedSame
         return emptyLike ? "" : trimmed
     }
 
@@ -85,11 +83,14 @@ struct LibrarySearch: Sendable {
         let normalized = normalize(query)
         var results: [LibrarySearchMatches] = []
         for library in libraries {
-            let rowIDs = normalized.isEmpty
-                ? []
-                : library.rows.compactMap { row in
+                let rowIDs: [Int64]
+            if normalized.isEmpty {
+                rowIDs = []
+            } else {
+                rowIDs = library.rows.compactMap { row in
                     matches(row.row.values, query: normalized) ? row.rowID : nil
                 }
+            }
             results.append(LibrarySearchMatches(libraryID: library.libraryID, rowIDs: rowIDs))
         }
         return LibrarySearchResult(query: normalized, libraries: results)
