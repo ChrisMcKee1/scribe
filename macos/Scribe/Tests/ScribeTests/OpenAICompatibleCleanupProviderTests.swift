@@ -2,6 +2,14 @@ import XCTest
 
 @testable import Scribe
 
+private actor LMStudioLoadBox {
+    var value: (endpoint: String, model: String, context: Int)?
+
+    func record(endpoint: String, model: String, context: Int) {
+        value = (endpoint, model, context)
+    }
+}
+
 final class OpenAICompatibleEndpointTests: XCTestCase {
     /// OpenRouter documents its base with `/v1`, LM Studio without, and Windows expects the `/v1` form; either one must
     /// reach `/v1/chat/completions` exactly once.
@@ -163,14 +171,14 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 
     func testALMStudioContextSizeLoadsTheModelBeforeChatCompletions() async throws {
         let log = RequestLog()
-        let load = OSAllocatedUnfairLock<(endpoint: String, model: String, context: Int)?>(initialState: nil)
+        let load = LMStudioLoadBox()
         let provider = OpenAICompatibleCleanupProvider(
             model: "google/gemma-4-e2b",
             completionsURL: URL(string: "http://127.0.0.1:1234/v1/chat/completions")!,
             localServerApp: .lmStudio,
             localTuning: { LocalModelTuning(contextTokens: 16384, sendWholeVocabulary: false) },
             loadLocalContext: { endpoint, model, contextTokens in
-                load.withLock { $0 = (endpoint, model, contextTokens) }
+                await load.record(endpoint: endpoint, model: model, context: contextTokens)
                 return "instance-1"
             },
             session: makeStubSession { request in
@@ -180,9 +188,10 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 
         _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse."))
 
-        XCTAssertEqual(load.withLock { $0?.endpoint }, LocalAiServer.lmStudioAddress)
-        XCTAssertEqual(load.withLock { $0?.model }, "google/gemma-4-e2b")
-        XCTAssertEqual(load.withLock { $0?.context }, 16384)
+        let recorded = await load.value
+        XCTAssertEqual(recorded?.endpoint, LocalAiServer.lmStudioAddress)
+        XCTAssertEqual(recorded?.model, "google/gemma-4-e2b")
+        XCTAssertEqual(recorded?.context, 16384)
         XCTAssertEqual(log.all.first?.url?.path, "/v1/chat/completions")
     }
 
