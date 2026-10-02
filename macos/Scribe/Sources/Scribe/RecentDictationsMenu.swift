@@ -20,12 +20,21 @@ final class RecentDictationsMenu: NSObject, NSMenuDelegate {
 
     private let store: LastTranscriptStore
     private let pasteboard: NSPasteboard
+    private let copy: (@MainActor (String) -> Bool)?
+    private let notify: @MainActor (DictationNotice) -> Void
+    private var copyEpisode = TrayActionNoticeEpisode()
     /// The item to add to the tray menu; its submenu has this object as its delegate.
     let item: NSMenuItem
 
-    init(store: LastTranscriptStore, pasteboard: NSPasteboard = .general) {
+    init(
+        store: LastTranscriptStore, pasteboard: NSPasteboard = .general,
+        copy: (@MainActor (String) -> Bool)? = nil,
+        notify: @escaping @MainActor (DictationNotice) -> Void = { _ in }
+    ) {
         self.store = store
         self.pasteboard = pasteboard
+        self.copy = copy
+        self.notify = notify
         item = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
         super.init()
         let submenu = NSMenu(title: "Recent Dictations")
@@ -71,9 +80,21 @@ final class RecentDictationsMenu: NSObject, NSMenuDelegate {
             ScribeLog.info(.app, "A recent dictation Clear history removed was not copied")
             return
         }
-        pasteboard.clearContents()
-        pasteboard.setString(entry.transcript, forType: .string)
+        let copied: Bool
+        if let copy {
+            copied = copy(entry.transcript)
+        } else {
+            pasteboard.clearContents()
+            copied = pasteboard.setString(entry.transcript, forType: .string)
+        }
+        guard copied else {
+            ScribeLog.warning(.app, "Could not copy a recent dictation to the clipboard")
+            if copyEpisode.failed() { notify(.copyFailed) }
+            return
+        }
         ScribeLog.info(
             .app, "Copied a recent dictation to the clipboard", .count("characters", entry.transcript.count))
+        copyEpisode.recovered()
+        notify(.copiedRecentDictation)
     }
 }

@@ -80,6 +80,10 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
     case accessibilityNeeded
     case durationLimitReached
     case stillProcessing
+    case tooQuick
+    case noAudio
+    case onlySilence
+    case noWordsRecognized
 
     var label: String {
         switch self {
@@ -97,6 +101,10 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
         case .accessibilityNeeded: return "Accessibility access needed"
         case .durationLimitReached: return "Stopped at the time limit"
         case .stillProcessing: return "Still processing"
+        case .tooQuick: return "Nothing recorded"
+        case .noAudio: return "No sound recorded"
+        case .onlySilence: return "Only silence recorded"
+        case .noWordsRecognized: return "No words recognized"
         }
     }
 
@@ -106,6 +114,8 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
             return false
         case .cleanupFellBack, .microphoneUnavailable, .microphoneAccessNeeded, .recognizerMissing,
             .transcriptionFailed, .textKept, .partlyInserted, .mayNotBeInserted, .accessibilityNeeded:
+            return true
+        case .tooQuick, .noAudio, .onlySilence, .noWordsRecognized:
             return true
         }
     }
@@ -132,6 +142,14 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
             return PillOutcome(kind: .nothingTyped, detail: PillOutcome.recognizerStep)
         case .transcriptionFailed:
             return PillOutcome(kind: .nothingTyped, detail: PillOutcome.transcriptionStep)
+        case .tooQuick:
+            return PillOutcome(kind: .nothingTyped, detail: "Use the shortcut to speak")
+        case .noAudio:
+            return PillOutcome(kind: .nothingTyped, detail: PillOutcome.microphoneStep)
+        case .onlySilence:
+            return PillOutcome(kind: .nothingTyped, detail: "Microphone may be muted")
+        case .noWordsRecognized:
+            return PillOutcome(kind: .nothingTyped, detail: "No words heard, try again")
         case .microphoneStoppedEarly, .durationLimitReached, .stillProcessing:
             return nil
         }

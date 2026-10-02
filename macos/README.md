@@ -134,8 +134,19 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
 - Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
   that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept").
   A notice never covers a recording and never replaces a newer failure; one that cannot be shown waits
-  for the pill, and a cleanup fallback or failed transcription that cannot be shown at once is posted as
-  a notification instead. No modal alerts while you dictate
+  for the pill. Microphone, empty-audio and recognition problems also have plain-language notifications,
+  once per problem episode, reset when that stage works again or the saved microphone or shortcut changes.
+  A cleanup fallback that cannot be shown at once is posted once until cleanup recovers or its setup changes.
+  Every failed insertion still has its own Copy Transcript recovery action; those are never suppressed.
+  Known near-silent audio is not sent to the recognizer, and an empty recognition on real audio says
+  "No words recognized", rather than disappearing. No modal alerts while you dictate
+- If a chosen microphone is unavailable, Scribe says when it uses the system default instead, once until the
+  chosen microphone works again or the saved selection changes. A selection that cannot be confirmed says so
+  without claiming which microphone recorded. Recent Dictations reports whether copying succeeded; Quick Add
+  says "Saved to your dictionary" only once the new rules are in use, otherwise "Saved, but not in use yet".
+  Notifications contain no dictated text. Copy Transcript retains only the last five texts in memory and
+  Clear history withdraws those copies. See the [notice trigger matrix](PORTING-PLAN.md#tray-and-dictation-notices)
+  for the Windows mapping and platform-specific limits
 - Releasing the key never waits for the recording to be finished off: that happens in the background,
   and dictations are still processed in the order you spoke them
 - Quitting hides the pill at once, then waits for a paste in progress to put your clipboard back, and for a

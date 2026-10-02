@@ -35,7 +35,15 @@ enum LocalModelReadiness {
     ) async throws -> LocalModelPreparationResult {
         try Task.checkCancellation()
         guard await isCurrent() else { return .configurationChanged }
-        if try await isResident() {
+        let resident: Bool
+        do {
+            resident = try await isResident()
+        } catch {
+            try Task.checkCancellation()
+            throw error
+        }
+        try Task.checkCancellation()
+        if resident {
             guard await isCurrent() else { return .configurationChanged }
             return .resident
         }

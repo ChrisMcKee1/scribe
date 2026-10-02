@@ -203,7 +203,10 @@ final class DictationNoticeScheduleTests: XCTestCase {
         XCTAssertEqual(OverlayNotice.stillProcessing.role, .feedback)
         XCTAssertEqual(
             OverlayNotice.allCases.filter(\.notifiesWhenThePillIsBusy),
-            [.typedWithoutCleanup, .cleanupFellBack, .transcriptionFailed])
+            [
+                .typedWithoutCleanup, .cleanupFellBack, .transcriptionFailed, .tooQuick, .noAudio, .onlySilence,
+                .noWordsRecognized,
+            ])
         for notice in OverlayNotice.allCases where notice.notifiesWhenThePillIsBusy {
             XCTAssertEqual(notice.role, .informational)
         }

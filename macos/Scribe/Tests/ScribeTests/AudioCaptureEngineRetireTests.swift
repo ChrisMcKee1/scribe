@@ -113,6 +113,8 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
 
         var held = CaptureTestDevice.Configuration()
         held.holdsPrepare = true
+        let selection = MicrophoneSelectionOutcome(requestedUID: "chosen", result: .systemDefault)
+        held.microphoneSelection = selection
         let device = CaptureTestDevice(held)
         addTeardownBlock { device.releasePrepare() }
         let opening = AudioCaptureEngine(makeDevice: { device })
@@ -128,6 +130,7 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
 
         XCTAssertEqual(outcome, .stoppedWhileOpening)
         XCTAssertEqual(try XCTUnwrap(sealed).samples, [])
+        XCTAssertEqual(try XCTUnwrap(sealed).microphoneSelection, selection)
         XCTAssertEqual(device.counts.closed, 1)
     }
 }

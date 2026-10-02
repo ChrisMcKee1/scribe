@@ -2,14 +2,13 @@ import Foundation
 import os
 
 /// Hands a recording's events from the audio thread to a main-actor handler without flooding the main
-/// queue. Meter readings coalesce: at most one delivery is waiting at any time, and it carries the newest
-/// reading. Stop requests are never coalesced or dropped, and arrive in the order they were posted. A reading
-/// posted in the same window as a stop request is delivered just before it; a recording posts nothing after
-/// its stop request, so this only ever reorders events of different recordings, which carry their owner.
+/// queue. Meter readings coalesce: at most one delivery is waiting at any time, carrying the newest reading.
+/// Stop requests and microphone selections never coalesce and arrive in the order posted. A late open can report
+/// its selection after its stop, so each event carries its recording's owner.
 final class CaptureEventRelay: Sendable {
     private struct Pending: Sendable {
         var level: CaptureEvent?
-        var stops: [CaptureEvent] = []
+        var orderedEvents: [CaptureEvent] = []
         var deliveryScheduled = false
     }
 
@@ -33,8 +32,8 @@ final class CaptureEventRelay: Sendable {
             switch event.kind {
             case .level:
                 pending.level = event
-            case .stopRequested:
-                pending.stops.append(event)
+            case .stopRequested, .microphoneSelection:
+                pending.orderedEvents.append(event)
             }
             guard !pending.deliveryScheduled else { return false }
             pending.deliveryScheduled = true
@@ -51,18 +50,18 @@ final class CaptureEventRelay: Sendable {
 
     @MainActor
     private func deliver() {
-        let (level, stops) = pending.withLock { pending -> (CaptureEvent?, [CaptureEvent]) in
-            let taken = (pending.level, pending.stops)
+        let (level, events) = pending.withLock { pending -> (CaptureEvent?, [CaptureEvent]) in
+            let taken = (pending.level, pending.orderedEvents)
             pending.level = nil
-            pending.stops = []
+            pending.orderedEvents = []
             pending.deliveryScheduled = false
             return taken
         }
         if let level {
             handler(level)
         }
-        for stop in stops {
-            handler(stop)
+        for event in events {
+            handler(event)
         }
     }
 }

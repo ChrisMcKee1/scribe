@@ -8,7 +8,7 @@ enum PillOutcomeKind: Equatable, Sendable {
 }
 
 struct PillOutcome: Equatable, Sendable {
-    static let recoveryStep = "Copy it from the tray menu"
+    static let recoveryStep = "Copy it from the menu bar"
     static let cleanupDidNotRun = "See Settings, AI cleanup"
     static let accessibilityStep = "Allow Accessibility access"
     static let microphoneStep = "Check your microphone"

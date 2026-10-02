@@ -568,8 +568,8 @@ final class DictationPipelineTests: XCTestCase {
 
     // MARK: - Nothing to insert
 
-    /// An empty transcript is nothing to insert: no delivery, no history entry, no notice, no notification.
-    func testAnEmptyTranscriptIsNothingToInsertAndQuiet() async {
+    /// No words on real audio are a recognition problem, not a successful empty dictation.
+    func testAnEmptyTranscriptOnRealAudioSaysNoWordsRecognized() async {
         let harness = makeHarness()
         harness.transcriber.defaultText = "   "
 
@@ -578,10 +578,10 @@ final class DictationPipelineTests: XCTestCase {
 
         XCTAssertTrue(harness.fakeInjector.deliveries.isEmpty)
         XCTAssertTrue(harness.history.records.isEmpty)
-        XCTAssertTrue(harness.presenter.noticesShown().isEmpty)
-        XCTAssertTrue(harness.notifier.notices.isEmpty)
+        XCTAssertEqual(harness.presenter.noticesShown(), [.noWordsRecognized])
+        XCTAssertEqual(harness.notifier.notices.map(\.kind), [.noWordsRecognized])
         XCTAssertTrue(harness.recovery.recent().isEmpty)
-        XCTAssertEqual(harness.lastOverlay, .hidden)
+        XCTAssertEqual(harness.reports.latest?.failureStage, .decode)
     }
 
     /// A missing recognizer says so without an alert, and the next dictation looks for it again.
