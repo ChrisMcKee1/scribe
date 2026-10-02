@@ -730,6 +730,255 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    // MARK: - Whole-window Settings commit
+
+    func loadSettingsSession() async throws -> SettingsStorageRead {
+        try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.read) {
+                try Self.readSettingsSession(session)
+            }
+        }
+    }
+
+    func commitSettingsSession(_ submission: SettingsSubmission) async throws -> SettingsCommitReceipt {
+        guard SettingsSessionValidation.isValid(submission.document) else { throw SettingsSaveFailure.validation }
+        let receipt = try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) {
+                let current = try Self.readSettingsSession(session)
+                let receiptKey = "settings.receipt." + submission.id.uuidString
+                if let encoded = try Self.readSetting(key: receiptKey, session) {
+                    return try JSONDecoder().decode(SettingsCommitReceipt.self, from: Data(encoded.utf8))
+                }
+                for (key, expected) in submission.attachment.expectedValues {
+                    guard try Self.readSetting(key: key, session) == expected else {
+                        throw SettingsSaveFailure.conflict
+                    }
+                }
+                var document = submission.document
+                var record = current.stored ?? SettingsStoredDocument(preferences: submission.baseline.preferences)
+                try Self.mergeSettingsPreferences(submission, record: &record)
+                document.preferences = record.preferences
+                if document.historyRetentionValue != submission.baseline.historyRetentionValue {
+                    guard current.historyRetentionValue == submission.baseline.historyRetentionValue else {
+                        throw SettingsSaveFailure.conflict
+                    }
+                    try Self.writeSetting(
+                        key: retentionSettingKey, value: document.historyRetentionValue, session)
+                } else {
+                    document.historyRetentionValue = current.historyRetentionValue
+                }
+                document.dictionary = try Self.saveSessionDictionary(submission, current: current, session)
+                document.snippets = try Self.saveSessionSnippets(submission, current: current, session)
+                document.profiles = try Self.saveSessionProfiles(submission, current: current, session)
+                if let profiles = document.profiles {
+                    record.profileOrder = profiles.map(\.id)
+                }
+                for (key, value) in submission.attachment.values {
+                    guard key != SettingsStoredDocument.key && key != retentionSettingKey else {
+                        throw SettingsSaveFailure.validation
+                    }
+                    try Self.writeSetting(key: key, value: value, session)
+                }
+                if let references = submission.attachment.values[SettingsCredentialReference.storageKey] ?? nil {
+                    record.credentialReferences = try JSONDecoder().decode(
+                        [String: SettingsCredentialReference].self, from: Data(references.utf8))
+                }
+                record.lastCommit = submission.id
+                record.revision += 1
+                let encoded = try JSONEncoder().encode(record)
+                try Self.writeSetting(
+                    key: SettingsStoredDocument.key, value: String(decoding: encoded, as: UTF8.self), session)
+                var receipt = SettingsCommitReceipt(
+                    id: submission.id, revision: submission.revision, document: document)
+                receipt.attachment = submission.attachment
+                let receiptData = try JSONEncoder().encode(receipt)
+                try Self.writeSetting(
+                    key: receiptKey, value: String(decoding: receiptData, as: UTF8.self), session)
+                return receipt
+            }
+        }
+        removedText.record()
+        return receipt
+    }
+
+    func updateSettingsExternal(
+        _ setting: SettingsExternalSetting,
+        values: [String: SettingsValue],
+        revision: UInt64,
+        legacy: SettingsPreferences
+    ) async throws -> SettingsStorageRead {
+        try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) {
+                let current = try Self.readSettingsSession(session)
+                var record = current.stored ?? SettingsStoredDocument(preferences: legacy)
+                guard revision > (record.savedThrough[setting.rawValue] ?? 0) else { return current }
+                for key in SettingsSession.keys(for: setting) {
+                    record.preferences[key] = values[key]
+                }
+                record.savedThrough[setting.rawValue] = revision
+                record.revision += 1
+                record.lastCommit = nil
+                let encoded = try JSONEncoder().encode(record)
+                try Self.writeSetting(
+                    key: SettingsStoredDocument.key, value: String(decoding: encoded, as: UTF8.self), session)
+                return try Self.readSettingsSession(session)
+            }
+        }
+    }
+
+    private static func readSettingsSession(_ session: SQLiteSession) throws -> SettingsStorageRead {
+        let record: SettingsStoredDocument?
+        if let encoded = try readSetting(key: SettingsStoredDocument.key, session) {
+            record = try JSONDecoder().decode(SettingsStoredDocument.self, from: Data(encoded.utf8))
+            guard record?.version == 1 else { throw SettingsSaveFailure.storage }
+        } else {
+            record = nil
+        }
+        var profiles = try readAppProfiles(session).map(SettingsProfileRow.init)
+        if let order = record?.profileOrder {
+            let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+            profiles.sort {
+                let left = positions[$0.id] ?? Int.max
+                let right = positions[$1.id] ?? Int.max
+                return left == right ? $0.id < $1.id : left < right
+            }
+        }
+        return SettingsStorageRead(
+            stored: record,
+            historyRetentionValue: try readSetting(key: retentionSettingKey, session),
+            dictionary: try readDictionaryEntries(enabledOnly: false, session).map(SettingsDictionaryRow.init),
+            snippets: try readSnippets(enabledOnly: false, session).map(SettingsSnippetRow.init),
+            profiles: profiles)
+    }
+
+    private static func mergeSettingsPreferences(
+        _ submission: SettingsSubmission,
+        record: inout SettingsStoredDocument
+    ) throws {
+        let externalKeys = Set(SettingsExternalSetting.allCases.flatMap(SettingsSession.keys(for:)))
+        for field in SettingsMigrationLedger.draftDefaults where !externalKeys.contains(field.key) {
+            let before = submission.baseline.preferences[field.key]
+            let after = submission.document.preferences[field.key]
+            guard before != after else { continue }
+            guard record.preferences[field.key] == before else { throw SettingsSaveFailure.conflict }
+            record.preferences[field.key] = after
+        }
+        for setting in SettingsExternalSetting.allCases {
+            guard let intent = submission.intents[setting] else { continue }
+            guard intent.revision > (record.savedThrough[setting.rawValue] ?? 0) else { continue }
+            for key in SettingsSession.keys(for: setting) {
+                record.preferences[key] = intent.values[key]
+            }
+            record.savedThrough[setting.rawValue] = intent.revision
+        }
+    }
+
+    private static func saveSessionDictionary(
+        _ submission: SettingsSubmission, current: SettingsStorageRead, _ session: SQLiteSession
+    ) throws -> [SettingsDictionaryRow]? {
+        guard submission.baseline.dictionary != nil || submission.document.dictionary == nil else {
+            throw SettingsSaveFailure.validation
+        }
+        guard let before = submission.baseline.dictionary, let after = submission.document.dictionary else { return nil }
+        let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
+        let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
+        let stored = Dictionary(uniqueKeysWithValues: current.dictionary.map { ($0.id, $0) })
+        for row in before where changed[row.id] != row {
+            guard stored[row.id] == row else { throw SettingsSaveFailure.conflict }
+            if let edited = changed[row.id] {
+                try updateDictionaryEntry(edited.entry, in: session)
+            } else {
+                try deleteDictionaryEntry(id: row.id, in: session)
+            }
+        }
+        for row in after where old[row.id] == nil {
+            guard row.id <= 0 else { throw SettingsSaveFailure.conflict }
+            _ = try insertDictionaryEntry(row.entry, in: session)
+        }
+        return try readDictionaryEntries(enabledOnly: false, session).map(SettingsDictionaryRow.init)
+    }
+
+    private static func saveSessionSnippets(
+        _ submission: SettingsSubmission, current: SettingsStorageRead, _ session: SQLiteSession
+    ) throws -> [SettingsSnippetRow]? {
+        guard submission.baseline.snippets != nil || submission.document.snippets == nil else {
+            throw SettingsSaveFailure.validation
+        }
+        guard let before = submission.baseline.snippets, let after = submission.document.snippets else { return nil }
+        let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
+        let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
+        let stored = Dictionary(uniqueKeysWithValues: current.snippets.map { ($0.id, $0) })
+        for row in before where changed[row.id] != row {
+            guard stored[row.id] == row else { throw SettingsSaveFailure.conflict }
+            if let edited = changed[row.id] {
+                try runUpdate(
+                    "UPDATE snippets SET phrase = ?1, template = ?2, enabled = ?3 WHERE id = ?4;",
+                    in: session
+                ) { statement in
+                    try statement.bind(edited.phrase, at: 1)
+                    try statement.bind(edited.template, at: 2)
+                    try statement.bind(edited.enabled, at: 3)
+                    try statement.bind(edited.id, at: 4)
+                }
+            } else {
+                try deleteSnippet(id: row.id, in: session)
+            }
+        }
+        for row in after where old[row.id] == nil {
+            guard row.id <= 0 else { throw SettingsSaveFailure.conflict }
+            _ = try insertSnippet(row.snippet, in: session)
+        }
+        return try readSnippets(enabledOnly: false, session).map(SettingsSnippetRow.init)
+    }
+
+    private static func saveSessionProfiles(
+        _ submission: SettingsSubmission, current: SettingsStorageRead, _ session: SQLiteSession
+    ) throws -> [SettingsProfileRow]? {
+        guard submission.baseline.profiles != nil || submission.document.profiles == nil else {
+            throw SettingsSaveFailure.validation
+        }
+        guard let before = submission.baseline.profiles, let after = submission.document.profiles else { return nil }
+        let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
+        let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
+        let stored = Dictionary(uniqueKeysWithValues: current.profiles.map { ($0.id, $0) })
+        for row in before where changed[row.id] != row {
+            guard stored[row.id] == row else { throw SettingsSaveFailure.conflict }
+            if let edited = changed[row.id] {
+                try runUpdate(
+                    """
+                    UPDATE app_profiles SET name = ?1, bundle_identifiers = ?2, process_names = ?3,
+                    writing_style_prompt = ?4, newline_handling = ?5 WHERE id = ?6;
+                    """,
+                    in: session
+                ) { statement in
+                    try statement.bind(edited.name, at: 1)
+                    try statement.bind(edited.bundleIdentifiers.joined(separator: ","), at: 2)
+                    try statement.bind(edited.processNames.joined(separator: ","), at: 3)
+                    try statement.bind(edited.writingStyle, at: 4)
+                    try statement.bind(edited.newlineMode, at: 5)
+                    try statement.bind(edited.id, at: 6)
+                }
+            } else {
+                try deleteAppProfile(id: row.id, in: session)
+            }
+        }
+        var order: [Int64] = []
+        for row in after {
+            if old[row.id] == nil {
+                guard row.id <= 0 else { throw SettingsSaveFailure.conflict }
+                order.append(try insertAppProfile(row.profile, in: session))
+            } else {
+                order.append(row.id)
+            }
+        }
+        let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+        return try readAppProfiles(session).map(SettingsProfileRow.init).sorted {
+            let left = positions[$0.id] ?? Int.max
+            let right = positions[$1.id] ?? Int.max
+            return left == right ? $0.id < $1.id : left < right
+        }
+    }
+
     // MARK: - Housekeeping (StorageMaintenance)
 
     /// Whether a foreground caller is waiting for the connection right now.

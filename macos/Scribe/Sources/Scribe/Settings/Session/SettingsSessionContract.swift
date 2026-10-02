@@ -52,6 +52,26 @@ enum SettingsValue: Codable, Equatable, Sendable {
         if case .string(let value) = self { return value }
         return nil
     }
+
+    func legacyBool(default fallback: Bool = false, strict: Bool = false) -> Bool {
+        switch self {
+        case .bool(let value): return value
+        case .integer(let value):
+            if strict { return (NSNumber(value: value) as? Bool) ?? fallback }
+            return value != 0
+        case .string(let value): return strict ? fallback : (value as NSString).boolValue
+        default: return fallback
+        }
+    }
+
+    var legacyInteger: Int {
+        switch self {
+        case .integer(let value): return value
+        case .bool(let value): return value ? 1 : 0
+        case .string(let value): return (value as NSString).integerValue
+        default: return 0
+        }
+    }
 }
 
 /// Missing keys stay missing, preserving the legacy stores' property defaults and downgrade behavior.
@@ -64,17 +84,22 @@ struct SettingsPreferences: Codable, Equatable, Sendable {
     }
 
     var aiCleanupEnabled: Bool {
-        get { values["ScribeAiCleanupEnabled"]?.bool ?? false }
+        get { values["ScribeAiCleanupEnabled"]?.legacyBool() ?? false }
         set { values["ScribeAiCleanupEnabled"] = .bool(newValue) }
     }
 
     var shortcutKeyCode: Int {
-        get { values["ScribePushToTalkKeyCode"]?.integer ?? Int(HotkeySettingsStore.defaultKeyCode) }
+        get {
+            guard let value = values["ScribePushToTalkKeyCode"]?.integer, value >= 0, value <= Int(UInt16.max) else {
+                return Int(HotkeySettingsStore.defaultKeyCode)
+            }
+            return value
+        }
         set { values["ScribePushToTalkKeyCode"] = .integer(newValue) }
     }
 
     var addSpaceAfterDictation: Bool {
-        get { values["ScribeAddSpaceAfterDictation"]?.bool ?? true }
+        get { values["ScribeAddSpaceAfterDictation"]?.legacyBool(default: true, strict: true) ?? true }
         set { values["ScribeAddSpaceAfterDictation"] = .bool(newValue) }
     }
 
@@ -140,14 +165,15 @@ struct SettingsProfileRow: Codable, Equatable, Sendable {
     }
 
     var profile: AppProfile {
-        AppProfile(
+        let mode = newlineMode.flatMap(NewlineInjectionMode.init(rawValue:))
+        return AppProfile(
             id: id, name: name, bundleIdentifiers: bundleIdentifiers, processNames: processNames,
-            writingStylePrompt: writingStyle, newlineHandling: newlineMode.flatMap(NewlineInjectionMode.init(rawValue:)))
+            writingStylePrompt: writingStyle, newlineHandling: mode)
     }
 }
 
 /// Nil collections are not loaded, not empty. Word-pack content belongs to its workspace and commit attachment.
-struct SettingsDocument: Equatable, Sendable {
+struct SettingsDocument: Codable, Equatable, Sendable {
     var preferences = SettingsPreferences()
     var historyRetentionValue: String?
     var dictionary: [SettingsDictionaryRow]?
@@ -168,7 +194,7 @@ struct SettingsExternalIntent: Equatable, Sendable {
 }
 
 /// Expected values are checked and all values written inside the same transaction as the settings document.
-struct SettingsCommitAttachment: Equatable, Sendable {
+struct SettingsCommitAttachment: Codable, Equatable, Sendable {
     var expectedValues: [String: String?] = [:]
     var values: [String: String?] = [:]
 }
@@ -180,12 +206,14 @@ struct SettingsSubmission: Sendable {
     var document: SettingsDocument
     let intents: [SettingsExternalSetting: SettingsExternalIntent]
     var attachment = SettingsCommitAttachment()
+    var credentials: [SettingsCredentialID: SettingsCredentialEdit] = [:]
 }
 
-struct SettingsCommitReceipt: Equatable, Sendable {
+struct SettingsCommitReceipt: Codable, Equatable, Sendable {
     let id: UUID
     let revision: UInt64
     let document: SettingsDocument
+    var attachment = SettingsCommitAttachment()
 }
 
 enum SettingsApplicationOutcome: Equatable, Sendable {
