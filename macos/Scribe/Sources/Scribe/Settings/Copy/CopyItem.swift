@@ -128,7 +128,8 @@ struct CopyItem: Equatable, Sendable {
         }
         flushLiteral()
         return result
-    }}
+    }
+}
 
 /// A page's (or surface's) strings. The items are the stored `CopyItem` properties, so a catalog cannot list a
 /// string the manifest does not see, and the manifest cannot hold one a catalog does not have.
