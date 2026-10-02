@@ -4,9 +4,10 @@ A native Swift menu bar port of [Scribe](../README.md), Windows' offline push-to
 app. Built with Swift Package Manager and bundled into a minimal, locally self-signed `.app` by a shell
 script. Feature parity with the Windows app is close (see `PORTING-PLAN.md` for the parity table, the
 row-by-row checklist and known gaps). The current code passes CI's builds, unit and scenario tests and
-sanitizer runs on macOS 15 and 26, but it has not yet been run on a real Mac: permissions, the
-microphone, the push-to-talk key, insertion into real apps and the overlay still need that check (see
-Tests below).
+sanitizer runs on macOS 15 and 26, with native Intel build/test/package coverage too. Right Option recording
+and direct keyboard insertion have been exercised on an Apple Silicon Mac, including Teams. This is not a
+complete interactive acceptance pass: full-screen presentation, alternative speech models and the remaining
+permission/device combinations still need checks (see Tests below).
 
 ## Requirements
 
@@ -39,8 +40,8 @@ certificate, rebuild and re-grant the permissions once for the new certificate.
 
 ## Releasing
 
-Scribe for macOS ships as a notarized direct download through GitHub Releases, not through the Mac App Store, because
-App Sandbox blocks the cross-app Accessibility text injection Scribe needs.
+The release pipeline targets a notarized direct download through GitHub Releases, not the Mac App Store.
+Developer ID signing and notarization still need an end-to-end credentialed release verification.
 
 One-time setup:
 
@@ -93,6 +94,8 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
 - Menu bar app shell (`NSStatusItem`, background-only via `LSUIElement`) with tray items for test
   dictation, Settings, AI Cleanup/Pause toggles, Recent Dictations, Quick Add to Dictionary,
   Welcome, and Quit
+- A Microphone submenu refreshes available devices when opened, preserves an unavailable saved choice and links to
+  Sound settings.
 - Global push-to-talk hotkey, real audio capture, and text injection into the app that had focus when the
   recording started. Scribe types Unicode keyboard events directly, matching Windows' default, without
   changing your clipboard or writing the editor's Accessibility text attributes. Accessibility permission
@@ -118,7 +121,11 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   it
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2`, an English model (`TranscriptionEngine.swift`).
   The recognizer runs off the main thread with a deadline and can be cancelled, and the recording it
-  reads is a private temporary file that is deleted as soon as it returns
+  reads is a private temporary file that is deleted as soon as it returns. Long Foundry recordings decode sequentially
+  in chunks of at most 30 seconds, with jointly planned quiet seams. Advanced discovers the installed speech-model
+  catalog and offers model selection and explicit downloads; cancellation or quit stops and reaps a download.
+- AI cleanup supports staged editing of the global writing style and local/detailed guardrails with restore-default
+  actions. Microsoft Foundry also accepts a Keychain-backed resource API key, which takes precedence over Entra sign-in.
 - Capture that belongs to one recording at a time: every input channel is mixed in, so a microphone on
   any input of an interface is heard; a device change ends the recording and keeps what it captured;
   Right Option (the default key) is held while you talk and never stops on silence. Caps Lock is still available as
