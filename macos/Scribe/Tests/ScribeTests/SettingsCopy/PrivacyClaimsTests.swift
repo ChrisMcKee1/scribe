@@ -213,7 +213,8 @@ final class PrivacyClaimsTests: XCTestCase {
     /// A setting can stop future sends; it cannot take back what an earlier request already carried. The text may say
     /// what is withheld from now on, but never that nothing was sent or that sent data is removed.
     func testNoTextPromisesToUnsendOrSaysNothingWasSent() throws {
-        let pattern = #"(?i)\bnothing (was|has been|had been) sent\b|\b(unsend|take back|retract|recall)\b|"#
+        let pattern =
+            #"(?i)\bnothing (was|has been|had been) sent\b|\b(unsend|take back|retract|recall)\b|"#
             + #"\bremoves? what (was|has been) sent\b"#
         let regex = try NSRegularExpression(pattern: pattern)
         for item in SettingsCopy.allItems {
