@@ -46,6 +46,7 @@ struct CleanupSettingsValues: Equatable, Sendable {
     var writingStyle = ""
     var frontierPrompt = ""
     var localPrompt = ""
+    var localModelIdleMinutes = LocalModelDefaults.keepAliveMinutes
 }
 
 /// The full unsaved configuration tested by the button. Secret values stay in memory only and are redacted if the
@@ -125,9 +126,13 @@ extension CleanupSettingsAccess {
                     azureApiKeySelected: store.azureApiKeySelected,
                     writingStyle: store.writingStyle,
                     frontierPrompt: store.frontierPrompt,
-                    localPrompt: store.localPrompt)
+                    localPrompt: store.localPrompt,
+                    localModelIdleMinutes: store.localModelIdleMinutes)
             },
             save: { new, old in
+                if new.localModelIdleMinutes != old.localModelIdleMinutes {
+                    store.localModelIdleMinutes = new.localModelIdleMinutes
+                }
                 if new.isEnabled != old.isEnabled { store.isEnabled = new.isEnabled }
                 if new.providerKind != old.providerKind { store.providerKind = new.providerKind }
                 if new.foundryLocalModelAlias != old.foundryLocalModelAlias {
@@ -236,6 +241,7 @@ final class CleanupSettingsModel: ObservableObject {
         self.drafts = drafts
         self.operations = operations
         values = access.load()
+        drafts.loadCleanupIdleTime(values.localModelIdleMinutes)
         drafts.loadCleanupPrompts(
             writingStyle: values.writingStyle, frontierPrompt: values.frontierPrompt, localPrompt: values.localPrompt)
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
@@ -558,6 +564,7 @@ final class CleanupSettingsModel: ObservableObject {
         guard stored != values else { return }
         isReloading = true
         values = stored
+        drafts.loadCleanupIdleTime(stored.localModelIdleMinutes)
         isReloading = false
         drafts.loadCleanupPrompts(
             writingStyle: stored.writingStyle, frontierPrompt: stored.frontierPrompt, localPrompt: stored.localPrompt)
@@ -659,6 +666,12 @@ final class CleanupSettingsModel: ObservableObject {
         }
     }
 
+    private var candidateSettings: CleanupSettingsValues {
+        var settings = values
+        settings.localModelIdleMinutes = drafts.cleanupIdleMinutes
+        return settings
+    }
+
     /// Runs Test Connection through the provider the pipeline would use, environment overrides included. A result that
     /// arrives after the settings or a stored credential changed is dropped rather than shown against them.
     /// `cancelConnectionTest()` stops it while it runs, and so does Quit (`AuxiliaryOperations`).
@@ -666,7 +679,7 @@ final class CleanupSettingsModel: ObservableObject {
         guard !isDisabled(.connectionTest) else { return }
         let started = revision
         let candidate = CleanupConnectionCandidate(
-            settings: values,
+            settings: candidateSettings,
             openAIApiKey: drafts.openAIApiKey.isEmpty ? nil : drafts.openAIApiKey,
             azureClientSecret: drafts.azureClientSecret.isEmpty ? nil : drafts.azureClientSecret,
             azureApiKey: drafts.azureApiKey.isEmpty ? nil : drafts.azureApiKey,
@@ -708,7 +721,7 @@ final class CleanupSettingsModel: ObservableObject {
             started == revision
             && candidate
                 == CleanupConnectionCandidate(
-                    settings: values,
+                    settings: candidateSettings,
                     openAIApiKey: drafts.openAIApiKey.isEmpty ? nil : drafts.openAIApiKey,
                     azureClientSecret: drafts.azureClientSecret.isEmpty ? nil : drafts.azureClientSecret,
                     azureApiKey: drafts.azureApiKey.isEmpty ? nil : drafts.azureApiKey,

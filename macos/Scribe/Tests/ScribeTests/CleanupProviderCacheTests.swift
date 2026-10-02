@@ -5,6 +5,20 @@ import os
 @testable import Scribe
 
 final class CleanupProviderCacheTests: XCTestCase {
+    func testChangingIdleTimeRebuildsTheRetentionSentByTheProvider() async throws {
+        let rig = try makeRig()
+        rig.store.providerKind = .ollama
+        let request = CleanupRequest(transcript: "sample")
+        _ = try await rig.cache.provider().clean(request)
+        XCTAssertEqual(rig.requests.all.last?.jsonBody["keep_alive"] as? String, "10m")
+        rig.store.localModelIdleMinutes = 30
+        _ = try await rig.cache.provider().clean(request)
+        XCTAssertEqual(rig.requests.all.last?.jsonBody["keep_alive"] as? String, "30m")
+        rig.store.localModelIdleMinutes = 0
+        _ = try await rig.cache.provider().clean(request)
+        XCTAssertNil(rig.requests.all.last?.jsonBody["keep_alive"])
+    }
+
     func testOneOffAdmissionRefusesAConfigurationThatChangedBack() async throws {
         let rig = try makeRig()
         configureOpenAICompatible(rig.store)

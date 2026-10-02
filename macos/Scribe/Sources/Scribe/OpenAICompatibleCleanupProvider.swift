@@ -35,7 +35,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         localServerApp: LocalServerApp = .none,
         keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
         localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
-        lifecycle: LocalModelLifecycle = .shared,
+        lifecycle: LocalModelLifecycle? = nil,
         localTuning: @escaping @Sendable () -> LocalModelTuning = { .none },
         loadLocalContext:
             @escaping @Sendable (
@@ -66,7 +66,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.localServerApp = localServerApp
         self.keepAliveMinutes = keepAliveMinutes
         self.localModelLane = localModelLane
-        self.lifecycle = lifecycle
+        self.lifecycle = lifecycle ?? LocalModelLifecycle(idle: .zero, actions: .connected(to: session))
         self.localTuning = localTuning
         self.localServerEndpoint = self.serviceURL.absoluteString
         self.loadLocalContext = loadLocalContext

@@ -71,13 +71,18 @@ final class LocalModelLifecycle: Sendable {
         var unloadModel: @Sendable (_ endpoint: String, _ model: String, _ apiKey: String?) async -> Bool
         var unloadInstance: @Sendable (_ endpoint: String, _ instanceID: String, _ apiKey: String?) async -> Bool
 
-        static let live = Actions(
-            unloadModel: { endpoint, model, apiKey in
-                await LocalServerClient().unload(endpoint, modelID: model, apiKey: apiKey)
-            },
-            unloadInstance: { endpoint, instanceID, apiKey in
-                await LocalServerClient().unloadInstance(endpoint, instanceID: instanceID, apiKey: apiKey)
-            })
+        static let live = connected(to: .shared)
+
+        static func connected(to session: URLSession) -> Actions {
+            Actions(
+                unloadModel: { endpoint, model, apiKey in
+                    await LocalServerClient(session: session).unload(endpoint, modelID: model, apiKey: apiKey)
+                },
+                unloadInstance: { endpoint, instanceID, apiKey in
+                    await LocalServerClient(session: session).unloadInstance(
+                        endpoint, instanceID: instanceID, apiKey: apiKey)
+                })
+        }
     }
 
     /// A copy LM Studio loaded for Scribe at a chosen size.
@@ -127,12 +132,15 @@ final class LocalModelLifecycle: Sendable {
         var idleTask: Task<Void, Never>?
         var idleGeneration: UInt64 = 0
         var idle: Duration = .zero
+        var isPaused = false
+        var idleSince: ContinuousClock.Instant?
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let bounds: Bounds
     private let actions: Actions
     private let sleeper: @Sendable (Duration) async throws -> Void
+    private let now: @Sendable () -> ContinuousClock.Instant
     private let releaseLane = AsyncLane()
     private let loadLane = AsyncLane()
 
@@ -140,17 +148,27 @@ final class LocalModelLifecycle: Sendable {
         idle: Duration,
         bounds: Bounds = Bounds(),
         actions: Actions = .live,
-        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         state.withLock { $0.idle = idle }
         self.bounds = bounds
         self.actions = actions
         self.sleeper = sleeper
+        self.now = now
     }
 
     var useCount: Int { state.withLock { $0.uses } }
     var ownedCopies: [Copy] { state.withLock { $0.copies } }
     var servedTarget: LocalModelTarget? { state.withLock { $0.served } }
+
+    func notePause(_ paused: Bool) {
+        state.withLock {
+            guard $0.isPaused != paused else { return }
+            $0.isPaused = paused
+            $0.revision &+= 1
+        }
+    }
 
     // MARK: Uses
 
@@ -175,6 +193,7 @@ final class LocalModelLifecycle: Sendable {
             state.uses += 1
             state.revision &+= 1
             state.served = target
+            state.idleSince = nil
             state.idleTask?.cancel()
             state.idleTask = nil
             state.idleGeneration &+= 1
@@ -193,6 +212,7 @@ final class LocalModelLifecycle: Sendable {
         let gates = state.withLock { state -> [LifecycleGate] in
             state.uses -= 1
             guard state.uses == 0 else { return [] }
+            state.idleSince = now()
             let gates = state.drainGates
             state.drainGates = []
             return gates
@@ -204,7 +224,7 @@ final class LocalModelLifecycle: Sendable {
     // MARK: Idle
 
     /// Changes the idle time the next countdown uses; zero never frees on idle. A countdown already running is
-    /// restarted from now, so a shorter time is not postponed by the one it replaces.
+    /// recalculated from the end of the last use, so changing the time never postpones a release already owed.
     func setIdle(_ idle: Duration) {
         let changed = state.withLock { state -> Bool in
             guard state.idle != idle else { return false }
@@ -221,15 +241,24 @@ final class LocalModelLifecycle: Sendable {
         let sleeper = self.sleeper
         state.withLock { state in
             let idle = state.idle
-            guard state.uses == 0, !state.copies.isEmpty, idle > .zero else { return }
+            guard state.uses == 0 else { return }
+            let paused = state.isPaused
+            guard paused || (!state.copies.isEmpty && idle > .zero) else { return }
+            let elapsed = state.idleSince.map { $0.duration(to: now()) } ?? .zero
+            let remaining = max(.zero, idle - elapsed)
             state.idleTask?.cancel()
             state.idleGeneration &+= 1
             let generation = state.idleGeneration
             let revision = state.revision
+            let target = state.served
             state.idleTask = Task { [weak self] in
-                do { try await sleeper(idle) } catch { return }
+                if !paused {
+                    do { try await sleeper(remaining) } catch { return }
+                }
                 guard let self, !Task.isCancelled else { return }
-                _ = await self.release(.idle, target: nil, decidedAt: revision, generation: generation)
+                _ = await self.release(
+                    paused ? .pause : .idle, target: paused ? target : nil,
+                    decidedAt: revision, generation: generation)
             }
         }
     }
@@ -317,6 +346,7 @@ final class LocalModelLifecycle: Sendable {
             }
             let decision = state.withLock { state -> Decision in
                 guard state.uses == 0 else { return .retry }
+                if reason == .pause, !state.isPaused { return .stop(.notWanted) }
                 let decidedByRevision = reason == .idle || reason == .pause
                 if decidedByRevision, state.revision != revision { return .stop(.notWanted) }
                 if let generation, state.idleGeneration != generation { return .stop(.notWanted) }
@@ -428,11 +458,21 @@ final class LocalModelLifecycle: Sendable {
             forgetUnlisted(endpoint: target.endpoint, model: target.model, listed: listed)
         }
         let held = observed.reach == .reached ? observed.loaded(for: target.model) : nil
+        if let held, held.contextTokens == contextTokens {
+            state.withLock { _ = $0.refused.remove(refusedKey) }
+            return
+        }
+        if let held, held.remainingTTLSeconds == nil { return }
+        let change = state.withLock { state -> LifecycleGate? in
+            guard state.uses == 1, state.inFlightUnload == nil else { return nil }
+            let gate = LifecycleGate()
+            state.inFlightUnload = gate
+            return gate
+        }
+        guard let change else { return }
+        var transferred = false
+        defer { if !transferred { finishChange(change) } }
         if let held {
-            if held.contextTokens == contextTokens {
-                state.withLock { _ = $0.refused.remove(refusedKey) }
-                return
-            }
             // Loaded by hand, or by something that is not Scribe: used as it is.
             guard held.remainingTTLSeconds != nil else { return }
             guard lease.isSoleUse else { return }
@@ -458,8 +498,12 @@ final class LocalModelLifecycle: Sendable {
 
         let settleLease = lease.extend()
         let done = LifecycleGate()
+        transferred = true
         let settle = Task { [self] in
-            defer { settleLease.end() }
+            defer {
+                finishChange(change)
+                settleLease.end()
+            }
             do {
                 try await loadLane.run {
                     let instance = await load(target.endpoint, target.model, contextTokens)
@@ -473,6 +517,13 @@ final class LocalModelLifecycle: Sendable {
         _ = settle
         // A cancelled caller returns here at once; the load keeps its lease and records its copy when it lands.
         try? await done.wait()
+    }
+
+    private func finishChange(_ gate: LifecycleGate) {
+        state.withLock {
+            if $0.inFlightUnload === gate { $0.inFlightUnload = nil }
+        }
+        gate.open()
     }
 
     private func recordLoad(target: LocalModelTarget, contextTokens: Int, instance: String?) {
@@ -506,11 +557,16 @@ final class LifecycleGate: Sendable {
     private struct State {
         var isOpen = false
         var next: UInt64 = 0
+        var registering: Set<UInt64> = []
         var waiters: [UInt64: CheckedContinuation<Void, Error>] = [:]
         var cancelledEarly: Set<UInt64> = []
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+
+    var waiterCountForTests: Int {
+        state.withLock { $0.registering.count + $0.waiters.count + $0.cancelledEarly.count }
+    }
 
     func open() {
         let waiters = state.withLock { state -> [CheckedContinuation<Void, Error>] in
@@ -525,13 +581,15 @@ final class LifecycleGate: Sendable {
     func wait() async throws {
         let id = state.withLock { state -> UInt64 in
             state.next += 1
+            state.registering.insert(state.next)
             return state.next
         }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let action = state.withLock { state -> Int in
-                    if state.isOpen { return 0 }
+                    state.registering.remove(id)
                     if state.cancelledEarly.remove(id) != nil { return 1 }
+                    if state.isOpen { return 0 }
                     state.waiters[id] = continuation
                     return 2
                 }
@@ -544,6 +602,7 @@ final class LifecycleGate: Sendable {
         } onCancel: {
             let waiter = state.withLock { state -> CheckedContinuation<Void, Error>? in
                 if let waiter = state.waiters.removeValue(forKey: id) { return waiter }
+                guard state.registering.contains(id) else { return nil }
                 state.cancelledEarly.insert(id)
                 return nil
             }

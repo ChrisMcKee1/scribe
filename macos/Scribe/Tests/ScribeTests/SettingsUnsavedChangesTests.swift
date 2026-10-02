@@ -5,6 +5,27 @@ import XCTest
 
 @MainActor
 final class SettingsUnsavedChangesTests: XCTestCase {
+    func testLocalModelIdleTimeIsStagedAndSavedOnlyBySave() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let cleanup = makeCleanupStore().store
+        let drafts = SettingsDrafts()
+        drafts.loadCleanupIdleTime(cleanup.localModelIdleMinutes)
+        drafts.configureSave(
+            store: fixture.store, libraries: fixture.libraries, cleanupSettings: cleanup, onChanged: {})
+        drafts.cleanupIdleMinutes = 30
+        XCTAssertEqual(cleanup.localModelIdleMinutes, 10)
+        XCTAssertEqual(drafts.unsavedSections, ["AI cleanup"])
+        drafts.discard()
+        XCTAssertEqual(drafts.cleanupIdleMinutes, 10)
+        XCTAssertEqual(cleanup.localModelIdleMinutes, 10)
+        drafts.cleanupIdleMinutes = 0
+        let saved = await drafts.save()
+        XCTAssertTrue(saved, drafts.footerMessage ?? "")
+        XCTAssertEqual(cleanup.localModelIdleMinutes, 0)
+        XCTAssertFalse(drafts.hasUnsavedChanges)
+    }
+
     func testIndicatorDraftSaveDiscardAndFailedValidation() async throws {
         let fixture = try SettingsGapStorageFixture()
         defer { fixture.remove() }

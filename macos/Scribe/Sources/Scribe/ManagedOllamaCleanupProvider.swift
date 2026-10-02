@@ -22,6 +22,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     private let keepAliveMinutes: Int
     private let localModelLane: AsyncLane
     private let lifecycle: LocalModelLifecycle
+    private let lifecycleEndpoint: String
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let readLocalServer: @Sendable (String) async -> LocalServerState
@@ -31,7 +32,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
         baseURL: URL = ManagedOllamaCleanupProvider.defaultBaseURL,
         keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
         localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
-        lifecycle: LocalModelLifecycle = .shared,
+        lifecycle: LocalModelLifecycle? = nil,
         timeout: TimeInterval = 30,
         readLocalServer: @escaping @Sendable (String) async -> LocalServerState = { endpoint in
             await LocalServerClient().read(endpoint)
@@ -44,7 +45,8 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
             ?? baseURL.appendingPathComponent("v1/chat/completions")
         self.keepAliveMinutes = keepAliveMinutes
         self.localModelLane = localModelLane
-        self.lifecycle = lifecycle
+        self.lifecycle = lifecycle ?? LocalModelLifecycle(idle: .zero, actions: .connected(to: session))
+        self.lifecycleEndpoint = baseURL.absoluteString
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
         self.readLocalServer = readLocalServer
@@ -54,7 +56,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
         do {
             return try await lifecycle.beginUse(
                 LocalModelTarget(
-                    endpoint: Self.defaultBaseURL.absoluteString, model: model, app: .ollama, apiKey: nil))
+                    endpoint: lifecycleEndpoint, model: model, app: .ollama, apiKey: nil))
         } catch is LocalModelLifecycleError {
             throw CleanupProviderError.timedOut
         }

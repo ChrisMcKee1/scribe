@@ -387,6 +387,7 @@ final class DictationController {
     func setPaused(_ paused: Bool) {
         guard paused != isPaused else { return }
         isPaused = paused
+        services.cleanup.notePause(paused)
         if paused {
             ScribeLog.info(.dictation, "Dictation paused")
         } else {

@@ -195,9 +195,18 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   context size; only a missing or differently sized model gets a fixed local readying request. It contains no dictated
   text or vocabulary, has a bounded wait, and a failure leaves dictation text intact while cleanup is skipped. Cleanup
   failure notifications use plain language and are suppressed until cleanup recovers or its configuration changes.
-- `LocalModelLifecycle` frees a local model on pause, shutdown, cleanup off, a provider or model change and Free memory.
+- `LocalModelLifecycle` coordinates Ollama and LM Studio releases on pause, cleanup off, a provider or model change and
+  Free memory, and retires Scribe-loaded LM Studio copies at shutdown.
   Every release waits for readiness, cleanup and Test connection uses in flight (bounded, cancellable), LM Studio copies
-  Scribe loaded are tracked and retired by instance id, and a failed unload stays owed. The idle time is stored (`localModelIdleMinutes`, 10 by default, 0 means never) and reaches the next countdown without a restart; Settings has no field for it yet. Test connection waits 180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
+  Scribe loaded are tracked and retired by instance id, and a failed unload stays owed. AI cleanup stages the idle time
+  for Ollama and LM Studio (10 minutes by default, Never supported); Save applies it, Cancel discards it. A shorter
+  countdown uses the end of the last use, not the time the setting changed. New requests wait for a model resize or
+  unload already in progress. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
+  180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
+- Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and
+  suggestion instructions. It never reads saved history or sends expanded snippets/templates. Consent is tied to the
+  saved cleanup configuration's revision: changing away and back still requires consent again. Every request/retry
+  shares the settings/send admission boundary, and a stale reply is discarded. Only reviewed, selected words are added.
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, and an opt-in AI summary that sends only your
   totals and the recurring terms that are dictionary spellings: never a word mined from your dictations,

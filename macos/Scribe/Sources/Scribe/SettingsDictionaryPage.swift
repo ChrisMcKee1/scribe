@@ -24,7 +24,7 @@ struct SettingsDictionaryPage: View {
         drafts: SettingsDrafts,
         requestedTab: DictionaryTab? = nil,
         pipelineReportStore: PipelineReportStore,
-        aiSuggestionService: AIDictionarySuggestionService? = nil
+        aiSuggestionService: AIDictionarySuggestionService? = .live
     ) {
         self.persistenceStore = persistenceStore
         self.dictionaryLibraryService = dictionaryLibraryService

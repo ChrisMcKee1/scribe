@@ -4,8 +4,13 @@ import XCTest
 
 @MainActor
 private final class AIDictionarySuggestionBacking {
-    var recipient = CleanupConnection(target: .foundryLocal(modelAlias: "local-model"), source: .settings)
-    var cleanupEnabled = true
+    var recipient = CleanupConnection(target: .foundryLocal(modelAlias: "local-model"), source: .settings) {
+        didSet { revision &+= 1 }
+    }
+    var cleanupEnabled = true {
+        didSet { revision &+= 1 }
+    }
+    private var revision: UInt64 = 0
     private(set) var sent: [(prompt: String, sample: String, recipient: CleanupConnection)] = []
     private(set) var addedCount = 0
 
@@ -18,29 +23,31 @@ private final class AIDictionarySuggestionBacking {
     }
 
     var service: AIDictionarySuggestionService {
-        AIDictionarySuggestionService(
-            currentRecipient: { self.recipient },
-            isCleanupEnabled: { self.cleanupEnabled },
-            complete: { prompt, sample, recipient in
-                await self.record(prompt: prompt, sample: sample, recipient: recipient)
-                return #"""
-                    [
-                    {"spoken":"a p i","written":"API"},
-                    {"spoken":"post gres","written":"PostgreSQL"}
-                    ]
-                    """#
-            })
+        service(gate: nil)
     }
 
-    func service(gate: SettingsTestGate) -> AIDictionarySuggestionService {
-        AIDictionarySuggestionService(
-            currentRecipient: { self.recipient },
-            isCleanupEnabled: { self.cleanupEnabled },
-            complete: { prompt, sample, recipient in
-                await self.record(prompt: prompt, sample: sample, recipient: recipient)
-                await gate.pass()
-                return #"[{"spoken":"a p i","written":"API"}]"#
-            })
+    func service(gate: SettingsTestGate?) -> AIDictionarySuggestionService {
+        AIDictionarySuggestionService(admit: {
+            guard self.cleanupEnabled else { return nil }
+            let revision = self.revision
+            let recipient = self.recipient
+            return AIDictionarySuggestionAdmission(
+                recipient: recipient,
+                isCurrent: { self.cleanupEnabled && self.revision == revision },
+                complete: { prompt, sample in
+                    await self.record(prompt: prompt, sample: sample, recipient: recipient)
+                    if let gate {
+                        await gate.pass()
+                        return #"[{"spoken":"a p i","written":"API"}]"#
+                    }
+                    return #"""
+                        [
+                        {"spoken":"a p i","written":"API"},
+                        {"spoken":"post gres","written":"PostgreSQL"}
+                        ]
+                        """#
+                })
+        })
     }
 }
 
@@ -170,6 +177,74 @@ final class AIDictionarySuggestionsTests: XCTestCase {
         XCTAssertTrue(backing.sent.isEmpty)
         XCTAssertTrue(model.suggestions.isEmpty)
         XCTAssertNil(model.consent)
+    }
+
+    func testRecipientChangedBackStillWithdrawsConsent() {
+        let backing = AIDictionarySuggestionBacking()
+        let model = makeModel(backing: backing)
+        model.prepareConsent()
+        let original = backing.recipient
+        backing.recipient = CleanupConnection(target: .ollama(model: "other"), source: .settings)
+        backing.recipient = original
+        model.requestSuggestions()
+        XCTAssertTrue(backing.sent.isEmpty)
+        XCTAssertNil(model.consent)
+        XCTAssertNotNil(model.errorMessage)
+    }
+
+    func testLiveAdapterBindsConsentToTheSettingsRevision() async throws {
+        let fixture = makeCleanupStore()
+        fixture.store.isEnabled = true
+        fixture.store.providerKind = .openAICompatible
+        fixture.store.openAIBaseURL = "https://example.invalid/v1"
+        fixture.store.openAIModel = "test-model"
+        let requests = RequestLog()
+        let session = makeStubSession { request in
+            requests.record(request)
+            return StubReply.completion(request, #"[{"spoken":"a p i","written":"API"}]"#)
+        }
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:], factory: .testing(session: session))
+        let model = AIDictionarySuggestionModel(
+            reports: reportStore(), access: access(),
+            service: .backed(by: cache, operations: AuxiliaryOperations()),
+            center: NotificationCenter())
+        model.prepareConsent()
+        XCTAssertNotNil(model.consent)
+        fixture.store.openAIModel = "changed"
+        fixture.store.openAIModel = "test-model"
+        model.requestSuggestions()
+        await model.inFlight?.value
+        XCTAssertEqual(requests.count, 0)
+        XCTAssertTrue(model.suggestions.isEmpty)
+    }
+
+    func testLiveAdapterSendsOnlyTheRawSampleAndReturnsSuggestions() async throws {
+        let fixture = makeCleanupStore()
+        fixture.store.isEnabled = true
+        fixture.store.providerKind = .openAICompatible
+        fixture.store.openAIBaseURL = "https://example.invalid/v1"
+        fixture.store.openAIModel = "test-model"
+        let requests = RequestLog()
+        let session = makeStubSession { request in
+            requests.record(request)
+            return StubReply.completion(request, #"[{"spoken":"a p i","written":"API"}]"#)
+        }
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:], factory: .testing(session: session))
+        let model = AIDictionarySuggestionModel(
+            reports: reportStore(raw: "RAW-SAMPLE", final: "SNIPPET-TEMPLATE"),
+            access: access(), service: .backed(by: cache, operations: AuxiliaryOperations()),
+            center: NotificationCenter())
+        model.prepareConsent()
+        model.requestSuggestions()
+        await model.inFlight?.value
+        XCTAssertEqual(requests.count, 1)
+        let body = try XCTUnwrap(requests.all.first).bodyText
+        XCTAssertTrue(body.contains("RAW-SAMPLE"))
+        XCTAssertFalse(body.contains("SNIPPET-TEMPLATE"))
+        XCTAssertEqual(model.suggestions.map(\.pattern), ["a p i"])
+        XCTAssertTrue(model.isReviewPresented)
     }
 
     func testRecipientChangeWhileAwaitingDiscardsTheReply() async {

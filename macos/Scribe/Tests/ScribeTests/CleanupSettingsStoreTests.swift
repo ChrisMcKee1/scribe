@@ -6,6 +6,18 @@ import XCTest
 /// `CleanupSettingsStore` over a defaults suite and secret stores of each test's own: nothing here reads, replaces or
 /// deletes the developer's AI cleanup settings or Keychain items, and the suites can run in parallel worker processes.
 final class CleanupSettingsStoreTests: XCTestCase {
+    func testIdleTimeIsInTheSnapshotAndCannotOverflowTheRetentionField() {
+        let store = makeCleanupStore().store
+        store.localModelIdleMinutes = 30
+        XCTAssertEqual(store.snapshot().localModelIdleMinutes, 30)
+        store.localModelIdleMinutes = 0
+        XCTAssertEqual(store.snapshot().localModelIdleMinutes, 0)
+        store.localModelIdleMinutes = Int.max
+        XCTAssertEqual(store.localModelIdleMinutes, LocalModelDefaults.keepAliveMinutes)
+        store.localModelIdleMinutes = -1
+        XCTAssertEqual(store.localModelIdleMinutes, 0)
+    }
+
     func testDefaultsWhenNothingIsSaved() {
         let store = makeCleanupStore().store
 

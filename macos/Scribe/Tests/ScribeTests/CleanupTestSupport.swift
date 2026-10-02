@@ -706,7 +706,10 @@ extension CleanupProviderFactory {
                 await LocalServerClient(session: session).read(endpoint, apiKey: apiKey)
             },
             now: clock.now,
-            monotonicNow: clock.monotonicNow)
+            monotonicNow: clock.monotonicNow,
+            localModelLifecycle: LocalModelLifecycle(
+                idle: .zero,
+                actions: .init(unloadModel: { _, _, _ in true }, unloadInstance: { _, _, _ in true })))
     }
 }
 

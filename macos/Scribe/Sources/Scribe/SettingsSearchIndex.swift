@@ -126,12 +126,20 @@ enum SettingsSearchIndex {
             ["context", "context window", "context length", "num_ctx", "tokens", "memory"], "Ollama",
             [requiresAI, requiresLocal, requiresOllama]),
         entry(
+            "ai.local.ollama.idle", .aiCleanup, "ai.provider", "Free local model memory after",
+            ["idle", "release", "memory", "minutes", "never"], "Ollama",
+            [requiresAI, requiresLocal, requiresOllama]),
+        entry(
             "ai.local.ollama.vocabulary", .aiCleanup, "ai.provider", LocalModelTuningText.wholeVocabularyTitle,
             ["vocabulary", "dictionary", "word packs", "context"], "Ollama",
             [requiresAI, requiresLocal, requiresOllama]),
         entry(
             "ai.local.lmstudio.context", .aiCleanup, "ai.provider", LocalModelTuningText.contextSizeTitle,
             ["context", "context window", "context length", "tokens", "memory"], "LM Studio",
+            [requiresAI, requiresLocal, requiresLMStudio]),
+        entry(
+            "ai.local.lmstudio.idle", .aiCleanup, "ai.provider", "Free local model memory after",
+            ["idle", "release", "memory", "minutes", "never"], "LM Studio",
             [requiresAI, requiresLocal, requiresLMStudio]),
         entry(
             "ai.local.lmstudio.vocabulary", .aiCleanup, "ai.provider", LocalModelTuningText.wholeVocabularyTitle,

@@ -43,9 +43,9 @@ final class CleanupProviderCache: Sendable {
         },
         checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         readinessTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        lifecycle: LocalModelLifecycle = .shared
+        lifecycle: LocalModelLifecycle? = nil
     ) {
-        self.lifecycle = lifecycle
+        self.lifecycle = lifecycle ?? factory.localModelLifecycle
         self.store = store
         self.environment = environment
         self.factory = factory
@@ -65,8 +65,12 @@ final class CleanupProviderCache: Sendable {
     }
 
     struct OneOffAdmission: Sendable {
-        fileprivate let connection: CleanupConnection
+        let connection: CleanupConnection
         fileprivate let handoff: CleanupSendHandoff
+    }
+
+    func isCurrent(_ admission: OneOffAdmission) -> Bool {
+        (try? admission.handoff.perform { true }) == true
     }
 
     func admitOneOff() throws -> OneOffAdmission {
@@ -97,11 +101,18 @@ final class CleanupProviderCache: Sendable {
     /// `provider()` that begins after this returns can be handed anything from before it: a build still running
     /// across the call hands its provider to its own caller once and keeps nothing (`CleanupProviderCacheState`).
     func invalidate() {
+        let served = lifecycle.servedTarget
         state.withLock { $0.invalidate() }
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
         // A configuration that no longer uses the model it served frees it, once its uses have ended. A, B, A is not
         // a change: `wanted` is asked again when the release commits.
-        Task.detached { [self] in await releaseLocalModel(.configurationChanged) }
+        Task.detached { [self] in
+            guard let served else { return }
+            _ = await lifecycle.release(
+                .configurationChanged, target: served,
+                wanted: { self.currentLocalTarget() != served })
+        }
+        applyIdleTime()
     }
 
     /// Hands the lifecycle the idle time stored now, so a change reaches the next countdown without a restart.
@@ -392,6 +403,7 @@ final class CleanupProviderCache: Sendable {
                     store: store,
                     environment: [:],
                     factory: factory,
+                    lifecycle: lifecycle,
                     openAIApiKeyOverride: candidate.openAIApiKey,
                     azureClientSecretOverride: candidate.azureClientSecret,
                     azureApiKeyOverride: candidate.azureApiKey
@@ -522,7 +534,7 @@ final class CleanupProviderCache: Sendable {
 
         var made: CleanupProviderCacheState.HeldCredential?
         let provider = try CleanupProviderResolver.makeProvider(
-            for: connection, store: store, environment: environment, factory: factory
+            for: connection, store: store, environment: environment, factory: factory, lifecycle: lifecycle
         ) { identity, make in
             if let held = snapshot.credential, held.identity == identity {
                 return held.credential

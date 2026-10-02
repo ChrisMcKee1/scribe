@@ -61,10 +61,12 @@ protocol DictationCleaning {
     /// Frees the local model for `reason` once no use is in flight (pause, shutdown). Never throws; a model another
     /// app holds is left alone unless the reason frees it explicitly.
     func releaseLocalModel(_ reason: LocalModelReleaseReason) async
+    func notePause(_ paused: Bool)
 }
 
 extension DictationCleaning {
     func releaseLocalModel(_ reason: LocalModelReleaseReason) async {}
+    func notePause(_ paused: Bool) {}
 
     func prepareLocalModel(
         isCurrent: @escaping @MainActor @Sendable () async -> Bool,
@@ -251,6 +253,10 @@ struct LiveDictationCleanup: DictationCleaning {
 
     func releaseLocalModel(_ reason: LocalModelReleaseReason) async {
         await cache.releaseLocalModel(reason)
+    }
+
+    func notePause(_ paused: Bool) {
+        cache.lifecycle.notePause(paused)
     }
 }
 

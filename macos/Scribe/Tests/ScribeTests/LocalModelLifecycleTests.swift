@@ -7,16 +7,27 @@ import XCTest
 private final class ManualClock: @unchecked Sendable {
     private let lock = NSLock()
     private var gates: [LifecycleGate] = []
+    private var requested: [Duration] = []
+    private var instant = ContinuousClock.now
 
     var sleeper: @Sendable (Duration) async throws -> Void {
-        { [self] _ in
+        { [self] duration in
             let gate = LifecycleGate()
-            lock.withLock { gates.append(gate) }
+            lock.withLock {
+                gates.append(gate)
+                requested.append(duration)
+            }
             try await gate.wait()
         }
     }
 
     var pending: Int { lock.withLock { gates.count } }
+    var durations: [Duration] { lock.withLock { requested } }
+    var now: @Sendable () -> ContinuousClock.Instant { { self.lock.withLock { self.instant } } }
+
+    func advance(_ duration: Duration) {
+        lock.withLock { instant = instant.advanced(by: duration) }
+    }
 
     func fire() {
         let all = lock.withLock { () -> [LifecycleGate] in
@@ -32,24 +43,45 @@ private final class ManualClock: @unchecked Sendable {
 }
 
 private final class FakeUnloads: @unchecked Sendable {
-    private let lock = NSLock()
-    private(set) var models: [String] = []
-    private(set) var instances: [(id: String, key: String?)] = []
-    var modelResult = true
+    private let lock = NSRecursiveLock()
+    private var storedModels: [String] = []
+    private var storedInstances: [(id: String, key: String?)] = []
+    private var storedModelResult = true
+    private var storedRequiredKey: String?
+    private var storedInstanceResult = true
+    private var storedBarrier: LifecycleGate?
+    let modelStarted = LifecycleGate()
+
+    var models: [String] { lock.withLock { storedModels } }
+    var instances: [(id: String, key: String?)] { lock.withLock { storedInstances } }
+    var modelResult: Bool {
+        get { lock.withLock { storedModelResult } }
+        set { lock.withLock { storedModelResult = newValue } }
+    }
     /// Instances whose unload succeeds only with this key.
-    var requiredKey: String?
-    var instanceResult = true
-    var barrier: LifecycleGate?
+    var requiredKey: String? {
+        get { lock.withLock { storedRequiredKey } }
+        set { lock.withLock { storedRequiredKey = newValue } }
+    }
+    var instanceResult: Bool {
+        get { lock.withLock { storedInstanceResult } }
+        set { lock.withLock { storedInstanceResult = newValue } }
+    }
+    var barrier: LifecycleGate? {
+        get { lock.withLock { storedBarrier } }
+        set { lock.withLock { storedBarrier = newValue } }
+    }
 
     var actions: LocalModelLifecycle.Actions {
         LocalModelLifecycle.Actions(
             unloadModel: { [self] _, model, _ in
-                lock.withLock { models.append(model) }
+                lock.withLock { storedModels.append(model) }
+                modelStarted.open()
                 if (try? await barrier?.wait()) == nil, barrier != nil { return false }
                 return lock.withLock { modelResult }
             },
             unloadInstance: { [self] _, id, key in
-                lock.withLock { instances.append((id, key)) }
+                lock.withLock { storedInstances.append((id, key)) }
                 if (try? await barrier?.wait()) == nil, barrier != nil { return false }
                 return lock.withLock { requiredKey.map { $0 == key } ?? instanceResult }
             })
@@ -63,6 +95,120 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testAnOpenedGateKeepsNoBookkeepingAfterCancellation() async {
+        let gate = LifecycleGate()
+        gate.open()
+        for _ in 0..<100 {
+            let waiter = Task { try await gate.wait() }
+            waiter.cancel()
+            _ = try? await waiter.value
+            XCTAssertEqual(gate.waiterCountForTests, 0)
+        }
+    }
+
+    func testACancelledClosedGateWaitLeavesNoBookkeeping() async {
+        let gate = LifecycleGate()
+        let waiter = Task { try await gate.wait() }
+        waiter.cancel()
+        do {
+            try await waiter.value
+            XCTFail("A cancelled gate wait must throw")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(gate.waiterCountForTests, 0)
+    }
+
+    func testResumeWithdrawsAPauseWaitingForAnActiveUse() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let lease = try await lifecycle.beginUse(target())
+        lifecycle.notePause(true)
+        let release = Task { await lifecycle.release(.pause, target: lmTarget()) }
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        lifecycle.notePause(false)
+        lease.end()
+        let outcome = await release.value
+        XCTAssertEqual(outcome, .notWanted)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testAPauseTaskStartingAfterResumeUnloadsNothing() async {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        lifecycle.notePause(true)
+        lifecycle.notePause(false)
+        let outcome = await lifecycle.release(.pause, target: lmTarget())
+        XCTAssertEqual(outcome, .notWanted)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testANewUseWaitsForAnAbandonedResizeToSettle() async throws {
+        let clock = ManualClock()
+        let lifecycle = make(clock: clock, idle: .zero)
+        let first = try await lifecycle.beginUse(target())
+        let started = LifecycleGate()
+        let finish = LifecycleGate()
+        let model = target()
+        let resize = Task {
+            await lifecycle.reconcileLMStudio(
+                target: model, contextTokens: 8192, lease: first,
+                read: { _, _ in .notRunning.reached },
+                load: { _, _, _ in
+                    started.open()
+                    try? await finish.wait()
+                    return "resized"
+                })
+        }
+        try await started.wait()
+        let next = Task { try await lifecycle.beginUse(model) }
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        XCTAssertEqual(lifecycle.useCount, 2)
+        resize.cancel()
+        await resize.value
+        first.end()
+        XCTAssertEqual(lifecycle.useCount, 1, "the resize owns its barrier after the caller leaves")
+        finish.open()
+        let second = try await next.value
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["resized"])
+        second.end()
+        XCTAssertEqual(lifecycle.useCount, 0)
+    }
+
+    func testTheUseEndingWhilePausedPaysThePauseRelease() async throws {
+        let fake = FakeUnloads()
+        let finish = LifecycleGate()
+        fake.set { $0.barrier = finish }
+        let lifecycle = make(fake, idle: .zero)
+        lifecycle.notePause(true)
+        let lease = try await lifecycle.beginUse(target())
+        lease.end()
+        try await fake.modelStarted.wait()
+        XCTAssertEqual(fake.models, ["m"])
+        lifecycle.notePause(false)
+        finish.open()
+        let next = try await lifecycle.beginUse(target())
+        next.end()
+    }
+
+    func testShorteningIdleUsesTheOriginalEndOfUse() async throws {
+        let clock = ManualClock()
+        let lifecycle = make(clock: clock)
+        try await owned(lifecycle, "copy")
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.durations.last, .seconds(600))
+        clock.advance(.seconds(400))
+        lifecycle.setIdle(.seconds(300))
+        await clock.waitForSleepers(2)
+        XCTAssertEqual(clock.durations.last, .zero)
+        clock.fire()
+        _ = await lifecycle.release(.freeMemory, target: target())
+    }
+
     private func target(_ model: String = "m", key: String? = nil) -> LocalModelTarget {
         lmTarget(model, key: key)
     }
@@ -70,7 +216,7 @@ final class LocalModelLifecycleTests: XCTestCase {
     private func make(
         _ fake: FakeUnloads = FakeUnloads(), clock: ManualClock = ManualClock(), idle: Duration = .seconds(600)
     ) -> LocalModelLifecycle {
-        LocalModelLifecycle(idle: idle, actions: fake.actions, sleeper: clock.sleeper)
+        LocalModelLifecycle(idle: idle, actions: fake.actions, sleeper: clock.sleeper, now: clock.now)
     }
 
     private func owned(_ lifecycle: LocalModelLifecycle, _ instance: String, key: String? = nil) async throws {

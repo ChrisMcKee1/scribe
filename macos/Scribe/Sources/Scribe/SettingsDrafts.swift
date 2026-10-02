@@ -38,6 +38,7 @@ final class SettingsDrafts: ObservableObject {
     @Published var cleanupWritingStyle = CleanupPrompt.defaultWritingStyle
     @Published var cleanupFrontierPrompt = CleanupPrompt.defaultFrontierPrompt
     @Published var cleanupLocalPrompt = CleanupPrompt.defaultLocalPrompt
+    @Published var cleanupIdleMinutes = LocalModelDefaults.keepAliveMinutes
     @Published private(set) var indicator: OverlayAnchorSelection?
     private var indicatorObservation: AnyCancellable?
 
@@ -63,6 +64,7 @@ final class SettingsDrafts: ObservableObject {
     private var savedCleanupWritingStyle = CleanupPrompt.defaultWritingStyle
     private var savedCleanupFrontierPrompt = CleanupPrompt.defaultFrontierPrompt
     private var savedCleanupLocalPrompt = CleanupPrompt.defaultLocalPrompt
+    private var savedCleanupIdleMinutes = LocalModelDefaults.keepAliveMinutes
     var saveOperation: (@MainActor (SettingsDrafts) async throws -> Void)?
     @Published private(set) var entriesBeingAdded: Set<SettingsDraftEntry> = []
 
@@ -77,7 +79,8 @@ final class SettingsDrafts: ObservableObject {
         {
             sections.append("App profiles")
         }
-        if hasUnsavedCleanupPromptChanges || !openAIApiKey.isEmpty || !azureClientSecret.isEmpty || !azureApiKey.isEmpty
+        if hasUnsavedCleanupPromptChanges || hasUnsavedCleanupIdleTime
+            || !openAIApiKey.isEmpty || !azureClientSecret.isEmpty || !azureApiKey.isEmpty
         {
             sections.append("AI cleanup")
         }
@@ -91,6 +94,14 @@ final class SettingsDrafts: ObservableObject {
     }
 
     var hasUnsavedChanges: Bool { !unsavedSections.isEmpty }
+
+    var hasUnsavedCleanupIdleTime: Bool { cleanupIdleMinutes != savedCleanupIdleMinutes }
+
+    func loadCleanupIdleTime(_ minutes: Int) {
+        guard !hasUnsavedCleanupIdleTime else { return }
+        savedCleanupIdleMinutes = minutes
+        cleanupIdleMinutes = minutes
+    }
     var isBusy: Bool { isSaving || !entriesBeingAdded.isEmpty }
 
     var footerText: String {
@@ -200,6 +211,7 @@ final class SettingsDrafts: ObservableObject {
         cleanupWritingStyle = savedCleanupWritingStyle
         cleanupFrontierPrompt = savedCleanupFrontierPrompt
         cleanupLocalPrompt = savedCleanupLocalPrompt
+        cleanupIdleMinutes = savedCleanupIdleMinutes
         saveFailed = false
         footerMessage = "Discarded unsaved changes."
     }
@@ -237,6 +249,8 @@ extension SettingsDrafts {
             let cleanupFrontierPrompt = drafts.cleanupFrontierPrompt
             let cleanupLocalPrompt = drafts.cleanupLocalPrompt
             let saveCleanupPrompts = drafts.hasUnsavedCleanupPromptChanges
+            let cleanupIdleMinutes = drafts.cleanupIdleMinutes
+            let saveCleanupIdleTime = drafts.hasUnsavedCleanupIdleTime
             let nonblank: (String) -> Bool = { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             if drafts.unsavedSections.contains("Dictionary"),
                 !nonblank(drafts.dictionaryPattern) || !nonblank(drafts.dictionaryReplacement)
@@ -330,6 +344,10 @@ extension SettingsDrafts {
                     writingStyle: cleanupWritingStyle,
                     frontierPrompt: cleanupFrontierPrompt,
                     localPrompt: cleanupLocalPrompt)
+            }
+            if saveCleanupIdleTime {
+                cleanupSettings.localModelIdleMinutes = cleanupIdleMinutes
+                drafts.savedCleanupIdleMinutes = cleanupIdleMinutes
             }
         }
     }

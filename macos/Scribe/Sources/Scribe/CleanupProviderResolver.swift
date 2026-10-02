@@ -33,6 +33,7 @@ struct CleanupConnection: Hashable, Sendable, CustomStringConvertible, CustomRef
 
     let target: Target
     let source: CleanupConfigurationSource
+    var localModelIdleMinutes = LocalModelDefaults.keepAliveMinutes
 
     var kind: CleanupProviderKind { target.kind }
 
@@ -77,6 +78,7 @@ struct CleanupProviderFactory: Sendable {
     var now: @Sendable () -> Date
     /// Elapsed time, for how long Foundry Local's endpoint is trusted.
     var monotonicNow: @Sendable () -> ContinuousClock.Instant
+    var localModelLifecycle: LocalModelLifecycle = .shared
 
     static var live: CleanupProviderFactory {
         CleanupProviderFactory(
@@ -150,6 +152,7 @@ enum CleanupProviderResolver {
         settings.writingStyle = candidate.writingStyle
         settings.frontierPrompt = candidate.frontierPrompt
         settings.localPrompt = candidate.localPrompt
+        settings.localModelIdleMinutes = values.localModelIdleMinutes
         return try settingsConnection(settings)
     }
 
@@ -167,6 +170,7 @@ enum CleanupProviderResolver {
         store: CleanupSettingsStore,
         environment: [String: String],
         factory: CleanupProviderFactory,
+        lifecycle: LocalModelLifecycle? = nil,
         openAIApiKeyOverride: String? = nil,
         azureClientSecretOverride: String? = nil,
         azureApiKeyOverride: String? = nil,
@@ -180,7 +184,8 @@ enum CleanupProviderResolver {
         case .ollama(let model):
             return ManagedOllamaCleanupProvider(
                 model: model,
-                keepAliveMinutes: store.localModelIdleMinutes,
+                keepAliveMinutes: connection.localModelIdleMinutes,
+                lifecycle: lifecycle ?? factory.localModelLifecycle,
                 readLocalServer: { endpoint in await factory.readLocalServer(endpoint, nil) },
                 session: factory.session)
         case .openAICompatible(let serviceURL, let model, let keySource, let apiStyle):
@@ -206,7 +211,8 @@ enum CleanupProviderResolver {
                 serviceURL: serviceURL,
                 apiStyle: apiStyle,
                 localServerApp: localServerApp,
-                keepAliveMinutes: store.localModelIdleMinutes,
+                keepAliveMinutes: connection.localModelIdleMinutes,
+                lifecycle: lifecycle ?? factory.localModelLifecycle,
                 localTuning: {
                     connection.source == .settings ? LocalModelTuning.forSettings(store.snapshot()) : .none
                 },
@@ -295,6 +301,12 @@ enum CleanupProviderResolver {
     }
 
     private static func settingsConnection(_ settings: CleanupSettingsSnapshot) throws -> CleanupConnection {
+        var connection = try settingsTargetConnection(settings)
+        connection.localModelIdleMinutes = settings.localModelIdleMinutes
+        return connection
+    }
+
+    private static func settingsTargetConnection(_ settings: CleanupSettingsSnapshot) throws -> CleanupConnection {
         let source = CleanupConfigurationSource.settings
         switch settings.providerKind {
         case .foundryLocal:

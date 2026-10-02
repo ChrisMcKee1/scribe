@@ -207,6 +207,15 @@ struct CleanupProviderSettingsSection: View {
             app, state, choices.selected, idleMinutes: CleanupSettingsStore.live.localModelIdleMinutes)
         let askedContext = model.localContextTokens(for: choice)
         let effectiveContext = state?.loaded(for: choices.selected)?.contextTokens ?? 0
+        Picker("Free local model memory after", selection: $drafts.cleanupIdleMinutes) {
+            ForEach(Array(Set([0, 1, 2, 5, 10, 15, 30, 60, drafts.cleanupIdleMinutes])).sorted(), id: \.self) {
+                minutes in
+                Text(minutes == 0 ? "Never" : "\(minutes) minutes").tag(minutes)
+            }
+        }
+        Text("Applies to Ollama and LM Studio. Save applies the change; the speech recognizer manages its own memory.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         Picker(
             "Model",
             selection: Binding(

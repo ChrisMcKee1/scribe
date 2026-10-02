@@ -12,25 +12,41 @@ struct AIDictionarySuggestionAccess: Sendable {
     }
 }
 
-/// The completion must use the cleanup service's saved-recipient handoff and use/release barrier. It must verify
-/// `recipient` for every outbound attempt, including retries, and honor task cancellation. A raw provider call does
-/// not satisfy this contract and must not be wired here.
-struct AIDictionarySuggestionService {
-    typealias Completion =
-        @Sendable (
-            _ systemPrompt: String, _ userMessage: String, _ recipient: CleanupConnection
-        ) async throws -> String
+struct AIDictionarySuggestionAdmission: Sendable {
+    let recipient: CleanupConnection
+    let isCurrent: @MainActor @Sendable () -> Bool
+    let complete: @Sendable (_ systemPrompt: String, _ userMessage: String) async throws -> String
+}
 
-    let currentRecipient: @MainActor @Sendable () -> CleanupConnection?
-    let isCleanupEnabled: @MainActor @Sendable () -> Bool
-    let complete: Completion
+struct AIDictionarySuggestionService {
+    let admit: @MainActor @Sendable () -> AIDictionarySuggestionAdmission?
+
+    @MainActor static var live: Self { backed(by: .shared, operations: .shared) }
+
+    static func backed(by cache: CleanupProviderCache, operations: AuxiliaryOperations) -> Self {
+        Self(admit: {
+            guard let admission = try? cache.admitOneOff() else { return nil }
+            return AIDictionarySuggestionAdmission(
+                recipient: admission.connection,
+                isCurrent: { cache.isCurrent(admission) },
+                complete: { prompt, sample in
+                    try await operations.run {
+                        let response = try await cache.completeOneOff(
+                            CleanupRequest(
+                                transcript: sample, writingStylePrompt: prompt, maxOutputTokens: 2048),
+                            admission: admission)
+                        return response.cleanedText
+                    }
+                })
+        })
+    }
 }
 
 struct AIDictionarySuggestionConsent: Identifiable {
     let id: UUID
     let message: String
 
-    fileprivate let recipient: CleanupConnection
+    fileprivate let admission: AIDictionarySuggestionAdmission
     fileprivate let reportID: UInt64
     fileprivate let sample: String
 }
@@ -66,8 +82,8 @@ final class AIDictionarySuggestionModel: ObservableObject {
     private let onChanged: @MainActor @Sendable () -> Void
     private var requestID: UInt64 = 0
     private var activeReportID: UInt64?
-    private var requestRecipient: CleanupConnection?
-    private var reviewRecipient: CleanupConnection?
+    private var requestRecipient: AIDictionarySuggestionAdmission?
+    private var reviewRecipient: AIDictionarySuggestionAdmission?
     private var observation: SettingsNotificationObservation?
     private var reportObservation: AnyCancellable?
 
@@ -97,7 +113,7 @@ final class AIDictionarySuggestionModel: ObservableObject {
     }
 
     var canSuggest: Bool {
-        guard let service, service.isCleanupEnabled(), service.currentRecipient() != nil,
+        guard let service, service.admit() != nil,
             let report = rawReport(),
             Self.boundedRawSample(report.text) != nil
         else {
@@ -135,8 +151,7 @@ final class AIDictionarySuggestionModel: ObservableObject {
     /// settings draft is consulted. The recipient and report are checked again when the user confirms.
     func prepareConsent() {
         guard !isRequesting, !isCommitting, let service,
-            service.isCleanupEnabled(),
-            let recipient = service.currentRecipient(),
+            let admission = service.admit(),
             let report = rawReport(),
             let sample = Self.boundedRawSample(report.text)
         else {
@@ -151,8 +166,8 @@ final class AIDictionarySuggestionModel: ObservableObject {
             id: UUID(),
             message: Self.consentMessage(
                 sampleCharacters: sample.count,
-                destination: Self.destination(for: recipient)),
-            recipient: recipient,
+                destination: Self.destination(for: admission.recipient)),
+            admission: admission,
             reportID: report.id,
             sample: sample)
         activeReportID = report.id
@@ -164,8 +179,8 @@ final class AIDictionarySuggestionModel: ObservableObject {
     /// Called only by the affirmative consent action. The injected completion owns the per-send recipient checks and
     /// release/use barrier. This model checks before and after the operation and never publishes a stale answer.
     func requestSuggestions() {
-        guard !isRequesting, !isCommitting, let consent, let service,
-            service.isCleanupEnabled(), service.currentRecipient() == consent.recipient,
+        guard !isRequesting, !isCommitting, let consent,
+            consent.admission.isCurrent(),
             rawReport()?.id == consent.reportID
         else {
             self.consent = nil
@@ -176,24 +191,24 @@ final class AIDictionarySuggestionModel: ObservableObject {
         self.consent = nil
         requestID &+= 1
         let attempt = requestID
-        requestRecipient = consent.recipient
+        requestRecipient = consent.admission
         isRequesting = true
         errorMessage = nil
         statusMessage = nil
-        let complete = service.complete
+        let complete = consent.admission.complete
         let access = self.access
         inFlight = Task { [weak self] in
             guard let self else { return }
             do {
                 try Task.checkCancellation()
-                let response = try await complete(Self.systemPrompt, consent.sample, consent.recipient)
+                let response = try await complete(Self.systemPrompt, consent.sample)
                 try Task.checkCancellation()
-                guard self.isCurrent(attempt, recipient: consent.recipient, reportID: consent.reportID) else {
+                guard self.isCurrent(attempt, admission: consent.admission, reportID: consent.reportID) else {
                     return
                 }
                 let existing = try await access.loadEntries()
                 try Task.checkCancellation()
-                guard self.isCurrent(attempt, recipient: consent.recipient, reportID: consent.reportID) else {
+                guard self.isCurrent(attempt, admission: consent.admission, reportID: consent.reportID) else {
                     return
                 }
                 let parsed = Self.parseSuggestions(response, existing: existing)
@@ -207,12 +222,12 @@ final class AIDictionarySuggestionModel: ObservableObject {
                 }
                 self.suggestions = parsed
                 self.selectedSpokenForms = Set(parsed.map { Self.spokenFormKey($0.pattern) })
-                self.reviewRecipient = consent.recipient
+                self.reviewRecipient = consent.admission
                 self.isReviewPresented = true
             } catch is CancellationError {
                 self.finishCancelled(attempt)
             } catch {
-                guard self.isCurrent(attempt, recipient: consent.recipient, reportID: consent.reportID) else {
+                guard self.isCurrent(attempt, admission: consent.admission, reportID: consent.reportID) else {
                     return
                 }
                 self.finishFailed(attempt)
@@ -311,10 +326,11 @@ final class AIDictionarySuggestionModel: ObservableObject {
         return result
     }
 
-    private func isCurrent(_ attempt: UInt64, recipient: CleanupConnection, reportID: UInt64) -> Bool {
-        guard requestID == attempt, let service else { return false }
-        guard service.isCleanupEnabled(), service.currentRecipient() == recipient,
-            requestRecipient == recipient, rawReport()?.id == reportID
+    private func isCurrent(
+        _ attempt: UInt64, admission: AIDictionarySuggestionAdmission, reportID: UInt64
+    ) -> Bool {
+        guard requestID == attempt else { return false }
+        guard admission.isCurrent(), requestRecipient != nil, rawReport()?.id == reportID
         else {
             invalidateForSettingsChange()
             errorMessage =
@@ -349,13 +365,13 @@ final class AIDictionarySuggestionModel: ObservableObject {
     }
 
     private func invalidateIfRecipientChanged() {
-        guard let service else {
+        guard service != nil else {
             cancel()
             return
         }
-        let expected = consent?.recipient ?? requestRecipient ?? reviewRecipient
+        let expected = consent?.admission ?? requestRecipient ?? reviewRecipient
         guard let expected else { return }
-        guard service.isCleanupEnabled(), service.currentRecipient() == expected else {
+        guard expected.isCurrent() else {
             invalidateForSettingsChange()
             errorMessage =
                 "AI cleanup changed while suggestions were being prepared. The request or result was discarded."

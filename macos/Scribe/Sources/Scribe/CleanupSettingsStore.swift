@@ -58,6 +58,7 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var writingStyle = ""
     var frontierPrompt = ""
     var localPrompt = ""
+    var localModelIdleMinutes = LocalModelDefaults.keepAliveMinutes
     var otherServiceApiStyle: CustomAPIStyle
     var secretRevision: String
 }
@@ -231,12 +232,18 @@ struct CleanupSettingsStore: Sendable {
     /// or negative value reads as the default.
     var localModelIdleMinutes: Int {
         get {
-            guard let stored = defaults.object(forKey: Key.localModelIdleMinutes) as? Int, stored >= 0 else {
+            guard let stored = defaults.object(forKey: Key.localModelIdleMinutes) as? Int,
+                stored >= 0, stored <= Int.max / 60
+            else {
                 return LocalModelDefaults.keepAliveMinutes
             }
             return stored
         }
-        nonmutating set { defaults.set(max(0, newValue), forKey: Key.localModelIdleMinutes) }
+        nonmutating set {
+            writeValue(
+                newValue <= Int.max / 60 ? max(0, newValue) : LocalModelDefaults.keepAliveMinutes,
+                forKey: Key.localModelIdleMinutes)
+        }
     }
 
     var ollamaContextTokens: Int {
@@ -377,6 +384,7 @@ struct CleanupSettingsStore: Sendable {
             writingStyle: defaults.string(forKey: Key.writingStyle) ?? "",
             frontierPrompt: defaults.string(forKey: Key.frontierPrompt) ?? "",
             localPrompt: defaults.string(forKey: Key.localPrompt) ?? "",
+            localModelIdleMinutes: localModelIdleMinutes,
             otherServiceApiStyle: CustomAPIStyle(rawValue: defaults.string(forKey: Key.otherServiceApiStyle) ?? "")
                 ?? .chatCompletions,
             secretRevision: defaults.string(forKey: Key.secretRevision) ?? "")
