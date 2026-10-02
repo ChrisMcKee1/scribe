@@ -42,10 +42,6 @@ protocol DictationCleaning {
     /// has not reached it yet from being sent.
     var isEnabled: Bool { get }
 
-    /// The provider for the configuration stored now. Building one can read the Keychain, so it never runs on the
-    /// main actor.
-    func provider() async throws -> any CleanupProvider
-
     /// The cleanup settings stored now, for request shaping that belongs outside the provider cache.
     func currentSettings() -> CleanupSettingsSnapshot
 
@@ -202,15 +198,6 @@ struct LiveDictationCleanup: DictationCleaning {
         cache.store.isEnabled
     }
 
-    func provider() async throws -> any CleanupProvider {
-        let cache = cache
-        // Detached, because a build reads the Keychain, and a Keychain read waits for the user whenever macOS asks
-        // them to allow it; that wait must not hold the main actor.
-        return try await Task.detached(priority: .userInitiated) {
-            try cache.provider()
-        }.value
-    }
-
     func currentSettings() -> CleanupSettingsSnapshot {
         cache.store.snapshot()
     }
@@ -229,6 +216,7 @@ struct LiveDictationCleanup: DictationCleaning {
 
     func provider(for recipient: CleanupRecipient) async throws -> any CleanupProvider {
         let cache = cache
+        // A Keychain prompt must not hold the main actor.
         return try await Task.detached(priority: .userInitiated) {
             try cache.provider(for: recipient)
         }.value

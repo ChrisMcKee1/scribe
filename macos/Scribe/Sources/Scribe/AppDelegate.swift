@@ -32,8 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var ruleRefresher = RuleSetRefresher<DictationRuleSnapshot>(
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
+            let publication = CleanupSendGate.shared.vocabularyRevision
             let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
-            CleanupSendGate.shared.publishVocabulary(vocabulary.aiScope)
+            CleanupSendGate.shared.publishReadVocabulary(vocabulary.aiScope, after: publication)
             return await DictationRuleSnapshot.compile(
                 rules,
                 libraryEntries: vocabulary.entries,
@@ -110,7 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hotkeyManager = hotkeyManager
         return ApplicationTermination(
             work: ApplicationTermination.Work(
-                stopListening: { hotkeyManager.stop() },
+                stopListening: {
+                    CleanupSendGate.shared.close()
+                    hotkeyManager.stop()
+                },
                 operations: .shared,
                 dictation: dictationController,
                 // Maintenance stops first: a reclaim in progress rolls back and frees the connection for the last

@@ -21,9 +21,20 @@ enum CleanupCredentialInput: Sendable, CustomStringConvertible, CustomReflectabl
 /// resolver as dictation, and its receipt uses a private authority which cannot authorize a serving request.
 struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
     let settings: CleanupSettingsSnapshot
-    var apiKey: CleanupCredentialInput = .saved
-    var clientSecret: CleanupCredentialInput = .saved
-    var writingStyle = CleanupPrompt.defaultWritingStyle
+    var apiKey: CleanupCredentialInput = .saved {
+        didSet { revision = UUID() }
+    }
+    var clientSecret: CleanupCredentialInput = .saved {
+        didSet { revision = UUID() }
+    }
+    var writingStyle = CleanupPrompt.defaultWritingStyle {
+        didSet { revision = UUID() }
+    }
+    private var revision = UUID()
+
+    init(settings: CleanupSettingsSnapshot) {
+        self.settings = settings
+    }
 
     var description: String { "CleanupCandidate" }
     var customMirror: Mirror { Mirror(self, children: [:]) }
@@ -31,7 +42,7 @@ struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
     func recipient(environment: [String: String]) throws -> CleanupRecipient {
         CleanupRecipient(
             connection: try CleanupProviderResolver.connection(settings: settings, environment: environment),
-            settings: settings)
+            settings: settings, candidateRevision: revision)
     }
 
     func makeProvider(

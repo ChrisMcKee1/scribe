@@ -86,10 +86,10 @@ final class CleanupProviderCache: Sendable {
     }
 
     func provider(for recipient: CleanupRecipient) throws -> any CleanupProvider {
-        guard try effectiveRecipient() == recipient else { throw CleanupHoldback.recipientChanged }
+        guard (try? effectiveRecipient()) == recipient else { throw CleanupHoldback.recipientChanged }
         let provider = try entry(for: recipient.connection).provider
-        guard try effectiveRecipient() == recipient else { throw CleanupHoldback.recipientChanged }
-        return AdmittedCleanupProvider(provider: provider)
+        guard (try? effectiveRecipient()) == recipient else { throw CleanupHoldback.recipientChanged }
+        return AdmittedCleanupProvider(provider: provider, recipient: recipient)
     }
 
     /// Capture before presenting consent or accepting Get summary. Completion never selects another recipient.
@@ -109,7 +109,11 @@ final class CleanupProviderCache: Sendable {
                 transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
                 singleLineMode: request.singleLineMode, timeout: request.timeout,
                 maxOutputTokens: request.maxOutputTokens, receipt: consent))
-        try consent.check()
+        do {
+            try consent.check()
+        } catch {
+            throw CleanupHoldback.changedAfterSending
+        }
         return response
     }
 
@@ -285,7 +289,8 @@ final class CleanupProviderCache: Sendable {
         do {
             provider = AdmittedCleanupProvider(
                 provider: try candidate.makeProvider(
-                    recipient: recipient, store: store, environment: environment, factory: factory))
+                    recipient: recipient, store: store, environment: environment, factory: factory),
+                recipient: recipient)
         } catch {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))

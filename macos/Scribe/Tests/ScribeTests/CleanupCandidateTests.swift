@@ -3,6 +3,17 @@ import XCTest
 @testable import Scribe
 
 final class CleanupCandidateTests: XCTestCase {
+    func testUnsavedCredentialChangesHaveDistinctOpaqueRecipientIdentities() throws {
+        let fixture = makeCleanupStore()
+        var candidate = CleanupCandidate(settings: fixture.store.snapshot())
+        let first = try candidate.recipient(environment: [:])
+        candidate.apiKey = .replace("synthetic-secret")
+        let second = try candidate.recipient(environment: [:])
+        XCTAssertNotEqual(first, second)
+        XCTAssertFalse(String(describing: second).contains("synthetic-secret"))
+        XCTAssertFalse(String(reflecting: candidate).contains("synthetic-secret"))
+    }
+
     func testTheUnsavedCandidateAndSecretAreTestedWithoutChangingStoredValues() async throws {
         let fixture = makeCleanupStore()
         let store = fixture.store
@@ -118,5 +129,32 @@ final class CleanupCandidateTests: XCTestCase {
             XCTAssertEqual(error as? CleanupHoldback, .recipientChanged)
         }
         XCTAssertEqual(requests.count, 0)
+    }
+
+    func testAChangeAfterSendingDiscardsTheAnswerWithoutClaimingNothingWasSent() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.isEnabled = true
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "https://first.invalid/v1"
+        store.openAIModel = "first"
+        let requests = RequestLog()
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    requests.record(request)
+                    store.openAIModel = "second"
+                    return StubReply.completion(request, "Old answer.")
+                }))
+        let consent = try cache.admitAuxiliary()
+        do {
+            _ = try await cache.complete(CleanupRequest(transcript: "aggregate only"), consent: consent)
+            XCTFail("An obsolete answer must not be presented for new settings")
+        } catch {
+            XCTAssertEqual(error as? CleanupHoldback, .changedAfterSending)
+            XCTAssertFalse(error.localizedDescription.contains("nothing was sent"))
+        }
+        XCTAssertEqual(requests.count, 1)
     }
 }

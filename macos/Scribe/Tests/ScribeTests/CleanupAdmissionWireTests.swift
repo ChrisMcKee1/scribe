@@ -133,7 +133,8 @@ final class CleanupAdmissionWireTests: XCTestCase {
         let provider = AdmittedCleanupProvider(
             provider: OpenAICompatibleCleanupProvider(
                 model: "selected", serviceURL: URL(string: "https://example.invalid/v1")!,
-                apiStyle: .responses, session: session))
+                apiStyle: .responses, session: session),
+            recipient: admitted.recipient)
         let result = try await provider.clean(CleanupRequest(transcript: "Words.", receipt: admitted))
         XCTAssertEqual(result.cleanedText, "Cleaned.")
         XCTAssertEqual(requests.count, 1)
@@ -141,6 +142,7 @@ final class CleanupAdmissionWireTests: XCTestCase {
     }
 
     func testAnApplicationClientWithoutAReceiptFailsClosed() async throws {
+        let admitted = try receipt(gate: CleanupSendGate())
         let requests = RequestLog()
         let provider = AdmittedCleanupProvider(
             provider: OpenAICompatibleCleanupProvider(
@@ -148,7 +150,8 @@ final class CleanupAdmissionWireTests: XCTestCase {
                 session: makeStubSession { request in
                     requests.record(request)
                     return StubReply.completion(request, "Unwanted.")
-                }))
+                }),
+            recipient: admitted.recipient)
         do {
             _ = try await provider.clean(CleanupRequest(transcript: "private text"))
             XCTFail("The production wrapper must refuse requests without admission")

@@ -5,6 +5,7 @@ import os
 struct CleanupRecipient: Equatable, Sendable, CustomStringConvertible, CustomReflectable {
     let connection: CleanupConnection
     let settings: CleanupSettingsSnapshot
+    var candidateRevision: UUID? = nil
 
     var description: String { "CleanupRecipient" }
     var customMirror: Mirror { Mirror(self, children: [:]) }
@@ -21,14 +22,17 @@ enum CleanupHoldback: String, Error, LocalizedError, Sendable, Equatable {
     case noAdmission
     case vocabularyChanged
     case recipientChanged
+    case changedAfterSending
     case closed
 
     var errorDescription: String? {
         switch self {
         case .vocabularyChanged:
-            return "Your word pack choices changed before the request was sent, so AI cleanup was skipped."
+            return "Your word pack choices changed, so AI cleanup did not continue."
         case .recipientChanged:
-            return "Where AI cleanup runs changed before the request was sent, so nothing was sent."
+            return "Where AI cleanup runs changed, so this request did not continue."
+        case .changedAfterSending:
+            return "AI cleanup changed while the request was running, so its answer wasn't used."
         case .noAdmission, .closed:
             return "AI cleanup was skipped because this request is no longer allowed."
         }
@@ -43,31 +47,72 @@ final class CleanupSendGate: Sendable {
         var scope = AiVocabularyScope.none
         var recipient: CleanupRecipient?
         var closed = false
+        var uncertain = false
+        var vocabularyRevision: UInt64 = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     /// Publish on every permission/content change, including a change at the same catalog generation.
     func publishVocabulary(_ scope: AiVocabularyScope) {
-        state.withLock { $0.scope = scope }
+        state.withLock {
+            $0.scope = scope
+            $0.vocabularyRevision &+= 1
+        }
+    }
+
+    var vocabularyRevision: UInt64 {
+        state.withLock { $0.vocabularyRevision }
+    }
+
+    /// A legacy asynchronous read must not republish permissions a commit withdrew while it was reading.
+    @discardableResult
+    func publishReadVocabulary(_ scope: AiVocabularyScope, after revision: UInt64) -> Bool {
+        state.withLock { current in
+            guard current.vocabularyRevision == revision else { return false }
+            current.scope = scope
+            current.vocabularyRevision &+= 1
+            return true
+        }
     }
 
     func publishRecipient(_ recipient: CleanupRecipient?) {
         state.withLock { $0.recipient = recipient }
     }
 
+    /// Recovery publishes a verified pair; merely capturing a recipient cannot undo an uncertain commit.
+    func publish(vocabulary: AiVocabularyScope, recipient: CleanupRecipient?) {
+        state.withLock {
+            $0.scope = vocabulary
+            $0.recipient = recipient
+            $0.vocabularyRevision &+= 1
+            $0.uncertain = false
+        }
+    }
+
     /// A logical commit may publish both authorities together. Prepare files and credentials beforehand.
     /// This callback is synchronous; it must neither await nor call back into this gate.
+    /// A thrown commit can have an uncertain durable outcome, so it withholds sends until recovery publishes.
     func committing<Result>(
         vocabulary: AiVocabularyScope,
         recipient: CleanupRecipient?,
         _ commit: () throws -> Result
     ) rethrows -> Result {
         try state.withLockUnchecked { current in
-            let result = try commit()
-            current.scope = vocabulary
-            current.recipient = recipient
-            return result
+            do {
+                let result = try commit()
+                current.scope = vocabulary
+                current.vocabularyRevision &+= 1
+                current.recipient = recipient
+                current.uncertain = false
+                return result
+            } catch {
+                current.scope = .none
+                current.recipient = nil
+                current.uncertain = true
+                current.vocabularyRevision &+= 1
+                throw error
+            }
         }
     }
 
@@ -96,6 +141,7 @@ final class CleanupSendGate: Sendable {
         // The callback runs synchronously on the caller, never escapes or crosses an isolation boundary.
         try state.withLockUnchecked { current in
             guard !current.closed else { throw CleanupHoldback.closed }
+            guard !current.uncertain else { throw CleanupHoldback.noAdmission }
             guard current.scope.covers(receipt.scope) else { throw CleanupHoldback.vocabularyChanged }
             guard current.recipient == receipt.recipient, receipt.isCurrent() else {
                 throw CleanupHoldback.recipientChanged
@@ -134,6 +180,7 @@ enum CleanupSendContext {
 /// that supply no application vocabulary; an application client can never accidentally send without admission.
 struct AdmittedCleanupProvider: CleanupProvider {
     let provider: any CleanupProvider
+    let recipient: CleanupRecipient
 
     var id: String { provider.id }
     var displayName: String { provider.displayName }
@@ -141,6 +188,7 @@ struct AdmittedCleanupProvider: CleanupProvider {
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         guard let receipt = request.receipt else { throw CleanupHoldback.noAdmission }
+        guard receipt.recipient == recipient else { throw CleanupHoldback.recipientChanged }
         try receipt.check()
         return try await CleanupSendContext.$receipt.withValue(receipt) {
             try await provider.clean(request)

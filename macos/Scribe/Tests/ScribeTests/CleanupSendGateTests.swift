@@ -81,7 +81,7 @@ final class CleanupSendGateTests: XCTestCase {
         XCTAssertFalse(AiVocabularyScope.none.covers(admitted))
     }
 
-    func testAFailedLogicalCommitKeepsBothPublishedAuthorities() throws {
+    func testAnUncertainLogicalCommitWithholdsRequestsUntilRecoveryPublishes() throws {
         let gate = CleanupSendGate()
         let first = try recipient()
         gate.publishRecipient(first)
@@ -94,6 +94,23 @@ final class CleanupSendGateTests: XCTestCase {
                 throw CleanupHoldback.closed
             })
         XCTAssertEqual(gate.currentVocabularyScope, .none)
+        XCTAssertThrowsError(try receipt.check())
+        gate.publishRecipient(first)
+        XCTAssertThrowsError(try receipt.check())
+        gate.publish(vocabulary: .none, recipient: first)
         XCTAssertNoThrow(try receipt.check())
+    }
+
+    func testALateCatalogReadCannotPutBackPermissionAfterACommit() {
+        let gate = CleanupSendGate()
+        let oldScope = AiVocabularyScope(generation: 1, permittedContent: ["pack": "old"])
+        gate.publishVocabulary(oldScope)
+        let reading = gate.vocabularyRevision
+        gate.publishVocabulary(.none)
+        XCTAssertFalse(gate.publishReadVocabulary(oldScope, after: reading))
+        XCTAssertEqual(gate.currentVocabularyScope, .none)
+        let newRead = gate.vocabularyRevision
+        XCTAssertTrue(gate.publishReadVocabulary(oldScope, after: newRead))
+        XCTAssertEqual(gate.currentVocabularyScope, oldScope)
     }
 }
