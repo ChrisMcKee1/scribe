@@ -51,19 +51,22 @@ struct LibraryTermSort: Sendable {
             return first.isEmpty ? 1 : -1
         }
 
+        let options: String.CompareOptions = [.caseInsensitive, .numeric]
         var result = first.compare(
             second,
-            options: [.caseInsensitive, .numeric],
+            options: options,
             range: nil,
-            locale: locale).threeWay
+            locale: locale
+        ).threeWay
         let otherFirst = bySpoken ? lhs.written : lhs.spoken
         let otherSecond = bySpoken ? rhs.written : rhs.spoken
         if result == 0 {
             result = otherFirst.compare(
                 otherSecond,
-                options: [.caseInsensitive, .numeric],
+                options: options,
                 range: nil,
-                locale: locale).threeWay
+                locale: locale
+            ).threeWay
         }
         if result == 0 {
             result = first.compare(second, options: [], range: nil, locale: locale).threeWay
@@ -75,8 +78,8 @@ struct LibraryTermSort: Sendable {
     }
 }
 
-private extension ComparisonResult {
-    var threeWay: Int {
+extension ComparisonResult {
+    fileprivate var threeWay: Int {
         switch self {
         case .orderedAscending:
             return -1

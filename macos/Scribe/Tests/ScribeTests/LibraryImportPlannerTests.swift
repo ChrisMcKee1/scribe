@@ -35,9 +35,11 @@ final class LibraryImportPlannerTests: XCTestCase {
                 .alreadyHere, .writtenDifferently, .writtenDifferently, .add,
                 .add, .writtenDifferently, .writtenDifferently,
             ])
-        XCTAssertEqual(
-            (plan.adds, plan.writtenDifferently, plan.alreadyHere, plan.removalRules, plan.skipped),
-            (2, 4, 1, 1, 1))
+        XCTAssertEqual(plan.adds, 2)
+        XCTAssertEqual(plan.writtenDifferently, 4)
+        XCTAssertEqual(plan.alreadyHere, 1)
+        XCTAssertEqual(plan.removalRules, 1)
+        XCTAssertEqual(plan.skipped, 1)
         XCTAssertEqual(plan.operations[1].existingRowID, 11)
         XCTAssertEqual(plan.operations[1].existingValues, TermValues("get hub", "GitHub Enterprise"))
         XCTAssertEqual(plan.operations[2].existingValues, TermValues("get hub", "GitHub"))
@@ -72,7 +74,9 @@ final class LibraryImportPlannerTests: XCTestCase {
         XCTAssertEqual(
             plan.operations.map(\.kind),
             [.add, .writtenDifferently, .writtenDifferently, .alreadyHere, .writtenDifferently, .writtenDifferently])
-        XCTAssertEqual((plan.adds, plan.writtenDifferently, plan.alreadyHere), (1, 4, 1))
+        XCTAssertEqual(plan.adds, 1)
+        XCTAssertEqual(plan.writtenDifferently, 4)
+        XCTAssertEqual(plan.alreadyHere, 1)
         XCTAssertEqual(plan.operations[2].existingValues, TermValues("vm", "virtual machine"))
         XCTAssertEqual(plan.operations[5].existingRowID, 10)
         XCTAssertEqual(plan.operations[5].existingValues, TermValues("kube", "K8s"))

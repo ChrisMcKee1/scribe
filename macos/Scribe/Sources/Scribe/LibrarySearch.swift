@@ -56,7 +56,8 @@ struct LibrarySearch: Sendable {
             "",
             options: [.caseInsensitive, .diacriticInsensitive],
             range: nil,
-            locale: locale) == .orderedSame
+            locale: locale
+        ) == .orderedSame
         return emptyLike ? "" : trimmed
     }
 

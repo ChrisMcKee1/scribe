@@ -106,11 +106,6 @@ enum TermField: Sendable {
 struct TermCommands: OptionSet, Sendable {
     let rawValue: Int
 
-    init(rawValue: Int) {
-        self.rawValue = rawValue
-    }
-
-    static let none = TermCommands(rawValue: 0)
     static let turnOff = TermCommands(rawValue: 1 << 0)
     static let turnOn = TermCommands(rawValue: 1 << 1)
     static let delete = TermCommands(rawValue: 1 << 2)
