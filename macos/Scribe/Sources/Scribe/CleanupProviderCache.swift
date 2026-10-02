@@ -81,7 +81,7 @@ final class CleanupProviderCache: Sendable {
     ) -> CleanupRequestReceipt {
         sendGate.receipt(scope: scope, recipient: recipient, kind: kind) { [self] in
             guard let current = try? effectiveRecipient(), current == recipient else { return false }
-            return kind == .probe || current.settings.isEnabled
+            return kind == .probe || kind == .explicitCommand || current.settings.isEnabled
         }
     }
 

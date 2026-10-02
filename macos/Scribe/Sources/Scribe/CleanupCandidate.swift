@@ -54,7 +54,9 @@ struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
             case .environment:
                 key = environment["SCRIBE_CLEANUP_API_KEY"]
             case .secretStore:
-                key = try apiKey.resolve { try store.readOpenAIApiKey() }
+                key = try apiKey.resolve {
+                    try readSaved(store: store) { try store.readOpenAIApiKey() }
+                }
             }
             let app: LocalServerApp
             if source == .settings {
@@ -83,7 +85,17 @@ struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
                     launch: factory.azureCliLaunch, now: factory.now)
             case .servicePrincipal(let tenant, let client, _):
                 let input: CleanupCredentialInput = source == .environment ? .saved : clientSecret
-                let secret = try input.resolve { try store.readAzureClientSecret(clientId: client) }
+                let configured = source == .settings
+                    ? settings.azureClientId : (environment["SCRIBE_AZURE_CLIENT_ID"] ?? client)
+                let secret = try input.resolve {
+                    try readSaved(store: store) {
+                        if let value = try store.clientSecrets.secret(for: client) { return value }
+                        guard let legacy = CleanupSettingsStore.legacySecretAccount(forClientId: configured) else {
+                            return nil
+                        }
+                        return try store.clientSecrets.secret(for: legacy)
+                    }
+                }
                 guard let secret, !secret.isEmpty else {
                     throw CleanupProviderError.notConfigured(.azureClientSecretMissing, source: source)
                 }
@@ -96,5 +108,14 @@ struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
                 inferenceBase: base, deployment: deployment, promptCachingEnabled: { caching },
                 credential: credential, session: factory.session)
         }
+    }
+
+    private func readSaved(
+        store: CleanupSettingsStore, _ read: () throws -> String?
+    ) throws -> String? {
+        guard store.secretRevision == settings.secretRevision else { throw CleanupHoldback.recipientChanged }
+        let value = try read()
+        guard store.secretRevision == settings.secretRevision else { throw CleanupHoldback.recipientChanged }
+        return value
     }
 }

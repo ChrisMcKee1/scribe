@@ -80,4 +80,20 @@ final class CleanupSendGateTests: XCTestCase {
         XCTAssertTrue(admitted.covers(admitted))
         XCTAssertFalse(AiVocabularyScope.none.covers(admitted))
     }
+
+    func testAFailedLogicalCommitKeepsBothPublishedAuthorities() throws {
+        let gate = CleanupSendGate()
+        let first = try recipient()
+        gate.publishRecipient(first)
+        let receipt = gate.receipt(scope: .none, recipient: first, kind: .dictation)
+        XCTAssertThrowsError(
+            try gate.committing(
+                vocabulary: AiVocabularyScope(generation: 1, permittedContent: ["pack": "new"]),
+                recipient: try recipient(model: "other")
+            ) {
+                throw CleanupHoldback.closed
+            })
+        XCTAssertEqual(gate.currentVocabularyScope, .none)
+        XCTAssertNoThrow(try receipt.check())
+    }
 }

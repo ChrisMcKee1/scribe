@@ -817,7 +817,8 @@ final class DictationHarness {
         configuration: DictationController.Configuration = DictationController.Configuration(),
         rulesLoaded: Bool = true,
         injector: (any DictationInjecting)? = nil,
-        capture liveCapture: (any DictationCapturing)? = nil
+        capture liveCapture: (any DictationCapturing)? = nil,
+        cleanupSource: (any DictationCleaning)? = nil
     ) {
         let capture = FakeCapture()
         let transcriber = FakeTranscriber()
@@ -838,7 +839,7 @@ final class DictationHarness {
             services: DictationController.Services(
                 capture: liveCapture ?? capture,
                 transcriber: transcriber,
-                cleanup: cleanup,
+                cleanup: cleanupSource ?? cleanup,
                 targeting: targeting,
                 injector: injector ?? fakeInjector,
                 history: history,
@@ -967,10 +968,12 @@ extension XCTestCase {
         configuration: DictationController.Configuration = DictationController.Configuration(),
         rulesLoaded: Bool = true,
         injector: (any DictationInjecting)? = nil,
-        capture: (any DictationCapturing)? = nil
+        capture: (any DictationCapturing)? = nil,
+        cleanupSource: (any DictationCleaning)? = nil
     ) -> DictationHarness {
         let harness = DictationHarness(
-            configuration: configuration, rulesLoaded: rulesLoaded, injector: injector, capture: capture)
+            configuration: configuration, rulesLoaded: rulesLoaded, injector: injector, capture: capture,
+            cleanupSource: cleanupSource)
         addTeardownBlock { @MainActor in
             await harness.tearDown()
         }

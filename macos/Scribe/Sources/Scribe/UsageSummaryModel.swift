@@ -14,6 +14,8 @@ final class UsageSummaryModel: ObservableObject {
     private let readCleanupEnabled: @MainActor () -> Bool
     private let summarize: @Sendable (String, CleanupRequestReceipt?) async throws -> String
     private let captureConsent: @MainActor () throws -> CleanupRequestReceipt?
+    /// The offer a UI may describe before Get summary. Never replace it inside generate after consent.
+    private(set) var offeredConsent: CleanupRequestReceipt?
     /// Where the summary request runs, so Quit can cancel it and wait for any `az` or `foundry` it started.
     private let operations: AuxiliaryOperations
     /// Advances for every attempt and every cancellation, so only the newest attempt's reply is shown.
@@ -44,6 +46,7 @@ final class UsageSummaryModel: ObservableObject {
             [weak self] in
             self?.reloadCleanupEnabled()
         }
+        offeredConsent = try? captureConsent()
     }
 
     var canGenerate: Bool {
@@ -53,13 +56,7 @@ final class UsageSummaryModel: ObservableObject {
     /// Sends `payload`, the aggregate built by `UsageInsight.buildSummary`, to the provider AI cleanup uses.
     func generate(payload: String) {
         guard canGenerate else { return }
-        let consent: CleanupRequestReceipt?
-        do {
-            consent = try captureConsent()
-        } catch {
-            errorMessage = CleanupFailureText.forSettings(error, providerName: nil)
-            return
-        }
+        let consent = offeredConsent
         request += 1
         let attempt = request
         isGenerating = true
@@ -94,6 +91,7 @@ final class UsageSummaryModel: ObservableObject {
     }
 
     func reloadCleanupEnabled() {
+        offeredConsent = try? captureConsent()
         let enabled = readCleanupEnabled()
         guard enabled != isCleanupEnabled else { return }
         isCleanupEnabled = enabled

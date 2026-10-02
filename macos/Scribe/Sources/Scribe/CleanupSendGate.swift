@@ -14,6 +14,7 @@ enum CleanupRequestKind: Sendable, Equatable {
     case dictation
     case probe
     case auxiliary
+    case explicitCommand
 }
 
 enum CleanupHoldback: String, Error, LocalizedError, Sendable, Equatable {
@@ -53,6 +54,21 @@ final class CleanupSendGate: Sendable {
 
     func publishRecipient(_ recipient: CleanupRecipient?) {
         state.withLock { $0.recipient = recipient }
+    }
+
+    /// A logical commit may publish both authorities together. Prepare files and credentials beforehand.
+    /// This callback is synchronous; it must neither await nor call back into this gate.
+    func committing<Result>(
+        vocabulary: AiVocabularyScope,
+        recipient: CleanupRecipient?,
+        _ commit: () throws -> Result
+    ) rethrows -> Result {
+        try state.withLockUnchecked { current in
+            let result = try commit()
+            current.scope = vocabulary
+            current.recipient = recipient
+            return result
+        }
     }
 
     var currentVocabularyScope: AiVocabularyScope {
@@ -111,6 +127,7 @@ struct CleanupRequestReceipt: Sendable, CustomStringConvertible, CustomReflectab
 /// Local model preparation inherits the same receipt as the inference it prepares.
 enum CleanupSendContext {
     @TaskLocal static var receipt: CleanupRequestReceipt?
+    @TaskLocal static var beforeTransportStart: (@Sendable () async -> Void)?
 }
 
 /// The application factory wraps its clients. Raw clients remain usable by isolated wire tests and CLI callers
@@ -161,6 +178,9 @@ enum CleanupHTTP {
         session: URLSession,
         receipt: CleanupRequestReceipt?
     ) async throws -> (Data, URLResponse) {
+        if let beforeStart = CleanupSendContext.beforeTransportStart {
+            await beforeStart()
+        }
         try Task.checkCancellation()
         let cancellation = OSAllocatedUnfairLock(initialState: Cancellation())
         return try await withTaskCancellationHandler {

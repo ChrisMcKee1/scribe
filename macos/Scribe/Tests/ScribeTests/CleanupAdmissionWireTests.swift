@@ -3,6 +3,15 @@ import XCTest
 @testable import Scribe
 
 final class CleanupAdmissionWireTests: XCTestCase {
+    private struct HeldCredential: AzureCredentialProvider {
+        let gate: SettingsTestGate
+
+        func accessToken(scope: String) async throws -> AzureAccessToken {
+            await gate.pass()
+            return AzureAccessToken(token: "synthetic-token", expiresAt: .distantFuture)
+        }
+    }
+
     private func receipt(
         gate: CleanupSendGate, model: String = "selected", app: LocalServerApp = .none
     ) throws -> CleanupRequestReceipt {
@@ -32,6 +41,41 @@ final class CleanupAdmissionWireTests: XCTestCase {
             let session = makeStubSession { request in
                 requests.record(request)
                 return StubReply.completion(request, "Must not run.")
+            }
+
+            func testChangingPermissionAfterPromptCompositionStillPreventsEveryAPIFromStarting() async throws {
+                for variant in 0..<3 {
+                    let gate = CleanupSendGate()
+                    let admitted = try receipt(gate: gate, app: variant == 2 ? .ollama : .none)
+                    let barrier = SettingsTestGate()
+                    let requests = RequestLog()
+                    let session = makeStubSession { request in
+                        requests.record(request)
+                        return StubReply.completion(request, "Unwanted.")
+                    }
+                    let provider = OpenAICompatibleCleanupProvider(
+                        model: "selected", serviceURL: URL(string: "http://127.0.0.1:1234/v1")!,
+                        apiStyle: variant == 1 ? .responses : .chatCompletions,
+                        localServerApp: variant == 2 ? .ollama : .none, session: session)
+                    let work = Task {
+                        try await CleanupSendContext.$beforeTransportStart.withValue({ await barrier.pass() }) {
+                            try await provider.clean(
+                                CleanupRequest(
+                                    transcript: "dictation canary", writingStylePrompt: "vocabulary canary",
+                                    receipt: admitted))
+                        }
+                    }
+                    await barrier.waitForArrival()
+                    gate.publishVocabulary(.none)
+                    await barrier.open()
+                    do {
+                        _ = try await work.value
+                        XCTFail("Encoded JSON is not an authorization to send")
+                    } catch {
+                        XCTAssertEqual(error as? CleanupHoldback, .vocabularyChanged)
+                    }
+                    XCTAssertEqual(requests.count, 0)
+                }
             }
             let provider = OpenAICompatibleCleanupProvider(
                 model: "selected", serviceURL: URL(string: "http://127.0.0.1:1234/v1")!,
@@ -131,6 +175,34 @@ final class CleanupAdmissionWireTests: XCTestCase {
         do {
             _ = try await work.value
             XCTFail("Neither preparation nor inference may start after revocation")
+        } catch {
+            XCTAssertEqual(error as? CleanupHoldback, .vocabularyChanged)
+        }
+        XCTAssertEqual(requests.count, 0)
+    }
+
+    func testRevocationWhileAcquiringACredentialStopsTheInferenceTransport() async throws {
+        let gate = CleanupSendGate()
+        let admitted = try receipt(gate: gate)
+        let credential = SettingsTestGate()
+        let requests = RequestLog()
+        let session = makeStubSession { request in
+            requests.record(request)
+            return StubReply.completion(request, "Unwanted.")
+        }
+        let provider = MicrosoftFoundryCleanupProvider(
+            inferenceBase: URL(string: "https://example.invalid/openai/v1")!,
+            deployment: "model", promptCachingEnabled: { true },
+            credential: HeldCredential(gate: credential), session: session)
+        let work = Task {
+            try await provider.clean(CleanupRequest(transcript: "words", receipt: admitted))
+        }
+        await credential.waitForArrival()
+        gate.publishVocabulary(.none)
+        await credential.open()
+        do {
+            _ = try await work.value
+            XCTFail("Credential completion does not grant permission to send")
         } catch {
             XCTAssertEqual(error as? CleanupHoldback, .vocabularyChanged)
         }

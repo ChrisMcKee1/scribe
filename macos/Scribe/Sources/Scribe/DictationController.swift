@@ -841,8 +841,13 @@ final class DictationController {
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
-        guard services.cleanup.isEnabled, let recipient = dictation.cleanupRecipient else {
+        guard services.cleanup.isEnabled else {
             return heldBack(.recipientChanged, dictation: id)
+        }
+        guard let recipient = dictation.cleanupRecipient else {
+            ScribeLog.info(
+                .cleanup, "Cleanup had no configured recipient at admission", .integer("dictation", id.rawValue))
+            return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
         }
         let receipt = services.cleanup.receipt(for: recipient, scope: dictation.rules.aiScope)
         let provider: any CleanupProvider

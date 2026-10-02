@@ -51,4 +51,56 @@ final class AdmittedGenerationTests: XCTestCase {
         XCTAssertEqual(admitted.postProcess("term").text, "term")
         XCTAssertEqual(admitted.aiScope, .none)
     }
+
+    @MainActor
+    func testTheControllerUsesItsAdmittedRulesAfterRecognitionAndASettingsPublication() async throws {
+        let harness = makeHarness()
+        harness.load(dictionary: [DictionaryEntry(pattern: "term", replacement: "Before")])
+        let recognition = DictationGate<String>()
+        harness.transcriber.steps = [.gate(recognition)]
+        await harness.dictate()
+        await waitUntil("recognition is held") { recognition.waitingCount == 1 }
+        harness.load(dictionary: [DictionaryEntry(pattern: "term", replacement: "After")])
+        recognition.open("term")
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(harness.fakeInjector.texts, ["Before "])
+    }
+
+    @MainActor
+    func testPermissionWithdrawalProducesAHoldbackNotAProviderFailure() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.isEnabled = true
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "https://example.invalid/v1"
+        store.openAIModel = "model"
+        let requests = RequestLog()
+        let gate = CleanupSendGate()
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    requests.record(request)
+                    return StubReply.completion(request, "Must not send.")
+                }),
+            sendGate: gate)
+        let harness = makeHarness(cleanupSource: LiveDictationCleanup(cache: cache))
+        let first = snapshot("Before", hash: "first")
+        gate.publishVocabulary(first.aiScope)
+        harness.rules.install(first)
+        let recognition = DictationGate<String>()
+        harness.transcriber.steps = [.gate(recognition)]
+        await harness.dictate()
+        await waitUntil("recognition is held") { recognition.waitingCount == 1 }
+        gate.publishVocabulary(.none)
+        harness.rules.install(snapshot("After", hash: "next"))
+        recognition.open("term")
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(requests.count, 0)
+        XCTAssertEqual(harness.fakeInjector.texts, ["Before "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .heldBack)
+        XCTAssertEqual(harness.reports.latest?.cleanupHoldback, .vocabularyChanged)
+        XCTAssertTrue(harness.presenter.noticesShown().contains(.cleanupHeldBack))
+        XCTAssertFalse(harness.notifier.kinds.contains(.cleanupFellBack))
+    }
 }

@@ -119,7 +119,17 @@ enum CommandLineTranscriptionTool {
         }
 
         let rawTranscript = arguments[1]
-        let provider = CleanupProviderResolver.resolveDefaultProvider()
+        let cache = CleanupProviderCache.shared
+        let provider: any CleanupProvider
+        let receipt: CleanupRequestReceipt
+        do {
+            let recipient = try cache.captureRecipient()
+            receipt = cache.receipt(for: recipient, scope: .none, kind: .explicitCommand)
+            provider = try cache.provider(for: recipient)
+        } catch {
+            fputs("Cleanup could not start: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
         fputs("Using cleanup provider: \(provider.displayName) (\(provider.id))\n", stderr)
 
         let response: CleanupResponse
@@ -130,7 +140,7 @@ enum CommandLineTranscriptionTool {
                 return try await provider.clean(
                     CleanupRequest(
                         transcript: CleanupPrompt.wrapTranscript(rawTranscript),
-                        writingStylePrompt: systemPrompt))
+                        writingStylePrompt: systemPrompt, receipt: receipt))
             }
         } catch {
             fputs("Cleanup failed: \(error.localizedDescription)\n", stderr)
