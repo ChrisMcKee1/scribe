@@ -165,6 +165,66 @@ final class DictionaryLibraryService: @unchecked Sendable {
         try updatePersistedStateAfterRemoval(id: id)
     }
 
+    func save(changeSet: LibraryChangeSet) throws {
+        guard !changeSet.isEmpty else { return }
+        try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
+        let deletedDirectory = librariesDirectory.appendingPathComponent("deleted", isDirectory: true)
+        let editsDirectory = librariesDirectory.appendingPathComponent(
+            BuiltInLibraryOverlay.editsFolderName,
+            isDirectory: true)
+
+        for deletion in changeSet.deletions {
+            let url = librariesDirectory.appendingPathComponent("\(deletion.libraryID).csv", isDirectory: false)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            try fileManager.createDirectory(at: deletedDirectory, withIntermediateDirectories: true)
+            let stamp = Self.deletedStamp()
+            var target = deletedDirectory.appendingPathComponent("\(stamp).\(url.lastPathComponent)", isDirectory: false)
+            var sequence = 2
+            while fileManager.fileExists(atPath: target.path) {
+                target = deletedDirectory.appendingPathComponent(
+                    "\(stamp)-\(sequence).\(url.lastPathComponent)",
+                    isDirectory: false)
+                sequence += 1
+            }
+            try fileManager.moveItem(at: url, to: target)
+        }
+
+        for write in changeSet.writes {
+            guard let content = write.content else { continue }
+            if write.builtIn {
+                try fileManager.createDirectory(at: editsDirectory, withIntermediateDirectories: true)
+                let edits = BuiltInLibraryEdits(
+                    version: BuiltInLibraryEdits.currentVersion,
+                    library: write.libraryID,
+                    terms: content.entries.map { entry in
+                        let values = TermValues(entry: entry)
+                        return BuiltInTermEdit(
+                            key: LibraryTermKey.from(entry.pattern).value,
+                            intent: .edited,
+                            base: nil,
+                            value: values,
+                            acknowledged: nil)
+                    })
+                let data = try BuiltInLibraryOverlay.write(edits)
+                try data.write(to: BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: write.libraryID), options: .atomic)
+            } else {
+                let managed = try DictionaryLibraryCsv.exportManaged(
+                    LibraryCsvContent(
+                        name: content.name,
+                        category: content.category,
+                        description: content.description,
+                        basedOn: content.basedOn,
+                        rows: content.entries.map(TermValues.init(entry:))))
+                try managed.write(
+                    to: librariesDirectory.appendingPathComponent("\(write.libraryID).csv", isDirectory: false),
+                    options: .atomic)
+            }
+        }
+
+        settings.enabledLibraryIds = Set(changeSet.localState.enabledIds)
+        try savePersistedState(changeSet.localState)
+    }
+
     func loadCatalog() async throws -> LibraryCatalog {
         let libraries = loadCatalogLibraries()
         let state = try await loadResolvedState(for: libraries)
@@ -572,6 +632,21 @@ final class DictionaryLibraryService: @unchecked Sendable {
             let value = String(data: try JSONEncoder().encode(state), encoding: .utf8)
             try persistenceStore.writeStringSetting(key: Self.libraryStateKey, value: value)
         }
+    }
+
+    private func savePersistedState(_ state: LibraryLocalState) throws {
+        guard let persistenceStore else { return }
+        let value = String(data: try JSONEncoder().encode(state), encoding: .utf8)
+        try persistenceStore.writeStringSetting(key: Self.libraryStateKey, value: value)
+    }
+
+    private static func deletedStamp(now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return formatter.string(from: now)
     }
 
     private func libraryFiles() -> [URL] {
