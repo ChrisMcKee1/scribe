@@ -124,7 +124,8 @@ enum DictionaryLibraryOverlapAnalyzer {
         guard report.redundantCount > 0 else { return personal }
         let redundant = Set(report.redundant.map { "\($0.pattern.lowercased())\u{0}\($0.replacement)" })
         return personal.filter { entry in
-            let key = "\(entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())\u{0}\(entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines))"
+            let key =
+                "\(entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())\u{0}\(entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines))"
             return !redundant.contains(key)
         }
     }
@@ -223,9 +224,11 @@ enum LibrarySwitchOffCopy {
         let names = keptOn.map { "\"\($0.name)\"" }
         let list = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names.last!
         if names.count == 1 {
-            return "Kept on: \(list). Some of its terms overlap other terms dictation applies, so switching it off could change what dictation writes."
+            return
+                "Kept on: \(list). Some of its terms overlap other terms dictation applies, so switching it off could change what dictation writes."
         }
-        return "Kept on: \(list). Some of their terms overlap other terms dictation applies, so switching them off could change what dictation writes."
+        return
+            "Kept on: \(list). Some of their terms overlap other terms dictation applies, so switching them off could change what dictation writes."
     }
 
     private static func decide(

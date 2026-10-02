@@ -178,7 +178,8 @@ final class DictionaryLibraryService: @unchecked Sendable {
             guard fileManager.fileExists(atPath: url.path) else { continue }
             try fileManager.createDirectory(at: deletedDirectory, withIntermediateDirectories: true)
             let stamp = Self.deletedStamp()
-            var target = deletedDirectory.appendingPathComponent("\(stamp).\(url.lastPathComponent)", isDirectory: false)
+            var target = deletedDirectory.appendingPathComponent(
+                "\(stamp).\(url.lastPathComponent)", isDirectory: false)
             var sequence = 2
             while fileManager.fileExists(atPath: target.path) {
                 target = deletedDirectory.appendingPathComponent(
@@ -206,7 +207,8 @@ final class DictionaryLibraryService: @unchecked Sendable {
                             acknowledged: nil)
                     })
                 let data = try BuiltInLibraryOverlay.write(edits)
-                try data.write(to: BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: write.libraryID), options: .atomic)
+                try data.write(
+                    to: BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: write.libraryID), options: .atomic)
             } else {
                 let managed = try DictionaryLibraryCsv.exportManaged(
                     LibraryCsvContent(

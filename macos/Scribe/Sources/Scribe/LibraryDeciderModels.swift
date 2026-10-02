@@ -170,7 +170,8 @@ struct LibraryWorkspace: Sendable {
                     defer { nextRowID += 1 }
                     let values = TermValues(entry: entry)
                     let key = LibraryTermKey.from(entry.pattern)
-                    let origin: TermOrigin = item.builtIn
+                    let origin: TermOrigin =
+                        item.builtIn
                         ? (item.library.authoredKeys.contains(key) ? .edited : .shipped)
                         : .custom
                     return DraftTermRow(
@@ -279,7 +280,8 @@ struct LibraryWorkspace: Sendable {
         if key.isEmpty {
             return LibraryEditResult(
                 applied: false,
-                issue: LibraryValidationIssue(libraryID: libraryID, rowID: nil, kind: .writtenWithoutSpoken, field: .spoken))
+                issue: LibraryValidationIssue(
+                    libraryID: libraryID, rowID: nil, kind: .writtenWithoutSpoken, field: .spoken))
         }
         if draft.libraries[index].rows.contains(where: { $0.row.key == key }) {
             return LibraryEditResult(
@@ -301,7 +303,7 @@ struct LibraryWorkspace: Sendable {
 
     mutating func editTerm(_ libraryID: String, rowID: Int64, values: TermValues) -> LibraryEditResult {
         guard let libraryIndex = libraryIndex(libraryID),
-              let rowIndex = draft.libraries[libraryIndex].rows.firstIndex(where: { $0.rowID == rowID })
+            let rowIndex = draft.libraries[libraryIndex].rows.firstIndex(where: { $0.rowID == rowID })
         else {
             return LibraryEditResult(applied: false, issue: nil)
         }
@@ -310,12 +312,14 @@ struct LibraryWorkspace: Sendable {
         if key.isEmpty {
             return LibraryEditResult(
                 applied: false,
-                issue: LibraryValidationIssue(libraryID: libraryID, rowID: rowID, kind: .writtenWithoutSpoken, field: .spoken))
+                issue: LibraryValidationIssue(
+                    libraryID: libraryID, rowID: rowID, kind: .writtenWithoutSpoken, field: .spoken))
         }
         if draft.libraries[libraryIndex].rows.contains(where: { $0.rowID != rowID && $0.row.key == key }) {
             return LibraryEditResult(
                 applied: false,
-                issue: LibraryValidationIssue(libraryID: libraryID, rowID: rowID, kind: .duplicateSpoken, field: .spoken))
+                issue: LibraryValidationIssue(
+                    libraryID: libraryID, rowID: rowID, kind: .duplicateSpoken, field: .spoken))
         }
         change {
             var rows = $0.libraries[libraryIndex].rows
@@ -340,7 +344,7 @@ struct LibraryWorkspace: Sendable {
 
     mutating func setTermEnabled(_ libraryID: String, rowID: Int64, enabled: Bool) {
         guard let libraryIndex = libraryIndex(libraryID),
-              let rowIndex = draft.libraries[libraryIndex].rows.firstIndex(where: { $0.rowID == rowID })
+            let rowIndex = draft.libraries[libraryIndex].rows.firstIndex(where: { $0.rowID == rowID })
         else { return }
         structural(enabled ? "Turn on term" : "Turn off term") {
             var rows = $0.libraries[libraryIndex].rows
@@ -410,7 +414,8 @@ struct LibraryWorkspace: Sendable {
         state.health = .ok
         state.enabledIds = draft.libraries.filter { $0.enabled && !$0.pendingDelete }.map(\.id)
         state.legacyEnabledIds = state.enabledIds
-        state.aiPermissions = Dictionary(uniqueKeysWithValues: draft.libraries.map { ($0.id.lowercased(), $0.aiPermitted) })
+        state.aiPermissions = Dictionary(
+            uniqueKeysWithValues: draft.libraries.map { ($0.id.lowercased(), $0.aiPermitted) })
         state.normalize()
         return LibraryCaptureResult(
             changeSet: LibraryChangeSet(

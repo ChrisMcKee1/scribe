@@ -520,17 +520,19 @@ struct DictionaryWordPacksSettingsTab: View {
     }
 
     private var visiblePacks: [DraftLibrary] {
-        LibraryOrdering().sort(workspace.draft.libraries.filter { !$0.pendingDelete }.map { library in
-            DictionaryLibrary(
-                id: library.id,
-                name: library.name,
-                category: library.category,
-                description: library.description,
-                builtIn: library.builtIn,
-                entries: library.rows.map { $0.row.values.dictionaryEntry },
-                fileName: library.builtIn ? nil : "\(library.id).csv",
-                basedOn: library.basedOn)
-        }).compactMap { ordered in
+        LibraryOrdering().sort(
+            workspace.draft.libraries.filter { !$0.pendingDelete }.map { library in
+                DictionaryLibrary(
+                    id: library.id,
+                    name: library.name,
+                    category: library.category,
+                    description: library.description,
+                    builtIn: library.builtIn,
+                    entries: library.rows.map { $0.row.values.dictionaryEntry },
+                    fileName: library.builtIn ? nil : "\(library.id).csv",
+                    basedOn: library.basedOn)
+            }
+        ).compactMap { ordered in
             workspace.draft.libraries.first { $0.id.caseInsensitiveCompare(ordered.id) == .orderedSame }
         }
     }
@@ -543,7 +545,8 @@ struct DictionaryWordPacksSettingsTab: View {
     private var filteredRows: [DraftTermRow] {
         guard let selectedPack else { return [] }
         let search = LibrarySearch.forCurrentLocale()
-        let rows = searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let rows =
+            searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? selectedPack.rows
             : selectedPack.rows.filter { search.matches($0.row.values, query: searchText) }
         return LibraryTermSort.forCurrentLocale().sort(rows, by: sortOrder)
@@ -617,15 +620,20 @@ struct DictionaryWordPacksSettingsTab: View {
             List(selection: Binding(get: { selectedID }, set: { selectedID = $0 })) {
                 ForEach(visiblePacks, id: \.id) { pack in
                     HStack(alignment: .top, spacing: 8) {
-                        Toggle("", isOn: Binding(
-                            get: { pack.enabled },
-                            set: { workspace.setEnabled(pack.id, enabled: $0) }))
-                            .labelsHidden()
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { pack.enabled },
+                                set: { workspace.setEnabled(pack.id, enabled: $0) })
+                        )
+                        .labelsHidden()
                         VStack(alignment: .leading, spacing: 3) {
                             Text(pack.name).font(.body.weight(.medium))
-                            Text("\(pack.builtIn ? "Built-in" : "Your word pack") · \(pack.rows.count.formatted()) terms")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text(
+                                "\(pack.builtIn ? "Built-in" : "Your word pack") · \(pack.rows.count.formatted()) terms"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                             if let description = pack.description, !description.isEmpty {
                                 Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
@@ -645,8 +653,10 @@ struct DictionaryWordPacksSettingsTab: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(pack.name).font(.title3.weight(.semibold))
-                        Text("\(pack.builtIn ? "Built-in word pack" : "Your word pack") · \(pack.rows.count.formatted()) terms")
-                            .foregroundStyle(.secondary)
+                        Text(
+                            "\(pack.builtIn ? "Built-in word pack" : "Your word pack") · \(pack.rows.count.formatted()) terms"
+                        )
+                        .foregroundStyle(.secondary)
                     }
                     Spacer()
                     if pack.builtIn {
@@ -720,11 +730,14 @@ struct DictionaryWordPacksSettingsTab: View {
 
     private func termRow(packID: String, row: DraftTermRow) -> some View {
         HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { row.row.values.enabled },
-                set: { workspace.setTermEnabled(packID, rowID: row.rowID, enabled: $0) }))
-                .labelsHidden()
-                .frame(width: 42, alignment: .leading)
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { row.row.values.enabled },
+                    set: { workspace.setTermEnabled(packID, rowID: row.rowID, enabled: $0) })
+            )
+            .labelsHidden()
+            .frame(width: 42, alignment: .leading)
             Text(row.row.values.spoken).frame(maxWidth: .infinity, alignment: .leading)
             Text(row.row.values.written).frame(maxWidth: .infinity, alignment: .leading)
             Text(row.row.values.wholeWord ? "Yes" : "No").frame(width: 90, alignment: .leading)
