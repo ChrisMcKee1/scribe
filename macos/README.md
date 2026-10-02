@@ -147,6 +147,19 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   sidebar, opens matching pages and scrolls to matching cards; a change made from the tray shows in
   an open window, Open at Login shows what macOS reports, and no tab waits on the database on the
   main thread
+- Settings has a persistent unsaved-changes footer. Pending voice snippet and app profile input,
+  credential input and word pack edits are kept across page navigation; Save uses their existing
+  stores, Discard changes clears pending input, and the window's Close button or Command-W asks
+  Save / Discard changes / Keep editing. Keep editing is the default. A failed save stays open,
+  keeps uncommitted edits and shows its error in the footer. Settings that already apply immediately
+  on macOS, including tray choices, Open at Login, dictation controls, history retention and existing
+  dictionary/snippet/profile row actions, stay immediate and are not rolled back by Discard.
+  The guard covers closing Settings, not quitting or restarting the application.
+- History shows the newest 200 stored dictations, with copy and confirmed per-item delete. Search
+  runs asynchronously against every stored dictation's text and recorded app identity before limiting
+  the displayed matches to 200. Search is debounced; late results cannot replace a newer query, and
+  Clear search restores the recent list. Delete and Delete all history refresh the active query and
+  invalidate the existing recovery UI through the same history-cleared callback.
 - User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), Word packs
   (all 11 built-in packs, custom CSV import/export, staged editing with undo, redo, save and discard,
   per-pack AI vocabulary permission), voice snippets, and per-app profiles (writing style + newline

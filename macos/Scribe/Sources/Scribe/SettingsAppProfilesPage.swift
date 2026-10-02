@@ -53,6 +53,7 @@ struct AppProfilesSettingsTab: View {
         .onAppear {
             Task { await model.reload() }
         }
+        .onChange(of: drafts.saveRevision) { _ in Task { await model.reload() } }
         .onChange(of: model.profiles) { profiles in
             if let selectedProfileID, profiles.contains(where: { $0.id == selectedProfileID }) {
                 return
@@ -88,10 +89,6 @@ struct AppProfilesSettingsTab: View {
             HStack {
                 Button("Add") {
                     selectedProfileID = nil
-                    drafts.profileName = ""
-                    drafts.profileBundleIdentifiers = ""
-                    drafts.profileWritingStyle = ""
-                    drafts.profileNewlineMode = .smartFlatten
                 }
                 Button("Delete...", role: .destructive) {
                     if let selectedProfile {

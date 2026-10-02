@@ -30,6 +30,9 @@ final class SettingsSnapshotRenderTests: XCTestCase {
         let databaseURL = scratchURL.appendingPathComponent("scribe.db", isDirectory: false)
         let persistenceStore = PersistenceStore(databaseURL: databaseURL)
         try persistenceStore.initialize()
+        try persistenceStore.recordDictation(
+            startedAt: Date(), durationSeconds: 3, sampleCount: 48_000,
+            transcriptText: "This is an offline Settings history snapshot.", targetApp: "com.example.Editor")
 
         let defaults = makeIsolatedDefaults(label: "settings-snapshots")
         let cleanupAccess = makeCleanupAccess(defaults: defaults)
@@ -47,7 +50,7 @@ final class SettingsSnapshotRenderTests: XCTestCase {
             defaults: defaults.defaults,
             cleanupAccess: cleanupAccess,
             historyAccess: HistorySettingsAccess(
-                load: { HistoryStorageState(retention: .chosen(.days(90)), storedCount: 0) },
+                load: { HistoryStorageState(retention: .chosen(.days(90)), storedCount: 1) },
                 setRetention: { _ in },
                 clearHistory: { 0 }))
 
@@ -79,6 +82,16 @@ final class SettingsSnapshotRenderTests: XCTestCase {
         let searchDark = outputURL.appendingPathComponent("search-results-dark.png", isDirectory: false)
         try render(.dictation, dependencies: dependencies, appearance: .darkAqua, searchQuery: "model", to: searchDark)
         rendered.append(searchDark)
+
+        drafts.snippetPhrase = "my email"
+        drafts.snippetTemplate = "test@example.invalid"
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let theme = appearance == .aqua ? "light" : "dark"
+            let url = outputURL.appendingPathComponent("unsaved-footer-\(theme).png")
+            try render(.voiceSnippets, dependencies: dependencies, appearance: appearance, to: url)
+            rendered.append(url)
+        }
+        drafts.discard()
 
         for url in rendered {
             try assertPNGIsNotBlank(url)
@@ -310,6 +323,9 @@ private struct SnapshotSettingsShell: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            SettingsUnsavedFooter(drafts: dependencies.drafts)
+        }
         .frame(width: 1_000, height: 760)
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -377,7 +393,9 @@ private struct SnapshotSettingsShell: View {
                 onChanged: {},
                 drafts: dependencies.drafts)
         case .history:
-            SettingsHistoryPage(access: dependencies.historyAccess, onCleared: {})
+            SettingsHistoryPage(
+                access: dependencies.historyAccess, onCleared: {},
+                listAccess: .live(dependencies.persistenceStore))
         case .usage:
             SettingsUsagePage(persistenceStore: dependencies.persistenceStore, onChanged: {})
         case .advanced:
@@ -453,7 +471,8 @@ private struct SnapshotWordPacksShell: View {
                 SettingsCard {
                     DictionaryWordPacksSettingsTab(
                         dictionaryLibraryService: dependencies.dictionaryLibraryService,
-                        onChanged: {})
+                        onChanged: {},
+                        drafts: dependencies.drafts)
                 }
             }
             .padding(24)

@@ -157,7 +157,17 @@ struct SettingsView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            SettingsUnsavedFooter(drafts: drafts)
+        }
         .frame(minWidth: 860, minHeight: 600)
+        .onAppear {
+            drafts.configureSave(
+                store: persistenceStore,
+                libraries: dictionaryLibraryService,
+                onChanged: onProfilesOrRulesChanged)
+        }
+        .disabled(drafts.isSaving)
         .onChange(of: searchText) { _ in
             selectedSearchIndex = 0
             isShowingSearchResults = true
@@ -238,7 +248,9 @@ struct SettingsView: View {
                 onChanged: onProfilesOrRulesChanged,
                 drafts: drafts)
         case .history:
-            SettingsHistoryPage(access: historyAccess, onCleared: onHistoryCleared)
+            SettingsHistoryPage(
+                access: historyAccess, onCleared: onHistoryCleared,
+                listAccess: .live(persistenceStore))
         case .usage:
             SettingsUsagePage(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
         case .advanced:

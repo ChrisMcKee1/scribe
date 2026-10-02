@@ -61,7 +61,8 @@ struct SettingsDictionaryPage: View {
                 SettingsCard(searchID: "dictionary.word-packs") {
                     DictionaryWordPacksSettingsTab(
                         dictionaryLibraryService: dictionaryLibraryService,
-                        onChanged: childChanged)
+                        onChanged: childChanged,
+                        drafts: drafts)
                 }
             }
         }
@@ -213,6 +214,7 @@ struct DictionarySettingsTab: View {
             reloadWordPackCoverage()
             Task { await model.reload() }
         }
+        .onChange(of: drafts.saveRevision) { _ in Task { await model.reload() } }
         .sheet(
             isPresented: Binding(
                 get: { model.cleanupReport != nil },
@@ -530,7 +532,11 @@ struct DictionaryWordPacksSettingsTab: View {
     let dictionaryLibraryService: DictionaryLibraryService
     let onChanged: @MainActor () -> Void
 
-    @State private var workspace = LibraryWorkspace(libraries: [])
+    @ObservedObject var drafts: SettingsDrafts
+    private var workspace: LibraryWorkspace {
+        get { drafts.wordPackWorkspace }
+        nonmutating set { drafts.wordPackWorkspace = newValue }
+    }
     @State private var selectedID: String?
     @State private var searchText = ""
     @State private var sortOrder: LibraryTermSortOrder = .savedOrder
@@ -624,14 +630,17 @@ struct DictionaryWordPacksSettingsTab: View {
                     .keyboardShortcut("z", modifiers: [.command, .shift])
                 Button("Discard") { discard() }
                     .disabled(!workspace.hasUnsavedChanges)
-                Button("Save") { save() }
+                Button("Save") { Task { await drafts.save() } }
                     .disabled(!workspace.hasUnsavedChanges)
-                    .keyboardShortcut("s", modifiers: [.command])
             }
 
             recentlyDeletedSection
         }
+        .disabled(drafts.isSaving || !drafts.wordPacksLoaded)
         .onAppear(perform: reload)
+        .onChange(of: workspace.hasUnsavedChanges) { dirty in
+            if !dirty { reload() }
+        }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
             importWordPack(result)
         }
@@ -851,36 +860,21 @@ struct DictionaryWordPacksSettingsTab: View {
     private func reload() {
         Task {
             do {
-                let catalog = try await dictionaryLibraryService.loadCatalog()
+                try await drafts.loadWordPacks(using: dictionaryLibraryService)
+                let deleted = try await dictionaryLibraryService.listRecentlyDeleted()
                 await MainActor.run {
-                    workspace = LibraryWorkspace(catalog: catalog)
                     selectedID = selectedID ?? visiblePacks.first?.id
-                    recentlyDeleted = catalog.recentlyDeleted
+                    recentlyDeleted = deleted.filter { entry in
+                        !(workspace.captureChangeSet().changeSet?.recentlyDeletedActions.contains {
+                            $0.entryName == entry.entryName
+                        } ?? false)
+                    }
                     statusMessage = nil
                     errorMessage = nil
                 }
             } catch {
                 await MainActor.run { errorMessage = wordPackError(error) }
             }
-        }
-    }
-
-    private func save() {
-        let capture = workspace.captureChangeSet()
-        if let issue = capture.issues.first {
-            errorMessage = LibraryEditor.message(for: issue)
-            return
-        }
-        guard let changeSet = capture.changeSet else { return }
-        do {
-            try dictionaryLibraryService.save(changeSet: changeSet)
-            workspace.markSaved()
-            statusMessage = "Saved word packs."
-            errorMessage = nil
-            onChanged()
-            reload()
-        } catch {
-            errorMessage = wordPackError(error)
         }
     }
 
