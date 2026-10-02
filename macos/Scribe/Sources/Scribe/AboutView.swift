@@ -181,6 +181,7 @@ struct AboutView: View {
                 }
                 Spacer()
                 VStack(spacing: 8) {
+                    SaveDiagnosticsButton()
                     Button("Report an issue") {
                         NSWorkspace.shared.open(Self.newIssueURL)
                     }

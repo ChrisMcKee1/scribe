@@ -71,9 +71,10 @@ struct DiagnosticsSettingsTab: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Save diagnostics").cardTitle()
                 Text(
-                    "The macOS port does not create a diagnostics zip yet. Use this page for timings, system shape and local paths, and read any details before sharing them."
+                    "Save recent shape-only app logs and a system summary. The archive excludes dictations, recordings, saved settings and keys. Review it before sharing."
                 )
                 .cardDescription()
+                SaveDiagnosticsButton()
             }
         }
     }
@@ -82,7 +83,7 @@ struct DiagnosticsSettingsTab: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Logs").cardTitle()
             Text(
-                "Scribe for macOS writes app events to Apple unified logging with subsystem com.scribe.macos. Dictation text is not logged by Scribe."
+                "Scribe writes shape-only app events to Apple unified logging and local daily files. Logs are kept for seven days, with soft limits of 16 MB a day and 64 MB total. Dictation text is never included."
             )
             .cardDescription()
             Text("AI cleanup problems").cardTitle()

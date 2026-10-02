@@ -7,7 +7,15 @@ if CommandLineTranscriptionTool.runIfRequested() {
 }
 
 let application = NSApplication.shared
+let diagnosticsObservation = ScribeLog.addObserver { DiagnosticsLogStore.live.append($0) }
+ScribeLog.info(
+    .app, "Session started", .integer("pid", ProcessInfo.processInfo.processIdentifier),
+    .count("processors", ProcessInfo.processInfo.processorCount),
+    .integer("memoryBytes", ProcessInfo.processInfo.physicalMemory))
 let delegate = AppDelegate()
 application.setActivationPolicy(.accessory)
 application.delegate = delegate
 application.run()
+ScribeLog.info(.app, "Session ended", .integer("pid", ProcessInfo.processInfo.processIdentifier))
+DiagnosticsLogStore.live.finish()
+diagnosticsObservation.cancel()

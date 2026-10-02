@@ -116,6 +116,18 @@ from clipboard history (Win+V) and from cross-device cloud clipboard sync.
 
 ### Diagnostic information
 
+The native macOS app also keeps shape-only daily logs in
+`~/Library/Application Support/Scribe/Logs`. Its queued writer redacts device and
+profile names and paths, and excludes legacy unshaped events entirely. Files are
+kept for seven days with soft limits of 16 MB per day and 64 MB total. A day at its
+limit takes no more entries; old files are removed on the first event of a new
+day and before export, never the active day's file. A write failure cannot stop
+dictation. Save diagnostics on Diagnostics or About creates a zip containing
+only these redacted logs and a system-shape report, never the database, saved
+settings, recordings or Apple's unified logs. Review the archive before sharing.
+The Windows-specific historical redaction and retention details below do not
+describe the macOS log files.
+
 Scribe writes diagnostic logs locally. Logs may include application lifecycle
 events, the selected audio device, the name of the focused application,
 performance measurements, model and provider configuration identifiers, and

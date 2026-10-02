@@ -268,7 +268,7 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 
 See `PORTING-PLAN.md`, "Remaining parity gaps, checked against current source", for evidence, the smallest
 implementation surface and any dependency, runtime or credential blocker. Confirmed gaps include VAD trimming,
-multilingual and bundled ASR, chunking long recordings, GitHub Copilot cleanup, durable diagnostics export and logs,
+multilingual and bundled ASR, chunking long recordings, GitHub Copilot cleanup,
 automatic updates, Intel validation, and full real-ASR scenario coverage. Settings also lacks a separate indicator
 preview and visibility toggle, global writing-style and advanced-prompt editing, Azure resource API-key auth, and
 speech-model/thread controls, an editable idle memory-release duration, and a tray microphone picker. Mouse-button
