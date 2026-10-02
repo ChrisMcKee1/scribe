@@ -32,8 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var ruleRefresher = RuleSetRefresher<DictationRuleSnapshot>(
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
-            let libraryEntries = await self?.enabledLibraryEntries() ?? []
-            return await DictationRuleSnapshot.compile(rules, libraryEntries: libraryEntries)
+            let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
+            return await DictationRuleSnapshot.compile(rules, libraryEntries: vocabulary.entries)
         },
         apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
@@ -184,9 +184,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await ruleRefresher.refresh() }
     }
 
-    /// Which dictionary libraries are switched on, read on the main actor where Settings changes them.
-    private func enabledLibraryEntries() -> [DictionaryEntry] {
-        dictionaryLibraryService.enabledLibraryEntries()
+    /// The committed word pack vocabulary snapshot every dictation reads, including the AI-permitted subset.
+    private func loadLibraryVocabulary() async throws -> LibraryVocabulary {
+        try await dictionaryLibraryService.loadVocabulary()
     }
 
     private func installRules(_ snapshot: DictationRuleSnapshot) {
