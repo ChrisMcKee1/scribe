@@ -27,12 +27,12 @@ enum BuiltInDictionaryLibraries {
         var libraries: [DictionaryLibrary] = []
         for fileURL in fileURLs where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
-            guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            guard !id.isEmpty, let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
 
-            let file = DictionaryLibraryCsv.parse(text)
-            guard !file.entries.isEmpty else { continue }
+            let file = DictionaryLibraryCsv.parseManaged(data)
+            guard !file.terms.isEmpty else { continue }
 
             libraries.append(
                 DictionaryLibrary(
@@ -41,7 +41,7 @@ enum BuiltInDictionaryLibraries {
                     category: file.category ?? "General",
                     description: file.description,
                     builtIn: true,
-                    entries: file.entries))
+                    entries: file.terms.map(\.dictionaryEntry)))
         }
 
         return LibraryPrecedence.order(libraries)

@@ -733,9 +733,9 @@ private struct DictionaryLibrariesSettingsTab: View {
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             do {
-                let csv = try String(contentsOf: url, encoding: .utf8)
+                let data = try Data(contentsOf: url)
                 let library = try dictionaryLibraryService.import(
-                    csv: csv, suggestedName: url.deletingPathExtension().lastPathComponent)
+                    data: data, suggestedName: url.deletingPathExtension().lastPathComponent)
                 statusMessage = "Imported \"\(library.name)\" (\(library.entries.count) term(s))."
                 reload()
             } catch {

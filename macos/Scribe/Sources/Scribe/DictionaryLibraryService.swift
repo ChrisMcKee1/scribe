@@ -109,12 +109,13 @@ final class DictionaryLibraryService {
     /// library and returning it. The display name comes from the file's `name` header, else
     /// `suggestedName` (typically the file name). Throws if the CSV has no usable entries.
     @discardableResult
-    func `import`(csv: String, suggestedName: String?) throws -> DictionaryLibrary {
-        let file = DictionaryLibraryCsv.parse(csv)
+    func `import`(data: Data, suggestedName: String?) throws -> DictionaryLibrary {
+        let file = DictionaryLibraryCsv.parseImport(data)
         if !file.errors.isEmpty {
-            throw DictionaryLibraryServiceError.invalidCsv(file.errors.prefix(5).joined(separator: "\n"))
+            throw DictionaryLibraryServiceError.invalidCsv(
+                file.errors.prefix(5).map(\.legacyMessage).joined(separator: "\n"))
         }
-        guard !file.entries.isEmpty else {
+        guard !file.terms.isEmpty else {
             throw DictionaryLibraryServiceError.noUsableEntries
         }
 
@@ -132,15 +133,20 @@ final class DictionaryLibraryService {
             category: category,
             description: file.description,
             builtIn: false,
-            entries: file.entries,
+            entries: file.terms.map(\.dictionaryEntry),
             fileName: "\(id).csv"
         )
 
         // Re-export through the library writer so the stored file is normalized and always
         // carries a header, regardless of what the source file looked like.
-        let text = DictionaryLibraryCsv.export(library)
-        try text.write(
-            to: librariesDirectory.appendingPathComponent("\(id).csv"), atomically: true, encoding: .utf8)
+        let data = try DictionaryLibraryCsv.exportManaged(
+            LibraryCsvContent(
+                name: library.name,
+                category: library.category,
+                description: library.description,
+                basedOn: file.basedOn,
+                rows: file.terms))
+        try data.write(to: librariesDirectory.appendingPathComponent("\(id).csv"), options: .atomic)
         return library
     }
 
@@ -180,12 +186,14 @@ final class DictionaryLibraryService {
         })
         where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
-            guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            guard !id.isEmpty, let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
 
-            let file = DictionaryLibraryCsv.parse(text)
-            guard !file.entries.isEmpty else { continue }
+            let file = DictionaryLibraryCsv.parseManaged(data)
+            guard !file.terms.isEmpty else {
+                continue
+            }
 
             libraries.append(
                 DictionaryLibrary(
@@ -194,7 +202,7 @@ final class DictionaryLibraryService {
                     category: file.category ?? "Custom",
                     description: file.description,
                     builtIn: false,
-                    entries: file.entries,
+                    entries: file.terms.map(\.dictionaryEntry),
                     fileName: fileURL.lastPathComponent))
         }
         return libraries
