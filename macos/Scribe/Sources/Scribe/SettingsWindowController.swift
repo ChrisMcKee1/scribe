@@ -17,6 +17,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var drafts: SettingsDrafts?
     private var closePromptShowing = false
     private var closeAccepted = false
+    private var approvalOperation: Task<Bool, Never>?
     private let chooseClose: @MainActor (NSWindow, [String]) async -> SettingsCloseChoice
     private(set) var closeOperation: Task<Void, Never>?
 
@@ -68,14 +69,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         closePromptShowing = true
         closeOperation = Task { @MainActor [weak self] in
             guard let self else { return }
-            await drafts.waitUntilIdle()
-            let accepted: Bool
-            if drafts.hasUnsavedChanges {
-                let choice = await self.chooseClose(sender, drafts.unsavedSections)
-                accepted = await drafts.acceptClose(choice)
-            } else {
-                accepted = true
-            }
+            let accepted = await self.approvePendingChanges(sender, drafts: drafts)
             if accepted {
                 self.closeAccepted = true
                 sender.performClose(nil)
@@ -84,6 +78,41 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             self.closeOperation = nil
         }
         return false
+    }
+
+    /// Must complete before the application starts shutdown or schedules a restart. False cancels that request,
+    /// leaving Settings editable, including after a failed save. This does not close the window or start teardown.
+    func prepareForApplicationTermination() async -> Bool {
+        guard let drafts else { return true }
+        guard let window else { return !drafts.isBusy && !drafts.hasUnsavedChanges }
+        let accepted = await approvePendingChanges(window, drafts: drafts)
+        if !accepted {
+            showWindow(nil)
+            window.makeKeyAndOrderFront(nil)
+        }
+        return accepted
+    }
+
+    private func approvePendingChanges(_ window: NSWindow, drafts: SettingsDrafts) async -> Bool {
+        // A Quit during a Settings-close prompt joins that same choice, rather than displaying a second sheet.
+        if let approvalOperation {
+            let accepted = await approvalOperation.value
+            return accepted && !drafts.isBusy && !drafts.hasUnsavedChanges
+        }
+        guard window.attachedSheet == nil else { return false }
+        let operation = Task { @MainActor in
+            await drafts.waitUntilIdle()
+            guard !Task.isCancelled else { return false }
+            guard window.attachedSheet == nil else { return false }
+            guard drafts.hasUnsavedChanges else { return true }
+            let choice = await self.chooseClose(window, drafts.unsavedSections)
+            guard !Task.isCancelled else { return false }
+            return await drafts.acceptClose(choice)
+        }
+        approvalOperation = operation
+        let accepted = await operation.value
+        approvalOperation = nil
+        return accepted && !drafts.isBusy && !drafts.hasUnsavedChanges
     }
 
     private static func showClosePrompt(_ window: NSWindow, _ sections: [String]) async -> SettingsCloseChoice {

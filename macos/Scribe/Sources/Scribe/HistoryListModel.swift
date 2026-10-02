@@ -33,6 +33,12 @@ final class HistoryListModel: ObservableObject {
     private let access: HistoryListAccess
     private let delay: @Sendable () async throws -> Void
 
+    var resultLimitText: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Showing up to 200 recent dictations."
+            : "Searching all stored dictations. Showing only the first 200 matches, newest first."
+    }
+
     init(
         access: HistoryListAccess,
         delay: @escaping @Sendable () async throws -> Void = {

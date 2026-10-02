@@ -162,11 +162,7 @@ struct HistorySettingsTab: View {
                 }
                 if list.isLoading { ProgressView().controlSize(.small) }
             }
-            Text(
-                list.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? "Showing up to 200 recent dictations."
-                    : "Searching all stored dictations. Showing up to 200 matches."
-            ).cardDescription()
+            Text(list.resultLimitText).cardDescription()
             if let error = list.errorMessage {
                 HStack {
                     Text(error).font(.caption).foregroundStyle(.red)

@@ -231,6 +231,167 @@ final class SettingsUnsavedChangesTests: XCTestCase {
         XCTAssertNotNil(drafts.wordPackWorkspace.draft.find(id))
         XCTAssertFalse(drafts.hasUnsavedChanges)
     }
+
+    func testQuitGuardCleanStateNeedsNoPromptAndDoesNotCloseSettings() async {
+        _ = NSApplication.shared
+        let drafts = SettingsDrafts()
+        let controller = SettingsWindowController(
+            window: NSWindow(), drafts: drafts, onClose: { _ in XCTFail("Guard must not close Settings") },
+            chooseClose: { _, _ in
+                XCTFail("Clean Settings needs no prompt")
+                return .keepEditing
+            })
+        let accepted = await controller.prepareForApplicationTermination()
+        XCTAssertTrue(accepted)
+        XCTAssertNil(controller.closeOperation)
+    }
+
+    func testQuitGuardUsesEveryCloseChoiceForStagedWordPacks() async {
+        _ = NSApplication.shared
+        for choice in [SettingsCloseChoice.save, .discard, .keepEditing] {
+            let drafts = SettingsDrafts()
+            let id = drafts.wordPackWorkspace.createLibrary(name: "Pending")
+            var saves = 0
+            drafts.saveOperation = {
+                saves += 1
+                $0.wordPackWorkspace.discard()
+            }
+            let controller = SettingsWindowController(
+                window: NSWindow(), drafts: drafts, onClose: { _ in XCTFail("Guard must not close Settings") },
+                chooseClose: { _, sections in
+                    XCTAssertEqual(sections, ["Word packs"])
+                    return choice
+                })
+            let accepted = await controller.prepareForApplicationTermination()
+            XCTAssertEqual(accepted, choice != .keepEditing)
+            XCTAssertEqual(saves, choice == .save ? 1 : 0)
+            XCTAssertEqual(drafts.hasUnsavedChanges, choice == .keepEditing)
+            XCTAssertEqual(drafts.wordPackWorkspace.draft.find(id) != nil, choice == .keepEditing)
+        }
+    }
+
+    func testQuitGuardSavePersistsWordPacksBeforeApproving() async throws {
+        _ = NSApplication.shared
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let drafts = SettingsDrafts()
+        drafts.configureSave(store: fixture.store, libraries: fixture.libraries, onChanged: {})
+        try await drafts.loadWordPacks(using: fixture.libraries)
+        let id = drafts.wordPackWorkspace.createLibrary(name: "Saved before quitting")
+        let controller = SettingsWindowController(
+            window: NSWindow(), drafts: drafts, onClose: { _ in },
+            chooseClose: { _, _ in .save })
+        let accepted = await controller.prepareForApplicationTermination()
+        XCTAssertTrue(accepted, drafts.footerMessage ?? "")
+        let catalog = try await fixture.libraries.loadCatalog()
+        XCTAssertNotNil(catalog.libraries.first { $0.library.id == id })
+        XCTAssertFalse(drafts.hasUnsavedChanges)
+    }
+
+    func testQuitGuardSaveFailureRetainsWordPacksAndCanBeRetried() async {
+        _ = NSApplication.shared
+        let drafts = SettingsDrafts()
+        let id = drafts.wordPackWorkspace.createLibrary(name: "Pending")
+        drafts.saveOperation = { _ in throw SettingsDraftSaveError("Save failed.") }
+        let controller = SettingsWindowController(
+            window: NSWindow(), drafts: drafts, onClose: { _ in XCTFail("Save failure must not close") },
+            chooseClose: { _, _ in .save })
+        let failed = await controller.prepareForApplicationTermination()
+        XCTAssertFalse(failed)
+        XCTAssertTrue(drafts.saveFailed)
+        XCTAssertEqual(drafts.footerMessage, "Save failed.")
+        XCTAssertNotNil(drafts.wordPackWorkspace.draft.find(id))
+        drafts.saveOperation = { $0.wordPackWorkspace.discard() }
+        let retried = await controller.prepareForApplicationTermination()
+        XCTAssertTrue(retried)
+    }
+
+    func testQuitGuardWaitsForAnAddBeforeChoosingAndRejectsNewEditsDuringSave() async {
+        _ = NSApplication.shared
+        let drafts = SettingsDrafts()
+        drafts.snippetPhrase = "pending"
+        XCTAssertTrue(drafts.beginAdding(.snippet))
+        let started = expectation(description: "quit guard started")
+        var prompts = 0
+        let controller = SettingsWindowController(
+            window: NSWindow(), drafts: drafts, onClose: { _ in },
+            chooseClose: { _, _ in
+                prompts += 1
+                XCTAssertFalse(drafts.isBusy)
+                return .save
+            })
+        drafts.saveOperation = { $0.snippetPhrase = "new edit" }
+        let quitting = Task { @MainActor in
+            started.fulfill()
+            return await controller.prepareForApplicationTermination()
+        }
+        await fulfillment(of: [started], timeout: 10)
+        XCTAssertEqual(prompts, 0)
+        drafts.finishAdding(.snippet)
+        let accepted = await quitting.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(prompts, 1)
+        XCTAssertEqual(drafts.snippetPhrase, "new edit")
+    }
+
+    func testQuitDuringWindowCloseAndRepeatedQuitShareOnePrompt() async {
+        _ = NSApplication.shared
+        let drafts = SettingsDrafts()
+        _ = drafts.wordPackWorkspace.createLibrary(name: "Pending")
+        let gate = SettingsClosePromptGate()
+        let window = NSWindow()
+        window.isReleasedWhenClosed = false
+        let controller = SettingsWindowController(
+            window: window, drafts: drafts, onClose: { _ in XCTFail("Keep editing must not close") },
+            chooseClose: { _, _ in await gate.choose() })
+        XCTAssertFalse(controller.windowShouldClose(window))
+        await gate.waitUntilShown()
+        let joined = expectation(description: "both quits joined the pending close")
+        joined.expectedFulfillmentCount = 2
+        let first = Task {
+            joined.fulfill()
+            return await controller.prepareForApplicationTermination()
+        }
+        let second = Task {
+            joined.fulfill()
+            return await controller.prepareForApplicationTermination()
+        }
+        await fulfillment(of: [joined], timeout: 10)
+        gate.finish(.keepEditing)
+        let firstAccepted = await first.value
+        let secondAccepted = await second.value
+        await controller.closeOperation?.value
+        XCTAssertFalse(firstAccepted)
+        XCTAssertFalse(secondAccepted)
+        XCTAssertEqual(gate.promptCount, 1)
+        XCTAssertTrue(drafts.hasUnsavedChanges)
+    }
+}
+
+@MainActor
+private final class SettingsClosePromptGate {
+    private var choice: CheckedContinuation<SettingsCloseChoice, Never>?
+    private var shown: CheckedContinuation<Void, Never>?
+    private(set) var promptCount = 0
+
+    func choose() async -> SettingsCloseChoice {
+        await withCheckedContinuation {
+            choice = $0
+            promptCount += 1
+            shown?.resume()
+            shown = nil
+        }
+    }
+
+    func waitUntilShown() async {
+        guard promptCount == 0 else { return }
+        await withCheckedContinuation { shown = $0 }
+    }
+
+    func finish(_ result: SettingsCloseChoice) {
+        choice?.resume(returning: result)
+        choice = nil
+    }
 }
 
 final class SettingsGapStorageFixture {

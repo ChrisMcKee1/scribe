@@ -29,6 +29,40 @@ private actor HistoryReadGate {
 
 @MainActor
 final class HistoryListModelTests: XCTestCase {
+    func testSearchLimitDisclosureIsExplicitAndClearingRestoresRecentCopy() {
+        let model = HistoryListModel(access: HistoryListAccess(read: { _ in [] }, delete: { _ in }))
+        XCTAssertEqual(model.resultLimitText, "Showing up to 200 recent dictations.")
+        model.query = "old entry"
+        XCTAssertEqual(
+            model.resultLimitText,
+            "Searching all stored dictations. Showing only the first 200 matches, newest first.")
+        model.query = " \n "
+        XCTAssertEqual(model.resultLimitText, "Showing up to 200 recent dictations.")
+    }
+
+    func testSearchMatchesAcrossAllRowsBeforeDisplayingOnlyFirst200NewestMatches() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        for index in 1...220 {
+            try fixture.store.recordDictation(
+                startedAt: Date(timeIntervalSince1970: Double(index)), durationSeconds: 1, sampleCount: 1,
+                transcriptText: "matching entry \(index)")
+        }
+        for index in 221...430 {
+            try fixture.store.recordDictation(
+                startedAt: Date(timeIntervalSince1970: Double(index)), durationSeconds: 1, sampleCount: 1,
+                transcriptText: "other entry")
+        }
+        let model = HistoryListModel(access: .live(fixture.store), delay: {})
+        model.query = "matching"
+        model.appear()
+        await model.inFlight?.value
+        XCTAssertEqual(model.rows.count, 200)
+        XCTAssertEqual(model.rows.first?.record.transcriptText, "matching entry 220")
+        XCTAssertEqual(model.rows.last?.record.transcriptText, "matching entry 21")
+        XCTAssertTrue(model.resultLimitText.contains("first 200 matches"))
+    }
+
     private func row(_ id: Int64, text: String = "test") -> StoredDictation {
         StoredDictation(
             id: id,
