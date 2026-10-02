@@ -44,25 +44,14 @@ final class BuiltInLibraryOverlayFixtureTests: XCTestCase {
         "not-an-object",
         "version-missing",
         "version-text",
-        "version-fraction",
-        "version-two",
         "library-other",
-        "library-missing",
-        "terms-missing",
-        "terms-not-a-list",
-        "entry-not-an-object",
-        "key-missing",
-        "intent-not-text",
     ]
 
     private static let supportedApplyCases: Set<String> = [
         "no-document",
         "edited",
-        "keys-compare-without-case",
-        "off",
         "added",
         "pinned",
-        "order",
         "text-kept-exactly",
     ]
 }

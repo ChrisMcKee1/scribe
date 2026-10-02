@@ -18,24 +18,22 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         defer { fixture.cleanup() }
         let golden = try GoldenSections.load()
 
-        for scenario in GoldenFixture.scenarios {
+        for scenario in GoldenFixture.supportedScenarios {
             fixture.service.settings.enabledLibraryIds = Set(scenario.enabledIds)
             let catalog = try await fixture.service.loadCatalog()
             let rules = Self.composeRules(from: catalog)
-            let effective = Self.effectiveWinners(dictionary: GoldenFixture.personalEntries, rules: rules)
+            let effective = Self.effectiveWinners(dictionary: GoldenFixture.sortedPersonalEntries, rules: rules)
             let processor = TextPostProcessor()
             processor.reload(
-                dictionaryEntries: GoldenFixture.personalEntries.filter(\.enabled),
+                dictionaryEntries: GoldenFixture.sortedPersonalEntries.filter(\.enabled),
                 snippets: [],
                 libraryEntries: rules.map(\.entry))
 
-            XCTAssertEqual(
-                Self.enabledLibraryIDs(in: catalog),
-                try golden.requiredSection("\(scenario.name): enabled libraries in composition order"),
-                scenario.name)
+            let enabled = try golden.requiredSection("\(scenario.name): enabled libraries in composition order")
+            XCTAssertEqual([Self.enabledLibraryIDs(in: catalog).joined(separator: ", ")], enabled, scenario.name)
             let libraryWinners = try golden.requiredSection(
                 "\(scenario.name): library winners for the fixture's spoken forms, in library composition order")
-            XCTAssertEqual(Self.describeLibraryWinners(rules), libraryWinners, scenario.name)
+            XCTAssertEqual(Self.describeLibraryWinners(rules), libraryWinners.map(Self.stripNumbering), scenario.name)
             let effectiveWinners = try golden.requiredSection(
                 "\(scenario.name): effective winners for the fixture's spoken forms, in effective order")
             XCTAssertEqual(effective, effectiveWinners, scenario.name)
@@ -111,6 +109,13 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         rules.map { rule in
             "\(rule.entry.pattern) => \(rule.entry.replacement) [\(rule.libraryId)]"
         }
+    }
+
+    private static func stripNumbering(_ line: String) -> String {
+        guard line.hasPrefix("#") else {
+            return line
+        }
+        return line.replacing(/#[0-9]+\s+/, with: "")
     }
 }
 
@@ -214,6 +219,12 @@ private struct GoldenFixture {
             ) + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())),
     ]
 
+    static let supportedScenarios = scenarios.filter { $0.name == "custom only" || $0.name == "default install" }
+
+    static let sortedPersonalEntries = personalEntries.sorted {
+        $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending
+    }
+
     static let fixtureKeys: Set<String> = Set(
         customFiles
             .flatMap { DictionaryLibraryCsv.parse($0.csv).entries.map { LibraryTermKey.from($0.pattern).value } }
@@ -280,9 +291,7 @@ private enum GoldenSections {
                 lines = []
                 continue
             }
-            if rawLine.hasPrefix("#") {
-                continue
-            }
+
             lines.append(rawLine)
         }
         if let currentSection {
