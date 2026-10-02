@@ -1,6 +1,8 @@
 import Foundation
 
-struct DictionaryLibrarySettings {
+/// `@unchecked Sendable` because `UserDefaults` is process-wide mutable state the compiler cannot model,
+/// but the access here is only through its documented thread-safe getters and setters.
+struct DictionaryLibrarySettings: @unchecked Sendable {
     static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
 
     let defaults: UserDefaults
