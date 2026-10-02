@@ -927,10 +927,10 @@ private struct CleanupSettingsTab: View {
                 Toggle("Enable AI Cleanup", isOn: $model.values.isEnabled)
                     .disabled(model.isDisabled(.enableSwitch))
                 Text(
-                    "Cleans up punctuation and phrasing after each dictation using a locally or "
-                        + "remotely hosted model. Strictly opt-in and off by default: only the "
-                        + "transcribed text is ever sent to a cleanup provider, never audio."
-                )
+                    CleanupDisclosure.summary(
+                        for: model.values.providerKind,
+                        endpoint: model.values.openAIBaseURL,
+                        forceLocal: model.providerSelection == .onThisMac))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
@@ -957,6 +957,11 @@ private struct CleanupSettingsTab: View {
                         Text(statusMessage).foregroundStyle(.secondary).font(.caption)
                     }
                 }
+
+                CleanupDisclosureSection(
+                    providerKind: model.values.providerKind,
+                    endpoint: model.values.openAIBaseURL,
+                    forceLocal: model.providerSelection == .onThisMac)
             }
         }
         .formStyle(.grouped)

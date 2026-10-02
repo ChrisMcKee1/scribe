@@ -435,6 +435,14 @@ extension CleanupProviderError {
 /// Ported from Windows' `Scribe.Core.Cleanup.CleanupPrompt` (`src/Scribe.Core/Cleanup/CleanupPrompt.cs`),
 /// which is the benchmark-validated default (see docs/model-leaderboard.md on the Windows side).
 enum CleanupPrompt {
+    static let maxGlossaryTermsLocal = 80
+    static let maxGlossaryTermsCloud = 5_000
+    static let maxGlossaryChars = 24_000
+    static let maxGlossaryTermChars = TextPostProcessor.vocabularyReplacementLimit
+    static let glossaryHeader =
+        "Preferred vocabulary. When the transcript refers to any of these, use the exact spelling shown here. Treat "
+        + "this list as a style guide rather than a closed set, and apply it regardless of the writing style above:\n"
+
     static let defaultWritingStyle = """
         Write in the speaker's language using clear, natural, well-structured prose. Never translate \
         the dictation unless explicitly asked to. Use correct punctuation, meaning commas, periods, \
@@ -518,12 +526,35 @@ enum CleanupPrompt {
         capitalization are fixed, and the request is kept as a request rather than answered.
         """
 
+    static func glossaryTermBudget(useLocalPrompt: Bool) -> Int {
+        useLocalPrompt ? maxGlossaryTermsLocal : maxGlossaryTermsCloud
+    }
+
+    static func composeVocabulary(_ personal: [DictionaryEntry], _ libraries: [DictionaryEntry]) -> [DictionaryEntry] {
+        libraries.isEmpty ? personal : DictionaryLibraryComposer.merge(baseEntries: personal, libraryEntries: libraries)
+    }
+
+    static func buildGlossary(_ entries: [DictionaryEntry]?, maxTerms: Int = maxGlossaryTermsCloud) -> String {
+        guard let entries else {
+            return ""
+        }
+        let lines = glossaryLines(entries, maxTerms: maxTerms, maxCharacters: maxGlossaryChars)
+        guard !lines.isEmpty else {
+            return ""
+        }
+        return glossaryHeader + lines.joined(separator: "\n")
+    }
+
     /// Combines a guardrail preamble with the (possibly user-customized) writing style into the
     /// full system prompt sent to the model. `useLocalPrompt` selects the terser guardrail meant
     /// for small on-device models; see `FoundryLocalCleanupProvider`.
-    static func systemPrompt(writingStyle: String, useLocalPrompt: Bool) -> String {
+    static func systemPrompt(writingStyle: String, useLocalPrompt: Bool, glossary: String? = nil) -> String {
         let guardrail = useLocalPrompt ? defaultLocalPrompt : defaultFrontierPrompt
-        return guardrail + "\n\nWriting style:\n" + writingStyle
+        var prompt = guardrail + "\n\nWriting style:\n" + writingStyle
+        if let glossary, !glossary.isEmpty {
+            prompt += "\n\n" + glossary
+        }
+        return prompt
     }
 
     /// Wraps the raw transcript in the `<transcript>` tags the guardrail preambles above reference,
@@ -545,4 +576,97 @@ enum CleanupPrompt {
         }
         return result
     }
+
+    static func countGlossary(_ entries: [DictionaryEntry]?, maxTerms: Int = maxGlossaryTermsCloud) -> GlossaryCount {
+        let entries = entries ?? []
+        let eligible = glossaryLines(entries, maxTerms: .max, maxCharacters: .max).count
+        let included = glossaryLines(entries, maxTerms: maxTerms, maxCharacters: maxGlossaryChars).count
+        return GlossaryCount(included: included, eligible: eligible)
+    }
+
+    private static func glossaryLines(
+        _ entries: [DictionaryEntry],
+        maxTerms: Int = .max,
+        maxCharacters: Int = .max
+    ) -> [String] {
+        guard maxTerms > 0 else {
+            return []
+        }
+
+        var lines: [String] = []
+        var seen = Set<String>()
+        var characters = 0
+        for entry in entries where TextPostProcessor.isVocabulary(entry) {
+            let canonical = normalizeTerm(entry.replacement)
+            guard !canonical.isEmpty else {
+                continue
+            }
+
+            let normalizedPattern = normalizeTerm(entry.pattern)
+            let spoken =
+                !normalizedPattern.isEmpty && normalizedPattern.caseInsensitiveCompare(canonical) != .orderedSame
+                ? normalizedPattern : nil
+            let key = spoken.map { canonical + "|" + $0 } ?? canonical
+            if !seen.insert(key.lowercased()).inserted {
+                continue
+            }
+
+            let line = glossaryLine(canonical: canonical, spoken: spoken)
+            if characters + line.count + 1 > maxCharacters {
+                break
+            }
+
+            characters += line.count + 1
+            lines.append(line)
+            if lines.count >= maxTerms {
+                break
+            }
+        }
+        return lines
+    }
+
+    private static func glossaryLine(canonical: String, spoken: String?) -> String {
+        if let spoken {
+            return "- \(canonical) (transcribed as \"\(spoken)\")"
+        }
+        return "- \(canonical)"
+    }
+
+    private static func normalizeTerm(_ value: String?) -> String {
+        guard let value, !value.isEmpty else {
+            return ""
+        }
+
+        var normalized = String()
+        normalized.reserveCapacity(value.count)
+        var lastWasSpace = false
+        for scalar in value.unicodeScalars {
+            if scalar == "\"" || scalar == "`" {
+                continue
+            }
+
+            if CharacterSet.controlCharacters.contains(scalar) || CharacterSet.whitespacesAndNewlines.contains(scalar)
+            {
+                if !normalized.isEmpty && !lastWasSpace {
+                    normalized.append(" ")
+                    lastWasSpace = true
+                }
+                continue
+            }
+
+            normalized.unicodeScalars.append(scalar)
+            lastWasSpace = false
+        }
+
+        let trimmed = normalized.trimmingCharacters(in: .whitespaces)
+        if trimmed.count <= maxGlossaryTermChars {
+            return trimmed
+        }
+        return String(trimmed.prefix(maxGlossaryTermChars)).trimmingCharacters(in: .whitespaces)
+    }
+}
+
+struct GlossaryCount: Equatable, Sendable {
+    let included: Int
+    let eligible: Int
 }

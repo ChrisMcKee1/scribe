@@ -261,6 +261,10 @@ final class ScenarioRules: DictationRuleSource {
         rules.appProfiles
     }
 
+    var cleanupVocabulary: CleanupVocabulary {
+        rules.cleanupVocabulary
+    }
+
     func postProcess(_ text: String) -> TextPostProcessingResult {
         let result = rules.postProcess(text)
         journal.record(.postProcessed, script.line(cleaned: text)?.clip.name ?? "?")
