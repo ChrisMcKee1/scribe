@@ -201,4 +201,38 @@ final class CleanupSendGateTests: XCTestCase {
             XCTAssertEqual($0 as? CleanupHoldback, .recipientChanged)
         }
     }
+
+    func testRecipientOnlyPublicationCannotRestoreAPermissionRevokedAfterTheMenuRequestQueued() throws {
+        let gate = CleanupSendGate()
+        let recipient = try recipient()
+        let oldScope = AiVocabularyScope(generation: 1, permittedContent: ["pack": "old"])
+        gate.publish(vocabulary: oldScope, recipient: recipient)
+        gate.publishVocabulary(.none)
+        let revision = gate.vocabularyRevision
+        let result = gate.withPublication({ 42 }, publication: { _ in .recipientOnly(recipient) })
+        XCTAssertEqual(result, 42)
+        XCTAssertEqual(gate.currentVocabularyScope, .none)
+        XCTAssertEqual(gate.vocabularyRevision, revision)
+        let stale = gate.receipt(scope: oldScope, recipient: recipient, kind: .dictation)
+        XCTAssertThrowsError(try stale.check()) {
+            XCTAssertEqual($0 as? CleanupHoldback, .vocabularyChanged)
+        }
+    }
+
+    func testRecipientOnlyPublicationIsNotRecoveryOfAnUncertainVocabularyCommit() throws {
+        let gate = CleanupSendGate()
+        let recipient = try recipient()
+        gate.publish(vocabulary: .none, recipient: recipient)
+        XCTAssertThrowsError(
+            try gate.withPublication(
+                { () throws -> Int in throw CleanupHoldback.closed },
+                publication: { _ in .recipientOnly(recipient) }))
+        _ = gate.withPublication({ 42 }, publication: { _ in .recipientOnly(recipient) })
+        let request = gate.receipt(scope: .none, recipient: recipient, kind: .dictation)
+        XCTAssertThrowsError(try request.check()) {
+            XCTAssertEqual($0 as? CleanupHoldback, .noAdmission)
+        }
+        gate.publish(vocabulary: .none, recipient: recipient)
+        XCTAssertNoThrow(try request.check())
+    }
 }

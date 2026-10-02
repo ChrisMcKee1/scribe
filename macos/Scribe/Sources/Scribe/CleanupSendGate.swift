@@ -11,9 +11,27 @@ struct CleanupRecipient: Equatable, Sendable, CustomStringConvertible, CustomRef
     var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
-struct CleanupAuthorityPublication: Sendable {
-    let vocabulary: AiVocabularyScope
+struct CleanupAuthorityPublication: Sendable, CustomStringConvertible, CustomReflectable {
+    fileprivate let vocabulary: AiVocabularyScope?
     let recipient: CleanupRecipient?
+
+    init(vocabulary: AiVocabularyScope, recipient: CleanupRecipient?) {
+        self.vocabulary = vocabulary
+        self.recipient = recipient
+    }
+
+    private init(recipient: CleanupRecipient?) {
+        vocabulary = nil
+        self.recipient = recipient
+    }
+
+    /// Menu writes change the recipient only. Preserve the scope at COMMIT, not a pre-queue copy of it.
+    static func recipientOnly(_ recipient: CleanupRecipient?) -> CleanupAuthorityPublication {
+        CleanupAuthorityPublication(recipient: recipient)
+    }
+
+    var description: String { "CleanupAuthorityPublication" }
+    var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
 enum CleanupRequestKind: Sendable, Equatable {
@@ -143,11 +161,13 @@ final class CleanupSendGate: Sendable {
             do {
                 let result = try transaction()
                 let next = publication(result)
-                current.scope = next.vocabulary
-                current.vocabularyRevision &+= 1
+                if let vocabulary = next.vocabulary {
+                    current.scope = vocabulary
+                    current.vocabularyRevision &+= 1
+                    current.uncertain = false
+                }
                 current.recipient = next.recipient
                 current.recipientPublished = true
-                current.uncertain = false
                 return result
             } catch {
                 current.scope = .none
