@@ -1,5 +1,5 @@
-import os
 import XCTest
+import os
 
 @testable import Scribe
 
