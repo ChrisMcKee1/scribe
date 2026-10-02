@@ -1048,6 +1048,15 @@ private struct CleanupSettingsTab: View {
                     "Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)",
                     text: $model.values.azureEndpoint)
                 TextField("Deployment name", text: $model.values.azureDeployment)
+                Toggle("Let Microsoft Foundry cache what Scribe sends", isOn: $model.values.azurePromptCaching)
+                Text(
+                    "On: Microsoft Foundry may keep temporary prompt-cache data derived from what Scribe sends. Off: "
+                        + "Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests. "
+                        + "Some older or provisioned deployments reject that request, and cleanup stays unavailable "
+                        + "until you turn it back on."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Picker("Authentication", selection: $model.values.azureAuthMode) {
                     Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
                     Text("Service principal").tag(AzureAuthMode.servicePrincipal)

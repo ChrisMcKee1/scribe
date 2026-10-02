@@ -47,15 +47,20 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         endpoint: String = "https://my-res.services.ai.azure.com/api/projects/my-project",
         deployment: String = "gpt-5-mini",
         credential: any AzureCredentialProvider = RecordingCredential(),
+        promptCachingEnabled: @escaping @Sendable () -> Bool = { true },
         _ handler: @escaping StubURLProtocol.Handler
     ) -> MicrosoftFoundryCleanupProvider {
         MicrosoftFoundryCleanupProvider(
             inferenceBase: MicrosoftFoundryCleanupProvider.inferenceBase(for: URL(string: endpoint)!)!,
-            deployment: deployment, credential: credential, session: makeStubSession(handler))
+            deployment: deployment,
+            promptCachingEnabled: promptCachingEnabled,
+            credential: credential,
+            session: makeStubSession(handler))
     }
 
     /// The request shape reasoning deployments accept: the account's v1 route with no dated api-version, `model` set
-    /// to the deployment, no `temperature` and no `store`, and a bearer token for the Azure AI audience.
+    /// to the deployment, no `temperature` and no `store`, `reasoning_effort: "none"` at first, and a bearer token
+    /// for the Azure AI audience.
     func testCleanPostsToTheAccountsV1ChatCompletionsWithTheDeploymentAsTheModel() async throws {
         let log = RequestLog()
         let credential = RecordingCredential(token: "entra-token")
@@ -74,10 +79,82 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         XCTAssertEqual(sent.url?.absoluteString, "https://my-res.services.ai.azure.com/openai/v1/chat/completions")
         XCTAssertNil(sent.url?.query)
         XCTAssertEqual(sent.header("Authorization"), "Bearer entra-token")
-        XCTAssertEqual(Set(sent.jsonBody.keys), ["model", "messages", "stream"])
+        XCTAssertEqual(Set(sent.jsonBody.keys), ["model", "messages", "reasoning_effort", "stream"])
         XCTAssertEqual(sent.jsonBody["model"] as? String, "gpt-5-mini")
+        XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, "none")
         XCTAssertEqual(sent.messageContents, ["Style.", "raw text"])
         XCTAssertEqual(credential.requestedScopes, ["https://ai.azure.com/.default"])
+    }
+
+    func testAReasoningRejectionRetriesWithLowThenRemembersIt() async throws {
+        let log = RequestLog()
+        let provider = makeProvider { request in
+            log.record(request)
+            switch log.count {
+            case 1:
+                return StubReply.json(
+                    request,
+                    status: 400,
+                    #"{"error":{"message":"'none' is not supported for reasoning_effort. Use low."}}"#)
+            default:
+                return StubReply.completion(request, "Cleaned text.")
+            }
+        }
+
+        _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
+        _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
+
+        XCTAssertEqual(log.all.map { $0.jsonBody["reasoning_effort"] as? String }, ["none", "low", "low"])
+    }
+
+    func testAReasoningRejectionCanFallBackToNoField() async throws {
+        let log = RequestLog()
+        let provider = makeProvider { request in
+            log.record(request)
+            let effort = RecordedRequest(request).jsonBody["reasoning_effort"] as? String
+            if effort == nil {
+                return StubReply.completion(request, "Cleaned text.")
+            }
+            return StubReply.json(
+                request,
+                status: 400,
+                #"{"error":{"message":"reasoning_effort is not supported on this deployment."}}"#)
+        }
+
+        _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
+
+        XCTAssertEqual(log.all.map { $0.jsonBody["reasoning_effort"] as? String }, ["none", "low", nil])
+    }
+
+    func testPromptCachingOffAddsExplicitModeToTheBody() async throws {
+        let log = RequestLog()
+        let provider = makeProvider(promptCachingEnabled: { false }) { request in
+            log.record(request)
+            return StubReply.completion(request, "Cleaned text.")
+        }
+
+        _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
+
+        let sent = try XCTUnwrap(log.all.first)
+        XCTAssertEqual(sent.jsonBody["prompt_cache_options"] as? [String: String], ["mode": "explicit"])
+    }
+
+    func testPromptCachingOffNeverRetriesWithoutTheField() async throws {
+        let log = RequestLog()
+        let provider = makeProvider(promptCachingEnabled: { false }) { request in
+            log.record(request)
+            return StubReply.json(
+                request,
+                status: 400,
+                #"{"error":{"message":"prompt_cache_options is not supported on this deployment."}}"#)
+        }
+
+        let error = try await cleanupFailure(of: provider)
+
+        XCTAssertEqual(log.count, 1)
+        XCTAssertEqual(log.all.first?.jsonBody["prompt_cache_options"] as? [String: String], ["mode": "explicit"])
+        XCTAssertEqual(error.failureHTTPStatus, 400)
+        XCTAssertEqual(error.settingsDetail, "prompt_cache_options is not supported on this deployment.")
     }
 
     func testAForbiddenAnswerLeadsWithPropagationAndTheRightRoles() async throws {

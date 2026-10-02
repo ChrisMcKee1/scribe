@@ -13,6 +13,36 @@ import Foundation
 /// directly, mirroring how Windows' service-principal mode hides ARM discovery (a data-plane-only permission
 /// footprint), applied to both auth modes here.
 final class MicrosoftFoundryCleanupProvider: CleanupProvider {
+    private enum AzureReasoningEffort: String, Equatable {
+        case none
+        case low
+    }
+
+    private enum AzureReasoningMode: Equatable, Sendable {
+        case none
+        case low
+        case omitted
+
+        var field: String? {
+            switch self {
+            case .none: return AzureReasoningEffort.none.rawValue
+            case .low: return AzureReasoningEffort.low.rawValue
+            case .omitted: return nil
+            }
+        }
+
+        var next: AzureReasoningMode? {
+            switch self {
+            case .none: return .low
+            case .low: return .omitted
+            case .omitted: return nil
+            }
+        }
+    }
+
+    private static let reasoningField = "reasoning_effort"
+    private static let promptCacheField = "prompt_cache_options"
+    private static let promptCacheExplicitMode = "explicit"
     /// The audience of the unified `/openai/v1/` endpoint, the one Windows requests
     /// (`AzureOpenAIResponsesClientFactory.AzureAIScope`). The dated deployments route took the Cognitive Services
     /// audience instead.
@@ -23,20 +53,24 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     let deployment: String
     /// `{account}/openai/v1/chat/completions`.
     let completionsURL: URL
+    private let promptCachingEnabled: @Sendable () -> Bool
     private let credential: any AzureCredentialProvider
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
+    private let reasoningMode = OSAllocatedUnfairLock(initialState: AzureReasoningMode.none)
 
     /// - Parameter inferenceBase: The account's `/openai/v1/` base, from `inferenceBase(for:)`.
     init(
         inferenceBase: URL,
         deployment: String,
+        promptCachingEnabled: @escaping @Sendable () -> Bool = { CleanupSettingsStore.live.azurePromptCaching },
         credential: any AzureCredentialProvider,
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
         self.deployment = deployment
         self.completionsURL = inferenceBase.appendingPathComponent("chat").appendingPathComponent("completions")
+        self.promptCachingEnabled = promptCachingEnabled
         self.credential = credential
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
@@ -70,10 +104,52 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
         } catch let error as AzureCredentialError {
             throw CleanupProviderError.credentialUnavailable(error)
         }
-        let completion = try await transport.complete(
-            request, at: completionsURL, model: deployment, bearerToken: token.token, temperature: nil,
-            defaultTimeout: timeout, provider: .microsoftFoundry)
-        return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: deployment)
+        var mode = reasoningMode.withLock { $0 }
+        while true {
+            do {
+                let completion = try await transport.complete(
+                    request,
+                    at: completionsURL,
+                    model: deployment,
+                    bearerToken: token.token,
+                    temperature: nil,
+                    reasoningEffort: mode.field,
+                    promptCacheMode: promptCachingEnabled() ? nil : Self.promptCacheExplicitMode,
+                    defaultTimeout: timeout,
+                    provider: .microsoftFoundry)
+                return CleanupResponse(
+                    cleanedText: completion.text,
+                    latency: completion.latency,
+                    providerID: id,
+                    modelID: deployment)
+            } catch let error as CleanupProviderError {
+                if !promptCachingEnabled(), Self.namesField(Self.promptCacheField, in: error) {
+                    throw error
+                }
+                guard let next = Self.retryMode(after: mode, for: error) else {
+                    throw error
+                }
+                mode = reasoningMode.withLock { state in
+                    if state == mode {
+                        state = next
+                    }
+                    return state
+                }
+            }
+        }
+    }
+
+    private static func retryMode(
+        after mode: AzureReasoningMode,
+        for error: CleanupProviderError
+    ) -> AzureReasoningMode? {
+        guard namesField(reasoningField, in: error) else { return nil }
+        return mode.next
+    }
+
+    private static func namesField(_ field: String, in error: CleanupProviderError) -> Bool {
+        guard case .rejected(let status, _, let reply) = error, status == 400 else { return false }
+        return reply.code?.localizedCaseInsensitiveContains(field) == true
+            || reply.message?.localizedCaseInsensitiveContains(field) == true
     }
 }
