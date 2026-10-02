@@ -299,6 +299,15 @@ final class TranscriptionEngine: Sendable {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }
 
+        if backend.kind == .foundryLocal,
+            let integerSampleRate = Self.integerSampleRate(sampleRate),
+            samples.count > TranscriptionChunker.maxChunkSeconds * integerSampleRate
+        {
+            let spans = TranscriptionChunker.plan(samples: samples, sampleRate: integerSampleRate)
+            return try await runChunks(
+                backend, samples: samples, sampleRate: sampleRate, spans: spans)
+        }
+
         let file: ScratchAudioFile
         do {
             file = try scratch.writeRecording(samples: samples, sampleRate: sampleRate)
@@ -312,6 +321,83 @@ final class TranscriptionEngine: Sendable {
 
         let audioSeconds = sampleRate > 0 ? Double(samples.count) / sampleRate : 0
         return try await run(backend, audioURL: file.url, audioSeconds: audioSeconds)
+    }
+
+    private static func integerSampleRate(_ sampleRate: Double) -> Int? {
+        guard sampleRate.isFinite, sampleRate > 0, sampleRate.rounded(.towardZero) == sampleRate,
+            sampleRate <= Double(Int.max / TranscriptionChunker.maxChunkSeconds)
+        else {
+            return nil
+        }
+        return Int(sampleRate)
+    }
+
+    private func runChunks(
+        _ backend: TranscriptionBackendConfiguration,
+        samples: [Float],
+        sampleRate: Double,
+        spans: [Range<Int>]
+    ) async throws -> TranscriptionResult {
+        ScribeLog.info(
+            .transcription, "Transcribing long capture in bounded chunks",
+            .count("chunks", spans.count), .integer("maxChunkSeconds", TranscriptionChunker.maxChunkSeconds))
+
+        var parts: [String] = []
+        parts.reserveCapacity(spans.count)
+        var duration: Duration = .zero
+        var deadline: Duration = .zero
+        var standardOutputBytes = 0
+        var standardErrorBytes = 0
+        var usedColdBudget = false
+        var outputHeldAfterExit = false
+
+        do {
+            for (index, span) in spans.enumerated() {
+                guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+
+                let file: ScratchAudioFile
+                do {
+                    file = try scratch.writeRecording(
+                        samples: Array(samples[span]), sampleRate: sampleRate)
+                } catch let error as ScratchAudioError {
+                    ScribeLog.error(
+                        .transcription, "Could not write the recording for the recognizer",
+                        .name("step", error.operation), .integer("errno", error.errno))
+                    throw TranscriptionError.audioWriteFailed(errno: error.errno)
+                }
+                defer { scratch.remove(file) }
+
+                let result = try await run(
+                    backend, audioURL: file.url, audioSeconds: Double(span.count) / sampleRate)
+                if index == 0 {
+                    usedColdBudget = result.diagnostics.usedColdBudget
+                }
+                parts.append(result.text)
+                duration += result.diagnostics.duration
+                deadline += result.diagnostics.deadline
+                standardOutputBytes += result.diagnostics.standardOutputBytes
+                standardErrorBytes += result.diagnostics.standardErrorBytes
+                outputHeldAfterExit = outputHeldAfterExit || result.diagnostics.outputHeldAfterExit
+            }
+        } catch {
+            markCold(backend)
+            throw error
+        }
+
+        let text = parts.joined(separator: " ")
+        let diagnostics = TranscriptionDiagnostics(
+            duration: duration,
+            deadline: deadline,
+            usedColdBudget: usedColdBudget,
+            standardOutputBytes: standardOutputBytes,
+            standardErrorBytes: standardErrorBytes,
+            outputHeldAfterExit: outputHeldAfterExit)
+        ScribeLog.info(
+            .transcription, "Transcribed long capture",
+            .name("backend", backend.kind), .count("chunks", spans.count),
+            .count("characters", text.count), .count("stdoutBytes", standardOutputBytes),
+            .count("stderrBytes", standardErrorBytes))
+        return TranscriptionResult(text: text, backend: backend.kind, diagnostics: diagnostics)
     }
 
     /// Transcribes a WAV file the caller owns, for the `--transcribe-wav` verb. Throws `TranscriptionError`.
