@@ -74,6 +74,7 @@ extension WordPackWorkspace {
         }
         var next = state
         next.libraries[index].resetEdits = true
+        next.libraries[index].recoveredEdits = nil
         next.libraries[index].rows = next.libraries[index].rows.compactMap { row in
             BuiltInLibraryOverlay.restoreShipped(row.row).map {
                 DraftTermRow(rowID: row.rowID, row: $0, removalIntent: false, legacyEmpty: $0.values.written.isEmpty)
@@ -100,6 +101,7 @@ extension WordPackWorkspace {
         next.libraries[index].fileState = .available
         next.libraries[index].resetEdits = true
         next.libraries[index].recovering = true
+        next.libraries[index].recoveredEdits = previous
         change(next, label: previous == nil ? "Back up and reset" : "Restore the previous copy")
     }
 

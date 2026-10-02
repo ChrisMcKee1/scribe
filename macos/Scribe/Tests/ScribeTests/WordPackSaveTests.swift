@@ -272,6 +272,40 @@ final class WordPackSaveTests: XCTestCase {
         expectTrue(try await fixture.service.loadVocabulary().entries.contains { $0.pattern == "unique twin" })
         expectFalse(try await fixture.service.loadVocabulary().aiEntries.contains { $0.pattern == "unique twin" })
     }
+
+    func testDeletionUndoneWhileSaveRunsBecomesAnUnsavedRecreation() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        let imported = try fixture.service.import(csv: "pattern,replacement\nterm,Term\n", suggestedName: "Terms")
+        var workspace = WordPackWorkspace(catalog: try await fixture.service.loadCatalog())
+        try workspace.deleteLibrary(imported.id)
+        let changes = try XCTUnwrap(workspace.captureChangeSet().changeSet)
+        let prepared = try await fixture.coordinator.prepare(changes)
+        workspace.undo()
+        expectEqual(await fixture.coordinator.commit(prepared), .saved)
+        workspace.markSaved(
+            changes, catalog: try await fixture.service.loadCatalog(),
+            deleted: try await fixture.coordinator.recentlyDeleted())
+        XCTAssertTrue(workspace.hasUnsavedChanges)
+        XCTAssertFalse(workspace.draft.find(imported.id)!.pendingDelete)
+        XCTAssertEqual(workspace.rowsOf(imported.id).first?.row.values.written, "Term")
+    }
+
+    func testNewPackDeletedWhileSaveRunsRemainsADeletionOfThatSavedPack() async throws {
+        let fixture = try WordPackSaveFixture()
+        defer { fixture.remove() }
+        var workspace = WordPackWorkspace(catalog: try await fixture.service.loadCatalog())
+        let id = try workspace.createLibrary()
+        _ = workspace.rename(id, name: "Terms")
+        _ = workspace.addTerm(id, values: TermValues("term", "Term"))
+        let changes = try XCTUnwrap(workspace.captureChangeSet().changeSet)
+        let prepared = try await fixture.coordinator.prepare(changes)
+        try workspace.deleteLibrary(id)
+        expectEqual(await fixture.coordinator.commit(prepared), .saved)
+        workspace.markSaved(changes, catalog: try await fixture.service.loadCatalog(), deleted: [])
+        XCTAssertTrue(workspace.hasUnsavedChanges)
+        XCTAssertTrue(workspace.draft.find(id)!.pendingDelete)
+    }
 }
 
 private func expectEqual<T: Equatable>(_ value: T, _ expected: T, file: StaticString = #filePath, line: UInt = #line) {

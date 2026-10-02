@@ -5,7 +5,7 @@ enum WordPackComposition {
         let active = catalog.libraries.filter {
             catalog.localState.enabledIdSet.contains($0.id.lowercased())
                 && ($0.state == .available || $0.state == .partlyReadable)
-                && $0.origin != .retiredBuiltIn && accepted($0, state: catalog.localState)
+                && (!$0.builtIn || $0.origin != .retiredBuiltIn) && accepted($0, state: catalog.localState)
         }.sorted {
             LibraryPrecedence.compare(
                 id: $0.id, builtIn: $0.builtIn, fileName: $0.fileName,
@@ -56,7 +56,9 @@ extension WordPackWorkspace {
             let hash: LibraryContentHash?
             if draft.builtIn, let source = shipped.first(where: { $0.id == draft.id }) {
                 edits = try BuiltInLibraryOverlay.collect(
-                    shipped: source, committed: draft.resetEdits ? nil : committed.find(id: draft.id)?.edits,
+                    shipped: source,
+                    committed: draft.recovering ? draft.recoveredEdits
+                        : (draft.resetEdits ? nil : committed.find(id: draft.id)?.edits),
                     rows: draft.rows.map(\.row))
                 hash = try edits.map { LibraryContentHash(data: try BuiltInLibraryOverlay.write($0)) }
             } else {

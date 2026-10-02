@@ -60,6 +60,7 @@ struct DraftLibrary: Equatable, Sendable {
     var resetEdits = false
     var recovering = false
     var creationName: String?
+    var recoveredEdits: BuiltInLibraryEdits?
 
     init(
         id: String,

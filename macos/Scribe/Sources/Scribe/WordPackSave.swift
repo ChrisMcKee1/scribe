@@ -105,7 +105,9 @@ actor WordPackSaveCoordinator {
                         throw WordPackError.unavailable
                     }
                     let edits = try BuiltInLibraryOverlay.collect(
-                        shipped: shipped, committed: draft.resetEdits ? nil : old?.edits, rows: draft.rows.map(\.row))
+                        shipped: shipped,
+                        committed: draft.recovering ? draft.recoveredEdits : (draft.resetEdits ? nil : old?.edits),
+                        rows: draft.rows.map(\.row))
                     data = try edits.map(BuiltInLibraryOverlay.write)
                     if let current {
                         let previous = draft.recovering

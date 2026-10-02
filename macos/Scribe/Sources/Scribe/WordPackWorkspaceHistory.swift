@@ -50,6 +50,12 @@ extension WordPackWorkspace {
             } else if index == nil && old == nil, let desired {
                 let desiredIndex = to.libraries.firstIndex { $0.id == id } ?? result.libraries.count
                 result.libraries.insert(desired, at: min(desiredIndex, result.libraries.count))
+            } else if index == nil, let desired, desired != old, !desired.pendingDelete {
+                result.libraries.append(desired)
+            } else if let index, let old, desired == nil,
+                sameContent(result.libraries[index], old)
+            {
+                result.libraries[index].pendingDelete = true
             } else if let index, let old, let desired {
                 var library = result.libraries[index]
                 if library.name == old.name { library.name = desired.name }
@@ -57,6 +63,9 @@ extension WordPackWorkspace {
                 if library.description == old.description { library.description = desired.description }
                 if library.basedOn == old.basedOn { library.basedOn = desired.basedOn }
                 if library.pendingDelete == old.pendingDelete { library.pendingDelete = desired.pendingDelete }
+                if library.resetEdits == old.resetEdits { library.resetEdits = desired.resetEdits }
+                if library.recovering == old.recovering { library.recovering = desired.recovering }
+                if library.recoveredEdits == old.recoveredEdits { library.recoveredEdits = desired.recoveredEdits }
                 let rowIDs = Set(old.rows.map(\.rowID) + desired.rows.map(\.rowID))
                 for rowID in rowIDs {
                     let oldRow = old.rows.first { $0.rowID == rowID }
@@ -109,6 +118,12 @@ extension WordPackWorkspace {
         return result
     }
 
+    private static func sameContent(_ left: DraftLibrary, _ right: DraftLibrary) -> Bool {
+        left.id == right.id && left.name == right.name && left.category == right.category
+            && left.description == right.description && left.basedOn == right.basedOn
+            && left.rows.map { $0.row.values } == right.rows.map { $0.row.values }
+    }
+
     mutating func captureChangeSet() -> LibraryCaptureResult {
         let issues = validate()
         guard !isReadOnly, conflictingLibraryIDs.isEmpty, issues.isEmpty else {
@@ -151,6 +166,9 @@ extension WordPackWorkspace {
         let later = state
         reload(catalog, deleted: deleted)
         state = Self.merge(from: submitted, to: later, into: state)
+        let retained = Set(deleted.map(\.id))
+        state.purgeIDs.formIntersection(retained)
+        state.restoreIDs.formIntersection(retained)
         state.local.generation = catalog.generation
         revision = max(revision, changes.draftRevision + 1)
     }

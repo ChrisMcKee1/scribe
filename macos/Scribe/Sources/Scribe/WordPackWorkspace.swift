@@ -89,7 +89,7 @@ struct WordPackWorkspace: Equatable, Sendable {
         guard let library = draft.find(libraryID) else { return false }
         return !isReadOnly && !library.pendingDelete && library.fileState == .available
             && !conflictingLibraryIDs.contains(libraryID.lowercased())
-            && library.origin != .retiredBuiltIn
+            && (!library.builtIn || library.origin != .retiredBuiltIn)
     }
 
     func showsAIPermission(_ libraryID: String) -> Bool {
@@ -216,7 +216,11 @@ struct WordPackWorkspace: Equatable, Sendable {
             throw WordPackError.unavailable
         }
         var next = state
-        next.libraries[index].pendingDelete = true
+        if !baseline.libraries.contains(where: { $0.id == libraryID }) && !reservedIDs.contains(libraryID) {
+            next.libraries.remove(at: index)
+        } else {
+            next.libraries[index].pendingDelete = true
+        }
         next.local.removeState(for: libraryID)
         change(next, label: "Delete word pack")
     }
@@ -275,6 +279,7 @@ struct WordPackWorkspace: Equatable, Sendable {
         return old.name != library.name || old.category != library.category || old.description != library.description
             || old.rows != library.rows || old.basedOn != library.basedOn || old.pendingDelete != library.pendingDelete
             || old.resetEdits != library.resetEdits || old.recovering != library.recovering
+            || old.recoveredEdits != library.recoveredEdits
     }
 
     static func rowIDIn(_ draft: LibraryDraft, _ libraryID: String, _ index: Int) -> Int64? {
