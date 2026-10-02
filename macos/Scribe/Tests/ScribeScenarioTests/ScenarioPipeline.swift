@@ -219,6 +219,25 @@ final class ScenarioCleanupModel: CleanupProvider {
 final class ScenarioCleanupSource: DictationCleaning {
     let model: ScenarioCleanupModel
     var isEnabled = true
+    var settings = CleanupSettingsSnapshot(
+        isEnabled: true,
+        providerKind: .foundryLocal,
+        foundryLocalModelAlias: CleanupSettingsStore.defaultFoundryLocalModelAlias,
+        ollamaModel: CleanupSettingsStore.defaultOllamaModel,
+        selectedLocalApp: .none,
+        openAIBaseURL: "",
+        openAIModel: "",
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
+        azureEndpoint: "",
+        azureDeployment: "",
+        azureAuthMode: .azureCli,
+        azureTenantId: "",
+        azureClientId: "",
+        secretRevision: "")
     private(set) var invalidations = 0
 
     init(model: ScenarioCleanupModel) {
@@ -227,6 +246,10 @@ final class ScenarioCleanupSource: DictationCleaning {
 
     func provider() async throws -> any CleanupProvider {
         model
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        settings
     }
 
     func invalidate() {

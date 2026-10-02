@@ -19,6 +19,11 @@ final class CleanupSettingsBackingFake {
         selectedLocalApp: .none,
         openAIBaseURL: "",
         openAIModel: "",
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
         otherServiceBaseURL: "",
         otherServiceModel: "",
         azureEndpoint: "",
@@ -304,6 +309,27 @@ final class CleanupSettingsModelTests: XCTestCase {
         model.setLocalAppChoice(.lmStudio)
         XCTAssertFalse(model.showsConnectionTest)
         XCTAssertEqual(backing.stored.openAIBaseURL, LocalAiServer.lmStudioAddress)
+    }
+
+    @MainActor
+    func testLocalTuningFieldsAreStoredPerAppChoice() {
+        let backing = CleanupSettingsBackingFake()
+        let model = makeModel(backing)
+
+        model.setLocalAppChoice(.ollama)
+        model.setLocalContextTokens(32768, for: .ollama)
+        model.setSendsWholeVocabulary(true, for: .ollama)
+        model.setLocalAppChoice(.lmStudio)
+        model.setLocalContextTokens(16384, for: .lmStudio)
+        model.setSendsWholeVocabulary(false, for: .lmStudio)
+        model.setLocalAppChoice(.letScribeManageIt)
+        model.setSendsWholeVocabulary(true, for: .letScribeManageIt)
+
+        XCTAssertEqual(backing.stored.ollamaContextTokens, 32768)
+        XCTAssertTrue(backing.stored.ollamaSendWholeVocabulary)
+        XCTAssertEqual(backing.stored.lmStudioContextTokens, 16384)
+        XCTAssertFalse(backing.stored.lmStudioSendWholeVocabulary)
+        XCTAssertTrue(backing.stored.foundryLocalSendWholeVocabulary)
     }
 
     /// Settings is rebuilt on every open; a key typed but not saved lives in the drafts, which outlive the tab.

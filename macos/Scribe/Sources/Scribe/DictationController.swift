@@ -807,18 +807,29 @@ final class DictationController {
         }
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
 
+        let settings = services.cleanup.currentSettings()
+        let tuning = LocalModelTuning.forSettings(settings)
         let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
-        let glossary = services.rules.cleanupVocabulary.glossary(
-            maxTerms: CleanupPrompt.glossaryTermBudget(useLocalPrompt: provider.usesLocalCleanupPrompt),
-            mode: .mentioned,
-            dictation: raw)
+        let promptWithoutGlossary = CleanupPrompt.systemPrompt(
+            writingStyle: style,
+            useLocalPrompt: provider.usesLocalCleanupPrompt)
+        let outputCeiling = cleanupOutputCeiling(for: settings, transcript: sent)
+        let glossary = cleanupGlossary(
+            vocabulary: services.rules.cleanupVocabulary,
+            rawDictation: raw,
+            correctedText: sent,
+            promptWithoutGlossary: promptWithoutGlossary,
+            tuning: tuning,
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            outputCeiling: outputCeiling)
         let request = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript(sent),
             writingStylePrompt: CleanupPrompt.systemPrompt(
                 writingStyle: style,
                 useLocalPrompt: provider.usesLocalCleanupPrompt,
                 glossary: glossary),
-            singleLineMode: singleLine)
+            singleLineMode: singleLine,
+            maxOutputTokens: outputCeiling)
         let started = clock.now
         let response: CleanupResponse
         do {
@@ -848,6 +859,61 @@ final class DictationController {
                 .integer("dictation", id.rawValue), .name("reason", reason), .duration("cleanup", elapsed))
             return CleanupStage(outcome: .fellBack, text: nil, requestDuration: elapsed)
         }
+    }
+
+    private func cleanupGlossary(
+        vocabulary: CleanupVocabulary,
+        rawDictation: String,
+        correctedText: String,
+        promptWithoutGlossary: String,
+        tuning: LocalModelTuning,
+        useLocalPrompt: Bool,
+        outputCeiling: Int?
+    ) -> String? {
+        let defaultGlossary = vocabulary.glossary(
+            maxTerms: CleanupPrompt.glossaryTermBudget(useLocalPrompt: useLocalPrompt),
+            mode: .mentioned,
+            dictation: rawDictation)
+
+        let selectedContext = ContextBudget.sanitize(tuning.contextTokens)
+        let context =
+            selectedContext > 0
+            ? selectedContext
+            : (tuning.sendWholeVocabulary ? ContextBudget.assumedContextTokens : 0)
+        guard context > 0, let outputCeiling else {
+            return defaultGlossary
+        }
+
+        let budget = ContextBudget.vocabularyTokens(
+            context,
+            instructions: promptWithoutGlossary,
+            transcript: correctedText,
+            outputCeiling: outputCeiling)
+        let maxTerms =
+            tuning.sendWholeVocabulary
+            ? .max
+            : CleanupPrompt.glossaryTermBudget(useLocalPrompt: useLocalPrompt)
+        return vocabulary.glossary(
+            mode: .mentioned,
+            everything: tuning.sendWholeVocabulary,
+            dictation: rawDictation,
+            tokenBudget: budget,
+            maxTerms: maxTerms)
+    }
+
+    private func cleanupOutputCeiling(for settings: CleanupSettingsSnapshot, transcript: String) -> Int? {
+        switch settings.selectedLocalApp {
+        case .none:
+            return nil
+        case .ollama, .lmStudio:
+            return estimateCleanupOutputTokens(transcript)
+        }
+    }
+
+    private func estimateCleanupOutputTokens(_ text: String) -> Int {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        let estimate = Int(Double(words) * 2.5) + 128
+        return min(max(estimate, 64), 4096)
     }
 
     private func recognitionFailed(_ dictation: AdmittedDictation, _ error: any Error, report failure: PipelineReport) {

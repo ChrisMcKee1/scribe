@@ -503,6 +503,25 @@ final class FakeCleanup: DictationCleaning {
     var isEnabled = false
     var providerError: (any Error)?
     var cleanupProvider: any CleanupProvider
+    var settings = CleanupSettingsSnapshot(
+        isEnabled: false,
+        providerKind: .foundryLocal,
+        foundryLocalModelAlias: CleanupSettingsStore.defaultFoundryLocalModelAlias,
+        ollamaModel: CleanupSettingsStore.defaultOllamaModel,
+        selectedLocalApp: .none,
+        openAIBaseURL: "",
+        openAIModel: "",
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
+        azureEndpoint: "",
+        azureDeployment: "",
+        azureAuthMode: .azureCli,
+        azureTenantId: "",
+        azureClientId: "",
+        secretRevision: "")
     private(set) var invalidations = 0
 
     init(provider: any CleanupProvider = GatedCleanupProvider()) {
@@ -519,6 +538,10 @@ final class FakeCleanup: DictationCleaning {
             throw providerError
         }
         return cleanupProvider
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        settings
     }
 
     func invalidate() {
