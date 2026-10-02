@@ -6,15 +6,15 @@ struct LibraryOrdering: Sendable {
         if byName == .orderedAscending { return -1 }
         if byName == .orderedDescending { return 1 }
 
-        if lhs.name != rhs.name {
-            return lhs.name < rhs.name ? -1 : 1
-        }
+        let byOrdinalName = lhs.name.compare(rhs.name, options: [.literal])
+        if byOrdinalName == .orderedAscending { return -1 }
+        if byOrdinalName == .orderedDescending { return 1 }
 
-        if lhs.id == rhs.id {
-            return 0
-        }
+        let byOrdinalID = lhs.id.compare(rhs.id, options: [.literal])
+        if byOrdinalID == .orderedAscending { return -1 }
+        if byOrdinalID == .orderedDescending { return 1 }
 
-        return lhs.id < rhs.id ? -1 : 1
+        return 0
     }
 
     func sort<S: Sequence>(_ libraries: S) -> [DictionaryLibrary] where S.Element == DictionaryLibrary {

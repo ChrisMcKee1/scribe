@@ -4,9 +4,11 @@ import Foundation
 /// Windows' `StringComparison.OrdinalIgnoreCase` compares it. This keeps 0.4.3's composition behavior, including
 /// the older rows whose inner spacing never matched dictated text and therefore must not suppress a row that does.
 struct LibraryTermKey: Equatable, Hashable, Sendable, CustomStringConvertible {
+    private static let comparisonLocale = Locale(identifier: "en_US_POSIX")
     private static let asciiSpace = UnicodeScalar(0x20)!
-    private static let preservedOrdinalFoldScalars: Set<UInt32> = [
+    private static let disallowedCaseFoldScalars: Set<UInt32> = [
         0x00DF,  // ß
+        0x0130,  // İ
         0x0131,  // ı
         0x017F,  // ſ
         0x1E9E,  // ẞ
@@ -84,7 +86,15 @@ struct LibraryTermKey: Equatable, Hashable, Sendable, CustomStringConvertible {
     func hash(into hasher: inout Hasher) {
         hasher.combine(value.utf16.count)
         for scalar in value.unicodeScalars {
-            hasher.combine(Self.ordinalIgnoreCaseScalarKey(scalar))
+            if disallowedCaseFoldScalars.contains(scalar.value) {
+                hasher.combine(Int(scalar.value))
+                continue
+            }
+
+            hasher.combine(
+                String(scalar).folding(
+                    options: [.caseInsensitive, .literal],
+                    locale: comparisonLocale))
         }
     }
 
@@ -93,22 +103,27 @@ struct LibraryTermKey: Equatable, Hashable, Sendable, CustomStringConvertible {
             return false
         }
 
-        var left = lhs.value.unicodeScalars.makeIterator()
-        var right = rhs.value.unicodeScalars.makeIterator()
-        while true {
-            let leftScalar = left.next()
-            let rightScalar = right.next()
-            switch (leftScalar, rightScalar) {
-            case (nil, nil):
-                return true
-            case let (.some(l), .some(r)):
-                if ordinalIgnoreCaseScalarKey(l) != ordinalIgnoreCaseScalarKey(r) {
+        guard lhs.value.compare(rhs.value, options: [.caseInsensitive, .literal]) == .orderedSame else {
+            return false
+        }
+
+        let leftScalars = Array(lhs.value.unicodeScalars)
+        let rightScalars = Array(rhs.value.unicodeScalars)
+        guard leftScalars.count == rightScalars.count else {
+            return false
+        }
+
+        for (leftScalar, rightScalar) in zip(leftScalars, rightScalars) {
+            if disallowedCaseFoldScalars.contains(leftScalar.value)
+                || disallowedCaseFoldScalars.contains(rightScalar.value)
+            {
+                if leftScalar.value != rightScalar.value {
                     return false
                 }
-            default:
-                return false
             }
         }
+
+        return true
     }
 
     private static func trimWhitespace(_ text: String) -> String {
@@ -125,14 +140,5 @@ struct LibraryTermKey: Equatable, Hashable, Sendable, CustomStringConvertible {
         }
 
         return String(String.UnicodeScalarView(scalars[start..<end]))
-    }
-
-    private static func ordinalIgnoreCaseScalarKey(_ scalar: UnicodeScalar) -> String {
-        if preservedOrdinalFoldScalars.contains(scalar.value) {
-            return String(scalar)
-        }
-
-        let upper = String(scalar).uppercased()
-        return upper.unicodeScalars.count == 1 ? upper : String(scalar)
     }
 }
