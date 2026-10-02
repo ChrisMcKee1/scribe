@@ -33,11 +33,28 @@ struct WindowCopy: CopyCatalog {
 
 /// Every catalog of Settings text, for pages to read and for the manifest tests to walk.
 enum SettingsCopy {
+    static let dictation = DictationCopy()
+    static let tryDictation = TryDictationCopy()
+    static let aiCleanup = AiCleanupCopy()
+    static let dictionary = DictionaryCopy()
+    static let wordPacks = WordPackCopy()
+    static let snippets = SnippetsCopy()
+    static let appProfiles = AppProfilesCopy()
+    static let history = HistoryCopy()
+    static let usage = UsageCopy()
+    static let advanced = AdvancedCopy()
+    static let diagnostics = DiagnosticsCopy()
+    static let about = AboutCopy()
     static let window = WindowCopy()
+    static let menuBar = MenuBarCopy()
+    static let notice = NoticeCopy()
+    static let indicator = IndicatorCopy()
+    static let search = SearchCopy()
 
     /// Every catalog, in the order the window shows them.
     static let catalogs: [any CopyCatalog] = [
-        window
+        dictation, tryDictation, aiCleanup, dictionary, wordPacks, snippets, appProfiles, history, usage, advanced,
+        diagnostics, about, window, menuBar, notice, indicator, search,
     ]
 
     /// Every item in every catalog.

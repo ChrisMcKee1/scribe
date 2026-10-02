@@ -65,6 +65,27 @@ final class CopyManifestTests: XCTestCase {
         }
     }
 
+    func testEveryOmittedWindowsStringIsInTheWindowsSourcesAndHasAReason() {
+        for omission in SettingsCopyOmissions.all {
+            let found = WindowsSources.contains(omission.windows)
+            XCTAssertTrue(found, "'\(omission.windows)' is not in the Windows sources")
+        }
+        let texts = SettingsCopyOmissions.all.map(\.windows)
+        XCTAssertEqual(Set(texts).count, texts.count)
+    }
+
+    func testThereIsACatalogForEveryPageAndEverySurface() {
+        let prefixes = Set(SettingsCopy.catalogs.map(\.prefix))
+        let names: [SettingsPage: String] = [.dictionary: "dictionary", .voiceSnippets: "snippets"]
+        for page in SettingsPage.allCases {
+            let expected = names[page] ?? String(describing: page)
+            XCTAssertTrue(prefixes.contains(expected), "No catalog for \(page)")
+        }
+        for surface in ["wordPacks", "window", "menuBar", "notice", "indicator"] {
+            XCTAssertTrue(prefixes.contains(surface), "No catalog for \(surface)")
+        }
+    }
+
     func testTheHelperReadsStringsSplitAcrossLinesAndEscapedQuotes() {
         let source = "var x = \"First half, \" +\n    \"second half\";\n<Button Content=\"Say &quot;hi&quot;\" />"
         let text = WindowsSources.normalize(source)

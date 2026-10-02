@@ -8,6 +8,7 @@ final class GlossaryTests: XCTestCase {
     static let excludedFiles: [String: String] = [
         "Settings/Copy/CopyGlossary.swift": "The retired words themselves, as patterns.",
         "Settings/Copy/SettingsPage.swift": "Page keywords keep the old names, so a search for \"hotkey\" still works.",
+        "Settings/Copy/SettingsSearchIndex.swift": "Entry keywords keep the old names on purpose, as on Windows.",
     ]
 
     func testCatalogTextUsesNoRetiredName() throws {

@@ -26,6 +26,8 @@ enum CopyDeviation: String, CaseIterable, Sendable {
     case appliesAtOnce
     /// The Windows string is a template the Mac fills in differently.
     case macTemplate
+    /// The feature exists only on Windows, so the string is not carried over.
+    case windowsOnly
 
     /// The sentence recorded for the deviation, shown in the report and in failing tests.
     var reason: String {
@@ -41,6 +43,7 @@ enum CopyDeviation: String, CaseIterable, Sendable {
         case .macOnly: return "Windows has no equivalent text."
         case .appliesAtOnce: return "This control applies at once on the Mac."
         case .macTemplate: return "The Mac fills this template in with its own values."
+        case .windowsOnly: return "The feature exists only on Windows."
         }
     }
 }
