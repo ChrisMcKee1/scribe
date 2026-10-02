@@ -484,6 +484,10 @@ final class DictionaryLibraryService: @unchecked Sendable {
             state.aiPermissions[library.id.lowercased()] = true
             state.setAcceptedContent(library.contentHash, for: library.id)
         }
+        let shipped = Self.shippedValues(from: libraries.filter(\.builtIn))
+        for library in libraries where !library.builtIn {
+            state.legacyMarkers.append(contentsOf: Self.upgradeMarkers(for: library, shipped: shipped))
+        }
         for library in libraries where library.builtIn {
             state.aiPermissions[library.id.lowercased()] = true
             if library.contentHash != nil {
@@ -552,6 +556,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
         let activeLibraries = catalog.libraries.filter {
             isEnabled($0.id, in: catalog.localState) && isUsable($0.state)
         }
+        let activeBuiltInFolds = Self.shippedValues(from: activeLibraries.filter(\.builtIn))
         var rulesByTier: [RuleTier: [ComposedLibraryRule]] = [.authored: [], .shipped: [], .legacy: []]
 
         for library in activeLibraries {
@@ -559,7 +564,9 @@ final class DictionaryLibraryService: @unchecked Sendable {
                 let key = LibraryTermKey.from(entry.pattern)
                 guard !key.isEmpty else { continue }
                 let tier: RuleTier
-                if library.library.legacyMarkedKeys.contains(key) {
+                if library.library.legacyMarkedKeys.contains(key),
+                    activeBuiltInFolds[Self.markerFold(entry.pattern)] != nil
+                {
                     tier = .legacy
                 } else if !library.builtIn || library.library.authoredKeys.contains(key) {
                     tier = .authored
@@ -744,5 +751,44 @@ final class DictionaryLibraryService: @unchecked Sendable {
             .filter { $0.pathExtension.lowercased() == "csv" }
             .map { $0.deletingPathExtension().lastPathComponent }
         return builtIn + custom
+    }
+
+    private static func shippedValues(from libraries: [CatalogLibrary]) -> [String: [TermValues]] {
+        var shipped: [String: [TermValues]] = [:]
+        for library in libraries where library.builtIn {
+            for entry in library.library.entries where entry.enabled {
+                let values = TermValues(entry: entry)
+                let fold = markerFold(values.spoken)
+                guard !fold.isEmpty else { continue }
+                shipped[fold, default: []].append(values)
+            }
+        }
+        return shipped
+    }
+
+    private static func upgradeMarkers(for library: CatalogLibrary, shipped: [String: [TermValues]]) -> [LegacyMarker] {
+        var seen = Set<LibraryTermKey>()
+        var markers: [LegacyMarker] = []
+        for entry in library.library.entries where entry.enabled {
+            let values = TermValues(entry: entry)
+            let key = LibraryTermKey.from(values.spoken)
+            guard !key.isEmpty,
+                let builtIn = shipped[markerFold(values.spoken)],
+                builtIn.contains(where: { !sameResult($0, values) }),
+                seen.insert(key).inserted
+            else {
+                continue
+            }
+            markers.append(LegacyMarker(libraryId: library.id, key: key.value))
+        }
+        return markers
+    }
+
+    private static func sameResult(_ lhs: TermValues, _ rhs: TermValues) -> Bool {
+        lhs.written == rhs.written && lhs.wholeWord == rhs.wholeWord
+    }
+
+    static func markerFold(_ value: String) -> String {
+        SpokenFormFold.fold(value.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
