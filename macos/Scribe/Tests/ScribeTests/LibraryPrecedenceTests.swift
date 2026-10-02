@@ -36,7 +36,7 @@ final class LibraryPrecedenceTests: XCTestCase {
             library(id: "release-10", name: "Release 10", builtIn: false),
             library(id: "release-9", name: "Release 9", builtIn: false),
             library(id: "github", name: "GitHub", builtIn: true),
-            library(id: "github-copy", name: "github", builtIn: false),
+            library(id: "github-copy", name: "GitHub", builtIn: false),
         ]
 
         let ordering = LibraryOrdering()
