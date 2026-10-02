@@ -202,7 +202,8 @@ final class DictationNoticeScheduleTests: XCTestCase {
     func testEveryNoticeHasARoleAndOnlyTheSilentFallbacksNotifyInstead() {
         XCTAssertEqual(OverlayNotice.stillProcessing.role, .feedback)
         XCTAssertEqual(
-            OverlayNotice.allCases.filter(\.notifiesWhenThePillIsBusy), [.cleanupFellBack, .transcriptionFailed])
+            OverlayNotice.allCases.filter(\.notifiesWhenThePillIsBusy),
+            [.typedWithoutCleanup, .cleanupFellBack, .transcriptionFailed])
         for notice in OverlayNotice.allCases where notice.notifiesWhenThePillIsBusy {
             XCTAssertEqual(notice.role, .informational)
         }

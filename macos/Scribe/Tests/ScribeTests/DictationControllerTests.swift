@@ -546,8 +546,21 @@ final class DictationControllerTests: XCTestCase {
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.lastOverlay, .notice(.textKept))
         await waitUntil("the notice's end is scheduled") { harness.clock.sleeperCount == 1 }
-        harness.clock.advance(by: DictationController.Configuration().noticeDuration)
+        harness.clock.advance(by: PillTiming.noticeHold)
         await waitUntil("the notice ends") { harness.lastOverlay == .hidden }
+    }
+
+    func testASuccessfulDictationShowsTypedBrieflyThenHides() async {
+        let harness = makeHarness()
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(harness.lastOverlay, .notice(.typed))
+        XCTAssertEqual(harness.presenter.noticesShown().last, .typed)
+        await waitUntil("the typed outcome's end is scheduled") { harness.clock.sleeperCount == 1 }
+        harness.clock.advance(by: PillTiming.typedHold)
+        await waitUntil("the typed outcome ends") { harness.lastOverlay == .hidden }
     }
 
     // MARK: - Who owns the pill
@@ -568,8 +581,8 @@ final class DictationControllerTests: XCTestCase {
 
         reply.fail(DictationTestFailure(code: 5))
         await waitUntil("A is delivered raw") { harness.fakeInjector.deliveries.count == 1 }
+        await waitUntil("the fallback notification is posted") { harness.notifier.kinds == [.cleanupFellBack] }
         XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
-        XCTAssertEqual(harness.notifier.kinds, [.cleanupFellBack])
         XCTAssertTrue(isListening(harness.lastOverlay), "A's fallback covered B's meter")
         XCTAssertTrue(harness.controller.noticeSchedule.waiting.isEmpty, "the fallback also waits for the pill")
 
@@ -577,7 +590,7 @@ final class DictationControllerTests: XCTestCase {
         harness.cleanup.isEnabled = false
         harness.release()
         await harness.waitUntilProcessed()
-        XCTAssertFalse(harness.presenter.noticesShown().contains(.cleanupFellBack), "said twice")
+        XCTAssertFalse(harness.presenter.noticesShown().contains(.typedWithoutCleanup), "said twice")
     }
 
     /// The fallback notification goes out before the dictation is delivered, so it says nothing about insertion. Here

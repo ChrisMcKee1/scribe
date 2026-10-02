@@ -285,7 +285,9 @@ final class DictationController {
     private let transcriptionTurns = DictationTurns()
     private let deliveryTurns = DictationTurns()
     private var revision: UInt64 = 0
-    private var levelDbfs = AudioLevelMeasurement.toDbfs(0)
+    private var levelMeter = PillLevelMeter()
+    private var level = 0.0
+    private var lastLevelAt: ContinuousClock.Instant?
     private var notices = DictationNoticeSchedule()
     private var nextNoticeID: UInt64 = 0
     private var noticeTimer: Task<Void, Never>?
@@ -404,12 +406,14 @@ final class DictationController {
             return
         }
         switch event.kind {
-        case .level(let level):
+        case .level(let measurement):
             guard current.phase == .live else {
                 checkpoints.ignoredCaptureEvents += 1
                 return
             }
-            levelDbfs = level.rmsDbfs
+            let now = services.clock.now
+            level = levelMeter.update(measurement.peakAmplitude, sincePrevious: lastLevelAt?.duration(to: now) ?? .zero)
+            lastLevelAt = now
             present()
         case .stopRequested(let ending):
             let reason: DictationStopReason
@@ -470,7 +474,9 @@ final class DictationController {
         notices.yieldToRecording()
         noticeTimer?.cancel()
         noticeTimer = nil
-        levelDbfs = AudioLevelMeasurement.toDbfs(0)
+        levelMeter.reset()
+        level = 0
+        lastLevelAt = nil
         recording = LiveRecording(
             id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin())
         ScribeLog.info(
@@ -697,6 +703,7 @@ final class DictationController {
         // snippet template or template-like replacement ever reaches a provider, a dash the user wrote survives, no
         // rule runs twice, and a reply that is the text sent gives exactly the cleanup-off text.
         let post: TextPostProcessingResult
+        var cleanupFallbackWasNotified = false
         var postDuration = Duration.zero
         if services.cleanup.isEnabled {
             let vocabularyStarted = clock.now
@@ -711,7 +718,11 @@ final class DictationController {
                 report.cleanupOutcome = stage.outcome
                 report.cleanupDuration = stage.requestDuration?.seconds
                 if stage.outcome == .fellBack {
-                    postOutcome(.cleanupFellBack, about: id, stage: .cleanup)
+                    let pillIsBusy = recording != nil || notices.shown != nil || !notices.waiting.isEmpty
+                    if pillIsBusy {
+                        notify(.cleanupFellBack)
+                        cleanupFallbackWasNotified = true
+                    }
                 }
                 let finishStarted = clock.now
                 if let cleaned = stage.text {
@@ -742,18 +753,19 @@ final class DictationController {
         // no suspension in between.
         guard await deliveryTurns.waitForTurn(id), mayContinue else { return stopped(dictation, at: .beforeDelivery) }
         let deliveryStarted = clock.now
+        let injector = services.injector
         let insertionResult = await DictationInsertion.insert(
             insertion,
             addSpaceAfterDictation: configuration.addSpaceAfterDictation(),
             recovery: services.recovery
         ) { typed in
             if let destination = target?.injection {
-                return await services.injector.inject(text: typed, into: destination, shiftReturnLineBreaks: true)
+                return await injector.inject(text: typed, into: destination, shiftReturnLineBreaks: true)
             }
             // A target that could not be captured is never taken to mean "wherever focus is now".
             return InjectionResult(delivery: .targetUnknown)
         }
-        let recoveryGeneration = services.recovery.generation
+        let recoveryGeneration = insertionResult.recoveryGeneration
         let injection = insertionResult.injection
         report.injectionDuration = deliveryStarted.duration(to: clock.now).seconds
         report.injectionResult = injection
@@ -783,7 +795,13 @@ final class DictationController {
                 targetApp: target?.bundleIdentifier ?? target?.processName),
             dictationID: id.rawValue)
         services.reports.publish(report)
-        announce(injection, of: dictation, transcript: insertionResult.recorded, recoveryGeneration: recoveryGeneration)
+        announce(
+            injection,
+            cleanupOutcome: report.cleanupOutcome,
+            cleanupFallbackWasNotified: cleanupFallbackWasNotified,
+            of: dictation,
+            transcript: insertionResult.recorded,
+            recoveryGeneration: recoveryGeneration)
     }
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
@@ -885,17 +903,28 @@ final class DictationController {
     /// The pill's notice and, when the text did not go in, a notification with the transcript to copy. Both are
     /// refused when Clear history has removed that transcript since it was kept.
     private func announce(
-        _ injection: InjectionResult, of dictation: AdmittedDictation, transcript: String, recoveryGeneration: UInt64
+        _ injection: InjectionResult,
+        cleanupOutcome: DictationCleanupOutcome,
+        cleanupFallbackWasNotified: Bool,
+        of dictation: AdmittedDictation,
+        transcript: String,
+        recoveryGeneration: UInt64
     ) {
         let id = dictation.id
         switch injection.delivery {
-        case .accessibility, .pasted, .typed, .nothingToInsert:
+        case .accessibility, .pasted, .typed:
             if dictation.stopReason == .deviceFault {
                 postOutcome(.microphoneStoppedEarly, about: id, stage: .capture)
             } else if dictation.stopReason == .durationLimit {
                 postOutcome(.durationLimitReached, about: id, stage: .capture)
+            } else if cleanupOutcome == .fellBack {
+                if !cleanupFallbackWasNotified {
+                    postOutcome(.typedWithoutCleanup, about: id, stage: .delivery)
+                }
+            } else {
+                postOutcome(.typed, about: id, stage: .delivery)
             }
-        case .cancelled:
+        case .nothingToInsert, .cancelled:
             return
         case .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .failed:
             postOutcome(
@@ -982,7 +1011,7 @@ final class DictationController {
 
     private static func fallbackNotification(for kind: OverlayNotice) -> DictationNotice? {
         switch kind {
-        case .cleanupFellBack: return .cleanupFellBack
+        case .cleanupFellBack, .typedWithoutCleanup: return .cleanupFellBack
         case .transcriptionFailed: return .transcriptionFailed
         default: return nil
         }
@@ -995,7 +1024,8 @@ final class DictationController {
         notices.didShow(outcome, token: revision &+ 1)
         let token = present()
         let clock = services.clock
-        let until = clock.now.advanced(by: configuration.noticeDuration)
+        let hold = outcome.kind.pillOutcome?.hold ?? configuration.noticeDuration
+        let until = clock.now.advanced(by: hold)
         noticeTimer = Task { [weak self] in
             do {
                 try await clock.sleep(until: until)
@@ -1032,7 +1062,7 @@ final class DictationController {
     private var overlayState: OverlayState {
         if let recording {
             if recording.phase == .live {
-                return .listening(levelDbfs: levelDbfs)
+                return .listening(level: level)
             }
             return dictations.isEmpty ? .hidden : .processing
         }

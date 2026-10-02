@@ -19,23 +19,30 @@ enum DictationInsertion {
         _ text: String,
         addSpaceAfterDictation: Bool,
         recovery: LastTranscriptStore,
-        inject: @escaping (String) async -> InjectionResult
+        inject: @escaping @MainActor @Sendable (String) async -> InjectionResult
     ) async -> DictationInsertionResult {
         recovery.set(text)
+        let recoveryGeneration = recovery.generation
         let typed = textToType(text, addSpaceAfterDictation: addSpaceAfterDictation)
         guard !Task.isCancelled else {
             return DictationInsertionResult(
                 recorded: text,
                 typed: typed,
+                recoveryGeneration: recoveryGeneration,
                 injection: InjectionResult(delivery: .cancelled))
         }
-        return DictationInsertionResult(recorded: text, typed: typed, injection: await inject(typed))
+        return DictationInsertionResult(
+            recorded: text,
+            typed: typed,
+            recoveryGeneration: recoveryGeneration,
+            injection: await inject(typed))
     }
 }
 
 struct DictationInsertionResult: Equatable, Sendable {
     let recorded: String
     let typed: String
+    let recoveryGeneration: UInt64
     let injection: InjectionResult
 
     var spaceAdded: Bool {

@@ -159,7 +159,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         await harness.waitUntilProcessed()
         let cleanupOff = try XCTUnwrap(harness.fakeInjector.texts.first)
-        XCTAssertEqual(cleanupOff, "\(Self.snippetTemplate) and deploy it with Kubeflow then my signature")
+        XCTAssertEqual(cleanupOff, "\(Self.snippetTemplate) and deploy it with Kubeflow then my signature ")
 
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
@@ -205,8 +205,8 @@ final class DictationPipelineTests: XCTestCase {
         }
         let cleanupOff = harness.fakeInjector.texts
         let expected = [
-            "I will add my Private\nfooter tomorrow", "signature", "Private\nnotes then K8s",
-            "deploy Kubeflow then Best,\nPat Doe",
+            "I will add my Private\nfooter tomorrow ", "signature ", "Private\nnotes then K8s ",
+            "deploy Kubeflow then Best,\nPat Doe ",
         ]
         XCTAssertEqual(cleanupOff, expected)
 
@@ -238,7 +238,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         await harness.waitUntilProcessed()
         let cleanupOff = try XCTUnwrap(harness.fakeInjector.texts.last)
-        XCTAssertEqual(cleanupOff, "deploy Kubeflow then \(template)")
+        XCTAssertEqual(cleanupOff, "deploy Kubeflow then \(template) ")
 
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
@@ -364,7 +364,7 @@ final class DictationPipelineTests: XCTestCase {
 
         XCTAssertEqual(harness.fakeInjector.texts, ["can you check the build "])
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
-        XCTAssertTrue(harness.presenter.noticesShown().contains(.cleanupFellBack))
+        XCTAssertTrue(harness.presenter.noticesShown().contains(.typedWithoutCleanup))
     }
 
     /// A provider that fails, or cannot be built, falls back to the raw transcript with the pill's own "raw text
@@ -379,14 +379,14 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.fakeInjector.texts, ["ship it on friday "])
-        XCTAssertEqual(harness.presenter.noticesShown(), [.cleanupFellBack])
+        XCTAssertEqual(harness.presenter.noticesShown(), [.typedWithoutCleanup])
         XCTAssertTrue(harness.notifier.notices.isEmpty)
 
         harness.cleanup.providerError = CleanupProviderError.notConfigured(.openAIModelMissing, source: .settings)
         await harness.dictate()
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.fakeInjector.texts, ["ship it on friday ", "ship it on friday "])
-        XCTAssertEqual(harness.presenter.noticesShown(), [.cleanupFellBack, .cleanupFellBack])
+        XCTAssertEqual(harness.presenter.noticesShown(), [.typedWithoutCleanup, .typedWithoutCleanup])
         XCTAssertEqual(provider.requests.count, 1, "a provider that could not be built was sent a request")
     }
 
@@ -653,7 +653,9 @@ final class DictationPipelineTests: XCTestCase {
         let words = text.split(separator: " ").map { digits[String($0)] ?? String($0) }
         let spaced = words.joined(separator: " ")
         let decimals = spaced.replacingOccurrences(
-            of: "([0-9]) point ([0-9])", with: "$1.$2", options: .regularExpression)
+            of: "([0-9]) point ([0-9])",
+            with: "$1.$2",
+            options: .regularExpression)
         return decimals.prefix(1).uppercased() + decimals.dropFirst() + "."
     }
 }

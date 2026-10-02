@@ -37,6 +37,7 @@ final class DictationInsertionTests: XCTestCase {
         XCTAssertEqual(result.typed, "Hello world. ")
         XCTAssertTrue(result.spaceAdded)
         XCTAssertEqual(typed, ["Hello world. "])
+        XCTAssertEqual(result.recoveryGeneration, recovery.generation)
         XCTAssertEqual(recovery.recent(), ["Hello world."])
     }
 
@@ -59,6 +60,7 @@ final class DictationInsertionTests: XCTestCase {
         XCTAssertEqual(result.injection.delivery, .cancelled)
         XCTAssertEqual(result.recorded, "Cancelled text")
         XCTAssertEqual(result.typed, "Cancelled text ")
+        XCTAssertEqual(result.recoveryGeneration, recovery.generation)
         XCTAssertEqual(recovery.recent(), ["Cancelled text"])
     }
 }

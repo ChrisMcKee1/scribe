@@ -14,6 +14,8 @@ struct PipelineLine: Sendable {
     let reply: String
     /// The reply as the pipeline carries it on, after the response guard, which also normalizes dashes.
     let cleaned: String
+    /// The text the pipeline keeps for history and recovery, before the target-only trailing space.
+    let recorded: String
     /// The text that must reach the target.
     let delivered: String
 }
@@ -32,6 +34,10 @@ struct PipelineScript: Sendable {
 
     func line(cleaned: String) -> PipelineLine? {
         lines.first(where: { $0.cleaned == cleaned }) ?? line(raw: cleaned)
+    }
+
+    func line(recorded: String) -> PipelineLine? {
+        lines.first { $0.recorded == recorded }
     }
 
     func line(delivered: String) -> PipelineLine? {
@@ -336,7 +342,7 @@ final class ScenarioHistory: DictationHistoryWriting {
     }
 
     func enqueue(_ record: DictationHistoryRecord, dictationID: UInt64) -> Bool {
-        journal.record(.historyQueued, script.line(delivered: record.transcriptText ?? "")?.clip.name ?? "?")
+        journal.record(.historyQueued, script.line(recorded: record.transcriptText ?? "")?.clip.name ?? "?")
         let accepted = writer.enqueue(record, dictationID: dictationID)
         queued.increment()
         return accepted
