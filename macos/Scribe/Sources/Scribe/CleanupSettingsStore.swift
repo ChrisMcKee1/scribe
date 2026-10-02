@@ -79,8 +79,12 @@ struct CleanupSettingsStore: Sendable {
         static let providerKind = "ScribeCleanupProviderKind"
         static let foundryLocalModelAlias = "ScribeCleanupFoundryLocalModelAlias"
         static let ollamaModel = "ScribeCleanupOllamaModel"
+        static let lmStudioModel = "ScribeCleanupLmStudioModel"
+        static let selectedLocalApp = "ScribeCleanupSelectedLocalApp"
         static let openAIBaseURL = "ScribeCleanupOpenAIBaseURL"
         static let openAIModel = "ScribeCleanupOpenAIModel"
+        static let otherServiceBaseURL = "ScribeCleanupOtherServiceBaseURL"
+        static let otherServiceModel = "ScribeCleanupOtherServiceModel"
         static let azureEndpoint = "ScribeCleanupAzureEndpoint"
         static let azureDeployment = "ScribeCleanupAzureDeployment"
         static let azureAuthMode = "ScribeCleanupAzureAuthMode"
@@ -155,6 +159,16 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue, forKey: Key.ollamaModel) }
     }
 
+    var lmStudioModel: String {
+        get { defaults.string(forKey: Key.lmStudioModel) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.lmStudioModel) }
+    }
+
+    var selectedLocalApp: LocalServerApp {
+        get { LocalServerApp(rawValue: defaults.string(forKey: Key.selectedLocalApp) ?? "") ?? .none }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.selectedLocalApp) }
+    }
+
     var openAIBaseURL: String {
         get { defaults.string(forKey: Key.openAIBaseURL) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.openAIBaseURL) }
@@ -163,6 +177,16 @@ struct CleanupSettingsStore: Sendable {
     var openAIModel: String {
         get { defaults.string(forKey: Key.openAIModel) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.openAIModel) }
+    }
+
+    var otherServiceBaseURL: String {
+        get { defaults.string(forKey: Key.otherServiceBaseURL) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.otherServiceBaseURL) }
+    }
+
+    var otherServiceModel: String {
+        get { defaults.string(forKey: Key.otherServiceModel) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.otherServiceModel) }
     }
 
     var azureEndpoint: String {

@@ -7,8 +7,12 @@ struct CleanupSettingsValues: Equatable {
     var providerKind: CleanupProviderKind
     var foundryLocalModelAlias: String
     var ollamaModel: String
+    var lmStudioModel: String
+    var selectedLocalApp: LocalServerApp
     var openAIBaseURL: String
     var openAIModel: String
+    var otherServiceBaseURL: String
+    var otherServiceModel: String
     var azureEndpoint: String
     var azureDeployment: String
     var azureAuthMode: AzureAuthMode
@@ -47,19 +51,22 @@ extension CleanupSettingsAccess {
     static func backed(by store: CleanupSettingsStore, providers: CleanupProviderCache) -> CleanupSettingsAccess {
         CleanupSettingsAccess(
             load: {
-                let stored = store.snapshot()
                 return CleanupSettingsValues(
-                    isEnabled: stored.isEnabled,
-                    providerKind: stored.providerKind,
-                    foundryLocalModelAlias: stored.foundryLocalModelAlias,
-                    ollamaModel: stored.ollamaModel,
-                    openAIBaseURL: stored.openAIBaseURL,
-                    openAIModel: stored.openAIModel,
-                    azureEndpoint: stored.azureEndpoint,
-                    azureDeployment: stored.azureDeployment,
-                    azureAuthMode: stored.azureAuthMode,
-                    azureTenantId: stored.azureTenantId,
-                    azureClientId: stored.azureClientId)
+                    isEnabled: store.isEnabled,
+                    providerKind: store.providerKind,
+                    foundryLocalModelAlias: store.foundryLocalModelAlias,
+                    ollamaModel: store.ollamaModel,
+                    lmStudioModel: store.lmStudioModel,
+                    selectedLocalApp: store.selectedLocalApp,
+                    openAIBaseURL: store.openAIBaseURL,
+                    openAIModel: store.openAIModel,
+                    otherServiceBaseURL: store.otherServiceBaseURL,
+                    otherServiceModel: store.otherServiceModel,
+                    azureEndpoint: store.azureEndpoint,
+                    azureDeployment: store.azureDeployment,
+                    azureAuthMode: store.azureAuthMode,
+                    azureTenantId: store.azureTenantId,
+                    azureClientId: store.azureClientId)
             },
             save: { new, old in
                 if new.isEnabled != old.isEnabled { store.isEnabled = new.isEnabled }
@@ -68,8 +75,16 @@ extension CleanupSettingsAccess {
                     store.foundryLocalModelAlias = new.foundryLocalModelAlias
                 }
                 if new.ollamaModel != old.ollamaModel { store.ollamaModel = new.ollamaModel }
+                if new.lmStudioModel != old.lmStudioModel { store.lmStudioModel = new.lmStudioModel }
+                if new.selectedLocalApp != old.selectedLocalApp { store.selectedLocalApp = new.selectedLocalApp }
                 if new.openAIBaseURL != old.openAIBaseURL { store.openAIBaseURL = new.openAIBaseURL }
                 if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
+                if new.otherServiceBaseURL != old.otherServiceBaseURL {
+                    store.otherServiceBaseURL = new.otherServiceBaseURL
+                }
+                if new.otherServiceModel != old.otherServiceModel {
+                    store.otherServiceModel = new.otherServiceModel
+                }
                 if new.azureEndpoint != old.azureEndpoint { store.azureEndpoint = new.azureEndpoint }
                 if new.azureDeployment != old.azureDeployment { store.azureDeployment = new.azureDeployment }
                 if new.azureAuthMode != old.azureAuthMode { store.azureAuthMode = new.azureAuthMode }
@@ -162,6 +177,176 @@ final class CleanupSettingsModel: ObservableObject {
 
     var canSaveAzureClientSecret: Bool {
         !drafts.azureClientSecret.isEmpty && !values.azureClientId.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var providerSelection: CleanupProviderSelection {
+        switch values.providerKind {
+        case .microsoftFoundry:
+            return .microsoftFoundry
+        case .foundryLocal, .ollama:
+            return .onThisMac
+        case .openAICompatible:
+            return CustomServiceFields.savedApp(values: values, hasSavedAPIKey: hasSavedOpenAIApiKey) == .none
+                ? .otherService
+                : .onThisMac
+        }
+    }
+
+    var localAppChoice: CleanupLocalAppChoice {
+        switch values.providerKind {
+        case .foundryLocal:
+            return .letScribeManageIt
+        case .ollama:
+            return .ollama
+        case .microsoftFoundry:
+            return .letScribeManageIt
+        case .openAICompatible:
+            switch CustomServiceFields.savedApp(values: values, hasSavedAPIKey: hasSavedOpenAIApiKey) {
+            case .ollama:
+                return .ollama
+            case .lmStudio:
+                return .lmStudio
+            case .none:
+                return .letScribeManageIt
+            }
+        }
+    }
+
+    var otherServiceEndpoint: String {
+        providerSelection == .otherService ? values.openAIBaseURL : values.otherServiceBaseURL
+    }
+
+    var otherServiceModel: String {
+        providerSelection == .otherService ? values.openAIModel : values.otherServiceModel
+    }
+
+    var showsConnectionTest: Bool {
+        providerSelection != .onThisMac || localAppChoice == .letScribeManageIt
+    }
+
+    func setProviderSelection(_ selection: CleanupProviderSelection) {
+        switch selection {
+        case .onThisMac:
+            setLocalAppChoice(localAppChoice)
+        case .otherService:
+            var updated = values
+            let other = CustomServiceFields.otherService(values: values, hasSavedAPIKey: hasSavedOpenAIApiKey)
+            updated.providerKind = .openAICompatible
+            updated.selectedLocalApp = .none
+            updated.openAIBaseURL = other.endpoint ?? ""
+            updated.openAIModel = other.model ?? ""
+            values = updated
+        case .microsoftFoundry:
+            var updated = values
+            updated.providerKind = .microsoftFoundry
+            updated.selectedLocalApp = .none
+            values = updated
+        }
+    }
+
+    func setLocalAppChoice(_ choice: CleanupLocalAppChoice) {
+        switch choice {
+        case .letScribeManageIt:
+            var updated = values
+            updated.providerKind = .foundryLocal
+            updated.selectedLocalApp = .none
+            values = updated
+        case .ollama, .lmStudio:
+            let other = CustomServiceFields.otherService(values: values, hasSavedAPIKey: hasSavedOpenAIApiKey)
+            let saved = CustomServiceFields.forSave(
+                app: choice.serverApp,
+                appModel: localModel(for: choice),
+                otherService: other,
+                saved: values)
+            var updated = values
+            updated.providerKind = .openAICompatible
+            updated.selectedLocalApp = choice.serverApp
+            updated.openAIBaseURL = saved.stored.endpoint ?? ""
+            updated.openAIModel = saved.stored.model ?? ""
+            updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
+            updated.otherServiceModel = saved.remembered.model ?? ""
+            values = updated
+        }
+    }
+
+    func localModel(for choice: CleanupLocalAppChoice? = nil) -> String {
+        switch choice ?? localAppChoice {
+        case .letScribeManageIt:
+            return values.foundryLocalModelAlias
+        case .ollama:
+            return values.ollamaModel
+        case .lmStudio:
+            return values.lmStudioModel
+        }
+    }
+
+    func setLocalModel(_ model: String, for choice: CleanupLocalAppChoice? = nil) {
+        let choice = choice ?? localAppChoice
+        var updated = values
+        switch choice {
+        case .letScribeManageIt:
+            updated.foundryLocalModelAlias = model
+        case .ollama:
+            updated.ollamaModel = model
+            let saved = CustomServiceFields.forSave(
+                app: .ollama,
+                appModel: model,
+                otherService: CustomServiceFields.otherService(values: values, hasSavedAPIKey: hasSavedOpenAIApiKey),
+                saved: values)
+            updated.providerKind = .openAICompatible
+            updated.selectedLocalApp = .ollama
+            updated.openAIBaseURL = saved.stored.endpoint ?? ""
+            updated.openAIModel = saved.stored.model ?? ""
+            updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
+            updated.otherServiceModel = saved.remembered.model ?? ""
+        case .lmStudio:
+            updated.lmStudioModel = model
+            let saved = CustomServiceFields.forSave(
+                app: .lmStudio,
+                appModel: model,
+                otherService: CustomServiceFields.otherService(values: values, hasSavedAPIKey: hasSavedOpenAIApiKey),
+                saved: values)
+            updated.providerKind = .openAICompatible
+            updated.selectedLocalApp = .lmStudio
+            updated.openAIBaseURL = saved.stored.endpoint ?? ""
+            updated.openAIModel = saved.stored.model ?? ""
+            updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
+            updated.otherServiceModel = saved.remembered.model ?? ""
+        }
+        values = updated
+    }
+
+    func localAppEndpoint(for choice: CleanupLocalAppChoice? = nil) -> String? {
+        let choice = choice ?? localAppChoice
+        let app = choice.serverApp
+        guard app != .none else {
+            return nil
+        }
+        return LocalAiServer.appAt(values.openAIBaseURL) == app
+            ? values.openAIBaseURL
+            : LocalAiServer.address(of: app)
+    }
+
+    func setOtherServiceEndpoint(_ endpoint: String) {
+        var updated = values
+        updated.openAIBaseURL = endpoint
+        updated.otherServiceBaseURL = endpoint
+        if updated.providerKind != .microsoftFoundry {
+            updated.providerKind = .openAICompatible
+        }
+        updated.selectedLocalApp = .none
+        values = updated
+    }
+
+    func setOtherServiceModel(_ model: String) {
+        var updated = values
+        updated.openAIModel = model
+        updated.otherServiceModel = model
+        if updated.providerKind != .microsoftFoundry {
+            updated.providerKind = .openAICompatible
+        }
+        updated.selectedLocalApp = .none
+        values = updated
     }
 
     /// Re-reads stored settings. What is typed into a secret field is kept: it is not stored until Save.

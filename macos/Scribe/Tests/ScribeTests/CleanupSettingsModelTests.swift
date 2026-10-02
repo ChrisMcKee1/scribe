@@ -15,8 +15,12 @@ final class CleanupSettingsBackingFake {
         providerKind: .foundryLocal,
         foundryLocalModelAlias: "qwen2.5-1.5b",
         ollamaModel: "qwen2.5:3b",
+        lmStudioModel: "google/gemma-4-e2b",
+        selectedLocalApp: .none,
         openAIBaseURL: "",
         openAIModel: "",
+        otherServiceBaseURL: "",
+        otherServiceModel: "",
         azureEndpoint: "",
         azureDeployment: "",
         azureAuthMode: .azureCli,
@@ -249,6 +253,57 @@ final class CleanupSettingsModelTests: XCTestCase {
         backing.configured.insert(.openAICompatible)
 
         XCTAssertFalse(model.isDisabled(.connectionTest))
+    }
+
+    @MainActor
+    func testChoosingOnThisMacMovesAnotherAIServiceIntoRememberedFields() {
+        let backing = openAICompatibleBacking()
+        backing.apiKey = "sk-test"
+        let model = makeModel(backing)
+        model.refreshSecretState()
+
+        model.setLocalAppChoice(.ollama)
+
+        XCTAssertEqual(model.providerSelection, .onThisMac)
+        XCTAssertEqual(model.localAppChoice, .ollama)
+        XCTAssertEqual(backing.stored.providerKind, .openAICompatible)
+        XCTAssertEqual(backing.stored.openAIBaseURL, LocalAiServer.ollamaAddress)
+        XCTAssertEqual(backing.stored.openAIModel, "qwen2.5:3b")
+        XCTAssertEqual(backing.stored.otherServiceBaseURL, "http://localhost:1234")
+        XCTAssertEqual(backing.stored.otherServiceModel, "local-model")
+    }
+
+    @MainActor
+    func testChoosingAnotherAIServiceBringsBackItsRememberedFields() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        backing.stored.providerKind = .openAICompatible
+        backing.stored.openAIBaseURL = LocalAiServer.ollamaAddress
+        backing.stored.openAIModel = "gemma4:e4b"
+        backing.stored.ollamaModel = "gemma4:e4b"
+        backing.stored.otherServiceBaseURL = "https://openrouter.ai/api/v1"
+        backing.stored.otherServiceModel = "openai/gpt-5-mini"
+        let model = makeModel(backing)
+
+        model.setProviderSelection(.otherService)
+
+        XCTAssertEqual(model.providerSelection, .otherService)
+        XCTAssertEqual(backing.stored.openAIBaseURL, "https://openrouter.ai/api/v1")
+        XCTAssertEqual(backing.stored.openAIModel, "openai/gpt-5-mini")
+    }
+
+    @MainActor
+    func testAFoundryLocalChoiceHidesTheLocalAppStatusWorkflow() {
+        let backing = CleanupSettingsBackingFake()
+        let model = makeModel(backing)
+
+        XCTAssertEqual(model.providerSelection, .onThisMac)
+        XCTAssertEqual(model.localAppChoice, .letScribeManageIt)
+        XCTAssertTrue(model.showsConnectionTest)
+
+        model.setLocalAppChoice(.lmStudio)
+        XCTAssertFalse(model.showsConnectionTest)
+        XCTAssertEqual(backing.stored.openAIBaseURL, LocalAiServer.lmStudioAddress)
     }
 
     /// Settings is rebuilt on every open; a key typed but not saved lives in the drafts, which outlive the tab.
