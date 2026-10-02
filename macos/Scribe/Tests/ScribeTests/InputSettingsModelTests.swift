@@ -44,20 +44,20 @@ final class InputSettingsModelTests: XCTestCase {
         var handedOver: [CGKeyCode] = []
         let model = makeModel(onHotkeyChanged: { handedOver.append($0) })
 
-        model.apply(keyCode: 61)
+        model.apply(keyCode: 105)
 
-        XCTAssertEqual(hotkeyStore.keyCode, 61)
-        XCTAssertEqual(handedOver, [61])
-        XCTAssertEqual(model.binding, HotkeyBinding(keyCode: 61))
+        XCTAssertEqual(hotkeyStore.keyCode, 105)
+        XCTAssertEqual(handedOver, [105])
+        XCTAssertEqual(model.binding, HotkeyBinding(keyCode: 105))
         XCTAssertFalse(model.isDefaultBinding)
-        XCTAssertTrue(model.hint.hasPrefix("Hold Right Option"), model.hint)
+        XCTAssertTrue(model.hint.hasPrefix("Hold F13"), model.hint)
     }
 
     @MainActor
-    func testTheHintFollowsCapsLockAsAToggle() {
+    func testTheHintFollowsTheDefaultRightOptionHold() {
         let model = makeModel()
         XCTAssertTrue(model.isDefaultBinding)
-        XCTAssertTrue(model.hint.hasPrefix("Tap Caps Lock"), model.hint)
+        XCTAssertTrue(model.hint.hasPrefix("Hold Right Option"), model.hint)
     }
 
     @MainActor
@@ -127,6 +127,9 @@ final class InputSettingsModelTests: XCTestCase {
     func testTheSilenceAutoStopSwitchIsOffByDefaultAndStoredAtOnce() {
         let model = makeModel()
         XCTAssertFalse(model.autoStopOnSilence)
+        XCTAssertFalse(model.autoStopAppliesToBinding, "Right Option is held while talking")
+
+        model.apply(keyCode: HotkeySettingsStore.capsLockKeyCode)
         XCTAssertTrue(model.autoStopAppliesToBinding, "Caps Lock is tapped on and off")
 
         model.setAutoStopOnSilence(true)

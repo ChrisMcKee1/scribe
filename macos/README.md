@@ -1,7 +1,7 @@
 # Scribe for macOS
 
 A native Swift menu bar port of [Scribe](../README.md), Windows' offline push-to-talk dictation
-app. Built with Swift Package Manager and bundled into a minimal, ad-hoc-signed `.app` by a shell
+app. Built with Swift Package Manager and bundled into a minimal, locally self-signed `.app` by a shell
 script. Feature parity with the Windows app is close (see `PORTING-PLAN.md` for the parity table, the
 row-by-row checklist and known gaps). The current code passes CI's builds, unit and scenario tests and
 sanitizer runs on macOS 15 and 26, but it has not yet been run on a real Mac: permissions, the
@@ -32,9 +32,50 @@ The app bundle is written to:
 macos/Scribe/dist/Scribe.app
 ```
 
-The first time you build locally, run `./macos/Scribe/scripts/setup-dev-signing.sh` once so
-rebuilt bundles keep a stable code signature; otherwise macOS re-prompts for Accessibility
-permission on every rebuild (see the script's header comment for why).
+`build-app.sh` provisions or reuses the stable local `Scribe Local Dev` signing identity from
+`setup-dev-signing.sh`. That identity must stay stable across rebuilds because macOS keys Accessibility and Input
+Monitoring grants to the signing identity as well as the bundle id. If you intentionally delete and recreate the dev
+certificate, rebuild and re-grant the permissions once for the new certificate.
+
+## Releasing
+
+Scribe for macOS ships as a notarized direct download through GitHub Releases, not through the Mac App Store, because
+App Sandbox blocks the cross-app Accessibility text injection Scribe needs.
+
+One-time setup:
+
+1. Create a Developer ID Application certificate in Xcode:
+   Xcode > Settings > Accounts > Manage Certificates.
+2. Confirm it appears in the default keychain search list:
+
+   ```bash
+   security find-identity -v -p codesigning
+   ```
+
+   The release script auto-detects a single `Developer ID Application: ... (TEAMID)` identity. If more than one exists,
+   set `SCRIBE_SIGN_IDENTITY` to the exact identity string.
+3. Store notary credentials:
+
+   ```bash
+   xcrun notarytool store-credentials scribe-notary \
+     --apple-id "you@example.com" \
+     --team-id "TEAMID1234" \
+     --password "app-specific-password"
+   ```
+
+   Use `SCRIBE_NOTARY_PROFILE` if you store the credentials under a different profile name.
+
+Release command:
+
+```bash
+./macos/Scribe/scripts/release.sh release
+```
+
+`release.sh` reads the version from `macos/Scribe/VERSION`, builds the app, re-signs it with the Developer ID
+Application identity using the hardened runtime and a secure timestamp, notarizes and staples the app, creates the
+drag-to-Applications DMG, signs and notarizes the DMG, staples it, and validates Gatekeeper acceptance. The release
+entitlement file grants microphone input for the hardened runtime. The app is not sandboxed, so outbound network
+access to localhost, Foundry, Ollama, GitHub, or cloud cleanup endpoints does not require a network entitlement.
 
 ## Run
 
@@ -44,9 +85,8 @@ From Finder, double-click `macos/Scribe/dist/Scribe.app`, or from Terminal:
 open macos/Scribe/dist/Scribe.app
 ```
 
-On first launch you'll be asked to grant Microphone, Accessibility and Input Monitoring access (System
-Settings > Privacy & Security), and a one-time Welcome window explains the push-to-talk gesture and the
-privacy/offline promise.
+On first launch you'll be asked to grant Microphone, Accessibility and Input Monitoring access (System Settings >
+Privacy & Security), and a one-time Welcome window explains the push-to-talk gesture and the privacy/offline promise.
 
 ## What works today
 
@@ -82,15 +122,16 @@ privacy/offline promise.
   reads is a private temporary file that is deleted as soon as it returns
 - Capture that belongs to one recording at a time: every input channel is mixed in, so a microphone on
   any input of an interface is heard; a device change ends the recording and keeps what it captured;
-  Caps Lock (the default key) is tapped on and off and stops only when you tap it again, unless you turn
-  on "Also stop after a pause" in Settings > Input (off by default, as on Windows, because a pause to
-  think would end the dictation); the tray's test dictation always stops after a pause; a held key never
-  does; and every recording stops at ten minutes, even if the microphone stops delivering. Scribe only
-  listens to Caps Lock and never changes its lock state, so a recording starts only when your tap turns the
-  light on, and ends at your next tap. After a dictation that ended some other way than your tap (a pause with
-  the setting on, the ten minute limit, a microphone fault, Pause Dictation, a change of key or a press Scribe
-  turned away), or if the light was on when Scribe started, the light is on with nothing recording: your next
-  tap turns it off and starts nothing, and the tap after it starts a new dictation
+  Right Option (the default key) is held while you talk and never stops on silence. Caps Lock is still available as
+  a toggle key: it is tapped on and off and stops only when you tap it again, unless you turn on "Also stop after a
+  pause" in Settings > Input (off by default, as on Windows, because a pause to think would end the dictation); the
+  tray's test dictation always stops after a pause; other held keys never do; and every recording stops at ten
+  minutes, even if the microphone stops delivering. Scribe only listens to Caps Lock and never changes its lock
+  state, so a recording starts only when your tap turns the light on, and ends at your next tap. After a dictation
+  that ended some other way than your tap (a pause with the setting on, the ten minute limit, a microphone fault,
+  Pause Dictation, a change of key or a press Scribe turned away), or if the light was on when Scribe started, the
+  light is on with nothing recording: your next tap turns it off and starts nothing, and the tap after it starts a
+  new dictation
 - Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
   that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept").
   A notice never covers a recording and never replaces a newer failure; one that cannot be shown waits
@@ -195,6 +236,6 @@ See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row fea
 the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
 call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
 recognition; AI cleanup is sent no glossary of your dictionary terms (Windows sends up to 5,000 with every cloud
-request; whether macOS should is an open decision, because it changes what leaves the Mac); and there is no release
-packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local Accessibility persistence
-only).
+request; whether macOS should is an open decision, because it changes what leaves the Mac); and there is no
+auto-update story yet. Dev builds use a local self-signed certificate, and public releases use the Developer ID
+pipeline documented above.

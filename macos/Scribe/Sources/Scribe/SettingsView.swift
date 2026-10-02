@@ -342,8 +342,9 @@ private struct HotkeySettingsTab: View {
 
             if event.type == .flagsChanged {
                 // A flagsChanged event fires on both press AND release of a modifier key; only
-                // treat this as a recording when the key is actually down right now, the same
-                // check HotkeyManager itself uses to tell the two apart.
+                // treat this as a recording when the key is actually down right now. The runtime
+                // hotkey path also cross-checks release edges, but Settings only captures the
+                // initial press inside this focused window.
                 guard CGEventSource.keyState(.combinedSessionState, key: candidateKeyCode) else {
                     return event
                 }

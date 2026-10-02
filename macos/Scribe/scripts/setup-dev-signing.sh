@@ -15,9 +15,25 @@
 # Usage: scripts/setup-dev-signing.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKAGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 KEYCHAIN_NAME="scribe-dev.keychain-db"
 KEYCHAIN_PATH="$HOME/Library/Keychains/$KEYCHAIN_NAME"
 IDENTITY_NAME="Scribe Local Dev"
+
+ensure_keychain_in_search_list() {
+    if security list-keychains -d user | grep -Fq "$KEYCHAIN_PATH"; then
+        return
+    fi
+
+    EXISTING_KEYCHAINS="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+    # shellcheck disable=SC2086
+    security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING_KEYCHAINS
+}
+
+keychain_has_identity() {
+    security find-identity "$KEYCHAIN_PATH" 2>/dev/null | grep -Fq "\"$IDENTITY_NAME\""
+}
 
 if [[ -n "${SCRIBE_KEYCHAIN_PASSWORD:-}" ]]; then
     KEYCHAIN_PASSWORD="$SCRIBE_KEYCHAIN_PASSWORD"
@@ -33,14 +49,27 @@ else
     fi
 fi
 
-if security find-identity 2>/dev/null | grep -q "$IDENTITY_NAME"; then
-    echo "A '$IDENTITY_NAME' signing identity already exists; nothing to do."
-    echo "If Accessibility keeps re-prompting anyway, remove the old grant in System Settings >"
-    echo "Privacy & Security > Accessibility, rebuild, and re-grant it once."
+if [ -f "$KEYCHAIN_PATH" ]; then
+    security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+fi
+
+ensure_keychain_in_search_list
+
+if keychain_has_identity; then
+    echo "A '$IDENTITY_NAME' signing identity already exists in $KEYCHAIN_PATH; nothing to do."
+    echo "If TCC keeps re-prompting anyway, remove the old grant in System Settings >"
+    echo "Privacy & Security, rebuild, and re-grant it once."
     exit 0
 fi
 
-WORKDIR="$(mktemp -d)"
+if [ -f "$KEYCHAIN_PATH" ]; then
+    echo "Recreating $KEYCHAIN_PATH because '$IDENTITY_NAME' is missing or inaccessible there."
+    security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+fi
+
+WORKDIR="$PACKAGE_DIR/.build/setup-dev-signing-work"
+rm -rf "$WORKDIR"
+mkdir -p "$WORKDIR"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 cat > "$WORKDIR/codesign.cnf" <<EOF
@@ -68,23 +97,19 @@ openssl pkcs12 -export -out "$WORKDIR/scribe-dev.p12" \
 
 # A dedicated keychain (rather than the login keychain) avoids the interactive "codesign wants to
 # use your confidential information" prompt that a login-keychain import can trigger in a
-# non-interactive session; creating and unlocking it here with a user-chosen password sidesteps
-# that entirely, and macOS keeps it unlocked for the rest of the login session.
-security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+# non-interactive session. The user-chosen password lets later sessions unlock and reuse the same
+# identity instead of minting a replacement that would make TCC ask again.
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings "$KEYCHAIN_PATH"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security import "$WORKDIR/scribe-dev.p12" -k "$KEYCHAIN_PATH" -P "$P12_PASSWORD" -T /usr/bin/codesign -A
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
 
-# Add the new keychain to the user's search list (rather than replacing it) so codesign can find
-# the identity by name without needing -keychain on every invocation.
-EXISTING_KEYCHAINS="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
-security list-keychains -d user -s "$KEYCHAIN_PATH" $EXISTING_KEYCHAINS
+ensure_keychain_in_search_list
 
 echo "Created '$IDENTITY_NAME' signing identity in $KEYCHAIN_PATH."
-echo "Rebuild the app (scripts/build-app.sh) and re-grant Accessibility one more time in"
-echo "System Settings > Privacy & Security > Accessibility. Every future rebuild will keep the"
-echo "same signature, so that grant will stick without re-prompting."
+echo "Rebuild the app (scripts/build-app.sh) and re-grant Accessibility and Input Monitoring one"
+echo "more time in System Settings > Privacy & Security. Every future rebuild will keep the same"
+echo "signature, so those grants will stick without re-prompting."
 echo "Keep the $KEYCHAIN_NAME password somewhere safe. You will need it if you later want to"
 echo "unlock, delete, or recreate that dedicated keychain."
