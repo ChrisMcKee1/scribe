@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pauseMenuItem: NSMenuItem?
     private var aiCleanupMenuItem: NSMenuItem?
     private var overlayPositionMenu: NSMenu?
+    private lazy var microphoneMenu = MicrophoneMenu()
     private var cleanupSettings = CleanupSettingsStore.live.snapshot()
     private var observations: [SettingsNotificationObservation] = []
     private var quickAddIsOpening = false
@@ -359,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(dictationItem)
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
         menu.addItem(overlayPositionMenuItem())
+        menu.addItem(microphoneMenu.item)
         menu.addItem(.separator())
         let aiCleanupItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAiCleanup(_:)), keyEquivalent: "")
         aiCleanupItem.state = isAiCleanupEnabled ? .on : .off
