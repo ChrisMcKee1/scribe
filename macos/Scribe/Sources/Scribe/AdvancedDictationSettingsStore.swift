@@ -31,14 +31,11 @@ struct AdvancedDictationSettingsStore {
 
     var speechModelAlias: String {
         get {
-            let alias = defaults.string(forKey: Self.speechModelAliasDefaultsKey)
-            guard let alias, FoundrySpeechModelCatalog.choices.contains(where: { $0.alias == alias }) else {
-                return TranscriptionBackendResolver.defaultFoundryModelAlias
-            }
-            return alias
+            defaults.string(forKey: Self.speechModelAliasDefaultsKey).flatMap { $0.isEmpty ? nil : $0 }
+                ?? TranscriptionBackendResolver.defaultFoundryModelAlias
         }
         nonmutating set {
-            guard FoundrySpeechModelCatalog.choices.contains(where: { $0.alias == newValue }) else { return }
+            guard !newValue.isEmpty, !newValue.utf8.contains(0) else { return }
             defaults.set(newValue, forKey: Self.speechModelAliasDefaultsKey)
         }
     }

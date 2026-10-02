@@ -40,14 +40,17 @@ final class AdvancedDictationSettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.speechModelAlias, TranscriptionEngine.defaultFoundryModelAlias)
     }
 
-    func testSpeechModelSelectionRoundTripsAndRejectsUnknownAliases() {
+    func testSpeechModelSelectionRoundTripsAndPreservesUnknownAliases() {
         store.speechModelAlias = "whisper-base"
         XCTAssertEqual(AdvancedDictationSettingsStore(defaults: suite.defaults).speechModelAlias, "whisper-base")
 
-        store.speechModelAlias = "not-a-speech-model"
-        XCTAssertEqual(store.speechModelAlias, "whisper-base")
+        store.speechModelAlias = "removed-from-catalog-model"
+        XCTAssertEqual(store.speechModelAlias, "removed-from-catalog-model")
+        XCTAssertEqual(
+            AdvancedDictationSettingsStore(defaults: suite.defaults).speechModelAlias,
+            "removed-from-catalog-model")
         suite.defaults.set("unknown-model", forKey: "ScribeSpeechModelAlias")
-        XCTAssertEqual(store.speechModelAlias, TranscriptionEngine.defaultFoundryModelAlias)
+        XCTAssertEqual(store.speechModelAlias, "unknown-model")
     }
 
     @MainActor

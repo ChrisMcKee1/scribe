@@ -144,6 +144,56 @@ final class ApplicationTerminationTests: XCTestCase {
         XCTAssertEqual(model.errorMessage?.contains("quitting"), true)
     }
 
+    func testQuitCancelsAndReapsAnExplicitSpeechModelDownload() async throws {
+        let directory = try makeTemporaryDirectory(label: "quit-speech-download")
+        let ready = directory.appendingPathComponent("ready")
+        let pidFile = directory.appendingPathComponent("pid")
+        let script = try makeScript(
+            """
+            trap '' TERM
+            echo $$ > '\(pidFile.path(percentEncoded: false))'
+            : > '\(ready.path(percentEncoded: false))'
+            exec sleep 30
+            """, in: directory)
+        let operations = AuxiliaryOperations()
+
+        let download = Task { @MainActor in
+            do {
+                try await operations.run {
+                    try await FoundrySpeechModelCatalog.download(alias: "whisper-base", cliURL: script)
+                }
+                return true
+            } catch {
+                return false
+            }
+        }
+        let started = await FileGate.waitForFile(at: ready, timeout: .seconds(30))
+        XCTAssertTrue(started)
+        let pid = try XCTUnwrap(
+            pid_t(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        XCTAssertEqual(operations.runningCount, 1)
+
+        let replies = Collected<Bool>()
+        let termination = ApplicationTermination(
+            work: ApplicationTermination.Work(
+                stopListening: {},
+                operations: operations,
+                dictation: makeHarness().controller,
+                stopMaintenance: nil,
+                removeScratchAudio: {}),
+            reply: { replies.values.append(ProcessResources.isAlive(pid)) })
+
+        XCTAssertEqual(termination.request(), .terminateLater)
+        let replied = await finishes(within: 30) { await termination.waitUntilReplied() }
+        XCTAssertTrue(replied, "Quit did not wait for the speech download to stop")
+
+        XCTAssertEqual(replies.values, [false], "Quit replied while the model download child was alive")
+        XCTAssertTrue(ProcessResources.waitForExit(of: pid, timeout: .seconds(10)))
+        XCTAssertEqual(operations.runningCount, 0)
+        let downloadSucceeded = await download.value
+        XCTAssertFalse(downloadSucceeded)
+    }
+
     /// The Usage Insights summary goes through the same barrier: Quit cancels it and waits for it to return, and a
     /// summary asked for afterwards is refused without running.
     func testQuitCancelsAUsageSummaryInFlightAndWaitsForIt() async {

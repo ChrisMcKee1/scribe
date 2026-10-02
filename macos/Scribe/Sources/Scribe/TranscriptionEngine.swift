@@ -28,8 +28,10 @@ enum TranscriptionError: LocalizedError, Equatable {
     case emptyOutput
     /// The recognizer's reply could not be read.
     case malformedOutput
-    /// The selected non-default Foundry speech model has not been explicitly downloaded.
+    /// A newly selected Foundry speech model has not been explicitly downloaded.
     case speechModelNotCached
+    /// Foundry does not list the saved speech alias in this runtime's catalog.
+    case speechModelNotListed
     /// Foundry could not confirm whether the selected speech model is cached.
     case speechModelCacheUnavailable
 
@@ -65,6 +67,8 @@ enum TranscriptionError: LocalizedError, Equatable {
         case .speechModelNotCached:
             return
                 "The selected speech model is not downloaded. Open Advanced settings and download it before dictating."
+        case .speechModelNotListed:
+            return "Foundry Local does not list the selected speech model. Choose a listed model in Advanced settings."
         case .speechModelCacheUnavailable:
             return "Scribe could not check the selected speech model. Check Foundry Local and try again."
         }
@@ -433,14 +437,17 @@ final class TranscriptionEngine: Sendable {
     }
 
     private func requireFoundryModelIsCached(_ backend: TranscriptionBackendConfiguration) async throws {
-        guard backend.kind == .foundryLocal,
-            backend.foundryModelAlias != Self.defaultFoundryModelAlias
-        else {
-            return
-        }
+        guard backend.kind == .foundryLocal else { return }
+        guard backend.foundryModelAlias != Self.defaultFoundryModelAlias else { return }
         do {
-            let cached = try await FoundrySpeechModelCatalog.cachedAliases(cliURL: backend.cliURL)
-            guard cached.contains(backend.foundryModelAlias) else {
+            let models = try await FoundrySpeechModelCatalog.list(cliURL: backend.cliURL)
+            guard let model = models.first(where: { $0.alias == backend.foundryModelAlias }) else {
+                throw TranscriptionError.speechModelNotListed
+            }
+            guard let isCached = model.isCached else {
+                throw TranscriptionError.speechModelCacheUnavailable
+            }
+            guard isCached else {
                 throw TranscriptionError.speechModelNotCached
             }
         } catch is CancellationError {

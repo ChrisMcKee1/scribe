@@ -10,17 +10,53 @@ final class FoundrySpeechModelCatalogTests: XCTestCase {
         return url
     }
 
-    func testCacheQueryReturnsCachedAliasesAndDoesNotDownload() async throws {
-        let directory = try makeTemporaryDirectory(label: "speech-model-cache")
+    func testModelListDiscoversSpeechAliasesAndCacheStateWithoutDownloading() async throws {
+        let directory = try makeTemporaryDirectory(label: "speech-model-list")
         let script = try makeScript(
             """
-            test "$1" = cache && test "$2" = list || exit 9
-            printf '{"models":[{"alias":"parakeet-tdt-0.6b-v2","cached":true},{"alias":"whisper-base","cached":false}]}'
+            test "$1" = model && test "$2" = list && test "$3" = --type && test "$4" = speech || exit 9
+            printf '{"models":[{"alias":"parakeet-tdt-0.6b-v2","displayName":"Parakeet TDT v2","type":"Speech","cached":true},{"alias":"whisper-base","displayName":"Whisper Base","type":"Speech","cached":false},{"alias":"qwen2.5-7b","type":"Chat","cached":true},{"alias":"older-runtime-speech","type":"Speech"}]}'
             """, in: directory)
 
-        let aliases = try await FoundrySpeechModelCatalog.cachedAliases(cliURL: script)
+        let choices = try await FoundrySpeechModelCatalog.list(cliURL: script)
 
-        XCTAssertEqual(aliases, ["parakeet-tdt-0.6b-v2"])
+        XCTAssertEqual(
+            choices,
+            [
+                FoundrySpeechModelChoice(alias: "parakeet-tdt-0.6b-v2", title: "Parakeet TDT v2", isCached: true),
+                FoundrySpeechModelChoice(alias: "whisper-base", title: "Whisper Base", isCached: false),
+                FoundrySpeechModelChoice(
+                    alias: "older-runtime-speech", title: "older-runtime-speech", isCached: nil),
+            ])
+    }
+
+    func testModelListFailureDoesNotReturnAnEmptyCatalogAsSuccess() async throws {
+        let directory = try makeTemporaryDirectory(label: "speech-model-list-failure")
+        let script = try makeScript("printf 'not json'; exit 0", in: directory)
+
+        do {
+            _ = try await FoundrySpeechModelCatalog.list(cliURL: script)
+            XCTFail("unreadable model-list output must be reported")
+        } catch {
+            XCTAssertEqual(error as? FoundrySpeechModelError, .catalogUnavailable)
+        }
+    }
+
+    func testPickerChoicesKeepASavedAliasMissingFromTheInstalledCatalog() {
+        let installed = [
+            FoundrySpeechModelChoice(alias: "whisper-base", title: "Whisper Base", isCached: true)
+        ]
+
+        let choices = FoundrySpeechModelCatalog.choices(from: installed, preserving: "retired-speech-alias")
+
+        XCTAssertEqual(
+            choices.map(\.alias),
+            [
+                "whisper-base",
+                TranscriptionEngine.defaultFoundryModelAlias,
+                "retired-speech-alias",
+            ])
+        XCTAssertEqual(choices.last?.title, "Saved selection, not listed: retired-speech-alias")
     }
 
     func testDownloadRunsOnlyAfterExplicitRequestForSelectedAlias() async throws {
@@ -37,15 +73,49 @@ final class FoundrySpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: argumentsURL, encoding: .utf8), "model download whisper-base")
     }
 
-    func testDownloadRejectsAnAliasOutsideTheSpeechChoices() async throws {
+    @MainActor
+    func testCancellingTheSettingsTaskStopsAndReapsAnExplicitDownload() async throws {
+        let directory = try makeTemporaryDirectory(label: "speech-model-download-cancel")
+        let ready = directory.appendingPathComponent("ready")
+        let pidFile = directory.appendingPathComponent("pid")
+        let script = try makeScript(
+            """
+            trap '' TERM
+            echo $$ > '\(pidFile.path(percentEncoded: false))'
+            : > '\(ready.path(percentEncoded: false))'
+            exec sleep 30
+            """, in: directory)
+        let operations = AuxiliaryOperations()
+        let download = Task { @MainActor in
+            try await operations.run {
+                try await FoundrySpeechModelCatalog.download(alias: "whisper-base", cliURL: script)
+            }
+        }
+
+        let started = await FileGate.waitForFile(at: ready, timeout: .seconds(30))
+        XCTAssertTrue(started)
+        let pid = try XCTUnwrap(
+            pid_t(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        download.cancel()
+        do {
+            try await download.value
+            XCTFail("a cancelled Settings task must not report a completed download")
+        } catch is CancellationError {
+        }
+
+        XCTAssertTrue(ProcessResources.waitForExit(of: pid, timeout: .seconds(10)))
+        XCTAssertEqual(operations.runningCount, 0)
+    }
+
+    func testDownloadRejectsAnEmptyAliasWithoutStartingTheCommand() async throws {
         let directory = try makeTemporaryDirectory(label: "speech-model-invalid-download")
         let script = try makeScript("touch '\(directory.path(percentEncoded: false))/started'", in: directory)
 
         do {
-            try await FoundrySpeechModelCatalog.download(alias: "qwen2.5-7b", cliURL: script)
-            XCTFail("an unsupported model must not be downloaded")
+            try await FoundrySpeechModelCatalog.download(alias: "", cliURL: script)
+            XCTFail("an empty alias must not be downloaded")
         } catch {
-            XCTAssertEqual(error as? FoundrySpeechModelError, .unsupportedModel)
+            XCTAssertEqual(error as? FoundrySpeechModelError, .invalidAlias)
         }
         XCTAssertFalse(
             FileManager.default.fileExists(

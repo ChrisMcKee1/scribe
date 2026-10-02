@@ -34,7 +34,7 @@ final class TranscriptionEngineTests: XCTestCase {
         resolutionLifetime: Duration = TranscriptionEngine.defaultResolutionLifetime,
         foundryModelAlias: String? = nil,
         selectedFoundryModelAlias: @escaping @Sendable () -> String = {
-            AdvancedDictationSettingsStore.live.speechModelAlias
+            TranscriptionEngine.defaultFoundryModelAlias
         },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) -> TranscriptionEngine {
@@ -194,7 +194,7 @@ final class TranscriptionEngineTests: XCTestCase {
         let startedPath = started.path(percentEncoded: false)
         let script = try makeScript(
             """
-            if [ "$1" = cache ]; then
+            if [ "$1" = model ] && [ "$2" = list ]; then
               printf '{"models":[{"alias":"whisper-base","cached":false}]}'
               exit 0
             fi
@@ -209,6 +209,32 @@ final class TranscriptionEngineTests: XCTestCase {
         }
 
         XCTAssertEqual(failure, .speechModelNotCached)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: startedPath))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testSavedModelMissingFromInstalledCatalogIsPreservedButNotRun() async throws {
+        let directory = try makeTemporaryDirectory(label: "missing-speech-model")
+        let started = directory.appendingPathComponent("transcribe-started")
+        let startedPath = started.path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            if [ "$1" = model ] && [ "$2" = list ]; then
+              printf '{"models":[{"alias":"parakeet-tdt-0.6b-v2","type":"Speech","cached":true}]}'
+              exit 0
+            fi
+            touch '\(startedPath)'
+            printf '{"text":"must not run"}'
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(
+            foundry: script, scratch: scratch, foundryModelAlias: "removed-from-runtime")
+
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: tone, sampleRate: 16_000)
+        }
+
+        XCTAssertEqual(failure, .speechModelNotListed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: startedPath))
         XCTAssertTrue(scratchFiles(scratch).isEmpty)
     }
@@ -611,7 +637,7 @@ final class TranscriptionEngineTests: XCTestCase {
             return (script, record)
         }
         let quickDeadline = TranscriptionDeadlines(
-            coldBase: .milliseconds(300), warmBase: .milliseconds(300), perAudioSecond: 0)
+            coldBase: .seconds(2), warmBase: .seconds(2), perAudioSecond: 0)
 
         let success = try recognizer("success", then: "printf '{\"text\":\"done\"}'")
         let result = try await makeEngine(foundry: success.script, scratch: scratch)
