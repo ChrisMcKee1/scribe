@@ -126,10 +126,10 @@ final class LocalModelLifecycle: Sendable {
         var refused: Set<String> = []
         var idleTask: Task<Void, Never>?
         var idleGeneration: UInt64 = 0
+        var idle: Duration = .zero
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
-    private let idle: Duration
     private let bounds: Bounds
     private let actions: Actions
     private let sleeper: @Sendable (Duration) async throws -> Void
@@ -142,7 +142,7 @@ final class LocalModelLifecycle: Sendable {
         actions: Actions = .live,
         sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
-        self.idle = idle
+        state.withLock { $0.idle = idle }
         self.bounds = bounds
         self.actions = actions
         self.sleeper = sleeper
@@ -203,10 +203,24 @@ final class LocalModelLifecycle: Sendable {
 
     // MARK: Idle
 
+    /// Changes the idle time the next countdown uses; zero never frees on idle. A countdown already running is
+    /// restarted from now, so a shorter time is not postponed by the one it replaces.
+    func setIdle(_ idle: Duration) {
+        let changed = state.withLock { state -> Bool in
+            guard state.idle != idle else { return false }
+            state.idle = idle
+            state.idleTask?.cancel()
+            state.idleTask = nil
+            state.idleGeneration &+= 1
+            return true
+        }
+        if changed { scheduleIdleReleaseIfOwed() }
+    }
+
     private func scheduleIdleReleaseIfOwed() {
         let sleeper = self.sleeper
-        let idle = self.idle
         state.withLock { state in
+            let idle = state.idle
             guard state.uses == 0, !state.copies.isEmpty, idle > .zero else { return }
             state.idleTask?.cancel()
             state.idleGeneration &+= 1

@@ -25,7 +25,7 @@ final class CleanupProviderCache: Sendable {
     let store: CleanupSettingsStore
     private let environment: [String: String]
     private let factory: CleanupProviderFactory
-    private let deadlineForCheck: @Sendable (CleanupProviderKind) -> Duration
+    private let deadlineForCheck: @Sendable (CleanupProviderKind, Bool) -> Duration
     private let checkTimer: @Sendable (Duration) async throws -> Void
     private let readinessTimer: @Sendable (Duration) async throws -> Void
     private let state = OSAllocatedUnfairLock(initialState: CleanupProviderCacheState())
@@ -38,8 +38,8 @@ final class CleanupProviderCache: Sendable {
         store: CleanupSettingsStore,
         environment: [String: String],
         factory: CleanupProviderFactory,
-        checkDeadline: @escaping @Sendable (CleanupProviderKind) -> Duration = {
-            CleanupProviderCache.checkDeadline(for: $0)
+        checkDeadline: @escaping @Sendable (CleanupProviderKind, Bool) -> Duration = {
+            CleanupProviderCache.checkDeadline(for: $0, localApp: $1)
         },
         checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         readinessTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
@@ -60,6 +60,7 @@ final class CleanupProviderCache: Sendable {
     /// when it builds; it never starts a process or sends a request.
     func provider() throws -> any CleanupProvider {
         let connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+        applyIdleTime()
         return try entry(for: connection).provider
     }
 
@@ -101,6 +102,11 @@ final class CleanupProviderCache: Sendable {
         // A configuration that no longer uses the model it served frees it, once its uses have ended. A, B, A is not
         // a change: `wanted` is asked again when the release commits.
         Task.detached { [self] in await releaseLocalModel(.configurationChanged) }
+    }
+
+    /// Hands the lifecycle the idle time stored now, so a change reaches the next countdown without a restart.
+    private func applyIdleTime() {
+        lifecycle.setIdle(.seconds(store.localModelIdleMinutes * 60))
     }
 
     /// The local model the settings stored now would use, or nil when cleanup is off or not a model on this Mac.
@@ -249,10 +255,12 @@ final class CleanupProviderCache: Sendable {
         for connection: CleanupConnection, candidate: CleanupConnectionCandidate? = nil
     ) async -> CleanupConnectionCheck {
         let kind = connection.kind
-        let deadline = deadlineForCheck(kind)
+        applyIdleTime()
+        let localApp = isLocalApp(connection)
+        let deadline = deadlineForCheck(kind, localApp)
         do {
             return try await OperationDeadline.run(within: deadline, sleep: checkTimer) {
-                try await self.check(connection, candidate: candidate)
+                try await self.check(connection, candidate: candidate, deadline: deadline)
             }
         } catch let error as OperationDeadlineError {
             ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))
@@ -303,14 +311,15 @@ final class CleanupProviderCache: Sendable {
     static func probe(
         _ provider: any CleanupProvider,
         kind: CleanupProviderKind,
-        systemPrompt: String? = nil
+        systemPrompt: String? = nil,
+        deadline: Duration? = nil
     ) async throws -> ProbeAnswer {
         let capped = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),
             writingStylePrompt: systemPrompt
                 ?? CleanupPrompt.systemPrompt(
                     writingStyle: CleanupPrompt.effectiveWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
-            timeout: ChatCompletionsTransport.seconds(checkDeadline(for: kind)),
+            timeout: ChatCompletionsTransport.seconds(deadline ?? checkDeadline(for: kind)),
             maxOutputTokens: checkOutputCeiling(for: kind))
         let uncapped = capped.withoutOutputLimit()
 
@@ -368,7 +377,8 @@ final class CleanupProviderCache: Sendable {
     /// result, failures included, and throws only a cancellation, so the deadline or the caller says what it meant.
     private func check(
         _ connection: CleanupConnection,
-        candidate: CleanupConnectionCandidate? = nil
+        candidate: CleanupConnectionCandidate? = nil,
+        deadline: Duration
     ) async throws -> CleanupConnectionCheck {
         let kind = connection.kind
         // A check cancelled before it began (Cancel pressed at once, Settings closed) builds nothing and reads no
@@ -411,7 +421,7 @@ final class CleanupProviderCache: Sendable {
             } else {
                 prompt = nil
             }
-            let answer = try await Self.probe(provider, kind: kind, systemPrompt: prompt)
+            let answer = try await Self.probe(provider, kind: kind, systemPrompt: prompt, deadline: deadline)
             let seconds = ChatCompletionsTransport.seconds(started.duration(to: .now))
             ScribeLog.info(.cleanup, "Test Connection succeeded", .name("provider", kind), .name("answer", answer))
             return CleanupConnectionCheck(
@@ -441,10 +451,32 @@ final class CleanupProviderCache: Sendable {
         }
     }
 
+    /// What Windows allows a model on this Mac: Ollama and LM Studio load a model on the first request, which
+    /// takes minutes for a large one, however the connection is represented.
+    static let localCheckDeadline = Duration.seconds(180)
+
+    /// Whether `connection` reaches Ollama or LM Studio on this Mac, the same recognition dictation uses.
+    private func isLocalApp(_ connection: CleanupConnection) -> Bool {
+        switch connection.target {
+        case .ollama:
+            return true
+        case .openAICompatible(let url, _, _, _):
+            guard connection.source == .settings else { return false }
+            let app = store.selectedLocalApp != .none ? store.selectedLocalApp : LocalAiServer.appAt(url.absoluteString)
+            return app != .none
+        default:
+            return false
+        }
+    }
+
     /// How long Test Connection may take from start to finish. A first request to an on-device model can wait for the
     /// model to load, which takes minutes for a large model; a cloud deployment answers within seconds unless it is
     /// cold or thinking hard. Windows' readiness probe allows the same 180 and 90 seconds, as one `CancelAfter` over
     /// the whole probe.
+    static func checkDeadline(for kind: CleanupProviderKind, localApp: Bool) -> Duration {
+        localApp ? max(checkDeadline(for: kind), localCheckDeadline) : checkDeadline(for: kind)
+    }
+
     static func checkDeadline(for kind: CleanupProviderKind) -> Duration {
         switch kind {
         case .foundryLocal, .ollama:

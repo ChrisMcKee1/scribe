@@ -102,7 +102,9 @@ final class CleanupProviderCacheTests: XCTestCase {
         let timer: @Sendable (Duration) async throws -> Void = checkTimer ?? realTimer
         let cache = CleanupProviderCache(
             store: fixture.store, environment: environment, factory: factory,
-            checkDeadline: { kind in checkDeadline ?? CleanupProviderCache.checkDeadline(for: kind) },
+            checkDeadline: { kind, local in
+                checkDeadline ?? CleanupProviderCache.checkDeadline(for: kind, localApp: local)
+            },
             checkTimer: timer, readinessTimer: readinessTimer ?? realTimer)
         return Rig(
             fixture: fixture, cache: cache, requests: requests, azureCli: azureCli, foundryStatus: fakeFoundryStatus,
@@ -483,6 +485,27 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertFalse(check.reachable)
         XCTAssertEqual(check.message, CleanupConfigurationProblem.openAIEndpointMissing.message(for: .settings))
         XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    func testTestConnectionDeadlineFollowsTheRecognizedLocalTarget() {
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .openAICompatible, localApp: true), .seconds(180))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .openAICompatible, localApp: false), .seconds(90))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .microsoftFoundry, localApp: false), .seconds(90))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .ollama, localApp: false), .seconds(180))
+    }
+
+    @MainActor
+    func testLMStudioTestConnectionWaitsOutTheLocalDeadlineAndARemoteEndpointDoesNot() async throws {
+        let waits = DurationLog()
+        let rig = try makeRig(checkTimer: { try await waits.add($0) })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        _ = await rig.cache.checkConnection()
+        rig.store.openAIBaseURL = "https://api.example.com/v1"
+        rig.store.selectedLocalApp = .none
+        _ = await rig.cache.checkConnection()
+        XCTAssertEqual(waits.values.first, .seconds(180))
+        XCTAssertEqual(waits.values.last, .seconds(90))
     }
 
     func testTestConnectionGivesOnDeviceModelsTimeToLoad() {
@@ -1049,5 +1072,15 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertEqual(result, .cancelled)
         XCTAssertTrue(read.sawCancellation)
         XCTAssertEqual(rig.requests.count, 0)
+    }
+}
+
+private final class DurationLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Duration] = []
+    var values: [Duration] { lock.withLock { stored } }
+    func add(_ value: Duration) async throws {
+        lock.withLock { stored.append(value) }
+        try await Task.sleep(for: .seconds(3600))
     }
 }

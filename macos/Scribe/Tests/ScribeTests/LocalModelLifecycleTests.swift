@@ -261,6 +261,34 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertEqual(fake.instances.map(\.id), ["i1"])
     }
 
+    func testAChangedIdleTimeRestartsTheCountdownAndZeroNeverFrees() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        try await owned(lifecycle, "i1")
+        await clock.waitForSleepers(1)
+        lifecycle.setIdle(.zero)
+        clock.fire()
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(lifecycle.ownedCopies.count, 1, "zero is never")
+        lifecycle.setIdle(.seconds(60))
+        await clock.waitForSleepers(1)
+        clock.fire()
+        for _ in 0..<500 where lifecycle.ownedCopies.count > 0 { await Task.yield() }
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
+    func testIdleMinutesDefaultToTenAndAreStoredNeverNegative() {
+        let fixture = makeCleanupStore()
+        XCTAssertEqual(fixture.store.localModelIdleMinutes, 10)
+        fixture.store.localModelIdleMinutes = 0
+        XCTAssertEqual(fixture.store.localModelIdleMinutes, 0)
+        fixture.store.localModelIdleMinutes = -4
+        XCTAssertEqual(fixture.store.localModelIdleMinutes, 0)
+        fixture.store.localModelIdleMinutes = 25
+        XCTAssertEqual(fixture.store.localModelIdleMinutes, 25)
+    }
+
     func testANewUseCancelsTheIdleCountdown() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()

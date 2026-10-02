@@ -180,6 +180,7 @@ enum CleanupProviderResolver {
         case .ollama(let model):
             return ManagedOllamaCleanupProvider(
                 model: model,
+                keepAliveMinutes: store.localModelIdleMinutes,
                 readLocalServer: { endpoint in await factory.readLocalServer(endpoint, nil) },
                 session: factory.session)
         case .openAICompatible(let serviceURL, let model, let keySource, let apiStyle):
@@ -205,6 +206,7 @@ enum CleanupProviderResolver {
                 serviceURL: serviceURL,
                 apiStyle: apiStyle,
                 localServerApp: localServerApp,
+                keepAliveMinutes: store.localModelIdleMinutes,
                 localTuning: {
                     connection.source == .settings ? LocalModelTuning.forSettings(store.snapshot()) : .none
                 },

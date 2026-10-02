@@ -106,8 +106,6 @@ struct CleanupProviderSettingsSection: View {
     @StateObject private var local = LocalAppSettingsModel()
     @StateObject private var vocabularyStatus: CleanupVocabularyStatusModel
 
-    private let defaultIdleMinutes = LocalModelDefaults.keepAliveMinutes
-
     init(
         model: CleanupSettingsModel,
         drafts: SettingsDrafts,
@@ -205,7 +203,8 @@ struct CleanupProviderSettingsSection: View {
         let selectedModel = model.localModel(for: choice)
         let state = local.state(for: app)
         let choices = LocalAppSetup.modelChoices(state?.models ?? [], selectedModel)
-        let status = LocalAppSetup.describe(app, state, choices.selected, idleMinutes: defaultIdleMinutes)
+        let status = LocalAppSetup.describe(
+            app, state, choices.selected, idleMinutes: CleanupSettingsStore.live.localModelIdleMinutes)
         let askedContext = model.localContextTokens(for: choice)
         let effectiveContext = state?.loaded(for: choices.selected)?.contextTokens ?? 0
         Picker(

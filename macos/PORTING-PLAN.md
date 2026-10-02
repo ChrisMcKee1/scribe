@@ -101,7 +101,7 @@ real Mac.
   Local model lifecycle: one release lane (`LocalModelLifecycle`) unloads on pause, shutdown, cleanup off, provider or
   model change and Free memory, never under an in-flight readiness, cleanup or Test connection use (automatic releases
   defer up to 5 minutes, Free memory reports after 30 seconds), tracks LM Studio chosen-size copies for retirement and
-  keeps failed unloads owed. Partial: no idle-minutes setting (fixed 10-minute keep-alive); Foundry Local does not apply.
+  keeps failed unloads owed. Partial: the idle time is a stored setting (`localModelIdleMinutes`, default 10, 0 never) with no Settings field yet; Test connection uses 180 s for recognized local apps; Foundry Local does not apply.
   Cleanup failure notifications now use plain language and appear once per failure episode, resetting on successful
   cleanup or a cleanup configuration change. The idle and pause memory-release policy and ownership tracking for
   LM Studio copies are still open.

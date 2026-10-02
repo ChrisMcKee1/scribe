@@ -197,7 +197,7 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   failure notifications use plain language and are suppressed until cleanup recovers or its configuration changes.
 - `LocalModelLifecycle` frees a local model on pause, shutdown, cleanup off, a provider or model change and Free memory.
   Every release waits for readiness, cleanup and Test connection uses in flight (bounded, cancellable), LM Studio copies
-  Scribe loaded are tracked and retired by instance id, and a failed unload stays owed. There is no idle-minutes setting.
+  Scribe loaded are tracked and retired by instance id, and a failed unload stays owed. The idle time is stored (`localModelIdleMinutes`, 10 by default, 0 means never) and reaches the next countdown without a restart; Settings has no field for it yet. Test connection waits 180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, and an opt-in AI summary that sends only your
   totals and the recurring terms that are dictionary spellings: never a word mined from your dictations,

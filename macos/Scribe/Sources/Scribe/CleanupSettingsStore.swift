@@ -115,6 +115,7 @@ struct CleanupSettingsStore: Sendable {
         static let writingStyle = "ScribeCleanupWritingStyle"
         static let frontierPrompt = "ScribeCleanupFrontierPrompt"
         static let localPrompt = "ScribeCleanupLocalPrompt"
+        static let localModelIdleMinutes = "ScribeCleanupLocalModelIdleMinutes"
         static let secretRevision = "ScribeCleanupSecretRevision"
     }
 
@@ -224,6 +225,18 @@ struct CleanupSettingsStore: Sendable {
     var openAIApiStyle: CustomAPIStyle {
         get { CustomAPIStyle(rawValue: defaults.string(forKey: Key.openAIApiStyle) ?? "") ?? .chatCompletions }
         nonmutating set { writeValue(newValue.rawValue, forKey: Key.openAIApiStyle) }
+    }
+
+    /// Minutes without a dictation before Scribe asks Ollama or LM Studio to free the model; 0 is never. A missing
+    /// or negative value reads as the default.
+    var localModelIdleMinutes: Int {
+        get {
+            guard let stored = defaults.object(forKey: Key.localModelIdleMinutes) as? Int, stored >= 0 else {
+                return LocalModelDefaults.keepAliveMinutes
+            }
+            return stored
+        }
+        nonmutating set { defaults.set(max(0, newValue), forKey: Key.localModelIdleMinutes) }
     }
 
     var ollamaContextTokens: Int {
