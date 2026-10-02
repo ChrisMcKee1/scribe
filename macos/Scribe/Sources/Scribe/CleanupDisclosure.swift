@@ -1,17 +1,24 @@
 import Foundation
 
 enum CleanupDisclosure {
-    static let whatCleanupSends =
-        "Foundry Local runs cleanup on this Mac, so your text stays on it. Microsoft Foundry and any other AI service "
-        + "you set up receive, with every cleanup request, the text Scribe recognized for that dictation, the cleanup "
-        + "instructions with your writing style (or the matching app profile's), and, as vocabulary, the words from "
-        + "your dictionary plus the word packs the dictation appears to mention, including ones Scribe heard slightly "
-        + "differently: up to \(count(CleanupPrompt.maxGlossaryTermsCloud)) words or phrases and "
-        + "\(count(CleanupPrompt.maxGlossaryChars)) characters, or \(count(CleanupPrompt.maxGlossaryTermsLocal)) words "
-        + "or phrases with the short instructions. A word from your dictionary or a word pack is not vocabulary, and "
-        + "is not sent, when what Scribe writes for it spans more than one line, runs past "
-        + "\(count(CleanupPrompt.maxGlossaryTermChars)) characters, or needs formatting Scribe applies only on this "
-        + "Mac, such as dash or spacing fixes."
+    static let whatCleanupSends: String = {
+        let cloudTerms = count(CleanupPrompt.maxGlossaryTermsCloud)
+        let characters = count(CleanupPrompt.maxGlossaryChars)
+        let localTerms = count(CleanupPrompt.maxGlossaryTermsLocal)
+        let termLength = count(CleanupPrompt.maxGlossaryTermChars)
+        let parts: [String] = [
+            "Foundry Local runs cleanup on this Mac, so your text stays on it. Microsoft Foundry and any other AI ",
+            "service you set up receive, with every cleanup request, the text Scribe recognized for that dictation, ",
+            "the cleanup instructions with your writing style (or the matching app profile's), and, as vocabulary, ",
+            "the words from your dictionary plus the word packs the dictation appears to mention, including ones ",
+            "Scribe heard slightly differently: up to \(cloudTerms) words or phrases and \(characters) characters, ",
+            "or \(localTerms) words or phrases with the short instructions. A word from your dictionary or a word ",
+            "pack is not vocabulary, and is not sent, when what Scribe writes for it spans more than one line, runs ",
+            "past \(termLength) characters, or needs formatting Scribe applies only on this Mac, such as dash or ",
+            "spacing fixes.",
+        ]
+        return parts.joined()
+    }()
 
     static let whatCleanupNeverSends =
         "Each time cleanup connects, it first sends a short test request holding the word \"ok\" and the same "
