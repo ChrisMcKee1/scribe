@@ -17,30 +17,82 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         let fixture = try GoldenFixture.make()
         defer { fixture.cleanup() }
         let golden = try GoldenSections.load()
+        var actual: [String: [String]] = [
+            "libraries, in the order GetLibraries returns them": fixture.service.libraries().map(Self.describeLibrary)
+        ]
 
-        for scenario in GoldenFixture.supportedScenarios {
+        for scenario in GoldenFixture.scenarios {
             fixture.service.settings.enabledLibraryIds = Set(scenario.enabledIds)
             let catalog = try await fixture.service.loadCatalog()
-            let rules = Self.composeRules(from: catalog)
+            let rules = Self.composeRules(from: catalog, fixtureOnly: true)
+            let allRules = Self.composeRules(from: catalog, fixtureOnly: false)
             let effective = Self.effectiveWinners(dictionary: GoldenFixture.sortedPersonalEntries, rules: rules)
             let processor = TextPostProcessor()
             processor.reload(
                 dictionaryEntries: GoldenFixture.sortedPersonalEntries.filter(\.enabled),
                 snippets: [],
-                libraryEntries: rules.map(\.entry))
+                libraryEntries: allRules.map(\.entry))
 
-            let enabled = try golden.requiredSection("\(scenario.name): enabled libraries in composition order")
-            XCTAssertEqual([Self.enabledLibraryIDs(in: catalog).joined(separator: ", ")], enabled, scenario.name)
-            let libraryWinners = try golden.requiredSection(
-                "\(scenario.name): library winners for the fixture's spoken forms, in library composition order")
-            XCTAssertEqual(Self.describeLibraryWinners(rules), libraryWinners.map(Self.stripNumbering), scenario.name)
-            let effectiveWinners = try golden.requiredSection(
-                "\(scenario.name): effective winners for the fixture's spoken forms, in effective order")
-            XCTAssertEqual(effective, effectiveWinners, scenario.name)
-            XCTAssertEqual(
-                GoldenFixture.sentences.map { "\($0) => \(processor.processDetailed($0).text)" },
-                try golden.requiredSection("\(scenario.name): finished text from the post-processor"),
-                scenario.name)
+            actual["\(scenario.name): enabled libraries in composition order"] = [
+                Self.enabledLibraryIDs(in: catalog).joined(separator: ", ")
+            ]
+            actual["\(scenario.name): library winners for the fixture's spoken forms, in library composition order"] =
+                Self.describeLibraryWinners(rules, numbered: scenario.name == "custom only")
+            actual["\(scenario.name): effective winners for the fixture's spoken forms, in effective order"] = effective
+            actual["\(scenario.name): Dictionary page library badges (what covers each personal entry)"] =
+                Self.badges(dictionary: GoldenFixture.sortedPersonalEntries, rules: allRules)
+            actual["\(scenario.name): Save prompt report"] =
+                Self.savePrompt(dictionary: GoldenFixture.sortedPersonalEntries, rules: allRules)
+            actual["\(scenario.name): finished text from the post-processor"] =
+                GoldenFixture.sentences.map { "\($0) => \(processor.processDetailed($0).text)" }
+
+            let glossary = Self.glossarySources(dictionary: GoldenFixture.sortedPersonalEntries, rules: allRules)
+            switch scenario.name {
+            case "custom only":
+                actual["custom only: every effective rule"] = effective
+                actual["custom only: AI cleanup glossary, on-device"] = [
+                    CleanupPrompt.buildGlossary(
+                        glossary.entries.map(\.entry), maxTerms: CleanupPrompt.maxGlossaryTermsLocal)
+                ].flatMap { $0.components(separatedBy: .newlines) }
+                actual["custom only: AI cleanup glossary, cloud"] = [
+                    CleanupPrompt.buildGlossary(
+                        glossary.entries.map(\.entry), maxTerms: CleanupPrompt.maxGlossaryTermsCloud)
+                ].flatMap { $0.components(separatedBy: .newlines) }
+                actual["custom only: AI cleanup glossary, cut at 6 terms"] = [
+                    CleanupPrompt.buildGlossary(glossary.entries.map(\.entry), maxTerms: 6)
+                ].flatMap { $0.components(separatedBy: .newlines) }
+                actual["custom only: sources of the first 80 effective rules"] =
+                    [Self.sourceCounts(glossary.entries.prefix(80).map(\.source))]
+            case "default install":
+                actual["default install: sources of the first 80 effective rules"] =
+                    [Self.sourceCounts(glossary.entries.prefix(80).map(\.source))]
+            case "shipped and custom", "everything":
+                actual["\(scenario.name): sources of the on-device glossary's 80 lines"] =
+                    [Self.sourceCounts(glossary.entries.prefix(80).map(\.source))]
+                actual[
+                    "\(scenario.name): shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form"
+                ] =
+                    [
+                        glossary.entries.dropFirst(80).prefix(5).map(\.entry.pattern).joined(separator: ", ")
+                    ]
+                if scenario.name == "everything" {
+                    let included = glossary.entries.prefix(glossary.cloudIncluded)
+                    let cut = glossary.entries.dropFirst(glossary.cloudIncluded)
+                    actual["everything: sources of the cloud glossary's included lines"] =
+                        [Self.sourceCounts(included.map(\.source))]
+                    actual["everything: eligible lines past the cloud glossary's 24,000 characters"] =
+                        ["\(cut.count) of \(glossary.entries.count) eligible lines cut"]
+                    actual["everything: lines past the cloud glossary's 24,000 characters, by library"] =
+                        [Self.sourceCounts(cut.map(\.source))]
+                }
+            default:
+                break
+            }
+        }
+
+        XCTAssertEqual(Set(actual.keys), Set(golden.keys))
+        for section in golden.keys.sorted() {
+            XCTAssertEqual(actual[section], golden[section], section)
         }
     }
 
@@ -56,10 +108,16 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         }.map(\.id)
     }
 
-    private static func composeRules(from catalog: LibraryCatalog) -> [ComposedLibraryRule] {
+    private static func composeRules(from catalog: LibraryCatalog, fixtureOnly: Bool) -> [ComposedLibraryRule] {
         let activeLibraries = catalog.libraries.filter { library in
             catalog.localState.enabledIdSet.contains(library.id.lowercased())
                 && (library.state == .available || library.state == .partlyReadable)
+        }
+        var activeBuiltInFolds = Set<String>()
+        for library in activeLibraries where library.builtIn {
+            for entry in library.library.entries where entry.enabled {
+                activeBuiltInFolds.insert(DictionaryLibraryService.markerFold(entry.pattern))
+            }
         }
         var byTier: [RuleTier: [ComposedLibraryRule]] = [.authored: [], .shipped: [], .legacy: []]
 
@@ -68,7 +126,9 @@ final class LibraryCompositionGoldenTests: XCTestCase {
                 let key = LibraryTermKey.from(entry.pattern)
                 guard !key.isEmpty else { continue }
                 let tier: RuleTier
-                if library.library.legacyMarkedKeys.contains(key) {
+                if library.library.legacyMarkedKeys.contains(key),
+                    activeBuiltInFolds.contains(DictionaryLibraryService.markerFold(entry.pattern))
+                {
                     tier = .legacy
                 } else if !library.builtIn || library.library.authoredKeys.contains(key) {
                     tier = .authored
@@ -87,7 +147,7 @@ final class LibraryCompositionGoldenTests: XCTestCase {
                 rules.append(rule)
             }
         }
-        return rules.filter { GoldenFixture.fixtureKeys.contains($0.key.value) }
+        return fixtureOnly ? rules.filter { GoldenFixture.fixtureKeys.contains($0.key.value) } : rules
     }
 
     private static func effectiveWinners(dictionary: [DictionaryEntry], rules: [ComposedLibraryRule]) -> [String] {
@@ -105,17 +165,117 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         return lines
     }
 
-    private static func describeLibraryWinners(_ rules: [ComposedLibraryRule]) -> [String] {
-        rules.map { rule in
-            "\(rule.entry.pattern) => \(rule.entry.replacement) [\(rule.libraryId)]"
+    private static func describeLibraryWinners(_ rules: [ComposedLibraryRule], numbered: Bool) -> [String] {
+        rules.enumerated().map { index, rule in
+            let line = "\(rule.entry.pattern) => \(rule.entry.replacement) [\(rule.libraryId)]"
+            return numbered ? "#\(index + 1) \(line)" : line
         }
     }
 
-    private static func stripNumbering(_ line: String) -> String {
-        guard line.hasPrefix("#") else {
-            return line
+    private static func badges(dictionary: [DictionaryEntry], rules: [ComposedLibraryRule]) -> [String] {
+        var ruleByKey: [String: ComposedLibraryRule] = [:]
+        var libraryNames: [String: String] = [:]
+        for rule in rules {
+            ruleByKey[rule.key.value] = ruleByKey[rule.key.value] ?? rule
+            libraryNames[rule.libraryId] = libraryNames[rule.libraryId] ?? Self.libraryName(rule.libraryId)
         }
-        return line.replacing(/#[0-9]+\s+/, with: "")
+        return dictionary.map { entry in
+            let key = LibraryTermKey.from(entry.pattern).value
+            guard let rule = ruleByKey[key] else {
+                return "\(entry.pattern): not covered"
+            }
+            return
+                "\(entry.pattern): \"\(libraryNames[rule.libraryId] ?? rule.libraryId)\" writes \"\(rule.entry.replacement)\""
+        }
+    }
+
+    private static func savePrompt(dictionary: [DictionaryEntry], rules: [ComposedLibraryRule]) -> [String] {
+        var ruleByKey: [String: ComposedLibraryRule] = [:]
+        for rule in rules {
+            ruleByKey[rule.key.value] = ruleByKey[rule.key.value] ?? rule
+        }
+        var rows: [(DictionaryOverlapKind, DictionaryEntry, ComposedLibraryRule)] = []
+        for entry in dictionary where entry.enabled {
+            let key = LibraryTermKey.from(entry.pattern).value
+            guard let rule = ruleByKey[key] else { continue }
+            let kind: DictionaryOverlapKind =
+                entry.replacement == rule.entry.replacement && entry.wholeWord == rule.entry.wholeWord
+                ? .redundant : .override
+            rows.append((kind, entry, rule))
+        }
+        let redundant = rows.count { $0.0 == .redundant }
+        let override = rows.count { $0.0 == .override }
+        var lines = ["\(redundant) redundant, \(override) override"]
+        lines += rows.map { kind, entry, rule in
+            let prefix = kind == .redundant ? "Redundant" : "Override"
+            return
+                "\(prefix) \(entry.pattern) -> \"\(entry.replacement)\", library writes \"\(rule.entry.replacement)\", named \"\(libraryName(rule.libraryId))\""
+        }
+        return lines
+    }
+
+    private static func glossarySources(
+        dictionary: [DictionaryEntry],
+        rules: [ComposedLibraryRule]
+    ) -> (entries: [(entry: DictionaryEntry, source: String)], cloudIncluded: Int) {
+        var candidates: [(DictionaryEntry, String)] = []
+        var seenPatterns = Set<String>()
+        for entry in dictionary where entry.enabled {
+            let key = LibraryTermKey.from(entry.pattern).value
+            guard seenPatterns.insert(key).inserted else { continue }
+            candidates.append((entry, "your dictionary"))
+        }
+        for rule in rules {
+            guard seenPatterns.insert(rule.key.value).inserted else { continue }
+            candidates.append((rule.entry, rule.libraryId))
+        }
+        var seen = Set<String>()
+        var entries: [(DictionaryEntry, String)] = []
+        var characters = 0
+        var cloudIncluded = 0
+        var cloudStopped = false
+        for (entry, source) in candidates where TextPostProcessor.isVocabulary(entry) {
+            let canonical = CleanupPrompt.normalizeTerm(entry.replacement)
+            guard !canonical.isEmpty else { continue }
+            let spoken = CleanupPrompt.normalizeTerm(entry.pattern)
+            let key =
+                !spoken.isEmpty && spoken.caseInsensitiveCompare(canonical) != .orderedSame
+                ? "\(canonical)|\(spoken)" : canonical
+            guard seen.insert(key.lowercased()).inserted else { continue }
+            let line = CleanupPrompt.glossaryLine(
+                canonical: canonical,
+                spoken: key.contains("|") ? spoken : nil)
+            if !cloudStopped && characters + line.utf16.count + 1 <= CleanupPrompt.maxGlossaryChars {
+                cloudIncluded += 1
+                characters += line.utf16.count + 1
+            } else {
+                cloudStopped = true
+            }
+            entries.append((entry, source))
+        }
+        return (entries, cloudIncluded)
+    }
+
+    private static func sourceCounts(_ sources: [String]) -> String {
+        var counts: [(String, Int)] = []
+        for source in sources {
+            if counts.last?.0 == source {
+                counts[counts.count - 1].1 += 1
+            } else {
+                counts.append((source, 1))
+            }
+        }
+        return counts.map { "\($0.0) x\($0.1)" }.joined(separator: ", ")
+    }
+
+    private static func libraryName(_ id: String) -> String {
+        if let fixture = GoldenFixture.customFiles.first(where: {
+            URL(fileURLWithPath: $0.fileName).deletingPathExtension().lastPathComponent.caseInsensitiveCompare(id)
+                == .orderedSame
+        }) {
+            return DictionaryLibraryCsv.parse(fixture.csv).name ?? id
+        }
+        return BuiltInDictionaryLibraries.all.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }?.name ?? id
     }
 }
 

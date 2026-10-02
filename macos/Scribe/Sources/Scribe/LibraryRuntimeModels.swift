@@ -40,6 +40,27 @@ enum BuiltInTermIntent: String, Codable, Sendable {
     case off
 }
 
+struct TermFields: OptionSet, Codable, Equatable, Sendable {
+    let rawValue: Int
+
+    static let none = TermFields([])
+    static let spoken = TermFields(rawValue: 1 << 0)
+    static let written = TermFields(rawValue: 1 << 1)
+    static let wholeWord = TermFields(rawValue: 1 << 2)
+    static let enabled = TermFields(rawValue: 1 << 3)
+}
+
+enum TermReviewChoice: Sendable {
+    case keepMine
+    case useUpdated
+}
+
+struct TermReview: Equatable, Sendable {
+    let yours: TermValues
+    let updatedBuiltIn: TermValues
+    let differing: TermFields
+}
+
 struct LibraryContentHash: Codable, Equatable, Hashable, Sendable {
     let value: String
 
@@ -210,6 +231,19 @@ struct LibraryCatalog: Equatable, Sendable {
     let generation: Int64
     let libraries: [CatalogLibrary]
     let localState: LibraryLocalState
+    let recentlyDeleted: [RecentlyDeletedLibrary]
+
+    init(
+        generation: Int64,
+        libraries: [CatalogLibrary],
+        localState: LibraryLocalState,
+        recentlyDeleted: [RecentlyDeletedLibrary] = []
+    ) {
+        self.generation = generation
+        self.libraries = libraries
+        self.localState = localState
+        self.recentlyDeleted = recentlyDeleted
+    }
 
     func find(id: String) -> CatalogLibrary? {
         libraries.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
