@@ -241,9 +241,10 @@ private func parsedDocument(
 
 extension LibraryCsvDocument {
     fileprivate func matches(_ rhs: ExpectedDocument) -> Bool {
-        let errorMatches = errors.map {
+        let actualErrors = errors.map {
             RowErrorFixture(line: $0.line, kind: $0.kind, field: $0.field)
-        } == rhs.errors
+        }
+        let errorMatches = actualErrors == rhs.errors
         let expectedEncoding = LibraryTextEncoding(
             codePage: rhs.encoding.codePage,
             byteOrderMark: rhs.encoding.byteOrderMark,

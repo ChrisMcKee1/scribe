@@ -491,7 +491,6 @@ struct LibraryCsvCodec: Sendable {
         return nil
     }
 
-
     private func makeEncoding(
         codePage: Int,
         byteOrderMark: Bool = false,
