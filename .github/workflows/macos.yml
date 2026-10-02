@@ -234,6 +234,20 @@ jobs:
           swift format lint --strict --recursive --parallel --configuration macos/Scribe/.swift-format \
             macos/Scribe/Sources macos/Scribe/Tests
 
+      - name: Prepare formatter repair patch
+        if: failure()
+        run: |
+          swift format format --in-place --recursive --configuration macos/Scribe/.swift-format \
+            macos/Scribe/Sources macos/Scribe/Tests
+          git diff > formatter.patch
+
+      - name: Upload formatter repair patch
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: formatter-repair
+          path: formatter.patch
+
   # Optional and never required: it runs only when the workflow is dispatched by hand with real_asr,
   # and its failure never fails the run. It installs Foundry Local with Homebrew, keeps the speech
   # model in the Actions cache between runs, and transcribes the committed fixtures through the

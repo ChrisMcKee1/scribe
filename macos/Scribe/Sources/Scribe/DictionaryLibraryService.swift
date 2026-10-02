@@ -207,9 +207,21 @@ final class DictionaryLibraryService: @unchecked Sendable {
             let previousExists = fileManager.fileExists(atPath: previousURL.path)
 
             guard let data = try? Data(contentsOf: editsURL) else {
+                // Only ENOENT means absent. A directory, permission refusal or inaccessible ancestor must pause the pack.
+                let absent: Bool
+                do {
+                    _ = try editsURL.resourceValues(forKeys: [.isRegularFileKey])
+                    absent = false
+                } catch let error as NSError {
+                    absent = error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
+                }
+                let library = DictionaryLibrary(
+                    id: shipped.id, name: shipped.name, category: shipped.category,
+                    description: shipped.description, builtIn: true, entries: absent ? shipped.entries : [],
+                    fileName: shipped.fileName, basedOn: shipped.basedOn)
                 return CatalogLibrary(
-                    library: shipped,
-                    state: .available,
+                    library: library,
+                    state: absent ? .available : .unreadable,
                     contentHash: nil,
                     origin: .existing,
                     edits: nil,

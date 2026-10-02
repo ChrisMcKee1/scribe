@@ -7,7 +7,7 @@ struct DraftTermRow: Equatable, Sendable {
     let legacyEmpty: Bool
 }
 
-enum TermOrigin: Sendable {
+enum TermOrigin: String, Codable, Sendable {
     case custom
     case shipped
     case edited
@@ -22,12 +22,23 @@ struct LibraryRow: Equatable, Sendable {
     let values: TermValues
     let origin: TermOrigin
     let shipped: TermValues?
+    let edit: BuiltInTermEdit?
+    let review: TermReview?
 
-    init(key: LibraryTermKey? = nil, values: TermValues, origin: TermOrigin, shipped: TermValues? = nil) {
+    init(
+        key: LibraryTermKey? = nil,
+        values: TermValues,
+        origin: TermOrigin,
+        shipped: TermValues? = nil,
+        edit: BuiltInTermEdit? = nil,
+        review: TermReview? = nil
+    ) {
         self.key = key ?? LibraryTermKey.from(values.spoken)
         self.values = values
         self.origin = origin
         self.shipped = shipped
+        self.edit = edit
+        self.review = review
     }
 
     static func custom(_ values: TermValues) -> LibraryRow {
@@ -37,13 +48,15 @@ struct LibraryRow: Equatable, Sendable {
 
 struct DraftLibrary: Equatable, Sendable {
     let id: String
-    let name: String
-    let category: String
-    let description: String?
+    var name: String
+    var category: String
+    var description: String?
     let builtIn: Bool
-    let rows: [DraftTermRow]
-    let basedOn: String?
-    let pendingDelete: Bool
+    var rows: [DraftTermRow]
+    var basedOn: String?
+    var pendingDelete: Bool
+    var fileState: LibraryFileState = .available
+    var origin: LibraryOrigin = .existing
 
     init(
         id: String,
@@ -53,7 +66,9 @@ struct DraftLibrary: Equatable, Sendable {
         builtIn: Bool,
         rows: [DraftTermRow],
         basedOn: String? = nil,
-        pendingDelete: Bool = false
+        pendingDelete: Bool = false,
+        fileState: LibraryFileState = .available,
+        origin: LibraryOrigin = .existing
     ) {
         self.id = id
         self.name = name
@@ -63,6 +78,8 @@ struct DraftLibrary: Equatable, Sendable {
         self.rows = rows
         self.basedOn = basedOn
         self.pendingDelete = pendingDelete
+        self.fileState = fileState
+        self.origin = origin
     }
 }
 
@@ -75,25 +92,6 @@ struct LibraryDraft: Equatable, Sendable {
             return nil
         }
         return libraries.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
-    }
-}
-
-struct LibraryWorkspace: Equatable, Sendable {
-    let draft: LibraryDraft
-
-    init(revision: Int64 = 1, libraries: [DraftLibrary]) {
-        draft = LibraryDraft(revision: revision, libraries: libraries)
-    }
-
-    func rowsOf(_ libraryID: String) -> [DraftTermRow] {
-        draft.find(libraryID)?.rows ?? []
-    }
-
-    static func rowIDIn(_ draft: LibraryDraft, _ libraryID: String, _ index: Int) -> Int64? {
-        guard let library = draft.find(libraryID), library.rows.indices.contains(index) else {
-            return nil
-        }
-        return library.rows[index].rowID
     }
 }
 
