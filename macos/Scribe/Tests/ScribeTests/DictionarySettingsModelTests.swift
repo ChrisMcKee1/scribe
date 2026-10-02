@@ -282,6 +282,7 @@ final class DictionarySettingsModelTests: XCTestCase {
 
         drafts.dictionaryPattern = "kay eight ess"
         drafts.dictionaryReplacement = "K8s"
+        drafts.dictionaryWholeWord = false
         let addQueued = control.nextForegroundCaller()
         let adding = Task { await model.addFromDrafts() }
         await addQueued.wait()
@@ -300,10 +301,13 @@ final class DictionarySettingsModelTests: XCTestCase {
         XCTAssertTrue(write.wait())
 
         XCTAssertEqual(model.entries.map(\.pattern), ["kay eight ess"])
-        XCTAssertEqual(try store.fetchAllDictionaryEntries().map(\.replacement), ["K8s"])
+        let storedEntries = try store.fetchAllDictionaryEntries()
+        XCTAssertEqual(storedEntries.map(\.replacement), ["K8s"])
+        XCTAssertEqual(storedEntries.map(\.wholeWord), [false])
         XCTAssertEqual(refreshes.count, 1)
         XCTAssertEqual(drafts.dictionaryPattern, "")
         XCTAssertEqual(drafts.dictionaryReplacement, "")
+        XCTAssertTrue(drafts.dictionaryWholeWord)
         XCTAssertFalse(model.isAdding)
     }
 
