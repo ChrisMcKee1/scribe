@@ -307,7 +307,8 @@ struct WordPackWorkspace: Equatable, Sendable {
     mutating func create(
         name: String, category: String, description: String?, basedOn: String?, origin: LibraryOrigin, permission: Bool
     ) -> String {
-        let taken = state.libraries.map(\.id) + state.libraries.compactMap(\.basedOn)
+        let taken =
+            state.libraries.map(\.id) + state.libraries.compactMap(\.basedOn)
             + state.deleted.map(\.libraryID) + Array(reservedIDs)
         let id = LibraryNaming.newCustomID(name: name, takenIDs: taken)
         var next = state

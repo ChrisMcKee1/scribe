@@ -149,7 +149,8 @@ enum WordPackMaterializer {
                 // Foundation reintroduces macOS' root aliases even after resolving a per-user scratch path.
                 // Only the root-owned OS aliases are allowed, with their exact system destinations.
                 let target = try FileManager.default.destinationOfSymbolicLink(atPath: path)
-                let systemAlias = ["/var", "/tmp", "/etc"].contains(path)
+                let systemAlias =
+                    ["/var", "/tmp", "/etc"].contains(path)
                     && ["/private\(path)", "private\(path)"].contains(target)
                 guard systemAlias else { throw WordPackError.unsafePath }
             }

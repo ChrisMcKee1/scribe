@@ -316,6 +316,7 @@ final class WordPackSaveTests: XCTestCase {
         let id = try workspace.createLibrary()
         _ = workspace.rename(id, name: "Concurrent recovery")
         _ = workspace.addTerm(id, values: TermValues("term", "Term"))
+        _ = workspace.setAIPermission(id, permitted: true)
         let prepared = try await fixture.coordinator.prepare(XCTUnwrap(workspace.captureChangeSet().changeSet))
         try await fixture.store.commitSettingsParticipants([prepared.participant])
         let service = fixture.service
