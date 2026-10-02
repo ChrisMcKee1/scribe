@@ -15,18 +15,19 @@ struct SettingsEffectiveCleanup: Equatable, Sendable {
     let snapshot: CleanupSettingsSnapshot
     let source: SettingsCleanupSource
     let environmentOverrides: [String]
+    let purpose: SettingsCleanupPurpose
 
     var explanation: String? {
+        if source == .environment && purpose == .candidate {
+            return "This test uses AI cleanup set outside Settings, not the unsaved details shown here."
+        }
         if source == .environment {
             return "AI cleanup is set outside Settings."
-        }
-        if source == .draftCandidate && !environmentOverrides.isEmpty {
-            return "This test uses the details shown here. Dictation keeps using the settings set outside Settings."
         }
         return nil
     }
 
-    /// Mirrors CleanupProviderResolver's legacy precedence, including its unknown-provider Foundry Local fallback.
+    /// UI projection only. The candidate/serving factory uses the resolver's effective connection as its authority.
     static func resolve(
         snapshot saved: CleanupSettingsSnapshot,
         environment: [String: String],
@@ -36,7 +37,8 @@ struct SettingsEffectiveCleanup: Equatable, Sendable {
             return SettingsEffectiveCleanup(
                 snapshot: saved,
                 source: purpose == .candidate ? .draftCandidate : .savedSettings,
-                environmentOverrides: [])
+                environmentOverrides: [],
+                purpose: purpose)
         }
         var snapshot = saved
         var keys = ["SCRIBE_CLEANUP_PROVIDER"]
@@ -72,8 +74,9 @@ struct SettingsEffectiveCleanup: Equatable, Sendable {
         }
         keys += relevant.filter { environment[$0] != nil }
         return SettingsEffectiveCleanup(
-            snapshot: purpose == .candidate ? saved : snapshot,
-            source: purpose == .candidate ? .draftCandidate : .environment,
-            environmentOverrides: keys)
+            snapshot: snapshot,
+            source: .environment,
+            environmentOverrides: keys,
+            purpose: purpose)
     }
 }

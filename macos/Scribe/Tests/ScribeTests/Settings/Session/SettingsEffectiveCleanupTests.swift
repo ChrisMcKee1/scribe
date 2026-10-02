@@ -14,7 +14,7 @@ final class SettingsEffectiveCleanupTests: XCTestCase {
         XCTAssertNil(resolved.explanation)
     }
 
-    func testServingUsesEnvironmentButCandidateTestsTheDraftAndExplainsTheDifference() {
+    func testServingAndCandidateUsePipelineEnvironmentPrecedenceAndNeverBlessAnUntestedDraft() {
         var saved = SettingsPreferences().cleanupSnapshot
         saved.openAIBaseURL = "https://saved.example/v1"
         saved.openAIModel = "saved"
@@ -28,10 +28,25 @@ final class SettingsEffectiveCleanupTests: XCTestCase {
         let serving = SettingsEffectiveCleanup.resolve(snapshot: saved, environment: environment, purpose: .serving)
         let candidate = SettingsEffectiveCleanup.resolve(snapshot: saved, environment: environment, purpose: .candidate)
         XCTAssertEqual(serving.snapshot.openAIModel, "outside")
-        XCTAssertEqual(candidate.snapshot, saved)
-        XCTAssertNotNil(candidate.explanation)
+        XCTAssertEqual(candidate.snapshot, serving.snapshot)
+        XCTAssertNotEqual(candidate.snapshot.openAIBaseURL, saved.openAIBaseURL)
+        XCTAssertEqual(
+            candidate.explanation,
+            "This test uses AI cleanup set outside Settings, not the unsaved details shown here.")
         XCTAssertFalse(serving.environmentOverrides.contains("never-copy-this-secret"))
+        XCTAssertEqual(candidate.source, .environment)
+    }
+
+    func testCandidateWithoutAnActiveProviderOverrideUsesTheImmutableDraft() {
+        var draft = SettingsPreferences().cleanupSnapshot
+        draft.providerKind = .openAICompatible
+        draft.openAIBaseURL = "https://draft.example/v1"
+        draft.openAIModel = "draft"
+        let candidate = SettingsEffectiveCleanup.resolve(snapshot: draft, environment: [:], purpose: .candidate)
+        XCTAssertEqual(candidate.snapshot, draft)
         XCTAssertEqual(candidate.source, .draftCandidate)
+        XCTAssertTrue(candidate.environmentOverrides.isEmpty)
+        XCTAssertNil(candidate.explanation)
     }
 
     func testUnknownProviderKeepsLegacyFoundryFallbackAndAzureUsesOnlySupportedAuthModes() {

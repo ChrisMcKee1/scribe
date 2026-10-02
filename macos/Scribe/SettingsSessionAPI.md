@@ -101,9 +101,11 @@ credential removal, restore defaults and accepted learned words remain staged.
 ## Effective cleanup and native commands
 
 `SettingsEffectiveCleanup.resolve(snapshot:environment:purpose:)` preserves legacy environment precedence. Serving uses
-active environment overrides; a candidate test uses the shown draft and receives an explanation of ignored overrides.
-The result carries setting names, never an environment key's secret value. WS3 owns the actual independent candidate
-provider construction and send gate.
+active environment overrides; a candidate also uses that effective environment-controlled configuration when an override
+is active. Its explanation explicitly says the unsaved details were not tested. Without an active override, it uses the
+immutable draft. The result carries setting names, never an environment key's secret value. This is UI projection only:
+integration delegates actual connection resolution to WS3's pure resolver overload and displays the tested recipient.
+WS3 owns the independent candidate provider construction and send gate.
 
 Retain `SettingsMainMenu` in the app owner, then install its menu. Standard Edit items target the responder chain.
 Save/Close target supplied guarded commands only while Settings is key and capture/composition does not own input.
