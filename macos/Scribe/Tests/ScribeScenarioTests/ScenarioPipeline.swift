@@ -263,21 +263,49 @@ final class ScenarioCleanupSource: DictationCleaning {
     func invalidate() {
         invalidations += 1
     }
+
+    func admitRecipient() -> CleanupRecipient? {
+        guard let connection = try? CleanupProviderResolver.connection(settings: settings, environment: [:]) else {
+            return nil
+        }
+        return CleanupRecipient(connection: connection, settings: settings)
+    }
+
+    func provider(for recipient: CleanupRecipient) async throws -> any CleanupProvider {
+        model
+    }
+
+    func receipt(for recipient: CleanupRecipient, scope: AiVocabularyScope) -> CleanupRequestReceipt {
+        let gate = CleanupSendGate()
+        gate.publishRecipient(recipient)
+        gate.publishVocabulary(scope)
+        return gate.receipt(scope: scope, recipient: recipient, kind: .dictation)
+    }
 }
 
 /// The production rules (`DictationRules`: `StartupGate` and `TextPostProcessor`), with every rule step journaled.
 @MainActor
 final class ScenarioRules: DictationRuleSource {
-    let rules: DictationRules
+    let rules: any DictationRuleSource
     let script: PipelineScript
     let journal: PipelineJournal
     /// Advanced after each post-processing step: with cleanup off, or on the reply, never for the vocabulary step.
-    let processed = ScenarioCounter()
+    let processed: ScenarioCounter
 
-    init(rules: DictationRules, script: PipelineScript, journal: PipelineJournal) {
+    init(
+        rules: any DictationRuleSource, script: PipelineScript, journal: PipelineJournal,
+        processed: ScenarioCounter = ScenarioCounter()
+    ) {
         self.rules = rules
         self.script = script
         self.journal = journal
+        self.processed = processed
+    }
+
+    var aiScope: AiVocabularyScope { rules.aiScope }
+
+    func admitGeneration() -> any DictationRuleSource {
+        ScenarioRules(rules: rules.admitGeneration(), script: script, journal: journal, processed: processed)
     }
 
     var isLoaded: Bool {

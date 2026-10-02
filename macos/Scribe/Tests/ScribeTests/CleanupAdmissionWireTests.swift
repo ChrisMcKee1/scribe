@@ -13,13 +13,15 @@ final class CleanupAdmissionWireTests: XCTestCase {
     }
 
     private func receipt(
-        gate: CleanupSendGate, model: String = "selected", app: LocalServerApp = .none
+        gate: CleanupSendGate, model: String = "selected", app: LocalServerApp = .none,
+        endpoint: String = "http://127.0.0.1:1234/v1", apiStyle: CustomAPIStyle = .chatCompletions
     ) throws -> CleanupRequestReceipt {
         let fixture = makeCleanupStore()
         var settings = fixture.store.snapshot()
         settings.providerKind = .openAICompatible
-        settings.openAIBaseURL = "http://127.0.0.1:1234/v1"
+        settings.openAIBaseURL = endpoint
         settings.openAIModel = model
+        settings.openAIApiStyle = apiStyle
         settings.selectedLocalApp = app
         settings.ollamaContextTokens = 4096
         settings.lmStudioContextTokens = 4096
@@ -115,6 +117,45 @@ final class CleanupAdmissionWireTests: XCTestCase {
             XCTAssertEqual(error as? CleanupHoldback, .vocabularyChanged)
         }
         XCTAssertEqual(requests.count, 1)
+    }
+
+    func testAnAuthorizedResponsesRequestKeepsStoredOutputOff() async throws {
+        let gate = CleanupSendGate()
+        let admitted = try receipt(gate: gate, endpoint: "https://example.invalid/v1", apiStyle: .responses)
+        let requests = RequestLog()
+        let session = makeStubSession { request in
+            requests.record(request)
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"Cleaned."}]}]}"#.utf8)
+            )
+        }
+        let provider = AdmittedCleanupProvider(
+            provider: OpenAICompatibleCleanupProvider(
+                model: "selected", serviceURL: URL(string: "https://example.invalid/v1")!,
+                apiStyle: .responses, session: session))
+        let result = try await provider.clean(CleanupRequest(transcript: "Words.", receipt: admitted))
+        XCTAssertEqual(result.cleanedText, "Cleaned.")
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.all.first?.jsonBody["store"] as? Bool, false)
+    }
+
+    func testAnApplicationClientWithoutAReceiptFailsClosed() async throws {
+        let requests = RequestLog()
+        let provider = AdmittedCleanupProvider(
+            provider: OpenAICompatibleCleanupProvider(
+                model: "model", serviceURL: URL(string: "https://example.invalid/v1")!,
+                session: makeStubSession { request in
+                    requests.record(request)
+                    return StubReply.completion(request, "Unwanted.")
+                }))
+        do {
+            _ = try await provider.clean(CleanupRequest(transcript: "private text"))
+            XCTFail("The production wrapper must refuse requests without admission")
+        } catch {
+            XCTAssertEqual(error as? CleanupHoldback, .noAdmission)
+        }
+        XCTAssertEqual(requests.count, 0)
     }
 
     func testARequestWaitingForTheLocalLaneIsCheckedAfterItGetsTheLane() async throws {

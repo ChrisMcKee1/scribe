@@ -549,6 +549,24 @@ final class FakeCleanup: DictationCleaning {
     func invalidate() {
         invalidations += 1
     }
+
+    func admitRecipient() -> CleanupRecipient? {
+        guard let connection = try? CleanupProviderResolver.connection(settings: settings, environment: [:]) else {
+            return nil
+        }
+        return CleanupRecipient(connection: connection, settings: settings)
+    }
+
+    func provider(for recipient: CleanupRecipient) async throws -> any CleanupProvider {
+        try await provider()
+    }
+
+    func receipt(for recipient: CleanupRecipient, scope: AiVocabularyScope) -> CleanupRequestReceipt {
+        let gate = CleanupSendGate()
+        gate.publishRecipient(recipient)
+        gate.publishVocabulary(scope)
+        return gate.receipt(scope: scope, recipient: recipient, kind: .dictation)
+    }
 }
 
 @MainActor

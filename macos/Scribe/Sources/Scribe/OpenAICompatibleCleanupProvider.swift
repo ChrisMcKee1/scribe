@@ -100,10 +100,16 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         plain: Bool,
         local: Bool
     ) async throws -> ChatCompletionsTransport.Completion {
-        let tuning = request.receipt.map {
-            $0.recipient.connection.source == .settings
-                ? LocalModelTuning.forSettings($0.recipient.settings) : .none
-        } ?? localTuning()
+        let tuning: LocalModelTuning
+        if let receipt = request.receipt {
+            if receipt.recipient.connection.source == .settings {
+                tuning = LocalModelTuning.forSettings(receipt.recipient.settings)
+            } else {
+                tuning = .none
+            }
+        } else {
+            tuning = localTuning()
+        }
         let keepAlive = localServerApp == .ollama && keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil
         let ttl = localServerApp == .lmStudio && keepAliveMinutes > 0 ? keepAliveMinutes * 60 : nil
         let contextTokens = ContextBudget.sanitize(tuning.contextTokens)

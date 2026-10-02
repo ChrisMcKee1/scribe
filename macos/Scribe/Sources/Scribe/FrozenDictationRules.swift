@@ -25,6 +25,7 @@ final class FrozenDictationRules: DictationRuleSource {
     var appProfiles: [AppProfile] { snapshot?.appProfiles ?? [] }
     var cleanupVocabulary: CleanupVocabulary { snapshot?.cleanupVocabulary ?? .none }
     var aiScope: AiVocabularyScope { snapshot?.aiScope ?? .none }
+    func admitGeneration() -> any DictationRuleSource { self }
 
     func waitUntilLoaded() async -> StartupGate.State {
         let state = await gate.wait()

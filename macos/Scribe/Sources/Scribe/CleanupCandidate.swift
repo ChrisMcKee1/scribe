@@ -60,9 +60,11 @@ struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
             }
             let app: LocalServerApp
             if source == .settings {
-                app = settings.selectedLocalApp != .none
-                    ? settings.selectedLocalApp
-                    : (key == nil ? LocalAiServer.appAt(url.absoluteString) : .none)
+                if settings.selectedLocalApp != .none {
+                    app = settings.selectedLocalApp
+                } else {
+                    app = key == nil ? LocalAiServer.appAt(url.absoluteString) : .none
+                }
             } else {
                 app = .none
             }
@@ -85,8 +87,8 @@ struct CleanupCandidate: Sendable, CustomStringConvertible, CustomReflectable {
                     launch: factory.azureCliLaunch, now: factory.now)
             case .servicePrincipal(let tenant, let client, _):
                 let input: CleanupCredentialInput = source == .environment ? .saved : clientSecret
-                let configured = source == .settings
-                    ? settings.azureClientId : (environment["SCRIBE_AZURE_CLIENT_ID"] ?? client)
+                let configured =
+                    source == .settings ? settings.azureClientId : (environment["SCRIBE_AZURE_CLIENT_ID"] ?? client)
                 let secret = try input.resolve {
                     try readSaved(store: store) {
                         if let value = try store.clientSecrets.secret(for: client) { return value }

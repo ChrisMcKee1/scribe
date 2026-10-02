@@ -87,4 +87,36 @@ final class CleanupCandidateTests: XCTestCase {
         }
         XCTAssertEqual(requests.count, 0)
     }
+
+    func testARecipientChangedDuringCredentialConstructionCannotReachTheTransport() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.isEnabled = true
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "https://first.invalid/v1"
+        store.openAIModel = "model"
+        let requests = RequestLog()
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    requests.record(request)
+                    return StubReply.completion(request, "Unwanted.")
+                }))
+        let consent = try cache.admitAuxiliary()
+        let reading = fixture.apiKeys.pauseNextRead()
+        let work = Task.detached {
+            try await cache.complete(CleanupRequest(transcript: "aggregate only"), consent: consent)
+        }
+        await reading.waitUntilReached()
+        store.openAIBaseURL = "https://second.invalid/v1"
+        reading.release()
+        do {
+            _ = try await work.value
+            XCTFail("A built credential is not permission to send to the old recipient")
+        } catch {
+            XCTAssertEqual(error as? CleanupHoldback, .recipientChanged)
+        }
+        XCTAssertEqual(requests.count, 0)
+    }
 }

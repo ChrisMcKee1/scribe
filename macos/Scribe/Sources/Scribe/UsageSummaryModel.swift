@@ -23,23 +23,40 @@ final class UsageSummaryModel: ObservableObject {
     private var observation: SettingsNotificationObservation?
     private(set) var inFlight: Task<Void, Never>?
 
-    init(
+    convenience init() {
+        self.init(
+            readCleanupEnabled: { CleanupSettingsStore.live.isEnabled },
+            summarizeBound: { payload, receipt in
+                guard let receipt else { throw CleanupHoldback.noAdmission }
+                return try await Self.summarize(payload, consent: receipt)
+            },
+            captureConsent: { try CleanupProviderCache.shared.admitAuxiliary() },
+            center: .default,
+            operations: .shared)
+    }
+
+    convenience init(
         readCleanupEnabled: @escaping @MainActor () -> Bool = { CleanupSettingsStore.live.isEnabled },
-        summarize: (@Sendable (String) async throws -> String)? = nil,
+        summarize: @escaping @Sendable (String) async throws -> String,
         center: NotificationCenter = .default,
         operations: AuxiliaryOperations = .shared
     ) {
+        self.init(
+            readCleanupEnabled: readCleanupEnabled,
+            summarizeBound: { payload, _ in try await summarize(payload) },
+            captureConsent: { nil }, center: center, operations: operations)
+    }
+
+    private init(
+        readCleanupEnabled: @escaping @MainActor () -> Bool,
+        summarizeBound: @escaping @Sendable (String, CleanupRequestReceipt?) async throws -> String,
+        captureConsent: @escaping @MainActor () throws -> CleanupRequestReceipt?,
+        center: NotificationCenter,
+        operations: AuxiliaryOperations
+    ) {
         self.readCleanupEnabled = readCleanupEnabled
-        if let summarize {
-            self.summarize = { payload, _ in try await summarize(payload) }
-            captureConsent = { nil }
-        } else {
-            self.summarize = { payload, receipt in
-                guard let receipt else { throw CleanupHoldback.noAdmission }
-                return try await Self.summarize(payload, consent: receipt)
-            }
-            captureConsent = { try CleanupProviderCache.shared.admitAuxiliary() }
-        }
+        summarize = summarizeBound
+        self.captureConsent = captureConsent
         self.operations = operations
         isCleanupEnabled = readCleanupEnabled()
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
