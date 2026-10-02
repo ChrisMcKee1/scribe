@@ -58,7 +58,8 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
             term: TermValues("team term", "TeamTerm"))
         _ = try await context.service.loadCatalog()
 
-        var state = try XCTUnwrap(try await loadPersistedState(from: context.store))
+        let persistedState = try await loadPersistedState(from: context.store)
+        var state = try XCTUnwrap(persistedState)
         state.aiPermissions["team"] = false
         state.generation += 1
         try await saveState(state, to: context.store)

@@ -567,7 +567,6 @@ final class DictionaryLibraryService {
         }
     }
 
-
     private func libraryFiles() -> [URL] {
         (try? fileManager.contentsOfDirectory(
             at: librariesDirectory,
