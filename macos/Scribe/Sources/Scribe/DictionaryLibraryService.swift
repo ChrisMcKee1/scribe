@@ -58,7 +58,9 @@ enum DictionaryLibraryServiceError: Error, LocalizedError {
     }
 }
 
-final class DictionaryLibraryService {
+/// `@unchecked Sendable` because the service only reads immutable snapshots through collaborators that are safe for
+/// concurrent use in this app, but the compiler cannot prove that for `UserDefaults`, `FileManager` and the store.
+final class DictionaryLibraryService: @unchecked Sendable {
     static let libraryStateKey = "word_pack_state_v1"
 
     let librariesDirectory: URL
