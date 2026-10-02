@@ -1,5 +1,15 @@
 import Foundation
 
+/// The UI describes the identity which was actually tested, including environment precedence, not the draft
+/// fields which may have been overridden. Descriptions remain safe if accidentally included in diagnostics.
+struct CleanupCandidateCheck: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
+    let result: CleanupConnectionCheck
+    let recipient: CleanupRecipient?
+
+    var description: String { "CleanupCandidateCheck(reachable: \(result.reachable))" }
+    var customMirror: Mirror { Mirror(self, children: ["reachable": result.reachable]) }
+}
+
 enum CleanupCredentialInput: Sendable, CustomStringConvertible, CustomReflectable {
     case saved
     case replace(String)

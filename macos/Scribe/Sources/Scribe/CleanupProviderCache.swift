@@ -145,6 +145,13 @@ final class CleanupProviderCache: Sendable {
         await checkConnection(candidate: CleanupCandidate(settings: store.snapshot()))
     }
 
+    /// Preferred for staged Settings: its result names exactly the effective candidate which was tested.
+    func checkCandidate(_ candidate: CleanupCandidate) async -> CleanupCandidateCheck {
+        let recipient = try? candidate.recipient(environment: environment)
+        let result = await checkConnection(candidate: candidate)
+        return CleanupCandidateCheck(result: result, recipient: recipient)
+    }
+
     /// Tests the unsaved document and credential intents without saving or replacing the serving cache.
     func checkConnection(candidate: CleanupCandidate) async -> CleanupConnectionCheck {
         let recipient: CleanupRecipient

@@ -34,8 +34,10 @@ final class CleanupCandidateTests: XCTestCase {
         }
         let cache = CleanupProviderCache(
             store: store, environment: [:], factory: .testing(session: session))
-        let result = await cache.checkConnection(candidate: candidate)
+        let checked = await cache.checkCandidate(candidate)
+        let result = checked.result
         XCTAssertTrue(result.reachable, result.message)
+        XCTAssertEqual(checked.recipient, try candidate.recipient(environment: [:]))
         let sent = try XCTUnwrap(requests.all.first)
         XCTAssertEqual(sent.url?.host, "candidate.invalid")
         XCTAssertEqual(sent.jsonBody["model"] as? String, "candidate-model")
@@ -68,9 +70,13 @@ final class CleanupCandidateTests: XCTestCase {
                     requests.record(request)
                     return StubReply.completion(request, "Ok.")
                 }))
-        let result = await cache.checkConnection(candidate: candidate)
+        let checked = await cache.checkCandidate(candidate)
+        let result = checked.result
         XCTAssertTrue(result.reachable, result.message)
+        XCTAssertEqual(checked.recipient, try candidate.recipient(environment: environment))
+        XCTAssertEqual(checked.recipient?.connection.source, .environment)
         XCTAssertEqual(requests.all.first?.url?.host, "override.invalid")
+        XCTAssertFalse(String(reflecting: checked).contains("override.invalid"))
     }
 
     func testAnAuxiliaryConsentCannotFollowALaterEndpointChange() async throws {
