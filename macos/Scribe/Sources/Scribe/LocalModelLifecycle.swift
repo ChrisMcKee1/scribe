@@ -398,7 +398,9 @@ final class LocalModelLifecycle: Sendable {
                         freed.append(copy)
                         continue
                     }
-                    if await unload(copy, currentKey: target?.apiKey) {
+                    let currentKey =
+                        target.flatMap { Self.sameServer(copy.endpoint, $0.endpoint) ? $0.apiKey : nil }
+                    if await unload(copy, currentKey: currentKey) {
                         freed.append(copy)
                     } else {
                         copyFailed = true

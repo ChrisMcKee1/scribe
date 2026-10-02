@@ -275,6 +275,26 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertTrue(fake.models.isEmpty)
     }
 
+    func testRetiringCopiesNeverSendsAnotherServersKey() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "first", key: "first-server-key")
+        let other = LocalModelTarget(
+            endpoint: "http://127.0.0.1:1235/v1", model: "m", app: .lmStudio, apiKey: "second-server-key")
+        let lease = try await lifecycle.beginUse(other)
+        await lifecycle.reconcileLMStudio(
+            target: other, contextTokens: 8192, lease: lease,
+            read: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) },
+            load: { _, _, _ in "second" })
+        lease.end()
+        XCTAssertEqual(lifecycle.ownedCopies.count, 2)
+        let outcome = await lifecycle.release(.shutdown, target: other)
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.instances.map(\.id), ["first", "second"])
+        XCTAssertNil(fake.instances[0].key)
+        XCTAssertEqual(fake.instances[1].key, "second-server-key")
+    }
+
     private func target(_ model: String = "m", key: String? = nil) -> LocalModelTarget {
         lmTarget(model, key: key)
     }
