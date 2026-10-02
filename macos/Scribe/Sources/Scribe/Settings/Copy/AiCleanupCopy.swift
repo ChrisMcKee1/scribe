@@ -9,7 +9,8 @@ struct AiCleanupCopy: CopyCatalog {
     // Page
     let subtitle = CopyItem.same(
         "aiCleanup.subtitle",
-        "Optional. An AI model fixes punctuation, grammar and repeated words before Scribe types. Dictation works without it.")
+        "Optional. An AI model fixes punctuation, grammar and repeated words before Scribe types. Dictation works "
+            + "without it.")
     let use = CopyItem.same("aiCleanup.use", "Use AI cleanup")
     let offHint = CopyItem.same(
         "aiCleanup.offHint", "Off. Scribe types what it hears, with your dictionary and snippets.")
@@ -26,7 +27,8 @@ struct AiCleanupCopy: CopyCatalog {
     let onThisMacHint = CopyItem.changed(
         "aiCleanup.onThisMacHint",
         "Private: your text stays on this Mac. Use Foundry Local, Ollama or LM Studio if you have them.",
-        windows: "Private: your text stays on this PC. Scribe can set it up for you, or use Ollama or LM Studio if you have them.",
+        windows: "Private: your text stays on this PC. Scribe can set it up for you, or use Ollama or LM Studio if "
+            + "you have them.",
         because: .foundryLocal)
     let copilot = CopyItem.same("aiCleanup.copilot", "GitHub Copilot")
     let copilotUnavailable = CopyItem.added(
@@ -39,7 +41,8 @@ struct AiCleanupCopy: CopyCatalog {
     let anotherService = CopyItem.same("aiCleanup.anotherService", "Another AI service")
     let anotherServiceHint = CopyItem.same(
         "aiCleanup.anotherServiceHint",
-        "Connects to the server address you enter, such as OpenRouter, OpenAI or a server on another computer. Your text goes to that address.")
+        "Connects to the server address you enter, such as OpenRouter, OpenAI or a server on another computer. Your "
+            + "text goes to that address.")
     let disclosureTitle = CopyItem.same("aiCleanup.disclosureTitle", "What AI cleanup sends")
 
     // On this Mac
@@ -63,7 +66,8 @@ struct AiCleanupCopy: CopyCatalog {
     let nothingDownloads = CopyItem.changed(
         "aiCleanup.nothingDownloads",
         "Scribe downloads nothing itself. Foundry Local downloads the model the first time you use it.",
-        windows: "Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere else for AI cleanup removes what Scribe downloaded for it.",
+        windows: "Nothing downloads until you choose Set up or Load, or save with AI cleanup on. Choosing somewhere "
+            + "else for AI cleanup removes what Scribe downloaded for it.",
         because: .staleWindowsCorrected)
     let modelSettings = CopyItem.same("aiCleanup.modelSettings", "Model settings")
     let modelSettingsHint = CopyItem.same(
@@ -86,20 +90,24 @@ struct AiCleanupCopy: CopyCatalog {
     let signInApp = CopyItem.same("aiCleanup.signInApp", "An app registration (service principal)")
     let signInAppHint = CopyItem.same(
         "aiCleanup.signInAppHint",
-        "An app your organization set up in Azure for Scribe. Reliable when your account belongs to several organizations.")
+        "An app your organization set up in Azure for Scribe. Reliable when your account belongs to several "
+            + "organizations.")
     let signInKey = CopyItem.same("aiCleanup.signInKey", "An API key")
     let signInKeyHint = CopyItem.same(
         "aiCleanup.signInKeyHint",
-        "A key for the Azure resource that runs your model. Works without signing in to Azure, if your resource accepts keys.")
+        "A key for the Azure resource that runs your model. Works without signing in to Azure, if your resource "
+            + "accepts keys.")
     let tenantOptional = CopyItem.same("aiCleanup.tenantOptional", "Tenant ID (optional)")
     let optional = CopyItem.same("aiCleanup.optional", "Optional")
     let tenantHint = CopyItem.same(
         "aiCleanup.tenantHint",
-        "Only needed if your Azure account belongs to more than one organization. You'll find it in the Azure portal under Microsoft Entra ID.")
+        "Only needed if your Azure account belongs to more than one organization. You'll find it in the Azure portal "
+            + "under Microsoft Entra ID.")
     let subscription = CopyItem.same("aiCleanup.subscription", "Subscription")
     let subscriptionHint = CopyItem.same(
         "aiCleanup.subscriptionHint",
-        "Scribe starts with your current Azure subscription. Choose All subscriptions to see models in every subscription you can use.")
+        "Scribe starts with your current Azure subscription. Choose All subscriptions to see models in every "
+            + "subscription you can use.")
     let enterManually = CopyItem.same("aiCleanup.enterManually", "Enter details manually")
     let directoryId = CopyItem.same("aiCleanup.directoryId", "Directory (tenant) ID")
     let directoryIdExample = CopyItem.same("aiCleanup.directoryIdExample", "For example, contoso.onmicrosoft.com")
@@ -110,7 +118,8 @@ struct AiCleanupCopy: CopyCatalog {
     let clientSecretNote = CopyItem.changed(
         "aiCleanup.clientSecretNote",
         "Saved encrypted in your Keychain. Azure shows a secret's Value only once, when you create it.",
-        windows: "Saved encrypted on this PC with your Windows account. Azure shows a secret's Value only once, when you create it.",
+        windows: "Saved encrypted on this PC with your Windows account. Azure shows a secret's Value only once, when "
+            + "you create it.",
         because: .keychain)
     let azureAddress = CopyItem.same("aiCleanup.azureAddress", "Endpoint")
     let azureAddressExample = CopyItem.same(
@@ -171,7 +180,8 @@ struct AiCleanupCopy: CopyCatalog {
     let writingStyle = CopyItem.same("aiCleanup.writingStyle", "Writing style")
     let writingStyleHint = CopyItem.same(
         "aiCleanup.writingStyleHint",
-        "Scribe's style: clear sentences, lists when you list things, correct punctuation, numbers as digits, and your spoken corrections applied.")
+        "Scribe's style: clear sentences, lists when you list things, correct punctuation, numbers as digits, and "
+            + "your spoken corrections applied.")
     let customize = CopyItem.same("aiCleanup.customize", "Customize")
     let restoreStyle = CopyItem.same("aiCleanup.restoreStyle", "Restore Scribe's style")
     let advancedTitle = CopyItem.same("aiCleanup.advancedTitle", "Advanced AI settings")

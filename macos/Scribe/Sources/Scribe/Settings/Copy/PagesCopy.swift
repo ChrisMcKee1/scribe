@@ -92,8 +92,10 @@ struct HistoryCopy: CopyCatalog {
     let saveRecording = CopyItem.same("history.saveRecording", "Save a recording with each dictation")
     let saveRecordingHint = CopyItem.changed(
         "history.saveRecordingHint",
-        "Keeps the audio of each dictation on this Mac for up to 7 days (250 MB in total), then deletes it. Scribe doesn't play recordings back.",
-        windows: "Keeps the audio of each dictation on this PC for up to 7 days (250 MB in total), then deletes it. Scribe doesn't play recordings back.",
+        "Keeps the audio of each dictation on this Mac for up to 7 days (250 MB in total), then deletes it. Scribe "
+            + "doesn't play recordings back.",
+        windows: "Keeps the audio of each dictation on this PC for up to 7 days (250 MB in total), then deletes it. "
+            + "Scribe doesn't play recordings back.",
         because: .thisMac)
     let find = CopyItem.same("history.find", "Find a dictation")
     let copy = CopyItem.same("history.copy", "Copy")
@@ -123,7 +125,8 @@ struct HistoryCopy: CopyCatalog {
     let deleteAllTitle = CopyItem.same("history.deleteAllTitle", "Delete all history?")
     let deleteAllBody = CopyItem.same(
         "history.deleteAllBody",
-        "This deletes every saved dictation and recording now, including ones not shown here. Your dictionary, snippets and settings are kept. This can't be undone.")
+        "This deletes every saved dictation and recording now, including ones not shown here. Your dictionary, "
+            + "snippets and settings are kept. This can't be undone.")
     let deleteAllConfirm = CopyItem.same("history.deleteAllConfirm", "Delete all history")
     let cleared = CopyItem.same("history.cleared", "Cleared dictation history.")
     let clearFailed = CopyItem.same("history.clearFailed", "Couldn't clear history. Try again.")

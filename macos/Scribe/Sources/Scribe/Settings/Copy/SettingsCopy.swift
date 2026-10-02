@@ -50,11 +50,13 @@ enum SettingsCopy {
     static let notice = NoticeCopy()
     static let indicator = IndicatorCopy()
     static let search = SearchCopy()
+    static let shortcut = ShortcutCopy()
+    static let problem = ProblemCopy()
 
     /// Every catalog, in the order the window shows them.
     static let catalogs: [any CopyCatalog] = [
         dictation, tryDictation, aiCleanup, dictionary, wordPacks, snippets, appProfiles, history, usage, advanced,
-        diagnostics, about, window, menuBar, notice, indicator, search,
+        diagnostics, about, window, menuBar, notice, indicator, search, shortcut, problem,
     ]
 
     /// Every item in every catalog.

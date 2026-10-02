@@ -22,8 +22,11 @@ struct AdvancedCopy: CopyCatalog {
     let freeMemory = CopyItem.same("advanced.freeMemory", "Free memory when Scribe isn't used")
     let freeMemoryHint = CopyItem.changed(
         "advanced.freeMemoryHint",
-        "After this long without a dictation, Scribe frees the memory it uses for dictation. The next dictation may take longer before Scribe types it.",
-        windows: "After this long without a dictation, Scribe frees the memory its speech model and its own AI cleanup model use, and asks Ollama and LM Studio to free theirs. The next dictation may take longer before Scribe types it. Ollama and LM Studio may also free a model on their own.",
+        "After this long without a dictation, Scribe frees the memory it uses for dictation. The next dictation may "
+            + "take longer before Scribe types it.",
+        windows: "After this long without a dictation, Scribe frees the memory its speech model and its own AI "
+            + "cleanup model use, and asks Ollama and LM Studio to free theirs. The next dictation may take longer "
+            + "before Scribe types it. Ollama and LM Studio may also free a model on their own.",
         because: .staleWindowsCorrected)
     let restartNote = CopyItem.same(
         "advanced.restartNote",
@@ -51,7 +54,8 @@ struct AdvancedCopy: CopyCatalog {
     let typingMethod = CopyItem.same("advanced.typingMethod", "Typing method")
     let typingMethodHint = CopyItem.added(
         "advanced.typingMethodHint",
-        "Scribe types into the app in front. Pasting is faster for long text: Scribe uses the clipboard for a moment and puts back what you had copied when it can. Some apps block pasting.",
+        "Scribe types into the app in front. Pasting is faster for long text: Scribe uses the clipboard for a moment "
+            + "and puts back what you had copied when it can. Some apps block pasting.",
         because: .macBehaviour)
     let lineBreaks = CopyItem.same("advanced.lineBreaks", "Line breaks")
     let lineBreaksHint = CopyItem.same(
@@ -60,14 +64,17 @@ struct AdvancedCopy: CopyCatalog {
     let chatSafe = CopyItem.same("advanced.chatSafe", "Don't send chat messages early")
     let chatSafeHint = CopyItem.changed(
         "advanced.chatSafeHint",
-        "Types line breaks as Shift-Return, so apps like Teams and Slack start a new line instead of sending. Turn it off if an app uses Shift-Return for something else.",
-        windows: "Types line breaks as Shift+Enter, so apps like Teams and Slack start a new line instead of sending. Turn it off if an app uses Shift+Enter for something else.",
+        "Types line breaks as Shift-Return, so apps like Teams and Slack start a new line instead of sending. Turn it "
+            + "off if an app uses Shift-Return for something else.",
+        windows: "Types line breaks as Shift+Enter, so apps like Teams and Slack start a new line instead of sending. "
+            + "Turn it off if an app uses Shift+Enter for something else.",
         because: .macKeys)
     let textChanges = CopyItem.same("advanced.textChanges", "Text changes")
     let applyRules = CopyItem.same("advanced.applyRules", "Apply your dictionary and snippets")
     let applyRulesHint = CopyItem.same(
         "advanced.applyRulesHint",
-        "Applies your dictionary, snippets and spacing fixes to what Scribe hears. AI cleanup still receives your vocabulary when this is off.")
+        "Applies your dictionary, snippets and spacing fixes to what Scribe hears. AI cleanup still receives your "
+            + "vocabulary when this is off.")
     let restoreDefaults = CopyItem.same("advanced.restoreDefaults", "Restore advanced defaults")
     let restoreTitle = CopyItem.same("advanced.restoreTitle", "Restore the advanced settings to their defaults?")
     let restoreBody = CopyItem.same("advanced.restoreBody", "Nothing changes until you save.")
@@ -87,15 +94,18 @@ struct DiagnosticsCopy: CopyCatalog {
     let report = CopyItem.same("diagnostics.report", "Report a problem")
     let reportHint = CopyItem.same(
         "diagnostics.reportHint",
-        "Opens GitHub to report a problem or suggest a feature. Don't include dictations, recordings or keys in a public report.")
+        "Opens GitHub to report a problem or suggest a feature. Don't include dictations, recordings or keys in a "
+            + "public report.")
     let supportDetails = CopyItem.added("diagnostics.supportDetails", "Copy support details")
     let supportDetailsHint = CopyItem.added(
         "diagnostics.supportDetailsHint",
-        "Copies your Scribe and macOS versions, your settings choices and your recent timings. It never contains your dictations.")
+        "Copies your Scribe and macOS versions, your settings choices and your recent timings. It never contains your "
+            + "dictations.")
     let console = CopyItem.added("diagnostics.console", "Open Console")
     let consoleHint = CopyItem.added(
         "diagnostics.consoleHint",
-        "Scribe's log lines appear in Console under com.scribe.macos. They record app events, timings and errors, never your dictations. Read them before sharing.")
+        "Scribe's log lines appear in Console under com.scribe.macos. They record app events, timings and errors, "
+            + "never your dictations. Read them before sharing.")
     let cleanupProblems = CopyItem.same("diagnostics.cleanupProblems", "AI cleanup problems")
     let cleanupProblemsHint = CopyItem.same(
         "diagnostics.cleanupProblemsHint",
@@ -133,7 +143,8 @@ struct DiagnosticsCopy: CopyCatalog {
     let dataWarning = CopyItem.changed(
         "diagnostics.dataWarning",
         "Never send or share this file. It holds everything you've dictated. To delete dictations, use History.",
-        windows: "Never send or share this file. It holds everything you've dictated and your saved keys. To delete dictations, use History.",
+        windows: "Never send or share this file. It holds everything you've dictated and your saved keys. To delete "
+            + "dictations, use History.",
         because: .keychain)
     let dataFile = CopyItem.same("diagnostics.dataFile", "Scribe data file")
     let copyPath = CopyItem.same("diagnostics.copyPath", "Copy")
@@ -174,15 +185,18 @@ struct AboutCopy: CopyCatalog {
     let privacy = CopyItem.same("about.privacy", "Privacy")
     let privacyHint = CopyItem.changed(
         "about.privacyHint",
-        "Speech recognition runs on this Mac, and your audio never leaves it. AI cleanup is optional, and online services receive text only while you use them.",
-        windows: "Speech recognition runs on this PC, and your audio never leaves it. AI cleanup is optional, and online services receive text only while you use them.",
+        "Speech recognition runs on this Mac, and your audio never leaves it. AI cleanup is optional, and online "
+            + "services receive text only while you use them.",
+        windows: "Speech recognition runs on this PC, and your audio never leaves it. AI cleanup is optional, and "
+            + "online services receive text only while you use them.",
         because: .thisMac)
     let privacyLink = CopyItem.same("about.privacyLink", "Read the privacy policy")
     let feedback = CopyItem.same("about.feedback", "Feedback")
     let reportResult = CopyItem.same("about.reportResult", "Report an AI result...")
     let reportResultHint = CopyItem.same(
         "about.reportResultHint",
-        "If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it first. Scribe sends nothing by itself. You can also report a result from History.")
+        "If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it "
+            + "first. Scribe sends nothing by itself. You can also report a result from History.")
     let support = CopyItem.same("about.support", "Support Scribe")
     let star = CopyItem.same("about.star", "Star Scribe on GitHub")
     let starHint = CopyItem.same(

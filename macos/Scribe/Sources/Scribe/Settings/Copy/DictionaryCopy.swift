@@ -29,7 +29,8 @@ struct DictionaryCopy: CopyCatalog {
     let learnTip = CopyItem.changed(
         "dictionary.learnTip",
         "Suggests words from your recent dictations, found on this Mac. You review every suggestion.",
-        windows: "Suggests words from your recent dictations. If AI cleanup uses an online service, Scribe asks before sending anything.",
+        windows: "Suggests words from your recent dictations. If AI cleanup uses an online service, Scribe asks "
+            + "before sending anything.",
         because: .staleWindowsCorrected)
     let cleanUp = CopyItem.same("dictionary.cleanUp", "Clean up unused words...")
     let cleanUpTip = CopyItem.changed(
@@ -88,7 +89,8 @@ struct DictionaryCopy: CopyCatalog {
     let deleteTitle = CopyItem.same("dictionary.deleteTitle", "Delete selected words?")
     let deleteBody = CopyItem.same(
         "dictionary.deleteBody",
-        "{words} will be removed from your dictionary when you save. This can't be undone once saved. Turning them off instead keeps them in the list so you can switch them back on later.")
+        "{words} will be removed from your dictionary when you save. This can't be undone once saved. Turning them "
+            + "off instead keeps them in the list so you can switch them back on later.")
     let nothingToSuggest = CopyItem.same("dictionary.nothingToSuggest", "Nothing to suggest")
     let noHistoryToLearn = CopyItem.same(
         "dictionary.noHistoryToLearn",
@@ -157,8 +159,10 @@ struct WordPackCopy: CopyCatalog {
         because: .thisMac)
     let aiSends = CopyItem.changed(
         "wordPacks.aiSends",
-        "Sends the words of this word pack that your dictation seems to mention, as vocabulary with the AI cleanup request.",
-        windows: "Sends this word pack's words as vocabulary with every AI cleanup request, whether or not you say them.",
+        "Sends the words of this word pack that your dictation seems to mention, as vocabulary with the AI cleanup "
+            + "request.",
+        windows: "Sends this word pack's words as vocabulary with every AI cleanup request, whether or not you say "
+            + "them.",
         because: .staleWindowsCorrected)
     let aiNotSent = CopyItem.same(
         "wordPacks.aiNotSent", "Not sent as vocabulary. Words you dictate still reach the AI service in the text.")

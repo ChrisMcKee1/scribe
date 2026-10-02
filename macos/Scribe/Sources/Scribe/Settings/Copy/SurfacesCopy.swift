@@ -66,13 +66,17 @@ struct NoticeCopy: CopyCatalog {
     let typingFailedTitle = CopyItem.same("notice.typingFailedTitle", "Couldn't type your dictation")
     let typingIncompleteBody = CopyItem.changed(
         "notice.typingIncompleteBody",
-        "This app didn't accept all of the text. Click the Scribe icon in the menu bar and choose Copy last dictation, then paste it.",
-        windows: "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.",
+        "This app didn't accept all of the text. Click the Scribe icon in the menu bar and choose Copy last "
+            + "dictation, then paste it.",
+        windows: "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, "
+            + "then paste it.",
         because: .macSystemFeature)
     let typingChangedBody = CopyItem.changed(
         "notice.typingChangedBody",
-        "The window changed before Scribe finished typing. Click the Scribe icon in the menu bar and choose Copy last dictation, then paste it.",
-        windows: "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.",
+        "The window changed before Scribe finished typing. Click the Scribe icon in the menu bar and choose Copy last "
+            + "dictation, then paste it.",
+        windows: "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last "
+            + "dictation, then paste it.",
         because: .macSystemFeature)
     let soundFailedTitle = CopyItem.changed(
         "notice.soundFailedTitle",
@@ -99,7 +103,8 @@ struct NoticeCopy: CopyCatalog {
     let speechModelFailedTitle = CopyItem.same("notice.speechModelFailedTitle", "Speech model didn't load")
     let speechModelFailedBody = CopyItem.added(
         "notice.speechModelFailedBody",
-        "Scribe tries again when you dictate. If dictation doesn't work, copy the support details in Settings, Diagnostics and report the problem.")
+        "Scribe tries again when you dictate. If dictation doesn't work, copy the support details in Settings, "
+            + "Diagnostics and report the problem.")
     let cleanupFailingTitle = CopyItem.same("notice.cleanupFailingTitle", "AI cleanup isn't working")
     let cleanupFailingBody = CopyItem.same(
         "notice.cleanupFailingBody",
@@ -107,11 +112,13 @@ struct NoticeCopy: CopyCatalog {
     let defaultsTitle = CopyItem.same("notice.defaultsTitle", "Using default settings")
     let defaultsBody = CopyItem.same(
         "notice.defaultsBody",
-        "Scribe couldn't use your saved settings, so it's using defaults for now. Open Settings, review them and choose Save to keep them.")
+        "Scribe couldn't use your saved settings, so it's using defaults for now. Open Settings, review them and "
+            + "choose Save to keep them.")
     let reviewTitle = CopyItem.same("notice.reviewTitle", "Your settings need a review")
     let reviewBody = CopyItem.same(
         "notice.reviewBody",
-        "Scribe couldn't use your saved settings, so it's using defaults. Open Settings, review them and choose Save. Then you can change {change} here.")
+        "Scribe couldn't use your saved settings, so it's using defaults. Open Settings, review them and choose Save. "
+            + "Then you can change {change} here.")
     let repairedTitle = CopyItem.same("notice.repairedTitle", "Scribe repaired its data")
     let cleanupIsOn = CopyItem.same("notice.cleanupIsOn", "AI cleanup is on")
     let cleanupIsOff = CopyItem.same("notice.cleanupIsOff", "AI cleanup is off")
