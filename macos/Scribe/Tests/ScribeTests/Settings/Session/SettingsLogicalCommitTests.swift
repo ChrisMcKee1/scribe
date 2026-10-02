@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import os
 
 @testable import Scribe
 
@@ -298,6 +299,82 @@ final class SettingsLogicalCommitTests: XCTestCase {
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?.replacement, "Second")
     }
+
+    func testPublicationHookSpansCommitAndAuthorityUpdateBeforeAnotherSendStarts() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let peer = PersistenceStore(databaseURL: fixture.directory.databaseURL, access: .readOnly)
+        defer { peer.closeConnection() }
+        let gate = SessionPublicationBarrier()
+        let baseline = try await fixture.adapter.load()
+        var changed = baseline
+        changed.preferences.aiCleanupEnabled = true
+        let submission = SettingsSubmission(
+            id: UUID(), revision: 1, baseline: baseline, document: changed,
+            intents: [
+                .aiCleanup: SettingsExternalIntent(
+                    revision: SettingsIntentRevision.next(), values: ["ScribeAiCleanupEnabled": .bool(true)])
+            ])
+        let save = Task {
+            try await fixture.store.commitSettingsSession(
+                submission,
+                publication: { transaction in
+                    try gate.publish(transaction) { receipt in
+                        gate.recordVisible((try? peer.readStringSetting(key: SettingsStoredDocument.key)) != nil)
+                        return receipt.document.preferences.aiCleanupEnabled
+                    }
+                })
+        }
+        _ = await gate.entered.value
+        let send = Task.detached { gate.start() }
+        _ = await gate.attempted.value
+        XCTAssertEqual(gate.started, 0)
+        gate.release()
+        _ = try await save.value
+        let observed = await send.value
+        XCTAssertEqual(observed, true)
+        XCTAssertTrue(gate.commitWasVisible)
+    }
+
+    func testFailedTransactionNeverPublishesAClaimedNewAuthority() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let gate = SessionPublicationBarrier()
+        gate.release()
+        let baseline = try await fixture.adapter.load()
+        var submission = SettingsSubmission(
+            id: UUID(), revision: 1, baseline: baseline, document: baseline, intents: [:])
+        submission.attachment.expectedValues["word_pack_state_v1"] = "stale"
+        do {
+            _ = try await fixture.store.commitSettingsSession(
+                submission,
+                publication: { try gate.publish($0) { $0.document.preferences.aiCleanupEnabled } })
+            XCTFail("A conflicting transaction succeeded")
+        } catch {
+            XCTAssertEqual(error as? SettingsSaveFailure, .conflict)
+        }
+        XCTAssertNil(gate.published)
+        XCTAssertNil(try fixture.store.readStringSetting(key: SettingsStoredDocument.key))
+    }
+
+    func testImmediateOutsideWriteUsesTheSameSynchronousPublicationSeam() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let gate = SessionPublicationBarrier()
+        gate.release()
+        let adapter = SettingsLegacyStore(
+            defaults: fixture.defaults.defaults,
+            database: fixture.store,
+            externalPublication: { transaction in
+                try gate.publish(transaction) {
+                    let document = $0.document(legacy: SettingsPreferences())
+                    return document.preferences.aiCleanupEnabled
+                }
+            })
+        _ = try await adapter.updateExternal(
+            .aiCleanup, values: ["ScribeAiCleanupEnabled": .bool(true)], revision: SettingsIntentRevision.next())
+        XCTAssertEqual(gate.published, true)
+    }
 }
 
 @MainActor
@@ -313,6 +390,53 @@ private final class SessionStorageFixture {
         store = PersistenceStore(databaseURL: directory.databaseURL)
         try store.initialize()
         adapter = SettingsLegacyStore(defaults: defaults.defaults, database: store)
+    }
+
+    private final class SessionPublicationBarrier: Sendable {
+        private struct State {
+            var published: Bool?
+            var started = 0
+            var visible = false
+        }
+
+        private let lock = NSLock()
+        private let pause = DispatchSemaphore(value: 0)
+        private let state = OSAllocatedUnfairLock(initialState: State())
+        let entered = FirstOutcome()
+        let attempted = FirstOutcome()
+
+        var started: Int { state.withLock { $0.started } }
+        var published: Bool? { state.withLock { $0.published } }
+        var commitWasVisible: Bool { state.withLock { $0.visible } }
+
+        func publish<Value>(_ transaction: () throws -> Value, project: (Value) -> Bool) rethrows -> Value {
+            lock.lock()
+            defer { lock.unlock() }
+            entered.settle(true)
+            pause.wait()
+            let value = try transaction()
+            let published = project(value)
+            state.withLock { $0.published = published }
+            return value
+        }
+
+        func start() -> Bool? {
+            attempted.settle(true)
+            lock.lock()
+            defer { lock.unlock() }
+            return state.withLock {
+                $0.started += 1
+                return $0.published
+            }
+        }
+
+        func recordVisible(_ visible: Bool) {
+            state.withLock { $0.visible = visible }
+        }
+
+        func release() {
+            pause.signal()
+        }
     }
 
     func remove() {

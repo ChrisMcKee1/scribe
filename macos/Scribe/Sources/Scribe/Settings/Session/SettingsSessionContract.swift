@@ -284,6 +284,12 @@ struct SettingsCommitReceipt: Codable, Equatable, Sendable {
     }
 }
 
+/// Runs synchronously on the storage worker. A send gate may wrap COMMIT and nonthrowing authority publication.
+typealias SettingsCommitTransaction = () throws -> SettingsCommitReceipt
+typealias SettingsCommitPublication = @Sendable (SettingsCommitTransaction) throws -> SettingsCommitReceipt
+typealias SettingsExternalTransaction = () throws -> SettingsStorageRead
+typealias SettingsExternalPublication = @Sendable (SettingsExternalTransaction) throws -> SettingsStorageRead
+
 enum SettingsApplicationOutcome: Equatable, Sendable {
     case applied
     case notApplied

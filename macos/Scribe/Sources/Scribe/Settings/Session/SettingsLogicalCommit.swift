@@ -32,11 +32,20 @@ struct SettingsStorageRead: Sendable {
 @MainActor
 final class SettingsLegacyStore {
     private let defaults: UserDefaults
+    private let publication: SettingsCommitPublication
+    private let externalPublication: SettingsExternalPublication
     let database: PersistenceStore
 
-    init(defaults: UserDefaults, database: PersistenceStore) {
+    init(
+        defaults: UserDefaults,
+        database: PersistenceStore,
+        publication: @escaping SettingsCommitPublication = { try $0() },
+        externalPublication: @escaping SettingsExternalPublication = { try $0() }
+    ) {
         self.defaults = defaults
         self.database = database
+        self.publication = publication
+        self.externalPublication = externalPublication
     }
 
     func load() async throws -> SettingsDocument {
@@ -56,8 +65,8 @@ final class SettingsLegacyStore {
         SettingsSessionAccess(
             validate: SettingsSessionValidation.isValid,
             prepare: preparation.prepare,
-            commit: { [database] in
-                let receipt = try await database.commitSettingsSession($0)
+            commit: { [database, publication] in
+                let receipt = try await database.commitSettingsSession($0, publication: publication)
                 preparation.committed(receipt.id)
                 return receipt
             },
@@ -78,7 +87,9 @@ final class SettingsLegacyStore {
         SettingsSessionAccess(
             validate: SettingsSessionValidation.isValid,
             prepare: prepare,
-            commit: { [database] in try await database.commitSettingsSession($0) },
+            commit: { [database, publication] in
+                try await database.commitSettingsSession($0, publication: publication)
+            },
             recover: { [database] in try await database.loadSettingsReceipt($0) },
             apply: apply,
             discardPreparation: discardPreparation)
@@ -91,7 +102,7 @@ final class SettingsLegacyStore {
     ) async throws -> SettingsDocument {
         let legacy = SettingsMigrationLedger.capture(defaults)
         let read = try await database.updateSettingsExternal(
-            setting, values: values, revision: revision, legacy: legacy)
+            setting, values: values, revision: revision, legacy: legacy, publication: externalPublication)
         return read.document(legacy: legacy)
     }
 }

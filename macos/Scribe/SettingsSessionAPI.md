@@ -28,6 +28,24 @@ Keep editing starts no shutdown. An idle Escape does not close the window.
 An adapter must throw `SettingsCommitUncertain` for an unknown outcome, not an ordinary storage error. A persisted but
 unapplied submission retries application without another write.
 
+## Send-authority publication
+
+`SettingsCommitPublication` and `SettingsExternalPublication` are synchronous, Sendable wrappers around a transaction
+thunk. Inject them into `SettingsLegacyStore` or the corresponding `PersistenceStore` write. The wrapper runs on the
+storage worker and encloses the entire SQLite transaction, including COMMIT, not merely statement construction.
+
+The send gate adapter must execute the thunk under the same mutex as transport start, derive recipient/permission from
+the actual returned committed result, then atomically publish both before unlocking. Checked external intents can change
+that result, so a recipient precomputed from the editing document is not sufficient without an equivalent CAS proof.
+
+Post-commit projection must not throw. Derive it from immutable inputs and fail closed if no valid recipient exists.
+Never await, access Keychain, construct a provider, acquire the provider cache lock, or synchronously reenter this store
+under the gate. The independent read-only connection in the barrier test is an observation proving COMMIT visibility,
+not a production projection. Recovery must publish a verified current pair; stale async rebuilds must not restore it.
+
+The default wrapper executes only the transaction for backward compatibility. The coherent shell cutover must inject the
+actual WS3 adapter for both whole-window Save and immediate outside writes; async `access.apply` is not that adapter.
+
 ## Storage and participants
 
 `SettingsLegacyStore.load()` reads the existing stores without modifying defaults or credentials. After the first Save,

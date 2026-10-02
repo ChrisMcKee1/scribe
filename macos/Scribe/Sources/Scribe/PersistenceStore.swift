@@ -750,70 +750,77 @@ final class PersistenceStore: Sendable {
         }
     }
 
-    func commitSettingsSession(_ submission: SettingsSubmission) async throws -> SettingsCommitReceipt {
+    func commitSettingsSession(
+        _ submission: SettingsSubmission,
+        publication: @escaping SettingsCommitPublication = { try $0() }
+    ) async throws -> SettingsCommitReceipt {
         guard SettingsSessionValidation.isValid(submission.document) else { throw SettingsSaveFailure.validation }
         try Self.requirePreparedSessionCredentials(submission)
         let receipt = try await owner.withSessionAsync(.foreground) { session in
-            try session.transaction(.write) {
-                let current = try Self.readSettingsSession(session)
-                let receiptKey = "settings.receipt." + submission.id.uuidString
-                if let encoded = try Self.readSetting(key: receiptKey, session) {
-                    let marker = try JSONDecoder().decode(SettingsDurableReceipt.self, from: Data(encoded.utf8))
-                    return try Self.restoreSettingsReceipt(marker, current: current, session)
-                }
-                for (key, expected) in submission.attachment.expectedValues {
-                    guard try Self.readSetting(key: key, session) == expected else {
-                        throw SettingsSaveFailure.conflict
-                    }
-                }
-                var document = submission.document
-                var rowIDs: [String: Int64] = [:]
-                var record = current.stored ?? SettingsStoredDocument(preferences: submission.baseline.preferences)
-                try Self.mergeSettingsPreferences(submission, record: &record)
-                document.preferences = record.preferences
-                if document.historyRetentionValue != submission.baseline.historyRetentionValue {
-                    guard current.historyRetentionValue == submission.baseline.historyRetentionValue else {
-                        throw SettingsSaveFailure.conflict
-                    }
-                    try Self.writeSetting(
-                        key: Self.retentionSettingKey, value: document.historyRetentionValue, session)
-                } else {
-                    document.historyRetentionValue = current.historyRetentionValue
-                }
-                document.dictionary = try Self.saveSessionDictionary(
-                    submission, current: current, ids: &rowIDs, session)
-                document.snippets = try Self.saveSessionSnippets(submission, current: current, ids: &rowIDs, session)
-                document.profiles = try Self.saveSessionProfiles(submission, current: current, ids: &rowIDs, session)
-                if let profiles = document.profiles {
-                    record.profileOrder = profiles.map(\.id)
-                }
-                for (key, value) in submission.attachment.values {
-                    guard key != SettingsStoredDocument.key && key != Self.retentionSettingKey else {
-                        throw SettingsSaveFailure.validation
-                    }
-                    try Self.writeSetting(key: key, value: value, session)
-                }
-                if let references = submission.attachment.values[SettingsCredentialReference.storageKey] ?? nil {
-                    record.credentialReferences = try JSONDecoder().decode(
-                        [String: SettingsCredentialReference].self, from: Data(references.utf8))
-                }
-                record.lastCommit = submission.id
-                record.revision += 1
-                let encoded = try JSONEncoder().encode(record)
-                try Self.writeSetting(
-                    key: SettingsStoredDocument.key, value: String(decoding: encoded, as: UTF8.self), session)
-                var receipt = SettingsCommitReceipt(
-                    id: submission.id, revision: submission.revision, document: document)
-                receipt.attachment = submission.attachment
-                receipt.rowIDs = rowIDs
-                let receiptData = try JSONEncoder().encode(SettingsDurableReceipt(receipt))
-                try Self.writeSetting(
-                    key: receiptKey, value: String(decoding: receiptData, as: UTF8.self), session)
-                return receipt
+            try publication {
+                try Self.commitSessionTransaction(submission, session)
             }
         }
         removedText.record()
         return receipt
+    }
+
+    private static func commitSessionTransaction(
+        _ submission: SettingsSubmission, _ session: SQLiteSession
+    ) throws -> SettingsCommitReceipt {
+        try session.transaction(.write) {
+            let current = try Self.readSettingsSession(session)
+            let receiptKey = "settings.receipt." + submission.id.uuidString
+            if let encoded = try Self.readSetting(key: receiptKey, session) {
+                let marker = try JSONDecoder().decode(SettingsDurableReceipt.self, from: Data(encoded.utf8))
+                return try Self.restoreSettingsReceipt(marker, current: current, session)
+            }
+            for (key, expected) in submission.attachment.expectedValues {
+                guard try Self.readSetting(key: key, session) == expected else {
+                    throw SettingsSaveFailure.conflict
+                }
+            }
+            var document = submission.document
+            var rowIDs: [String: Int64] = [:]
+            var record = current.stored ?? SettingsStoredDocument(preferences: submission.baseline.preferences)
+            try Self.mergeSettingsPreferences(submission, record: &record)
+            document.preferences = record.preferences
+            if document.historyRetentionValue != submission.baseline.historyRetentionValue {
+                guard current.historyRetentionValue == submission.baseline.historyRetentionValue else {
+                    throw SettingsSaveFailure.conflict
+                }
+                try Self.writeSetting(key: retentionSettingKey, value: document.historyRetentionValue, session)
+            } else {
+                document.historyRetentionValue = current.historyRetentionValue
+            }
+            document.dictionary = try Self.saveSessionDictionary(submission, current: current, ids: &rowIDs, session)
+            document.snippets = try Self.saveSessionSnippets(submission, current: current, ids: &rowIDs, session)
+            document.profiles = try Self.saveSessionProfiles(submission, current: current, ids: &rowIDs, session)
+            if let profiles = document.profiles {
+                record.profileOrder = profiles.map(\.id)
+            }
+            for (key, value) in submission.attachment.values {
+                guard key != SettingsStoredDocument.key && key != retentionSettingKey else {
+                    throw SettingsSaveFailure.validation
+                }
+                try Self.writeSetting(key: key, value: value, session)
+            }
+            if let references = submission.attachment.values[SettingsCredentialReference.storageKey] ?? nil {
+                record.credentialReferences = try JSONDecoder().decode(
+                    [String: SettingsCredentialReference].self, from: Data(references.utf8))
+            }
+            record.lastCommit = submission.id
+            record.revision += 1
+            let encoded = try JSONEncoder().encode(record)
+            try Self.writeSetting(
+                key: SettingsStoredDocument.key, value: String(decoding: encoded, as: UTF8.self), session)
+            var receipt = SettingsCommitReceipt(id: submission.id, revision: submission.revision, document: document)
+            receipt.attachment = submission.attachment
+            receipt.rowIDs = rowIDs
+            let receiptData = try JSONEncoder().encode(SettingsDurableReceipt(receipt))
+            try Self.writeSetting(key: receiptKey, value: String(decoding: receiptData, as: UTF8.self), session)
+            return receipt
+        }
     }
 
     private static func requirePreparedSessionCredentials(_ submission: SettingsSubmission) throws {
@@ -843,24 +850,38 @@ final class PersistenceStore: Sendable {
         _ setting: SettingsExternalSetting,
         values: [String: SettingsValue],
         revision: UInt64,
-        legacy: SettingsPreferences
+        legacy: SettingsPreferences,
+        publication: @escaping SettingsExternalPublication = { try $0() }
     ) async throws -> SettingsStorageRead {
         try await owner.withSessionAsync(.foreground) { session in
-            try session.transaction(.write) {
-                let current = try Self.readSettingsSession(session)
-                var record = current.stored ?? SettingsStoredDocument(preferences: legacy)
-                guard revision > (record.savedThrough[setting.rawValue] ?? 0) else { return current }
-                for key in SettingsSession.keys(for: setting) {
-                    record.preferences[key] = values[key]
-                }
-                record.savedThrough[setting.rawValue] = revision
-                record.revision += 1
-                record.lastCommit = nil
-                let encoded = try JSONEncoder().encode(record)
-                try Self.writeSetting(
-                    key: SettingsStoredDocument.key, value: String(decoding: encoded, as: UTF8.self), session)
-                return try Self.readSettingsSession(session)
+            try publication {
+                try Self.commitExternalSettingsTransaction(
+                    setting, values: values, revision: revision, legacy: legacy, session)
             }
+        }
+    }
+
+    private static func commitExternalSettingsTransaction(
+        _ setting: SettingsExternalSetting,
+        values: [String: SettingsValue],
+        revision: UInt64,
+        legacy: SettingsPreferences,
+        _ session: SQLiteSession
+    ) throws -> SettingsStorageRead {
+        try session.transaction(.write) {
+            let current = try Self.readSettingsSession(session)
+            var record = current.stored ?? SettingsStoredDocument(preferences: legacy)
+            guard revision > (record.savedThrough[setting.rawValue] ?? 0) else { return current }
+            for key in SettingsSession.keys(for: setting) {
+                record.preferences[key] = values[key]
+            }
+            record.savedThrough[setting.rawValue] = revision
+            record.revision += 1
+            record.lastCommit = nil
+            let encoded = try JSONEncoder().encode(record)
+            try Self.writeSetting(
+                key: SettingsStoredDocument.key, value: String(decoding: encoded, as: UTF8.self), session)
+            return try Self.readSettingsSession(session)
         }
     }
 
