@@ -33,10 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
             let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
+            CleanupSendGate.shared.publishVocabulary(vocabulary.aiScope)
             return await DictationRuleSnapshot.compile(
                 rules,
                 libraryEntries: vocabulary.entries,
-                cleanupVocabularyEntries: vocabulary.aiEntries)
+                cleanupVocabularyEntries: vocabulary.aiEntries, aiScope: vocabulary.aiScope)
         },
         apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })

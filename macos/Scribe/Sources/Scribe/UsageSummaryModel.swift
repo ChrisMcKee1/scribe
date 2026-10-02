@@ -12,7 +12,8 @@ final class UsageSummaryModel: ObservableObject {
     @Published private(set) var isCleanupEnabled: Bool
 
     private let readCleanupEnabled: @MainActor () -> Bool
-    private let summarize: @Sendable (String) async throws -> String
+    private let summarize: @Sendable (String, CleanupRequestReceipt?) async throws -> String
+    private let captureConsent: @MainActor () throws -> CleanupRequestReceipt?
     /// Where the summary request runs, so Quit can cancel it and wait for any `az` or `foundry` it started.
     private let operations: AuxiliaryOperations
     /// Advances for every attempt and every cancellation, so only the newest attempt's reply is shown.
@@ -22,14 +23,21 @@ final class UsageSummaryModel: ObservableObject {
 
     init(
         readCleanupEnabled: @escaping @MainActor () -> Bool = { CleanupSettingsStore.live.isEnabled },
-        summarize: @escaping @Sendable (String) async throws -> String = { payload in
-            try await UsageSummaryModel.summarizeWithConfiguredProvider(payload)
-        },
+        summarize: (@Sendable (String) async throws -> String)? = nil,
         center: NotificationCenter = .default,
         operations: AuxiliaryOperations = .shared
     ) {
         self.readCleanupEnabled = readCleanupEnabled
-        self.summarize = summarize
+        if let summarize {
+            self.summarize = { payload, _ in try await summarize(payload) }
+            captureConsent = { nil }
+        } else {
+            self.summarize = { payload, receipt in
+                guard let receipt else { throw CleanupHoldback.noAdmission }
+                return try await Self.summarize(payload, consent: receipt)
+            }
+            captureConsent = { try CleanupProviderCache.shared.admitAuxiliary() }
+        }
         self.operations = operations
         isCleanupEnabled = readCleanupEnabled()
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
@@ -45,6 +53,13 @@ final class UsageSummaryModel: ObservableObject {
     /// Sends `payload`, the aggregate built by `UsageInsight.buildSummary`, to the provider AI cleanup uses.
     func generate(payload: String) {
         guard canGenerate else { return }
+        let consent: CleanupRequestReceipt?
+        do {
+            consent = try captureConsent()
+        } catch {
+            errorMessage = CleanupFailureText.forSettings(error, providerName: nil)
+            return
+        }
         request += 1
         let attempt = request
         isGenerating = true
@@ -54,7 +69,7 @@ final class UsageSummaryModel: ObservableObject {
         inFlight = Task { [weak self] in
             let outcome: Result<String, any Error>
             do {
-                outcome = .success(try await operations.run { try await summarize(payload) })
+                outcome = .success(try await operations.run { try await summarize(payload, consent) })
             } catch {
                 outcome = .failure(error)
             }
@@ -107,10 +122,11 @@ final class UsageSummaryModel: ObservableObject {
 
     /// The production request: the provider AI cleanup would use right now, from the shared provider cache, which
     /// throws for an unfinished setup instead of stopping the app.
-    nonisolated static func summarizeWithConfiguredProvider(_ payload: String) async throws -> String {
-        let provider = try CleanupProviderCache.shared.provider()
-        let response = try await provider.clean(
-            CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt))
+    nonisolated static func summarize(
+        _ payload: String, consent: CleanupRequestReceipt
+    ) async throws -> String {
+        let response = try await CleanupProviderCache.shared.complete(
+            CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt), consent: consent)
         return response.cleanedText
     }
 }

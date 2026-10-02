@@ -34,6 +34,7 @@ struct PipelineReport {
 
     var rawText: String?
     var cleanupOutcome = DictationCleanupOutcome.off
+    var cleanupHoldback: CleanupHoldback?
     /// What AI cleanup was sent: the raw transcript with the vocabulary rules applied. Nil when no request was made.
     var sentText: String?
     /// The model's accepted reply, before snippets and the template-like rules.

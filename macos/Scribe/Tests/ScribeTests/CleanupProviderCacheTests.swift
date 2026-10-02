@@ -346,7 +346,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
     /// Test Connection runs one real cleanup of a one-word transcript through the provider dictation uses, so a model
     /// that cannot clean fails here rather than passing a model list.
-    func testTestConnectionRunsOneRealCleanupThroughTheSameProvider() async throws {
+    func testTestConnectionUsesAnIsolatedCandidateWithoutPopulatingTheServingCache() async throws {
         let rig = try makeRig(apiKeys: InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"]))
         configureOpenAICompatible(rig.store)
 
@@ -366,7 +366,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 "<transcript>\nok\n</transcript>",
             ])
         XCTAssertEqual(rig.requests.count, 2)
-        XCTAssertEqual(rig.fixture.apiKeys.reads, 1, "the dictation reused the provider Test Connection built")
+        XCTAssertEqual(rig.fixture.apiKeys.reads, 2, "the candidate must not populate the serving cache")
     }
 
     func testTestConnectionReportsADeploymentThatCannotClean() async throws {

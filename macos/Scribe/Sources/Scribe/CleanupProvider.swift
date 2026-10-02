@@ -405,6 +405,8 @@ enum CleanupFailureText {
         let description: String
         var detail: String?
         switch error {
+        case let error as CleanupHoldback:
+            description = error.errorDescription ?? "AI cleanup was skipped."
         case let error as CleanupProviderError:
             description = error.errorDescription ?? "Cleanup failed."
             if let message = error.settingsDetail {

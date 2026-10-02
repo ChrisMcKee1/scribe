@@ -53,6 +53,9 @@ struct PillOutcome: Equatable, Sendable {
         case .nothingToInsert:
             return nil
         case .accessibility, .pasted, .typed:
+            if cleanupRequested, cleanupOutcome == .heldBack {
+                return PillOutcome(kind: .typedWithoutCleanup, detail: "Settings changed")
+            }
             if cleanupRequested, cleanupOutcome == .fellBack {
                 return PillOutcome(kind: .typedWithoutCleanup, detail: Self.cleanupDidNotRun)
             }

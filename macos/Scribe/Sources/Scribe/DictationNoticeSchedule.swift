@@ -16,8 +16,8 @@ extension OverlayNotice {
         switch self {
         case .stillProcessing:
             return .feedback
-        case .typed, .typedWithoutCleanup, .cleanupFellBack, .transcriptionFailed, .microphoneStoppedEarly,
-            .durationLimitReached:
+        case .typed, .typedWithoutCleanup, .cleanupFellBack, .cleanupHeldBack, .transcriptionFailed,
+            .microphoneStoppedEarly, .durationLimitReached:
             return .informational
         case .microphoneAccessNeeded, .microphoneUnavailable, .recognizerMissing, .textKept, .partlyInserted,
             .mayNotBeInserted, .accessibilityNeeded:

@@ -10,17 +10,28 @@ struct CleanupRecipient: Equatable, Sendable, CustomStringConvertible, CustomRef
     var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
-enum CleanupRequestKind: Sendable {
+enum CleanupRequestKind: Sendable, Equatable {
     case dictation
     case probe
     case auxiliary
 }
 
-enum CleanupHoldback: String, Error, Sendable, Equatable {
+enum CleanupHoldback: String, Error, LocalizedError, Sendable, Equatable {
     case noAdmission
     case vocabularyChanged
     case recipientChanged
     case closed
+
+    var errorDescription: String? {
+        switch self {
+        case .vocabularyChanged:
+            return "Your word pack choices changed before the request was sent, so AI cleanup was skipped."
+        case .recipientChanged:
+            return "Where AI cleanup runs changed before the request was sent, so nothing was sent."
+        case .noAdmission, .closed:
+            return "AI cleanup was skipped because this request is no longer allowed."
+        }
+    }
 }
 
 /// Publication and starting a transport share this gate. The response is always awaited outside it.
@@ -44,6 +55,10 @@ final class CleanupSendGate: Sendable {
         state.withLock { $0.recipient = recipient }
     }
 
+    var currentVocabularyScope: AiVocabularyScope {
+        state.withLock { $0.scope }
+    }
+
     func close() {
         state.withLock { $0.closed = true }
     }
@@ -62,7 +77,8 @@ final class CleanupSendGate: Sendable {
         _ receipt: CleanupRequestReceipt,
         _ start: () throws -> Result
     ) throws -> Result {
-        try state.withLock { current in
+        // The callback runs synchronously on the caller, never escapes or crosses an isolation boundary.
+        try state.withLockUnchecked { current in
             guard !current.closed else { throw CleanupHoldback.closed }
             guard current.scope.covers(receipt.scope) else { throw CleanupHoldback.vocabularyChanged }
             guard current.recipient == receipt.recipient, receipt.isCurrent() else {

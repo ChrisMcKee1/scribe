@@ -68,6 +68,7 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
     case typed
     case typedWithoutCleanup
     case cleanupFellBack
+    case cleanupHeldBack
     case microphoneUnavailable
     case microphoneAccessNeeded
     case microphoneStoppedEarly
@@ -85,6 +86,7 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
         case .typed: return "Typed"
         case .typedWithoutCleanup: return "Typed without AI cleanup"
         case .cleanupFellBack: return "Cleanup failed, raw text used"
+        case .cleanupHeldBack: return "AI cleanup skipped: settings changed"
         case .microphoneUnavailable: return "Microphone unavailable"
         case .microphoneAccessNeeded: return "Microphone access needed"
         case .microphoneStoppedEarly: return "Microphone stopped early"
@@ -101,7 +103,8 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
 
     var isFailure: Bool {
         switch self {
-        case .typed, .typedWithoutCleanup, .durationLimitReached, .stillProcessing, .microphoneStoppedEarly:
+        case .typed, .typedWithoutCleanup, .cleanupHeldBack, .durationLimitReached, .stillProcessing,
+            .microphoneStoppedEarly:
             return false
         case .cleanupFellBack, .microphoneUnavailable, .microphoneAccessNeeded, .recognizerMissing,
             .transcriptionFailed, .textKept, .partlyInserted, .mayNotBeInserted, .accessibilityNeeded:
@@ -115,6 +118,8 @@ enum OverlayNotice: String, CaseIterable, Equatable, Sendable {
             return PillOutcome(kind: .typed, detail: "")
         case .typedWithoutCleanup, .cleanupFellBack:
             return PillOutcome(kind: .typedWithoutCleanup, detail: PillOutcome.cleanupDidNotRun)
+        case .cleanupHeldBack:
+            return PillOutcome(kind: .typedWithoutCleanup, detail: "Settings changed")
         case .textKept:
             return PillOutcome(kind: .nothingTyped, detail: PillOutcome.recoveryStep)
         case .partlyInserted:

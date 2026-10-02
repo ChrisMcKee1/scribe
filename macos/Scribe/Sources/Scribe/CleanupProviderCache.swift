@@ -20,9 +20,10 @@ import os
 final class CleanupProviderCache: Sendable {
     /// The app's cache, over the live settings store, the process environment and the live factory. No test uses it.
     static let shared = CleanupProviderCache(
-        store: .live, environment: ProcessInfo.processInfo.environment, factory: .live)
+        store: .live, environment: ProcessInfo.processInfo.environment, factory: .live, sendGate: .shared)
 
     let store: CleanupSettingsStore
+    let sendGate: CleanupSendGate
     private let environment: [String: String]
     private let factory: CleanupProviderFactory
     private let deadlineForCheck: @Sendable (CleanupProviderKind) -> Duration
@@ -36,6 +37,7 @@ final class CleanupProviderCache: Sendable {
         store: CleanupSettingsStore,
         environment: [String: String],
         factory: CleanupProviderFactory,
+        sendGate: CleanupSendGate = CleanupSendGate(),
         checkDeadline: @escaping @Sendable (CleanupProviderKind) -> Duration = {
             CleanupProviderCache.checkDeadline(for: $0)
         },
@@ -44,6 +46,7 @@ final class CleanupProviderCache: Sendable {
         self.store = store
         self.environment = environment
         self.factory = factory
+        self.sendGate = sendGate
         self.deadlineForCheck = checkDeadline
         self.checkTimer = checkTimer
     }
@@ -57,11 +60,65 @@ final class CleanupProviderCache: Sendable {
         return try entry(for: connection).provider
     }
 
+    /// No credentials or I/O: capture the effective identity at recording/consent admission.
+    func captureRecipient() throws -> CleanupRecipient {
+        let recipient = try effectiveRecipient()
+        sendGate.publishRecipient(recipient)
+        return recipient
+    }
+
+    func effectiveRecipient() throws -> CleanupRecipient {
+        let settings = store.snapshot()
+        return CleanupRecipient(
+            connection: try CleanupProviderResolver.connection(settings: settings, environment: environment),
+            settings: settings)
+    }
+
+    func receipt(
+        for recipient: CleanupRecipient,
+        scope: AiVocabularyScope,
+        kind: CleanupRequestKind
+    ) -> CleanupRequestReceipt {
+        sendGate.receipt(scope: scope, recipient: recipient, kind: kind) { [self] in
+            guard let current = try? effectiveRecipient(), current == recipient else { return false }
+            return kind == .probe || current.settings.isEnabled
+        }
+    }
+
+    func provider(for recipient: CleanupRecipient) throws -> any CleanupProvider {
+        guard try effectiveRecipient() == recipient else { throw CleanupHoldback.recipientChanged }
+        let provider = try entry(for: recipient.connection).provider
+        guard try effectiveRecipient() == recipient else { throw CleanupHoldback.recipientChanged }
+        return AdmittedCleanupProvider(provider: provider)
+    }
+
+    /// Capture before presenting consent or accepting Get summary. Completion never selects another recipient.
+    func admitAuxiliary(scope: AiVocabularyScope = .none) throws -> CleanupRequestReceipt {
+        let recipient = try captureRecipient()
+        return receipt(for: recipient, scope: scope, kind: .auxiliary)
+    }
+
+    func complete(
+        _ request: CleanupRequest, consent: CleanupRequestReceipt
+    ) async throws -> CleanupResponse {
+        try consent.check()
+        let provider = try provider(for: consent.recipient)
+        try Task.checkCancellation()
+        let response = try await provider.clean(
+            CleanupRequest(
+                transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
+                singleLineMode: request.singleLineMode, timeout: request.timeout,
+                maxOutputTokens: request.maxOutputTokens, receipt: consent))
+        try consent.check()
+        return response
+    }
+
     /// Drops the cached provider and credential, and with them any token or secret held in memory, in one step. No
     /// `provider()` that begins after this returns can be handed anything from before it: a build still running
     /// across the call hands its provider to its own caller once and keeps nothing (`CleanupProviderCacheState`).
     func invalidate() {
         state.withLock { $0.invalidate() }
+        sendGate.publishRecipient(try? effectiveRecipient())
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
     }
 
@@ -81,19 +138,24 @@ final class CleanupProviderCache: Sendable {
     /// Scribe's own work has stopped, so a Keychain read already waiting on a prompt is let finish, and then nothing
     /// more is sent. Each request also keeps an idle timeout of the same length.
     func checkConnection() async -> CleanupConnectionCheck {
-        let connection: CleanupConnection
+        await checkConnection(candidate: CleanupCandidate(settings: store.snapshot()))
+    }
+
+    /// Tests the unsaved document and credential intents without saving or replacing the serving cache.
+    func checkConnection(candidate: CleanupCandidate) async -> CleanupConnectionCheck {
+        let recipient: CleanupRecipient
         do {
-            connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+            recipient = try candidate.recipient(environment: environment)
         } catch {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
         }
 
-        let kind = connection.kind
+        let kind = recipient.connection.kind
         let deadline = deadlineForCheck(kind)
         do {
             return try await OperationDeadline.run(within: deadline, sleep: checkTimer) {
-                try await self.check(connection)
+                try await self.check(candidate, recipient: recipient)
             }
         } catch let error as OperationDeadlineError {
             ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))
@@ -141,13 +203,19 @@ final class CleanupProviderCache: Sendable {
     ///   passes, and anything else, a `length` stop included, fails without a third request.
     ///
     /// Every request first checks for cancellation, so a check stopped between two requests sends no second one.
-    static func probe(_ provider: any CleanupProvider, kind: CleanupProviderKind) async throws -> ProbeAnswer {
+    static func probe(
+        _ provider: any CleanupProvider,
+        kind: CleanupProviderKind,
+        receipt: CleanupRequestReceipt? = nil,
+        writingStyle: String = CleanupPrompt.defaultWritingStyle
+    ) async throws -> ProbeAnswer {
         let capped = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),
             writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
+                writingStyle: writingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
             timeout: ChatCompletionsTransport.seconds(checkDeadline(for: kind)),
-            maxOutputTokens: checkOutputCeiling(for: kind))
+            maxOutputTokens: checkOutputCeiling(for: kind),
+            receipt: receipt)
         let uncapped = capped.withoutOutputLimit()
 
         let first: AttemptResult
@@ -202,14 +270,22 @@ final class CleanupProviderCache: Sendable {
 
     /// Everything the deadline covers: building the provider, its Keychain read included, and the probe. Returns the
     /// result, failures included, and throws only a cancellation, so the deadline or the caller says what it meant.
-    private func check(_ connection: CleanupConnection) async throws -> CleanupConnectionCheck {
-        let kind = connection.kind
+    private func check(
+        _ candidate: CleanupCandidate, recipient: CleanupRecipient
+    ) async throws -> CleanupConnectionCheck {
+        let kind = recipient.connection.kind
         // A check cancelled before it began (Cancel pressed at once, Settings closed) builds nothing and reads no
         // Keychain item: the task group still starts its child when the group is already cancelled.
         try Task.checkCancellation()
+        let gate = CleanupSendGate()
+        gate.publishRecipient(recipient)
+        let receipt = gate.receipt(scope: .none, recipient: recipient, kind: .probe)
+        defer { gate.close() }
         let provider: any CleanupProvider
         do {
-            provider = try entry(for: connection).provider
+            provider = AdmittedCleanupProvider(
+                provider: try candidate.makeProvider(
+                    recipient: recipient, store: store, environment: environment, factory: factory))
         } catch {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
@@ -219,7 +295,8 @@ final class CleanupProviderCache: Sendable {
 
         let started = ContinuousClock.now
         do {
-            let answer = try await Self.probe(provider, kind: kind)
+            let answer = try await Self.probe(
+                provider, kind: kind, receipt: receipt, writingStyle: candidate.writingStyle)
             let seconds = ChatCompletionsTransport.seconds(started.duration(to: .now))
             ScribeLog.info(.cleanup, "Test Connection succeeded", .name("provider", kind), .name("answer", answer))
             return CleanupConnectionCheck(

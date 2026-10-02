@@ -99,6 +99,8 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
+        try request.receipt?.check()
+        let promptCaching = request.receipt?.recipient.settings.azurePromptCaching ?? promptCachingEnabled()
         let token: AzureAccessToken
         do {
             token = try await credential.accessToken(scope: Self.inferenceScope)
@@ -115,7 +117,7 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
                     bearerToken: token.token,
                     temperature: nil,
                     reasoningEffort: mode.field,
-                    promptCacheMode: promptCachingEnabled() ? nil : Self.promptCacheExplicitMode,
+                    promptCacheMode: promptCaching ? nil : Self.promptCacheExplicitMode,
                     defaultTimeout: timeout,
                     provider: .microsoftFoundry)
                 return CleanupResponse(
@@ -124,7 +126,7 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
                     providerID: id,
                     modelID: deployment)
             } catch let error as CleanupProviderError {
-                if !promptCachingEnabled(), Self.namesField(Self.promptCacheField, in: error) {
+                if !promptCaching, Self.namesField(Self.promptCacheField, in: error) {
                     throw error
                 }
                 guard let next = Self.retryMode(after: mode, for: error) else {

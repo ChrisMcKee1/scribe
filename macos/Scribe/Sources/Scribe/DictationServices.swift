@@ -51,6 +51,31 @@ protocol DictationCleaning {
 
     /// Drops the cached provider and credential (`CleanupProviderCache.invalidate()`).
     func invalidate()
+
+    func admitRecipient() -> CleanupRecipient?
+    func provider(for recipient: CleanupRecipient) async throws -> any CleanupProvider
+    func receipt(for recipient: CleanupRecipient, scope: AiVocabularyScope) -> CleanupRequestReceipt
+}
+
+extension DictationCleaning {
+    func admitRecipient() -> CleanupRecipient? {
+        let settings = currentSettings()
+        guard let connection = try? CleanupProviderResolver.connection(settings: settings, environment: [:]) else {
+            return nil
+        }
+        return CleanupRecipient(connection: connection, settings: settings)
+    }
+
+    func provider(for recipient: CleanupRecipient) async throws -> any CleanupProvider {
+        try await provider()
+    }
+
+    func receipt(for recipient: CleanupRecipient, scope: AiVocabularyScope) -> CleanupRequestReceipt {
+        let gate = CleanupSendGate()
+        gate.publishRecipient(recipient)
+        gate.publishVocabulary(scope)
+        return gate.receipt(scope: scope, recipient: recipient, kind: .dictation)
+    }
 }
 
 /// Where a dictation is meant to go, captured when its recording starts.
@@ -105,6 +130,8 @@ protocol DictationRuleSource: AnyObject, Sendable {
 
     var appProfiles: [AppProfile] { get }
     var cleanupVocabulary: CleanupVocabulary { get }
+    var aiScope: AiVocabularyScope { get }
+    func admitGeneration() -> any DictationRuleSource
 
     /// With AI cleanup off, and when cleanup fell back: snippets, then the dictionary and the enabled libraries.
     func postProcess(_ text: String) -> TextPostProcessingResult
@@ -116,6 +143,11 @@ protocol DictationRuleSource: AnyObject, Sendable {
     /// With AI cleanup on, after an accepted reply: the snippets and the template-like replacements `pass` held back,
     /// made where the reply kept their words, and no rule matched again (`TextPostProcessor.finishAfterCleanup`).
     func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult
+}
+
+extension DictationRuleSource {
+    var aiScope: AiVocabularyScope { .none }
+    func admitGeneration() -> any DictationRuleSource { self }
 }
 
 /// What the tray and the pill show.
@@ -212,6 +244,21 @@ struct LiveDictationCleanup: DictationCleaning {
     func invalidate() {
         cache.invalidate()
     }
+
+    func admitRecipient() -> CleanupRecipient? {
+        try? cache.captureRecipient()
+    }
+
+    func receipt(for recipient: CleanupRecipient, scope: AiVocabularyScope) -> CleanupRequestReceipt {
+        cache.receipt(for: recipient, scope: scope, kind: .dictation)
+    }
+
+    func provider(for recipient: CleanupRecipient) async throws -> any CleanupProvider {
+        let cache = cache
+        return try await Task.detached(priority: .userInitiated) {
+            try cache.provider(for: recipient)
+        }.value
+    }
 }
 
 /// When a change of the cleanup settings should drop the cached provider and credential at once rather than on the
@@ -247,6 +294,7 @@ struct LiveDictationTargeting: DictationTargeting {
 struct DictationRuleSnapshot: Sendable {
     let rules: TextPostProcessor.CompiledRules
     let cleanupVocabulary: CleanupVocabulary
+    let aiScope: AiVocabularyScope
     let appProfiles: [AppProfile]
     /// For the log: how many rules of each kind went in, and how long compiling took.
     let dictionaryEntryCount: Int
@@ -258,7 +306,8 @@ struct DictationRuleSnapshot: Sendable {
     init(
         _ ruleSet: PersistenceRuleSet,
         libraryEntries: [DictionaryEntry],
-        cleanupVocabularyEntries: [DictionaryEntry]
+        cleanupVocabularyEntries: [DictionaryEntry],
+        aiScope: AiVocabularyScope = .none
     ) {
         let clock = ContinuousClock()
         let started = clock.now
@@ -266,6 +315,7 @@ struct DictationRuleSnapshot: Sendable {
             dictionaryEntries: ruleSet.dictionaryEntries, snippets: ruleSet.snippets, libraryEntries: libraryEntries)
         cleanupVocabulary = CleanupVocabulary(
             glossaryEntries: CleanupPrompt.composeVocabulary(ruleSet.dictionaryEntries, cleanupVocabularyEntries))
+        self.aiScope = aiScope
         appProfiles = ruleSet.appProfiles
         dictionaryEntryCount = ruleSet.dictionaryEntries.count
         libraryEntryCount = libraryEntries.count
@@ -277,13 +327,14 @@ struct DictationRuleSnapshot: Sendable {
     static func compile(
         _ ruleSet: PersistenceRuleSet,
         libraryEntries: [DictionaryEntry],
-        cleanupVocabularyEntries: [DictionaryEntry]
+        cleanupVocabularyEntries: [DictionaryEntry],
+        aiScope: AiVocabularyScope = .none
     ) async -> DictationRuleSnapshot {
         await Task.detached(priority: .userInitiated) {
             DictationRuleSnapshot(
                 ruleSet,
                 libraryEntries: libraryEntries,
-                cleanupVocabularyEntries: cleanupVocabularyEntries)
+                cleanupVocabularyEntries: cleanupVocabularyEntries, aiScope: aiScope)
         }.value
     }
 }
@@ -296,6 +347,9 @@ final class DictationRules: DictationRuleSource {
     private let processor = TextPostProcessor()
     private(set) var cleanupVocabulary = CleanupVocabulary.none
     private(set) var appProfiles: [AppProfile] = []
+    private(set) var aiScope = AiVocabularyScope.none
+    private var snapshot: DictationRuleSnapshot?
+    private var waitingAdmissions: [FrozenDictationRules] = []
 
     init(gate: StartupGate) {
         self.gate = gate
@@ -311,9 +365,23 @@ final class DictationRules: DictationRuleSource {
 
     /// Installs rules compiled off the main actor, in one step.
     func install(_ snapshot: DictationRuleSnapshot) {
+        self.snapshot = snapshot
         processor.install(snapshot.rules)
         cleanupVocabulary = snapshot.cleanupVocabulary
         appProfiles = snapshot.appProfiles
+        aiScope = snapshot.aiScope
+        for admission in waitingAdmissions {
+            admission.installFirst(snapshot)
+        }
+        waitingAdmissions.removeAll()
+    }
+
+    func admitGeneration() -> any DictationRuleSource {
+        let admitted = FrozenDictationRules(snapshot: snapshot, gate: gate)
+        if snapshot == nil, !gate.isOpen {
+            waitingAdmissions.append(admitted)
+        }
+        return admitted
     }
 
     /// Compiles `rules` here and installs them. The app compiles off the main actor instead (`install`).
