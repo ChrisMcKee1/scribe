@@ -32,9 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var ruleRefresher = RuleSetRefresher<DictationRuleSnapshot>(
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
-            let publication = CleanupSendGate.shared.vocabularyRevision
             let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
-            CleanupSendGate.shared.publishReadVocabulary(vocabulary.aiScope, after: publication)
             return await DictationRuleSnapshot.compile(
                 rules,
                 libraryEntries: vocabulary.entries,

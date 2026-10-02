@@ -113,4 +113,23 @@ final class CleanupSendGateTests: XCTestCase {
         XCTAssertTrue(gate.publishReadVocabulary(oldScope, after: newRead))
         XCTAssertEqual(gate.currentVocabularyScope, oldScope)
     }
+
+    func testLegacyWriteAllowsReentrantNotificationButNoSendOrStaleCatalogPublication() throws {
+        let gate = CleanupSendGate()
+        let recipient = try recipient()
+        let scope = AiVocabularyScope(generation: 1, permittedContent: ["pack": "accepted"])
+        gate.publish(vocabulary: scope, recipient: recipient)
+        let admitted = gate.receipt(scope: scope, recipient: recipient, kind: .dictation)
+        var duringWrite: UInt64 = 0
+        gate.changingVocabulary {
+            gate.publishRecipient(recipient)
+            duringWrite = gate.vocabularyRevision
+            XCTAssertFalse(gate.publishReadVocabulary(scope, after: duringWrite))
+            XCTAssertThrowsError(try admitted.check())
+        }
+        XCTAssertFalse(gate.publishReadVocabulary(scope, after: duringWrite))
+        XCTAssertThrowsError(try admitted.check())
+        XCTAssertTrue(gate.publishReadVocabulary(scope, after: gate.vocabularyRevision))
+        XCTAssertNoThrow(try admitted.check())
+    }
 }

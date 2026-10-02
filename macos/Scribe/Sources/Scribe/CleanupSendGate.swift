@@ -49,6 +49,7 @@ final class CleanupSendGate: Sendable {
         var closed = false
         var uncertain = false
         var vocabularyRevision: UInt64 = 0
+        var vocabularyChanges = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -69,7 +70,7 @@ final class CleanupSendGate: Sendable {
     @discardableResult
     func publishReadVocabulary(_ scope: AiVocabularyScope, after revision: UInt64) -> Bool {
         state.withLock { current in
-            guard current.vocabularyRevision == revision else { return false }
+            guard current.vocabularyRevision == revision, current.vocabularyChanges == 0 else { return false }
             current.scope = scope
             current.vocabularyRevision &+= 1
             return true
@@ -78,6 +79,23 @@ final class CleanupSendGate: Sendable {
 
     func publishRecipient(_ recipient: CleanupRecipient?) {
         state.withLock { $0.recipient = recipient }
+    }
+
+    /// Legacy stores can notify observers synchronously. Withdraw first, write without holding the send lock,
+    /// and reject reads made during that write; only a fresh catalog publication can grant permission again.
+    func changingVocabulary<Result>(_ change: () throws -> Result) rethrows -> Result {
+        state.withLock {
+            $0.scope = .none
+            $0.vocabularyChanges += 1
+            $0.vocabularyRevision &+= 1
+        }
+        defer {
+            state.withLock {
+                $0.vocabularyChanges -= 1
+                $0.vocabularyRevision &+= 1
+            }
+        }
+        return try change()
     }
 
     /// Recovery publishes a verified pair; merely capturing a recipient cannot undo an uncertain commit.
@@ -142,6 +160,7 @@ final class CleanupSendGate: Sendable {
         try state.withLockUnchecked { current in
             guard !current.closed else { throw CleanupHoldback.closed }
             guard !current.uncertain else { throw CleanupHoldback.noAdmission }
+            guard current.vocabularyChanges == 0 else { throw CleanupHoldback.vocabularyChanged }
             guard current.scope.covers(receipt.scope) else { throw CleanupHoldback.vocabularyChanged }
             guard current.recipient == receipt.recipient, receipt.isCurrent() else {
                 throw CleanupHoldback.recipientChanged

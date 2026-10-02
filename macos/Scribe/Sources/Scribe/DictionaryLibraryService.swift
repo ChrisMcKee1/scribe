@@ -6,10 +6,20 @@ struct DictionaryLibrarySettings: @unchecked Sendable {
     static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
 
     let defaults: UserDefaults
+    var sendGate: CleanupSendGate? = nil
 
     var enabledLibraryIds: Set<String> {
         get { Set(defaults.stringArray(forKey: Self.enabledIdsKey) ?? []) }
-        nonmutating set { defaults.set(Array(newValue), forKey: Self.enabledIdsKey) }
+        nonmutating set {
+            changingVocabulary { defaults.set(Array(newValue), forKey: Self.enabledIdsKey) }
+        }
+    }
+
+    func changingVocabulary<Result>(_ change: () throws -> Result) rethrows -> Result {
+        if let sendGate {
+            return try sendGate.changingVocabulary(change)
+        }
+        return try change()
     }
 
     func setEnabled(_ enabled: Bool, id: String) {
@@ -25,7 +35,7 @@ struct DictionaryLibrarySettings: @unchecked Sendable {
 
 enum DictionaryLibrarySettingsStore {
     static var standard: DictionaryLibrarySettings {
-        DictionaryLibrarySettings(defaults: .standard)
+        DictionaryLibrarySettings(defaults: .standard, sendGate: .shared)
     }
 
     static var enabledLibraryIds: Set<String> {
@@ -106,6 +116,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
 
     @discardableResult
     func `import`(data: Data, suggestedName: String?) throws -> DictionaryLibrary {
+        defer { republishVocabulary() }
+        return try settings.changingVocabulary {
+            try importFile(data: data, suggestedName: suggestedName)
+        }
+    }
+
+    private func importFile(data: Data, suggestedName: String?) throws -> DictionaryLibrary {
         let file = DictionaryLibraryCsv.parseImport(data)
         if !file.errors.isEmpty {
             throw DictionaryLibraryServiceError.invalidCsv(
@@ -146,6 +163,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     func remove(id: String) throws {
+        defer { republishVocabulary() }
+        try settings.changingVocabulary {
+            try removeFile(id: id)
+        }
+    }
+
+    private func removeFile(id: String) throws {
         guard !id.isEmpty else { return }
 
         if BuiltInDictionaryLibraries.all.contains(where: { $0.id.caseInsensitiveCompare(id) == .orderedSame }) {
@@ -173,6 +197,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     func loadVocabulary() async throws -> LibraryVocabulary {
+        let publication = settings.sendGate?.vocabularyRevision
         let catalog = try await loadCatalog()
         let composition = compose(catalog: catalog)
         let permitted = catalog.libraries.reduce(into: [String: String?]()) { result, library in
@@ -184,11 +209,28 @@ final class DictionaryLibraryService: @unchecked Sendable {
             }
             result[library.id.lowercased()] = .some(library.contentHash?.value)
         }
-        return LibraryVocabulary(
+        let vocabulary = LibraryVocabulary(
             generation: catalog.generation,
             entries: composition.entries,
             aiEntries: composition.aiEntries,
             aiScope: AiVocabularyScope(generation: catalog.generation, permittedContent: permitted))
+        if let publication {
+            settings.sendGate?.publishReadVocabulary(vocabulary.aiScope, after: publication)
+        }
+        return vocabulary
+    }
+
+    private func republishVocabulary() {
+        guard let gate = settings.sendGate else { return }
+        let publication = gate.vocabularyRevision
+        Task {
+            do {
+                _ = try await loadVocabulary()
+            } catch {
+                gate.publishReadVocabulary(.none, after: publication)
+                ScribeLog.warning(.settings, "Could not republish library permissions", .failure(error))
+            }
+        }
     }
 
     private func loadCatalogLibraries() -> [CatalogLibrary] {
