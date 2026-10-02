@@ -65,6 +65,9 @@ $targets = @(switch ($Architecture) {
 $propsPath = Join-Path $repoRoot 'Directory.Build.props'
 [xml]$props = Get-Content $propsPath
 $sourceVersion = [string]$props.Project.PropertyGroup.VersionPrefix
+if (-not [string]::IsNullOrWhiteSpace([string]$props.Project.PropertyGroup.VersionSuffix)) {
+    throw "Directory.Build.props sets a VersionSuffix, so this is a test build. Test builds are never packaged for the Microsoft Store."
+}
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $sourceVersion }
 if ($Version -ne $sourceVersion) {
     throw "Requested version $Version does not match Directory.Build.props version $sourceVersion."

@@ -72,11 +72,20 @@ $targets = @(switch ($Architecture) {
 
 $propsPath = Join-Path $repoRoot 'Directory.Build.props'
 [xml]$props = Get-Content $propsPath
-$sourceVersion = [string]$props.Project.PropertyGroup.VersionPrefix
-if ([string]::IsNullOrWhiteSpace($sourceVersion)) { throw "VersionPrefix missing from $propsPath" }
+$sourcePrefix = [string]$props.Project.PropertyGroup.VersionPrefix
+if ([string]::IsNullOrWhiteSpace($sourcePrefix)) { throw "VersionPrefix missing from $propsPath" }
+$sourceSuffix = [string]$props.Project.PropertyGroup.VersionSuffix
+$isTestBuild = -not [string]::IsNullOrWhiteSpace($sourceSuffix)
+$sourceVersion = if ($isTestBuild) { "$sourcePrefix-$sourceSuffix" } else { $sourcePrefix }
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $sourceVersion }
 if ($Version -ne $sourceVersion) {
     throw "Requested version $Version does not match Directory.Build.props version $sourceVersion. Update VersionPrefix first."
+}
+
+# A build with a VersionSuffix is a test build for one machine. Publishing would tag it v<version>, and a v* tag is what starts
+# the Release workflow and, after it, the Microsoft Store submission.
+if ($isTestBuild -and $Publish) {
+    throw "Version $Version is a test build (VersionSuffix is set). It is never published through pack.ps1: hand the installer over directly, or attach it to a prerelease whose tag does not start with 'v'."
 }
 
 # Branding for the installer and the Add/Remove Programs entry, read from the same single source of

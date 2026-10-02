@@ -3,7 +3,12 @@
        lives here so a single edit (or a CI override of VersionPrefix/VersionSuffix) stamps the app,
        the Velopack release, and the assembly/file/informational versions consistently. -->
   <PropertyGroup>
-    <VersionPrefix>0.5.3</VersionPrefix>
+    <VersionPrefix>0.5.4</VersionPrefix>
+    <!-- A VersionSuffix here marks a test build for one machine: 0.5.4-ollama.1 sorts above the released 0.5.3, so an
+         install updates to it, and below the real 0.5.4, which then supersedes it. build/pack.ps1 will not publish it,
+         and release.yml, store.yml and build/pack-msix.ps1 refuse it, so it can never reach the Microsoft Store. Remove the
+         suffix when this fix ships as a real release. -->
+    <VersionSuffix>ollama.1</VersionSuffix>
     <!-- CI can pass -p:VersionSuffix=rc.1 to produce 0.1.0-rc.1 without touching this file. -->
     <Version>$(VersionPrefix)</Version>
     <Version Condition="'$(VersionSuffix)' != ''">$(VersionPrefix)-$(VersionSuffix)</Version>

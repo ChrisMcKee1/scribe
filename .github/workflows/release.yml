@@ -41,6 +41,9 @@ jobs:
         run: |
           $props = [xml](Get-Content Directory.Build.props)
           $version = [string]$props.Project.PropertyGroup.VersionPrefix
+          if (-not [string]::IsNullOrWhiteSpace([string]$props.Project.PropertyGroup.VersionSuffix)) {
+              throw 'Directory.Build.props sets a VersionSuffix, so this is a test build. Test builds are never released or sent to the Microsoft Store.'
+          }
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
               throw "Tag $env:GITHUB_REF_NAME does not match source version v$version."
           }

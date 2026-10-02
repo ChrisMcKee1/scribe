@@ -200,7 +200,9 @@ public partial class SettingsWindow
 
         _localAppState = state;
         _log.LogInformation(
-            "Settings read {App}: {Reach}, {Models} model(s), {Loaded} loaded.", app, state.Reach, state.Models.Count, state.Loaded.Count);
+            "Settings read {App}: {Reach}, {Models} model(s), {Loaded} loaded{Detail}.",
+            app, state.Reach, state.Models.Count, state.Loaded.Count,
+            state.FailureDetail is { } detail ? $" ({detail})" : string.Empty);
         if (state.Reach == LocalServerReach.Reached)
         {
             SetLocalAppModelItems(app, state.Models, SelectedLocalAppModel);

@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace Scribe.Core.Cleanup;
@@ -58,6 +60,12 @@ public sealed record LocalServerState(
     IReadOnlyList<LocalServerModel> Models,
     IReadOnlyList<LocalServerLoadedModel> Loaded)
 {
+    /// <summary>
+    /// Why a <see cref="LocalServerReach.Failed"/> read failed, as <see cref="Diagnostics.FailureShape"/> text (exception
+    /// types and codes, never a message), for the log; null otherwise.
+    /// </summary>
+    public string? FailureDetail { get; init; }
+
     public static LocalServerState NotRunning { get; } = new(LocalServerReach.NotRunning, [], []);
 
     public static LocalServerState Failed { get; } = new(LocalServerReach.Failed, [], []);
@@ -136,6 +144,12 @@ public interface ILocalServerClient
 public sealed class LocalServerClient : ILocalServerClient, IDisposable
 {
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(4);
+
+    // The list of models is the answer Settings and every recording need, so it gets longer than a single figure does: an
+    // app busy loading a large model, or keeping many of them, can take seconds to list them. The loaded-model read only
+    // adds what is in memory, so it never costs the list.
+    private static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan LoadedTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan UnloadTimeout = TimeSpan.FromSeconds(15);
 
     // A model load reads gigabytes from disk: 5 to 7 s for Gemma 4 E2B on this machine, longer for a larger model or a slow
@@ -158,8 +172,98 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
     // No proxy, and no redirects: every request goes to the app's own address on this PC and nowhere else. A redirect
     // would carry the saved key, as a bearer token, to wherever the answer pointed (the chat requests' transport refuses
     // redirects for the same reason, see VocabularyHandOff).
+    //
+    // "localhost" names both loopback addresses and an app listens on only one of them (Ollama started with
+    // OLLAMA_HOST=localhost can end up on [::1] alone, the default is 127.0.0.1 alone). Windows takes about 2 s to refuse a
+    // connection to a closed loopback port, so trying the addresses one after the other spent the whole connect limit on
+    // the wrong one and never reached the app, while curl, which tries them together, did. The connect callback tries
+    // them all at once and takes the first that answers. ConnectTimeout only has to outlast it.
     internal static SocketsHttpHandler CreateHandler() =>
-        new() { UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromSeconds(2) };
+        new()
+        {
+            UseProxy = false,
+            AllowAutoRedirect = false,
+            ConnectTimeout = TimeSpan.FromSeconds(6),
+            ConnectCallback = ConnectToAnyAddressAsync,
+        };
+
+    internal static readonly TimeSpan ConnectBound = TimeSpan.FromSeconds(4);
+
+    private static async ValueTask<Stream> ConnectToAnyAddressAsync(
+        SocketsHttpConnectionContext context, CancellationToken cancellationToken)
+    {
+        var endpoint = context.DnsEndPoint;
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bound.CancelAfter(ConnectBound);
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(endpoint.Host, bound.Token).ConfigureAwait(false);
+            return await ConnectToFirstAsync(addresses, endpoint.Port, bound.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new HttpRequestException(
+                HttpRequestError.ConnectionError, "The app did not accept the connection in time.", new TimeoutException());
+        }
+        catch (Exception ex) when (ex is SocketException)
+        {
+            throw new HttpRequestException(HttpRequestError.ConnectionError, "The app refused the connection.", ex);
+        }
+    }
+
+    // Starts a connection to every address together and returns the first that is made; the others are cancelled, and one
+    // that finished in the same instant is closed.
+    internal static async Task<Stream> ConnectToFirstAsync(IReadOnlyList<IPAddress> addresses, int port, CancellationToken ct)
+    {
+        if (addresses.Count == 0)
+        {
+            throw new SocketException((int)SocketError.HostNotFound);
+        }
+
+        using var winner = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var pending = addresses.Select(address => ConnectOneAsync(address, port, winner.Token)).ToList();
+        Exception? last = null;
+        while (pending.Count > 0)
+        {
+            var finished = await Task.WhenAny(pending).ConfigureAwait(false);
+            pending.Remove(finished);
+            try
+            {
+                var socket = await finished.ConfigureAwait(false);
+                await winner.CancelAsync().ConfigureAwait(false);
+                foreach (var other in pending)
+                {
+                    _ = other.ContinueWith(
+                        static task => { if (task.IsCompletedSuccessfully) { task.Result.Dispose(); } },
+                        TaskScheduler.Default);
+                }
+
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                last = ex;
+            }
+        }
+
+        ct.ThrowIfCancellationRequested();
+        throw last!;
+    }
+
+    private static async Task<Socket> ConnectOneAsync(IPAddress address, int port, CancellationToken ct)
+    {
+        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(address, port), ct).ConfigureAwait(false);
+            return socket;
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
 
     public void Dispose() => _http.Dispose();
 
@@ -171,14 +275,12 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             return LocalServerState.Failed;
         }
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(ReadTimeout);
         try
         {
             return root.App switch
             {
-                LocalServerApp.Ollama => await ReadOllamaAsync(root.Uri, apiKey, timeout.Token).ConfigureAwait(false),
-                _ => await ReadLmStudioAsync(root.Uri, apiKey, timeout.Token).ConfigureAwait(false),
+                LocalServerApp.Ollama => await ReadOllamaAsync(root.Uri, apiKey, cancellationToken).ConfigureAwait(false),
+                _ => await ReadLmStudioAsync(root.Uri, apiKey, cancellationToken).ConfigureAwait(false),
             };
         }
         catch (HttpRequestException ex) when (ex.HttpRequestError == HttpRequestError.ConnectionError)
@@ -189,11 +291,19 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
         {
             return LocalServerState.Failed;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Not the app we expected, an answer we could not read, or no answer in time.
-            return LocalServerState.Failed;
+            return LocalServerState.Failed with { FailureDetail = Diagnostics.FailureShape.Describe(ex) };
         }
+    }
+
+    // A request's own time limit, so a slow one does not use up the time of the next.
+    private static CancellationTokenSource Bounded(TimeSpan limit, CancellationToken cancellationToken)
+    {
+        var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        source.CancelAfter(limit);
+        return source;
     }
 
     public async Task<bool> UnloadAsync(
@@ -391,8 +501,9 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
     private async Task<LocalServerState> ReadOllamaAsync(Uri root, string? apiKey, CancellationToken ct)
     {
         var models = new List<LocalServerModel>();
+        using (var tagsTimeout = Bounded(ListTimeout, ct))
         using (var tagsRequest = Request(HttpMethod.Get, new Uri(root, "/api/tags"), apiKey))
-        using (var tags = await _http.SendAsync(tagsRequest, ct).ConfigureAwait(false))
+        using (var tags = await _http.SendAsync(tagsRequest, tagsTimeout.Token).ConfigureAwait(false))
         {
             if (Refused(tags))
             {
@@ -401,10 +512,10 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
 
             if (!tags.IsSuccessStatusCode)
             {
-                return LocalServerState.Failed;
+                return LocalServerState.Failed with { FailureDetail = $"HTTP {(int)tags.StatusCode} from the model list" };
             }
 
-            using var document = await ReadJsonAsync(tags, ct).ConfigureAwait(false);
+            using var document = await ReadJsonAsync(tags, tagsTimeout.Token).ConfigureAwait(false);
             foreach (var model in Array(document.RootElement, "models"))
             {
                 if (Text(model, "name") is not { } name || !CanChat(model))
@@ -416,13 +527,17 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             }
         }
 
+        // What is in memory only decorates the list: an app that is busy loading a model can be slow to say, and that must
+        // not hide the models it just listed.
         var loaded = new List<LocalServerLoadedModel>();
-        using (var psRequest = Request(HttpMethod.Get, new Uri(root, "/api/ps"), apiKey))
-        using (var ps = await _http.SendAsync(psRequest, ct).ConfigureAwait(false))
+        try
         {
+            using var psTimeout = Bounded(LoadedTimeout, ct);
+            using var psRequest = Request(HttpMethod.Get, new Uri(root, "/api/ps"), apiKey);
+            using var ps = await _http.SendAsync(psRequest, psTimeout.Token).ConfigureAwait(false);
             if (ps.IsSuccessStatusCode)
             {
-                using var document = await ReadJsonAsync(ps, ct).ConfigureAwait(false);
+                using var document = await ReadJsonAsync(ps, psTimeout.Token).ConfigureAwait(false);
                 foreach (var model in Array(document.RootElement, "models"))
                 {
                     if ((Text(model, "name") ?? Text(model, "model")) is { } name)
@@ -435,14 +550,19 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
                 }
             }
         }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            loaded.Clear();
+        }
 
         return new LocalServerState(LocalServerReach.Reached, Sorted(models), loaded);
     }
 
     private async Task<LocalServerState> ReadLmStudioAsync(Uri root, string? apiKey, CancellationToken ct)
     {
+        using var timeout = Bounded(ListTimeout, ct);
         using var request = Request(HttpMethod.Get, new Uri(root, "/api/v1/models"), apiKey);
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await _http.SendAsync(request, timeout.Token).ConfigureAwait(false);
         if (Refused(response))
         {
             return LocalServerState.NeedsKey;
@@ -450,10 +570,10 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
 
         if (!response.IsSuccessStatusCode)
         {
-            return LocalServerState.Failed;
+            return LocalServerState.Failed with { FailureDetail = $"HTTP {(int)response.StatusCode} from the model list" };
         }
 
-        using var document = await ReadJsonAsync(response, ct).ConfigureAwait(false);
+        using var document = await ReadJsonAsync(response, timeout.Token).ConfigureAwait(false);
         var models = new List<LocalServerModel>();
         var loaded = new List<LocalServerLoadedModel>();
         foreach (var model in Array(document.RootElement, "models"))

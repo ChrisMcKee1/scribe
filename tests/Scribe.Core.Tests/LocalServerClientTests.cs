@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text.Json;
 using Scribe.Core.Cleanup;
 
@@ -93,6 +94,49 @@ public sealed class LocalServerClientTests
         Assert.Equal(1706000000, state.LoadedFor("gemma4:e2b")!.MemoryBytes);
         Assert.Null(state.LoadedFor("qwen3:4b-instruct"));
         Assert.Equal(["GET /api/tags", "GET /api/ps"], requests);
+    }
+
+    [Theory]
+    [InlineData("throws")]
+    [InlineData("garbage")]
+    [InlineData("error")]
+    public async Task A_loaded_model_read_that_fails_never_hides_the_models_Ollama_listed(string failure)
+    {
+        using var client = new LocalServerClient(new ScriptedHttpHandler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/api/ps")
+            {
+                return Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                    {"models":[{"name":"gemma4:12b","size":8000000000},{"name":"granite4:3b","size":2000000000}]}
+                    """));
+            }
+
+            return failure switch
+            {
+                "throws" => throw new HttpRequestException("The response ended prematurely."),
+                "garbage" => Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.OK, "not json")),
+                _ => Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.InternalServerError, "{}")),
+            };
+        }));
+
+        var state = await client.ReadAsync("http://localhost:11434/v1");
+
+        Assert.Equal(LocalServerReach.Reached, state.Reach);
+        Assert.Equal(["gemma4:12b", "granite4:3b"], state.Models.Select(model => model.Id));
+        Assert.Empty(state.Loaded);
+    }
+
+    [Fact]
+    public async Task A_failed_read_says_what_failed_without_quoting_the_answer()
+    {
+        using var client = new LocalServerClient(new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.OK, "private words, not json"))));
+
+        var state = await client.ReadAsync("http://localhost:11434/v1");
+
+        Assert.Equal(LocalServerReach.Failed, state.Reach);
+        Assert.False(string.IsNullOrWhiteSpace(state.FailureDetail));
+        Assert.DoesNotContain("private", state.FailureDetail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -250,6 +294,53 @@ public sealed class LocalServerClientTests
         Assert.Equal(["google/gemma-4-e2b"], state.Models.Select(model => model.Id));
         Assert.Equal(3000000000, state.LoadedFor("my-cleanup-model")!.MemoryBytes);
         Assert.NotNull(state.LoadedFor("google/gemma-4-e2b"));
+    }
+
+    // A redirect would carry the key saved for the address, as a bearer token, to wherever the answer pointed.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_app_listening_on_only_one_loopback_address_is_reached_through_localhost(bool ipv6)
+    {
+        var address = ipv6 ? IPAddress.IPv6Loopback : IPAddress.Loopback;
+        if (ipv6 && !Socket.OSSupportsIPv6)
+        {
+            return;
+        }
+
+        using var listener = new TcpListener(address, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serving = Task.Run(async () =>
+        {
+            using var accepted = await listener.AcceptTcpClientAsync();
+            var stream = accepted.GetStream();
+            var buffer = new byte[4096];
+            _ = await stream.ReadAsync(buffer);
+            await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"u8.ToArray());
+        });
+
+        using var http = new HttpClient(LocalServerClient.CreateHandler());
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(1.5));
+
+        // Windows takes about 2 s to refuse a connection to the closed loopback port of the other family, so reaching the
+        // app inside 1.5 s means both were tried together, whichever order "localhost" names them in.
+        Assert.Equal("ok", await http.GetStringAsync($"http://localhost:{port}/", cancel.Token));
+        await serving;
+    }
+
+    [Fact]
+    public async Task An_app_that_listens_nowhere_is_refused_by_every_address_and_reads_as_not_running()
+    {
+        using var probe = new TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+
+        using var http = new HttpClient(LocalServerClient.CreateHandler());
+        var failure = await Assert.ThrowsAsync<HttpRequestException>(() => http.GetStringAsync($"http://localhost:{port}/"));
+
+        Assert.Equal(HttpRequestError.ConnectionError, failure.HttpRequestError);
     }
 
     // A redirect would carry the key saved for the address, as a bearer token, to wherever the answer pointed.

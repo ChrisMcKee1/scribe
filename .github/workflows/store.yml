@@ -72,6 +72,9 @@ jobs:
           $props = [xml](Get-Content Directory.Build.props)
           $version = [string]$props.Project.PropertyGroup.VersionPrefix
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Could not read VersionPrefix.' }
+          if (-not [string]::IsNullOrWhiteSpace([string]$props.Project.PropertyGroup.VersionSuffix)) {
+              throw 'Directory.Build.props sets a VersionSuffix, so this is a test build. Test builds are never submitted to the Microsoft Store.'
+          }
           if ($env:INPUT_TAG -and $env:INPUT_TAG -ne "v$version") {
               throw "Tag $env:INPUT_TAG does not match source version v$version."
           }

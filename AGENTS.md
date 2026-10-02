@@ -2822,6 +2822,12 @@ store, GitHub signing secrets, or a publisher trust bundle.
   switches read-only until the Word packs page replaced it. It must remain absent from release heads (`git grep
   LegacyLibraryPageContainment -- src tests` returns no matches), and word pack switches are saved only through the
   library payload, never by a settings-only write of `EnabledDictionaryLibraryIds`.
+- **A `VersionSuffix` in `Directory.Build.props` marks a test build and keeps it off the Microsoft Store.** `0.5.4-ollama.1`
+  sorts above the released 0.5.3 (so an install updates to it) and below the real 0.5.4 (which supersedes it).
+  `pack.ps1` refuses `-Publish` for it, and `release.yml`, `store.yml` and `pack-msix.ps1` throw while a suffix is set, so even
+  a stray `v*` tag cannot reach the Store. Hand the Setup.exe over as an asset of a prerelease whose tag does not start with
+  `v` (a `v*` tag starts the Release workflow, then the Store hand-off); the app's update feed ignores prereleases. Remove the
+  suffix when the fix ships as a real release.
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
 - Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
