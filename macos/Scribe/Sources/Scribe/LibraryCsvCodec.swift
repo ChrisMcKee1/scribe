@@ -451,11 +451,11 @@ struct LibraryCsvCodec: Sendable {
         let replacement = encoding == .utf8 ? String(decoding: data, as: UTF8.self) : ""
         return (
             replacement,
-            LibraryTextEncoding(
+            makeEncoding(
                 codePage: codePage,
                 byteOrderMark: byteOrderMark,
-                ansiFallback: false,
-                invalidBytesReplaced: true))
+                invalidBytesReplaced: true)
+        )
     }
 
     private func decodeImport(_ data: Data) -> (text: String, encoding: LibraryTextEncoding) {
@@ -464,12 +464,15 @@ struct LibraryCsvCodec: Sendable {
             return managed
         }
 
-        let text = String(data: data, encoding: .windowsCP1252)
-            ?? String(decoding: data, as: UTF8.self)
+        let text = decodeWindows1252(data)
         return (
             text,
             makeEncoding(codePage: ansiCodePage, ansiFallback: true)
         )
+    }
+
+    private func decodeWindows1252(_ data: Data) -> String {
+        String(data: data, encoding: .windowsCP1252) ?? String(decoding: data, as: UTF8.self)
     }
 
     private func decodeDeclaredEncoding(_ prefix: [UInt8]) -> LibraryTextEncoding? {
