@@ -131,7 +131,8 @@ private struct GoldenFixture {
             north star,North Star,true,true
             contoso,Contoso Ltd,true,true
             pipeline,Pipelines,true,true
-            """),
+            """
+        ),
 
         (
             "team-terms-2.csv",
@@ -142,7 +143,8 @@ private struct GoldenFixture {
             kube,K8s,true,true
             north star,NorthStar,true,true
             pipeline,Pipeline,true,false
-            """),
+            """
+        ),
 
         (
             "alpha.csv",
@@ -151,7 +153,8 @@ private struct GoldenFixture {
             pattern,replacement
             contoso,CONTOSO
             fabrikam,Fabrikam
-            """),
+            """
+        ),
 
         (
             "Zulu Notes.csv",
@@ -160,7 +163,8 @@ private struct GoldenFixture {
             pattern,replacement
             fabrikam,FabriKam
             tailspin,Tailspin Toys
-            """),
+            """
+        ),
 
         (
             "release-10.csv",
@@ -169,7 +173,8 @@ private struct GoldenFixture {
             pattern,replacement
             sprint,Sprint 10
             retro,Retro
-            """),
+            """
+        ),
 
         (
             "release-9.csv",
@@ -179,7 +184,8 @@ private struct GoldenFixture {
             sprint,Sprint 9
             standup,Stand-up
             gpt five six terra,GPT 5.6 Terra
-            """),
+            """
+        ),
 
     ]
 
@@ -206,10 +212,13 @@ private struct GoldenFixture {
             [
                 "release-9", "Zulu Notes", "github", "team-terms-2", "ai-terminology", "alpha",
                 "release-10", "team-terms", "ai-model-names",
-            ]),
+            ]
+        ),
+
         (
             "custom only",
-            ["release-9", "Zulu Notes", "team-terms-2", "alpha", "release-10", "team-terms"]),
+            ["release-9", "Zulu Notes", "team-terms-2", "alpha", "release-10", "team-terms"]
+        ),
 
         ("default install", ["ai-model-names", "ai-terminology"]),
 
@@ -218,8 +227,9 @@ private struct GoldenFixture {
             Array(
                 customFiles
                     .map { URL(fileURLWithPath: $0.0).deletingPathExtension().lastPathComponent }
-                    .reversed())
-                + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())),
+                    .reversed()
+            ) + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())
+        ),
     ]
 
     static let fixtureKeys: Set<String> = Set(
@@ -257,24 +267,24 @@ private enum GoldenSections {
                 .appendingPathComponent("composition-golden.txt", isDirectory: false),
             encoding: .utf8)
         var sections: [String: [String]] = [:]
-        var current: String?
+        var currentSection: String?
         var lines: [String] = []
 
         for rawLine in text.components(separatedBy: .newlines) {
             if rawLine.hasPrefix("[") && rawLine.hasSuffix("]") {
-                if let current {
-                    sections[current] = lines
+                if let currentSection {
+                    sections[currentSection] = lines
                 }
-                current = String(rawLine.dropFirst().dropLast())
+                currentSection = String(rawLine.dropFirst().dropLast())
                 lines = []
                 continue
             }
-            guard let current else {
+            guard let currentSection else {
                 continue
             }
             if rawLine.isEmpty {
-                sections[current] = lines
-                current = nil
+                sections[currentSection] = lines
+                currentSection = nil
                 lines = []
                 continue
             }
@@ -283,8 +293,8 @@ private enum GoldenSections {
             }
             lines.append(rawLine)
         }
-        if let current {
-            sections[current] = lines
+        if let currentSection {
+            sections[currentSection] = lines
         }
         return sections
     }
