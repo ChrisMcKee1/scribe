@@ -505,14 +505,48 @@ struct DictionaryWordPacksSettingsTab: View {
     let dictionaryLibraryService: DictionaryLibraryService
     let onChanged: @MainActor () -> Void
 
-    @State private var wordPacks: [DictionaryLibrary] = []
-    @State private var enabledIds: Set<String> = []
+    @State private var workspace = LibraryWorkspace(libraries: [])
+    @State private var selectedID: String?
+    @State private var searchText = ""
+    @State private var sortOrder: LibraryTermSortOrder = .savedOrder
     @State private var errorMessage: String?
     @State private var statusMessage: String?
     @State private var showingImporter = false
+    @State private var editor: WordPackTermEditorState?
+    @State private var renameText = ""
 
     private var enabledCount: Int {
-        wordPacks.count { enabledIds.contains($0.id) }
+        visiblePacks.count { $0.enabled && !$0.pendingDelete }
+    }
+
+    private var visiblePacks: [DraftLibrary] {
+        LibraryOrdering().sort(workspace.draft.libraries.filter { !$0.pendingDelete }.map { library in
+            DictionaryLibrary(
+                id: library.id,
+                name: library.name,
+                category: library.category,
+                description: library.description,
+                builtIn: library.builtIn,
+                entries: library.rows.map { $0.row.values.dictionaryEntry },
+                fileName: library.builtIn ? nil : "\(library.id).csv",
+                basedOn: library.basedOn)
+        }).compactMap { ordered in
+            workspace.draft.libraries.first { $0.id.caseInsensitiveCompare(ordered.id) == .orderedSame }
+        }
+    }
+
+    private var selectedPack: DraftLibrary? {
+        let selected = selectedID.flatMap(workspace.draft.find)
+        return selected?.pendingDelete == false ? selected : visiblePacks.first
+    }
+
+    private var filteredRows: [DraftTermRow] {
+        guard let selectedPack else { return [] }
+        let search = LibrarySearch.forCurrentLocale()
+        let rows = searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? selectedPack.rows
+            : selectedPack.rows.filter { search.matches($0.row.values, query: searchText) }
+        return LibraryTermSort.forCurrentLocale().sort(rows, by: sortOrder)
     }
 
     var body: some View {
@@ -527,7 +561,8 @@ struct DictionaryWordPacksSettingsTab: View {
                     .cardDescription()
                 }
                 Spacer()
-                Button("Import word pack CSV...") { showingImporter = true }
+                Button("Import CSV...") { showingImporter = true }
+                Button("New word pack") { createWordPack() }
             }
 
             if let errorMessage {
@@ -537,68 +572,251 @@ struct DictionaryWordPacksSettingsTab: View {
                 Text(statusMessage).foregroundStyle(.secondary).font(.caption)
             }
 
-            List {
-                ForEach(wordPacks, id: \.id) { pack in
-                    HStack(alignment: .center, spacing: 12) {
-                        Toggle("", isOn: binding(for: pack.id))
-                            .labelsHidden()
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(pack.name)
-                                .font(.body.weight(.medium))
-                            HStack(spacing: 6) {
-                                Text(pack.builtIn ? "Built-in" : "Your word pack")
-                                Text("\(pack.enabledEntryCount.formatted()) terms")
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            if let description = pack.description, !description.isEmpty {
-                                Text(description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                        }
-                        Spacer()
-                        if !pack.builtIn {
-                            Button(role: .destructive) {
-                                removeWordPack(pack)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Remove \(pack.name)")
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
+            HStack(alignment: .top, spacing: 14) {
+                wordPackList
+                    .frame(minWidth: 280, idealWidth: 280, maxWidth: 280, minHeight: 420)
+                Divider()
+                selectedEditor
+                    .frame(minHeight: 420)
             }
-            .frame(minHeight: 320)
 
-            Text(
-                SettingsDictionaryPageLogic.enabledSummary(
-                    enabled: enabledCount, total: wordPacks.count, noun: "word pack")
-            )
-            .cardDescription()
+            HStack {
+                Text(
+                    SettingsDictionaryPageLogic.enabledSummary(
+                        enabled: enabledCount, total: visiblePacks.count, noun: "word pack")
+                )
+                .cardDescription()
+                Spacer()
+                Button("Undo") { workspace.undo() }
+                    .disabled(!workspace.canUndo)
+                    .keyboardShortcut("z", modifiers: [.command])
+                Button("Redo") { workspace.redo() }
+                    .disabled(!workspace.canRedo)
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                Button("Discard") { discard() }
+                    .disabled(!workspace.hasUnsavedChanges)
+                Button("Save") { save() }
+                    .disabled(!workspace.hasUnsavedChanges)
+                    .keyboardShortcut("s", modifiers: [.command])
+            }
         }
         .onAppear(perform: reload)
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
             importWordPack(result)
         }
+        .sheet(item: $editor) { state in
+            WordPackTermEditorView(state: state) { values in
+                applyTermEdit(state: state, values: values)
+            }
+        }
     }
 
-    private func binding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { enabledIds.contains(id) },
-            set: { isOn in
-                dictionaryLibraryService.settings.setEnabled(isOn, id: id)
-                enabledIds = dictionaryLibraryService.settings.enabledLibraryIds
-                onChanged()
-            })
+    private var wordPackList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("A to Z").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            List(selection: Binding(get: { selectedID }, set: { selectedID = $0 })) {
+                ForEach(visiblePacks, id: \.id) { pack in
+                    HStack(alignment: .top, spacing: 8) {
+                        Toggle("", isOn: Binding(
+                            get: { pack.enabled },
+                            set: { workspace.setEnabled(pack.id, enabled: $0) }))
+                            .labelsHidden()
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(pack.name).font(.body.weight(.medium))
+                            Text("\(pack.builtIn ? "Built-in" : "Your word pack") · \(pack.rows.count.formatted()) terms")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let description = pack.description, !description.isEmpty {
+                                Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .tag(pack.id as String?)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedEditor: some View {
+        if let pack = selectedPack {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(pack.name).font(.title3.weight(.semibold))
+                        Text("\(pack.builtIn ? "Built-in word pack" : "Your word pack") · \(pack.rows.count.formatted()) terms")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if pack.builtIn {
+                        Button("Reset built-in edits") { resetBuiltInEdits(pack.id) }
+                    } else {
+                        Button("Export CSV...") { export(pack) }
+                        Button("Rename") { rename(pack) }
+                        Button("Delete", role: .destructive) { delete(pack) }
+                    }
+                }
+
+                Toggle(
+                    "Include this word pack in AI cleanup vocabulary",
+                    isOn: Binding(
+                        get: { pack.aiPermitted },
+                        set: { workspace.setAiPermission(pack.id, permitted: $0) }))
+
+                HStack {
+                    TextField("Search terms", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                    Picker("Sort", selection: $sortOrder) {
+                        Text("Saved order").tag(LibraryTermSortOrder.savedOrder)
+                        Text("Spoken A to Z").tag(LibraryTermSortOrder.spokenAscending)
+                        Text("Spoken Z to A").tag(LibraryTermSortOrder.spokenDescending)
+                        Text("Written A to Z").tag(LibraryTermSortOrder.writtenAscending)
+                        Text("Written Z to A").tag(LibraryTermSortOrder.writtenDescending)
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                    Button("Add term") {
+                        editor = WordPackTermEditorState(packID: pack.id, rowID: nil, values: TermValues("", ""))
+                    }
+                }
+
+                termHeader
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredRows, id: \.rowID) { row in
+                            termRow(packID: pack.id, row: row)
+                            Divider()
+                        }
+                    }
+                }
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "shippingbox")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                Text("No word pack selected")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var termHeader: some View {
+        HStack {
+            Text("On").frame(width: 42, alignment: .leading)
+            Text("Spoken form").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Written form").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Whole word").frame(width: 90, alignment: .leading)
+            Text("").frame(width: 80)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+    }
+
+    private func termRow(packID: String, row: DraftTermRow) -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { row.row.values.enabled },
+                set: { workspace.setTermEnabled(packID, rowID: row.rowID, enabled: $0) }))
+                .labelsHidden()
+                .frame(width: 42, alignment: .leading)
+            Text(row.row.values.spoken).frame(maxWidth: .infinity, alignment: .leading)
+            Text(row.row.values.written).frame(maxWidth: .infinity, alignment: .leading)
+            Text(row.row.values.wholeWord ? "Yes" : "No").frame(width: 90, alignment: .leading)
+            HStack(spacing: 6) {
+                Button("Edit") {
+                    editor = WordPackTermEditorState(packID: packID, rowID: row.rowID, values: row.row.values)
+                }
+                .buttonStyle(.link)
+                Button("Delete", role: .destructive) { workspace.deleteTerm(packID, rowID: row.rowID) }
+                    .buttonStyle(.link)
+            }
+            .frame(width: 80, alignment: .trailing)
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
     }
 
     private func reload() {
-        wordPacks = SettingsDictionaryPageLogic.wordPackRows(dictionaryLibraryService.libraries())
-        enabledIds = dictionaryLibraryService.settings.enabledLibraryIds
+        Task {
+            do {
+                let catalog = try await dictionaryLibraryService.loadCatalog()
+                await MainActor.run {
+                    workspace = LibraryWorkspace(catalog: catalog)
+                    selectedID = selectedID ?? visiblePacks.first?.id
+                    statusMessage = nil
+                    errorMessage = nil
+                }
+            } catch {
+                await MainActor.run { errorMessage = wordPackError(error) }
+            }
+        }
+    }
+
+    private func save() {
+        let capture = workspace.captureChangeSet()
+        if let issue = capture.issues.first {
+            errorMessage = LibraryEditor.message(for: issue)
+            return
+        }
+        guard let changeSet = capture.changeSet else { return }
+        do {
+            try dictionaryLibraryService.save(changeSet: changeSet)
+            workspace.markSaved()
+            statusMessage = "Saved word packs."
+            errorMessage = nil
+            onChanged()
+            reload()
+        } catch {
+            errorMessage = wordPackError(error)
+        }
+    }
+
+    private func discard() {
+        workspace.discard()
+        statusMessage = "Discarded unsaved word pack changes."
+        errorMessage = nil
+    }
+
+    private func createWordPack() {
+        selectedID = workspace.createLibrary()
+        statusMessage = "Created a new word pack. Save to keep it."
+    }
+
+    private func rename(_ pack: DraftLibrary) {
+        let alert = NSAlert()
+        alert.messageText = "Rename word pack"
+        alert.informativeText = "Type the new name for this word pack."
+        let field = NSTextField(string: pack.name)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            let result = workspace.rename(pack.id, name: field.stringValue)
+            if let issue = result.issue {
+                errorMessage = LibraryEditor.message(for: issue)
+            }
+        }
+    }
+
+    private func delete(_ pack: DraftLibrary) {
+        workspace.deleteLibrary(pack.id)
+        selectedID = visiblePacks.first { $0.id != pack.id }?.id
+        statusMessage = "Deleted \"\(pack.name)\". Save to move it to Recently deleted."
+    }
+
+    private func resetBuiltInEdits(_ id: String) {
+        guard let pack = workspace.draft.find(id) else { return }
+        for row in pack.rows where row.row.origin != .shipped {
+            workspace.deleteTerm(id, rowID: row.rowID)
+        }
+        statusMessage = "Reset staged edits for \"\(pack.name)\". Save to apply."
     }
 
     private func importWordPack(_ result: Result<URL, Error>) {
@@ -611,27 +829,56 @@ struct DictionaryWordPacksSettingsTab: View {
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             do {
-                let csv = try String(contentsOf: url, encoding: .utf8)
-                let pack = try dictionaryLibraryService.import(
-                    csv: csv, suggestedName: url.deletingPathExtension().lastPathComponent)
-                statusMessage = "Imported \"\(pack.name)\" (\(pack.entries.count.formatted()) terms)."
-                reload()
-                onChanged()
+                let data = try Data(contentsOf: url)
+                let document = DictionaryLibraryCsv.parseImport(data)
+                if !document.errors.isEmpty {
+                    throw DictionaryLibraryServiceError.invalidCsv(
+                        document.errors.prefix(5).map(\.legacyMessage).joined(separator: "\n"))
+                }
+                let id = workspace.createLibrary(
+                    name: document.name ?? url.deletingPathExtension().lastPathComponent)
+                for term in document.terms {
+                    _ = workspace.addTerm(id, values: term)
+                }
+                selectedID = id
+                statusMessage = "Imported \(document.terms.count.formatted()) terms. Save to keep the word pack."
             } catch {
                 errorMessage = wordPackError(error)
             }
         }
     }
 
-    private func removeWordPack(_ pack: DictionaryLibrary) {
-        errorMessage = nil
+    private func export(_ pack: DraftLibrary) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(pack.id).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try dictionaryLibraryService.remove(id: pack.id)
-            statusMessage = "Removed \"\(pack.name)\"."
-            reload()
-            onChanged()
+            let data = DictionaryLibraryCsv.exportSharing(
+                LibraryCsvContent(
+                    name: pack.name,
+                    category: pack.category,
+                    description: pack.description,
+                    basedOn: pack.basedOn,
+                    rows: pack.rows.map(\.row.values)))
+            try data.write(to: url, options: .atomic)
+            statusMessage = "Exported \"\(pack.name)\"."
         } catch {
             errorMessage = wordPackError(error)
+        }
+    }
+
+    private func applyTermEdit(state: WordPackTermEditorState, values: TermValues) {
+        let result: LibraryEditResult
+        if let rowID = state.rowID {
+            result = workspace.editTerm(state.packID, rowID: rowID, values: values)
+        } else {
+            result = workspace.addTerm(state.packID, values: values)
+        }
+        if let issue = result.issue {
+            errorMessage = LibraryEditor.message(for: issue)
+        } else {
+            editor = nil
         }
     }
 
@@ -641,5 +888,57 @@ struct DictionaryWordPacksSettingsTab: View {
             .replacingOccurrences(of: "Libraries", with: "Word packs")
             .replacingOccurrences(of: "library", with: "word pack")
             .replacingOccurrences(of: "Library", with: "Word pack")
+    }
+}
+
+private struct WordPackTermEditorState: Identifiable {
+    let packID: String
+    let rowID: Int64?
+    let values: TermValues
+
+    var id: String { "\(packID):\(rowID ?? 0)" }
+}
+
+private struct WordPackTermEditorView: View {
+    let state: WordPackTermEditorState
+    let onSave: (TermValues) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var spoken: String
+    @State private var written: String
+    @State private var wholeWord: Bool
+    @State private var enabled: Bool
+
+    init(state: WordPackTermEditorState, onSave: @escaping (TermValues) -> Void) {
+        self.state = state
+        self.onSave = onSave
+        _spoken = State(initialValue: state.values.spoken)
+        _written = State(initialValue: state.values.written)
+        _wholeWord = State(initialValue: state.values.wholeWord)
+        _enabled = State(initialValue: state.values.enabled)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(state.rowID == nil ? "Add term" : "Edit term")
+                .font(.title3.weight(.semibold))
+            TextField("Spoken form", text: $spoken)
+                .textFieldStyle(.roundedBorder)
+            TextField("Written form", text: $written)
+                .textFieldStyle(.roundedBorder)
+            Toggle("Match whole words only", isOn: $wholeWord)
+            Toggle("Term is on", isOn: $enabled)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Save") {
+                    onSave(TermValues(spoken, written, wholeWord, enabled))
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
