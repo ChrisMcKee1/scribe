@@ -273,6 +273,38 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(harness.fakeInjector.deliveries.count, 2)
     }
 
+    func testASessionInterruptionEndsALiveRecordingAndStillProcessesWhatItCaptured() async throws {
+        let harness = makeHarness()
+
+        _ = try await harness.pressAdmitted()
+        await harness.waitUntilLive()
+        harness.controller.handleSessionInterruption()
+
+        await waitUntil("the interrupted recording stops") { harness.controller.currentRecording == nil }
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(harness.reports.latest?.stopReason, .sessionInterrupted)
+        XCTAssertEqual(harness.fakeInjector.deliveries.count, 1)
+    }
+
+    func testASessionInterruptionWhileTheMicrophoneOpensLeavesNothingRecordingAndNothingProcessed() async throws {
+        let harness = makeHarness()
+        harness.capture.holdsOpens = true
+
+        let id = try await harness.pressAdmitted()
+        await waitUntil("the open is pending") { harness.capture.pendingOpens == 1 }
+        harness.controller.handleSessionInterruption()
+        XCTAssertEqual(harness.capture.stopCount(for: id), 1)
+
+        harness.capture.completeOpen(id, .stoppedWhileOpening)
+        await waitUntil("the interrupted open answer is handled") { harness.controller.checkpoints.openAnswers == 1 }
+
+        XCTAssertNil(harness.controller.currentRecording)
+        XCTAssertEqual(harness.transcriber.calls, 0)
+        XCTAssertEqual(harness.controller.processingCount, 0)
+        XCTAssertFalse(harness.activity.isActive)
+    }
+
     /// A held key never stops on silence, and neither does the toggle key (Caps Lock, the default) unless the user
     /// opted in, as on Windows (`AppSettings.AutoStopOnSilence`, off by default), with the choice read at each press.
     /// The tray's test dictation always stops on silence. A toggle's recording that ended some other way than by the

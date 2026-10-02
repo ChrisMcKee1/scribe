@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let pipelineReportStore = PipelineReportStore()
     private let overlayPanelController = OverlayPanelController()
     private lazy var trayPresenter = TrayPresenter(overlay: overlayPanelController)
+    private var interruptionMonitor: DictationInterruptionMonitor?
     private lazy var notifier: any DictationNotifying = Self.makeNotifier(recovery: lastTranscriptStore)
     private lazy var startupNotices = StartupNotices { [weak self] notice in
         self?.notifier.notify(notice)
@@ -84,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkAccessibility()
         requestMicrophoneAccessIfNeeded()
         configureHotkey()
+        interruptionMonitor = DictationInterruptionMonitor { [weak self] in
+            self?.dictationController.handleSessionInterruption()
+        }
         observeSettingsAndActivation()
         showWelcomeIfFirstRun()
     }
@@ -477,11 +481,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 existing: existing,
                 onSave: { [weak self] result in self?.handleQuickAddSaved(result) },
                 onClose: { [weak self] in self?.quickAddWindowController?.close() },
-                persistAction: { [weak self] entry in
+                persistAction: { [weak self] result in
                     guard let self else {
                         throw QuickAddPersistError.noPersistAction
                     }
-                    return try await self.persistQuickAddEntry(entry)
+                    return try await self.persistQuickAddEntries(result)
                 }))
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Add to Dictionary"
@@ -501,12 +505,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Writes the entry (insert for a new rule, update in place for an existing one, keyed by a non-zero id) and
     /// returns the row's id, mirroring Windows' `persist` delegate. The write waits on the storage queue, not the
     /// main actor.
-    private func persistQuickAddEntry(_ entry: DictionaryEntry) async throws -> Int64 {
-        if entry.id != 0 {
-            try await persistenceStore.saveDictionaryEntry(entry)
-            return entry.id
+    private func persistQuickAddEntries(_ result: DictionaryWordEditor.Result) async throws -> [DictionaryEntry] {
+        let inserts = result.addedEntries
+        let updates = result.editedEntry.map { [$0] } ?? []
+        try await persistenceStore.saveDictionaryChanges(inserts: inserts, updates: updates)
+
+        var saved: [DictionaryEntry] = []
+        if let updated = result.editedEntry {
+            saved.append(updated)
         }
-        return try await persistenceStore.addDictionaryEntry(entry)
+        if !inserts.isEmpty {
+            let existing = try await persistenceStore.loadAllDictionaryEntries()
+            for inserted in inserts {
+                if let savedEntry = existing.first(where: {
+                    $0.pattern == inserted.pattern
+                        && $0.replacement == inserted.replacement
+                        && $0.wholeWord == inserted.wholeWord
+                        && $0.enabled == inserted.enabled
+                }) {
+                    saved.append(savedEntry)
+                }
+            }
+        }
+        return saved
     }
 
     /// After a successful save: refreshes the rules so the new one takes effect on the next dictation, repairs the

@@ -7,6 +7,7 @@ import Foundation
 struct DictionarySettingsAccess: Sendable {
     var loadEntries: @Sendable () async throws -> [DictionaryEntry]
     var addEntry: @Sendable (DictionaryEntry) async throws -> Void
+    var applyChanges: @Sendable (_ inserts: [DictionaryEntry], _ updates: [DictionaryEntry]) async throws -> Void
     var setEnabled: @Sendable (_ id: Int64, _ enabled: Bool) async throws -> Void
     var deleteEntry: @Sendable (_ id: Int64) async throws -> Void
     /// Merges parsed CSV rows into the dictionary as stored, in one transaction.
@@ -24,6 +25,9 @@ extension DictionarySettingsAccess {
         DictionarySettingsAccess(
             loadEntries: { try await store.loadAllDictionaryEntries() },
             addEntry: { entry in _ = try await store.addDictionaryEntry(entry) },
+            applyChanges: { inserts, updates in
+                try await store.saveDictionaryChanges(inserts: inserts, updates: updates)
+            },
             setEnabled: { id, enabled in try await store.saveDictionaryEntryEnabled(id: id, enabled: enabled) },
             deleteEntry: { id in try await store.removeDictionaryEntry(id: id) },
             importEntries: { entries in try await store.importDictionary(entries) },
@@ -117,6 +121,57 @@ final class DictionarySettingsModel: ObservableObject {
             drafts.dictionaryPattern = ""
             drafts.dictionaryReplacement = ""
         }
+    }
+
+    @discardableResult
+    func addWords(replacement: String, forms: [String]) async -> Bool {
+        await saveWords(replacement: replacement, forms: forms, editing: nil)
+    }
+
+    @discardableResult
+    func editWord(_ entry: DictionaryEntry, replacement: String, forms: [String]) async -> Bool {
+        await saveWords(replacement: replacement, forms: forms, editing: entry)
+    }
+
+    @discardableResult
+    private func saveWords(replacement: String, forms: [String], editing: DictionaryEntry?) async -> Bool {
+        errorMessage = nil
+
+        let existing: [DictionaryEntry]
+        do {
+            existing = try await access.loadEntries()
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+
+        let editedIndex = editing.flatMap { entry in
+            existing.firstIndex(where: { $0.id == entry.id })
+        }
+        let built = DictionaryWordEditor.build(
+            existing: existing,
+            editedIndex: editedIndex,
+            replacement: replacement,
+            forms: forms)
+        guard built.succeeded else {
+            errorMessage = built.error
+            return false
+        }
+
+        let succeeded = await write {
+            try await self.access.applyChanges(built.addedEntries, built.editedEntry.map { [$0] } ?? [])
+        }
+        if succeeded {
+            statusMessage =
+                editing == nil
+                ? (built.addedEntries.count == 1
+                    ? "Added a word to your dictionary."
+                    : "Added \(built.addedEntries.count) ways to your dictionary.")
+                : (built.addedEntries.isEmpty
+                    ? "Updated a dictionary word."
+                    : "Updated a dictionary word and added \(built.addedEntries.count) more way(s).")
+        }
+        return succeeded
     }
 
     func setEnabled(_ entry: DictionaryEntry, enabled: Bool) async {

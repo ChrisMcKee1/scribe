@@ -27,6 +27,7 @@ final class DictionarySettingsModelTests: XCTestCase {
         DictionarySettingsAccess(
             loadEntries: loadEntries,
             addEntry: { _ in throw StorageTestFailure(message: "unexpected add") },
+            applyChanges: { _, _ in throw StorageTestFailure(message: "unexpected apply") },
             setEnabled: { _, _ in throw StorageTestFailure(message: "unexpected switch") },
             deleteEntry: { _ in throw StorageTestFailure(message: "unexpected delete") },
             importEntries: { _ in throw StorageTestFailure(message: "unexpected import") },
@@ -45,6 +46,14 @@ final class DictionarySettingsModelTests: XCTestCase {
     ) -> DictionarySettingsAccess {
         var access = Self.access(loadEntries: { [] })
         access.addEntry = addEntry
+        return access
+    }
+
+    private static func access(
+        applyChanges: @escaping @Sendable ([DictionaryEntry], [DictionaryEntry]) async throws -> Void
+    ) -> DictionarySettingsAccess {
+        var access = Self.access(loadEntries: { [] })
+        access.applyChanges = applyChanges
         return access
     }
 
@@ -352,5 +361,38 @@ final class DictionarySettingsModelTests: XCTestCase {
         XCTAssertEqual(model.statusMessage, "Turned off 2 unused entries.")
         XCTAssertEqual(refreshes.count, 1)
         XCTAssertNil(model.cleanupReport)
+    }
+
+    @MainActor
+    func testAddingSeveralWaysWritesThemInOneRefresh() async {
+        let applied = SettingsTestCounter()
+        let capturedInserts = LockedValue<[DictionaryEntry]>()
+        let model = DictionarySettingsModel(
+            access: Self.access(applyChanges: { inserts, updates in
+                capturedInserts.set(inserts)
+                XCTAssertTrue(updates.isEmpty)
+            }),
+            drafts: SettingsDrafts(),
+            onChanged: { applied.increment() })
+
+        let succeeded = await model.addWords(replacement: "Copilot", forms: ["co pilot", "copilot"])
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(capturedInserts.value?.map(\.pattern), ["co pilot", "copilot"])
+        XCTAssertEqual(capturedInserts.value?.map(\.replacement), ["Copilot", "Copilot"])
+        XCTAssertEqual(applied.count, 1)
+    }
+
+    @MainActor
+    func testAddingSeveralWaysReportsBuilderErrors() async {
+        let model = DictionarySettingsModel(
+            access: Self.access(loadEntries: { [Self.rule(1, "copilot")] }),
+            drafts: SettingsDrafts(),
+            onChanged: {})
+
+        let succeeded = await model.addWords(replacement: "Copilot", forms: ["copilot", "copilot"])
+
+        XCTAssertFalse(succeeded)
+        XCTAssertTrue(model.errorMessage?.contains("already in your dictionary") == true)
     }
 }

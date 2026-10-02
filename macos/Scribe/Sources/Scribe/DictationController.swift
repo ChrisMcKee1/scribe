@@ -44,6 +44,8 @@ enum DictationStopReason: String, Equatable, Sendable {
     case bindingChanged
     /// The event tap was disabled and, re-read afterwards, the key had been released meanwhile.
     case tapResynchronized
+    /// The session locked or slept while the dictation was live.
+    case sessionInterrupted
     /// Scribe is quitting; the recording is discarded.
     case shutdown
 }
@@ -382,6 +384,13 @@ final class DictationController {
         } else {
             present()
         }
+    }
+
+    /// The session locked or slept while a dictation was live or opening. Ends it through the normal stop path so
+    /// what was already captured is still processed.
+    func handleSessionInterruption() {
+        guard let current = recording else { return }
+        endRecording(current.id, reason: .sessionInterrupted)
     }
 
     /// Drops the cached cleanup provider and credential, for when cleanup is switched off or its settings change.
