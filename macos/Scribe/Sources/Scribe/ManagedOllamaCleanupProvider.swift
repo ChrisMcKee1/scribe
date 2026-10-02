@@ -19,12 +19,16 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     /// CLEANUP-MODEL-BENCHMARK.md.
     let model: String
     let completionsURL: URL
+    private let keepAliveMinutes: Int
+    private let localModelLane: AsyncLane
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
 
     init(
         model: String = CleanupSettingsStore.defaultOllamaModel,
         baseURL: URL = ManagedOllamaCleanupProvider.defaultBaseURL,
+        keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
+        localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
@@ -32,18 +36,26 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
         self.completionsURL =
             OpenAICompatibleEndpoint.chatCompletionsURL(for: baseURL)
             ?? baseURL.appendingPathComponent("v1/chat/completions")
+        self.keepAliveMinutes = keepAliveMinutes
+        self.localModelLane = localModelLane
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
-        let completion = try await transport.complete(
-            request, at: completionsURL, model: model, bearerToken: nil,
-            temperature: CleanupSampling.onDeviceTemperature,
-            reasoningEffort: CleanupReasoningEffort.none,
-            includeLegacyMaxTokens: true,
-            defaultTimeout: timeout,
-            provider: .ollama)
+        let completion = try await localModelLane.run {
+            try await transport.complete(
+                request,
+                at: completionsURL,
+                model: model,
+                bearerToken: nil,
+                temperature: CleanupSampling.onDeviceTemperature,
+                reasoningEffort: CleanupReasoningEffort.none,
+                includeLegacyMaxTokens: true,
+                keepAlive: keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil,
+                defaultTimeout: timeout,
+                provider: .ollama)
+        }
         return CleanupResponse(
             cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
     }

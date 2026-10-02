@@ -45,6 +45,27 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
     }
 
+    func testRecordingStartPassesItsWritingStyleToCleanup() async throws {
+        let harness = makeHarness()
+
+        _ = try await harness.pressAdmitted()
+        await waitUntil("cleanup sees the recording start") {
+            harness.cleanup.recordingStarts.count == 1
+        }
+
+        XCTAssertEqual(
+            harness.cleanup.recordingStarts.first,
+            CleanupPrompt.writingStyle(profileStyle: nil, requireSingleLine: false))
+    }
+
+    func testPausingWhileIdleAsksCleanupToReleaseItsLocalModel() {
+        let harness = makeHarness()
+
+        harness.controller.setPaused(true)
+
+        XCTAssertEqual(harness.cleanup.pauseReleases, 1)
+    }
+
     /// A pause while the device is still opening ends the recording before it ever captured anything: the open's late
     /// answer changes nothing, nothing is processed and nothing is shown as recording.
     func testAPauseWhileTheMicrophoneOpensLeavesNothingRecordingAndNothingProcessed() async throws {

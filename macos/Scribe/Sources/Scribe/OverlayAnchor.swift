@@ -63,6 +63,8 @@ enum OverlayState: Equatable, Sendable {
     case listening(levelDbfs: Float)
     /// Transcribing or AI-polishing: bouncing dots.
     case processing
+    /// Waiting for a model on this Mac to load or warm.
+    case startingLocalModel
     /// A short notice about how a dictation went, shown for a moment and then taken down.
     case notice(OverlayNotice)
 }

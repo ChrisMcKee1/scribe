@@ -89,6 +89,7 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, CleanupReasoningEffort.none)
         XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 16)
         XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, 16)
+        XCTAssertEqual(sent.jsonBody["ttl"] as? Int, LocalModelDefaults.keepAliveMinutes * 60)
     }
 
     func testALocalServerThatRejectsTheExtraFieldsFallsBackToPlainRequests() async throws {
@@ -290,9 +291,10 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
         XCTAssertNil(sent.header("Authorization"))
         XCTAssertEqual(
             Set(sent.jsonBody.keys),
-            ["model", "messages", "temperature", "reasoning_effort", "stream"])
+            ["model", "messages", "temperature", "reasoning_effort", "keep_alive", "stream"])
         XCTAssertEqual(sent.jsonBody["model"] as? String, "qwen2.5:3b")
         XCTAssertEqual(sent.jsonBody["temperature"] as? Double, CleanupSampling.onDeviceTemperature)
         XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, CleanupReasoningEffort.none)
+        XCTAssertEqual(sent.jsonBody["keep_alive"] as? String, "\(LocalModelDefaults.keepAliveMinutes)m")
     }
 }

@@ -116,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             services: DictationController.Services(
                 capture: LiveDictationCapture(engine: audioCaptureEngine),
                 transcriber: LiveDictationTranscriber(engine: transcriptionEngine),
-                cleanup: LiveDictationCleanup(cache: .shared),
+                cleanup: LiveDictationCleanup(cache: CleanupProviderCache.shared),
                 targeting: LiveDictationTargeting(injector: textInjector),
                 injector: textInjector,
                 history: historyWriter,
@@ -280,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let previous = cleanupSettings
         cleanupSettings = current
         if CleanupInvalidation.shouldInvalidate(from: previous, to: current) {
-            dictationController.invalidateCleanup()
+            dictationController.cleanupSettingsChanged(from: previous, to: current)
             ScribeLog.info(.cleanup, "Dropped the cached cleanup provider after a settings change")
         }
         aiCleanupMenuItem?.state = current.isEnabled ? .on : .off

@@ -45,6 +45,9 @@ struct OverlayPillView: View {
         case .processing:
             ProgressView()
                 .controlSize(.small)
+        case .startingLocalModel:
+            ProgressView()
+                .controlSize(.small)
         case .notice(let notice):
             Image(systemName: notice.isFailure ? "exclamationmark.triangle.fill" : "info.circle.fill")
                 .foregroundStyle(notice.isFailure ? Color.red : Color.secondary)
@@ -63,6 +66,7 @@ struct OverlayPillView: View {
         case .hidden: return ""
         case .listening(let levelDbfs): return String(format: "Listening %.0f dBFS", levelDbfs)
         case .processing: return "Processing…"
+        case .startingLocalModel: return "Starting local model…"
         case .notice(let notice): return notice.label
         }
     }

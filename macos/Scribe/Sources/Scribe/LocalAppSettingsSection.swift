@@ -91,7 +91,7 @@ struct CleanupProviderSettingsSection: View {
     @ObservedObject var drafts: SettingsDrafts
     @StateObject private var local = LocalAppSettingsModel()
 
-    private let defaultIdleMinutes = 10
+    private let defaultIdleMinutes = LocalModelDefaults.keepAliveMinutes
 
     var body: some View {
         Group {

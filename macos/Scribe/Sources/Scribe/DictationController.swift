@@ -375,12 +375,20 @@ final class DictationController {
         if paused, let current = recording {
             endRecording(current.id, reason: .paused)
         } else {
+            if paused, recording == nil, dictations.isEmpty {
+                services.cleanup.releaseForPause()
+            }
             present()
         }
     }
 
     /// Drops the cached cleanup provider and credential, for when cleanup is switched off or its settings change.
     func invalidateCleanup() {
+        services.cleanup.invalidate()
+    }
+
+    func cleanupSettingsChanged(from previous: CleanupSettingsSnapshot, to current: CleanupSettingsSnapshot) {
+        services.cleanup.settingsChanged(from: previous, to: current)
         services.cleanup.invalidate()
     }
 
@@ -497,6 +505,21 @@ final class DictationController {
         let opening = services.capture.startOpening(owner: id, policy: admitted.policy, events: captureEvents.sink)
         let target = services.targeting.captureTarget()
         let profiles = services.rules.isLoaded ? services.rules.appProfiles : nil
+        let profile = AppProfileMatcher.match(
+            profiles: profiles ?? [],
+            bundleIdentifier: target.bundleIdentifier,
+            processName: target.processName)
+        let newlineMode = AppProfileMatcher.resolveNewlineMode(
+            profile: profile,
+            globalDefault: configuration.newlineMode,
+            bundleIdentifier: target.bundleIdentifier)
+        let singleLine = AppProfileMatcher.flattensNewlines(
+            newlineMode,
+            bundleIdentifier: target.bundleIdentifier)
+        services.cleanup.recordingStarted(
+            writingStylePrompt: CleanupPrompt.writingStyle(
+                profileStyle: profile?.writingStylePrompt,
+                requireSingleLine: singleLine))
         if var current = recording, current.id == id {
             current.phase = .opening
             current.target = target
@@ -684,6 +707,9 @@ final class DictationController {
         let newlineMode = AppProfileMatcher.resolveNewlineMode(
             profile: profile, globalDefault: configuration.newlineMode, bundleIdentifier: target?.bundleIdentifier)
         let singleLine = AppProfileMatcher.flattensNewlines(newlineMode, bundleIdentifier: target?.bundleIdentifier)
+        let writingStyle = CleanupPrompt.writingStyle(
+            profileStyle: profile?.writingStylePrompt,
+            requireSingleLine: singleLine)
 
         // With AI cleanup off: snippets, then the dictionary and the libraries, each once, as Windows runs them. With
         // cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it, and
@@ -703,7 +729,11 @@ final class DictationController {
                 post = rules.postProcess(raw)
             } else {
                 report.sentText = pass.text
-                let stage = await cleanUp(pass.text, dictation: dictation, profile: profile, singleLine: singleLine)
+                let stage = await cleanUp(
+                    pass.text,
+                    dictation: dictation,
+                    singleLine: singleLine,
+                    writingStyle: writingStyle)
                 guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
                 report.cleanupOutcome = stage.outcome
                 report.cleanupDuration = stage.requestDuration?.seconds
@@ -781,7 +811,10 @@ final class DictationController {
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
     private func cleanUp(
-        _ sent: String, dictation: AdmittedDictation, profile: AppProfile?, singleLine: Bool
+        _ sent: String,
+        dictation: AdmittedDictation,
+        singleLine: Bool,
+        writingStyle: String
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
@@ -797,12 +830,20 @@ final class DictationController {
             return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
         }
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
+        guard await services.cleanup.waitForLocalModelIfNeeded() else {
+            if mayContinue {
+                ScribeLog.warning(
+                    .cleanup,
+                    "The local AI model did not start in time, so the raw transcript is used",
+                    .integer("dictation", id.rawValue))
+            }
+            return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+        }
 
-        let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
         let request = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript(sent),
             writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: style, useLocalPrompt: provider.usesLocalCleanupPrompt),
+                writingStyle: writingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
             singleLineMode: singleLine)
         let started = clock.now
         let response: CleanupResponse
@@ -818,6 +859,7 @@ final class DictationController {
             return CleanupStage(outcome: .fellBack, text: nil, requestDuration: elapsed)
         }
         let elapsed = started.duration(to: clock.now)
+        services.cleanup.noteAnswerReceived(from: provider)
 
         // Against the text the model was sent; the guard also normalizes the reply's dashes.
         switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: sent) {
@@ -921,6 +963,9 @@ final class DictationController {
         dictations[dictation.id] = nil
         dictation.lease.end()
         showNextNoticeOrPresent()
+        if isPaused, recording == nil, dictations.isEmpty {
+            services.cleanup.releaseForPause()
+        }
     }
 
     private static func isBlank(_ text: String) -> Bool {
@@ -1027,12 +1072,16 @@ final class DictationController {
             if recording.phase == .live {
                 return .listening(levelDbfs: levelDbfs)
             }
-            return dictations.isEmpty ? .hidden : .processing
+            return dictations.isEmpty ? .hidden : processingOverlayState
         }
         if let shown = notices.shown {
             return .notice(shown.notice.kind)
         }
-        return dictations.isEmpty ? .hidden : .processing
+        return dictations.isEmpty ? .hidden : processingOverlayState
+    }
+
+    private var processingOverlayState: OverlayState {
+        services.cleanup.isStartingLocalModel ? .startingLocalModel : .processing
     }
 
     /// Hands the current state to the presenter under the next revision, and returns that revision. Once shutdown has

@@ -83,6 +83,16 @@ enum LocalAiServer {
         }
     }
 
+    static func appForChatCompletionsURL(_ url: URL) -> LocalServerApp {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return .none
+        }
+        components.percentEncodedPath = "/v1"
+        components.query = nil
+        components.fragment = nil
+        return appAt(components.url?.absoluteString)
+    }
+
     private static func normalizedURL(_ endpoint: String?) -> URL? {
         guard let endpoint, !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
