@@ -20,6 +20,7 @@ final class SettingsDrafts: ObservableObject {
 
     @Published var dictionaryPattern = ""
     @Published var dictionaryReplacement = ""
+    @Published var dictionaryWholeWord = true
 
     @Published var snippetPhrase = ""
     @Published var snippetTemplate = ""

@@ -105,17 +105,21 @@ final class DictionarySettingsModel: ObservableObject {
     func addFromDrafts() async {
         let pattern = drafts.dictionaryPattern
         let replacement = drafts.dictionaryReplacement
+        let wholeWord = drafts.dictionaryWholeWord
         guard canAdd, drafts.beginAdding(.dictionaryRule) else {
             return
         }
         defer { drafts.finishAdding(.dictionaryRule) }
 
         let added = await write {
-            try await self.access.addEntry(DictionaryEntry(pattern: pattern, replacement: replacement))
+            try await self.access.addEntry(DictionaryEntry(pattern: pattern, replacement: replacement, wholeWord: wholeWord))
         }
-        if added, drafts.dictionaryPattern == pattern, drafts.dictionaryReplacement == replacement {
+        if added, drafts.dictionaryPattern == pattern, drafts.dictionaryReplacement == replacement,
+            drafts.dictionaryWholeWord == wholeWord
+        {
             drafts.dictionaryPattern = ""
             drafts.dictionaryReplacement = ""
+            drafts.dictionaryWholeWord = true
         }
     }
 

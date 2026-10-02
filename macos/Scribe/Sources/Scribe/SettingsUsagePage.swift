@@ -8,8 +8,7 @@ struct SettingsUsagePage: View {
 
     var body: some View {
         SettingsPage(title: "Usage", subtitle: "How much you've dictated, and words you might add to your dictionary.") {
-            SettingsGroupHeader("Usage")
-            SettingsCard { UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged) }
+            UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged)
         }
     }
 }
@@ -32,11 +31,15 @@ struct UsageInsightsSettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Usage")
-                    .font(.headline)
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Usage")
+                        .font(.headline)
+                    Text("Period")
+                        .cardDescription()
+                }
                 Spacer()
-                Picker("Window", selection: $model.windowDays) {
+                Picker("Period", selection: $model.windowDays) {
                     Text("7 days").tag(7.0)
                     Text("30 days").tag(30.0)
                     Text("90 days").tag(90.0)
@@ -44,6 +47,10 @@ struct UsageInsightsSettingsTab: View {
                 .pickerStyle(.segmented)
                 .frame(width: 260)
                 .onChange(of: model.windowDays) { _ in
+                    summaryModel.reset()
+                    Task { await model.reload() }
+                }
+                Button("Refresh") {
                     summaryModel.reset()
                     Task { await model.reload() }
                 }
@@ -71,15 +78,14 @@ struct UsageInsightsSettingsTab: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        totalsSection(snapshot)
-                        Divider()
-                        trendSection(snapshot)
-                        Divider()
-                        topAppsSection(snapshot)
-                        Divider()
-                        termsSection(snapshot)
-                        Divider()
-                        aiSummarySection(snapshot)
+                        SettingsCard { totalsSection(snapshot) }
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
+                            SettingsCard { topAppsSection(snapshot) }
+                            SettingsCard { trendSection(snapshot) }
+                            SettingsCard { knownTermsSection(snapshot) }
+                            SettingsCard { termsSection(snapshot) }
+                        }
+                        SettingsCard { aiSummarySection(snapshot) }
                     }
                 }
             } else {
@@ -102,12 +108,14 @@ struct UsageInsightsSettingsTab: View {
     private func totalsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Totals")
-                .font(.subheadline.bold())
-            metricRow(label: "Dictations", value: "\(snapshot.dictations)")
-            metricRow(label: "Words", value: "\(snapshot.words)")
-            metricRow(label: "Active days", value: "\(snapshot.activeDays)")
-            metricRow(label: "Speech time", value: String(format: "%.1f min", snapshot.speechSeconds / 60.0))
-            metricRow(label: "Average words / dictation", value: String(format: "%.1f", snapshot.averageWords))
+                .cardTitle()
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 5), spacing: 12) {
+                metricTile(value: "\(snapshot.dictations)", label: "dictations")
+                metricTile(value: "\(snapshot.words)", label: "words")
+                metricTile(value: "\(snapshot.activeDays)", label: "active days")
+                metricTile(value: String(format: "%.1f min", snapshot.speechSeconds / 60.0), label: "speaking time")
+                metricTile(value: String(format: "%.1f", snapshot.averageWords), label: "words per dictation")
+            }
         }
     }
 
@@ -116,7 +124,7 @@ struct UsageInsightsSettingsTab: View {
     private func trendSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(snapshot.granularity == .daily ? "Trend (daily)" : "Trend (weekly)")
-                .font(.subheadline.bold())
+                .cardTitle()
             if snapshot.trend.isEmpty {
                 Text("Not enough history to chart a trend yet.")
                     .foregroundStyle(.secondary)
@@ -138,7 +146,7 @@ struct UsageInsightsSettingsTab: View {
     private func topAppsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Top apps")
-                .font(.subheadline.bold())
+                .cardTitle()
             if snapshot.topApps.isEmpty {
                 Text("No app usage recorded yet.")
                     .foregroundStyle(.secondary)
@@ -160,27 +168,24 @@ struct UsageInsightsSettingsTab: View {
 
     private func termsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recurring terms")
-                .font(.subheadline.bold())
-            if snapshot.terms.isEmpty {
-                Text("No recurring terms found yet.")
+            Text("Words you could add")
+                .cardTitle()
+            Text("Words that came up often and aren't in your dictionary yet.")
+                .cardDescription()
+            let novelTerms = snapshot.terms.filter { !$0.covered }
+            if novelTerms.isEmpty {
+                Text("No new words in this period.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(snapshot.terms, id: \.text) { term in
+                ForEach(novelTerms, id: \.text) { term in
                     HStack {
                         Text(term.text)
                         Text("(\(term.dictations) dictations, \(term.occurrences)x)")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                         Spacer()
-                        if term.covered {
-                            Text("In dictionary")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        } else {
-                            Button("Add to Dictionary") {
-                                Task { await model.addTermToDictionary(term) }
-                            }
+                        Button("Add to dictionary") {
+                            Task { await model.addTermToDictionary(term) }
                         }
                     }
                 }
@@ -193,7 +198,7 @@ struct UsageInsightsSettingsTab: View {
     private func aiSummarySection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("AI summary")
-                .font(.subheadline.bold())
+                .cardTitle()
             Text(
                 """
                 Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup \
@@ -205,7 +210,7 @@ struct UsageInsightsSettingsTab: View {
             .foregroundStyle(.secondary)
 
             HStack {
-                Button(summaryModel.isGenerating ? "Generating..." : "Generate AI Summary") {
+                Button(summaryModel.isGenerating ? "Generating..." : "Get summary") {
                     summaryModel.generate(payload: UsageInsight.buildSummary(snapshot))
                 }
                 .disabled(!summaryModel.canGenerate)
@@ -234,13 +239,37 @@ struct UsageInsightsSettingsTab: View {
         }
     }
 
-    private func metricRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Spacer()
+    private func knownTermsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Words your dictionary already knows")
+                .cardTitle()
+            Text("Dictionary and word pack words that came up in this period.")
+                .cardDescription()
+            let covered = snapshot.terms.filter(\.covered)
+            if covered.isEmpty {
+                Text("No known words in this period.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(covered, id: \.text) { term in
+                    HStack {
+                        Text(term.text)
+                        Spacer()
+                        Text("\(term.dictations) dictations")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func metricTile(value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
             Text(value)
+                .font(.title3.weight(.semibold))
                 .monospacedDigit()
+            Text(label)
+                .cardDescription()
         }
     }
 }
