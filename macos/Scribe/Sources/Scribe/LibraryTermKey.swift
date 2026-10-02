@@ -86,7 +86,7 @@ struct LibraryTermKey: Equatable, Hashable, Sendable, CustomStringConvertible {
     func hash(into hasher: inout Hasher) {
         hasher.combine(value.utf16.count)
         for scalar in value.unicodeScalars {
-            if disallowedCaseFoldScalars.contains(scalar.value) {
+            if Self.disallowedCaseFoldScalars.contains(scalar.value) {
                 hasher.combine(Int(scalar.value))
                 continue
             }
@@ -94,7 +94,7 @@ struct LibraryTermKey: Equatable, Hashable, Sendable, CustomStringConvertible {
             hasher.combine(
                 String(scalar).folding(
                     options: [.caseInsensitive, .literal],
-                    locale: comparisonLocale))
+                    locale: Self.comparisonLocale))
         }
     }
 
