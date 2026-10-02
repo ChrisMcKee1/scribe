@@ -1,0 +1,456 @@
+import Foundation
+import XCTest
+
+@testable import Scribe
+
+/// A timer the test fires by hand, so no test sleeps and every deadline passes exactly where the test says.
+private final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gates: [LifecycleGate] = []
+
+    var sleeper: @Sendable (Duration) async throws -> Void {
+        { [self] _ in
+            let gate = LifecycleGate()
+            lock.withLock { gates.append(gate) }
+            try await gate.wait()
+        }
+    }
+
+    var pending: Int { lock.withLock { gates.count } }
+
+    func fire() {
+        let all = lock.withLock { () -> [LifecycleGate] in
+            defer { gates = [] }
+            return gates
+        }
+        for gate in all { gate.open() }
+    }
+
+    func waitForSleepers(_ count: Int) async {
+        for _ in 0..<2000 where pending < count { await Task.yield() }
+    }
+}
+
+private final class FakeUnloads: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var models: [String] = []
+    private(set) var instances: [(id: String, key: String?)] = []
+    var modelResult = true
+    /// Instances whose unload succeeds only with this key.
+    var requiredKey: String?
+    var instanceResult = true
+    var barrier: LifecycleGate?
+
+    var actions: LocalModelLifecycle.Actions {
+        LocalModelLifecycle.Actions(
+            unloadModel: { [self] _, model, _ in
+                lock.withLock { models.append(model) }
+                if (try? await barrier?.wait()) == nil, barrier != nil { return false }
+                return lock.withLock { modelResult }
+            },
+            unloadInstance: { [self] _, id, key in
+                lock.withLock { instances.append((id, key)) }
+                if (try? await barrier?.wait()) == nil, barrier != nil { return false }
+                return lock.withLock { requiredKey.map { $0 == key } ?? instanceResult }
+            })
+    }
+
+    func set(_ change: (FakeUnloads) -> Void) { lock.withLock { change(self) } }
+}
+
+private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTarget {
+    LocalModelTarget(endpoint: "http://127.0.0.1:1234/v1", model: model, app: .lmStudio, apiKey: key)
+}
+
+final class LocalModelLifecycleTests: XCTestCase {
+    private func target(_ model: String = "m", key: String? = nil) -> LocalModelTarget {
+        lmTarget(model, key: key)
+    }
+
+    private func make(
+        _ fake: FakeUnloads = FakeUnloads(), clock: ManualClock = ManualClock(), idle: Duration = .seconds(600)
+    ) -> LocalModelLifecycle {
+        LocalModelLifecycle(idle: idle, actions: fake.actions, sleeper: clock.sleeper)
+    }
+
+    private func owned(_ lifecycle: LocalModelLifecycle, _ instance: String, key: String? = nil) async throws {
+        let lease = try await lifecycle.beginUse(target(key: key))
+        await lifecycle.reconcileLMStudio(
+            target: target(key: key), contextTokens: 8192, lease: lease,
+            read: { _, _ in .notRunning.reached },
+            load: { _, _, _ in instance })
+        lease.end()
+    }
+
+    func testAReleaseWaitsForAUseInFlightAndThenFreesTheModel() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let lease = try await lifecycle.beginUse(target())
+        let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertTrue(fake.models.isEmpty, "nothing is unloaded under a use")
+        lease.end()
+        let outcome = await release.value
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.models, ["m"])
+    }
+
+    func testLeaseEndIsIdempotent() async throws {
+        let lifecycle = make()
+        let lease = try await lifecycle.beginUse(target())
+        lease.end()
+        lease.end()
+        XCTAssertEqual(lifecycle.useCount, 0)
+    }
+
+    func testFreeMemoryReportsDrainTimedOutAfterItsBoundAndUnloadsNothing() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        let lease = try await lifecycle.beginUse(target())
+        let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
+        await clock.waitForSleepers(1)
+        clock.fire()
+        let outcome = await release.value
+        XCTAssertEqual(outcome, .drainTimedOut)
+        XCTAssertTrue(fake.models.isEmpty)
+        lease.end()
+    }
+
+    func testAUseThatBeginsAfterAnIdleReleaseWasDecidedCancelsIt() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let first = try await lifecycle.beginUse(target())
+        let release = Task { await lifecycle.release(.pause, target: lmTarget()) }
+        for _ in 0..<100 { await Task.yield() }
+        first.end()
+        // The release is already past its wait only if it saw no newer use; start one before it commits.
+        let second = try await lifecycle.beginUse(target())
+        second.end()
+        let outcome = await release.value
+        XCTAssertTrue([.released, .notWanted].contains(outcome))
+        if outcome == .notWanted { XCTAssertTrue(fake.models.isEmpty) }
+    }
+
+    func testAPauseDecidedBeforeANewUseIsNotWanted() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let lease = try await lifecycle.beginUse(target())
+        let release = Task { await lifecycle.release(.pause, target: lmTarget()) }
+        for _ in 0..<100 { await Task.yield() }
+        lease.end()
+        let again = try await lifecycle.beginUse(target())
+        again.end()
+        let outcome = await release.value
+        XCTAssertTrue([.released, .notWanted].contains(outcome))
+    }
+
+    func testAConfigurationThatCameBackIsNotReleased() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let outcome = await lifecycle.release(.configurationChanged, target: target(), wanted: { false })
+        XCTAssertEqual(outcome, .notWanted)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testAConfigurationChangeUnloadsTheModelItNoLongerUses() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let outcome = await lifecycle.release(.configurationChanged, target: target(), wanted: { true })
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.models, ["m"])
+    }
+
+    func testANewUseWaitsForAnUnloadOnItsWayAndThenProceeds() async throws {
+        let fake = FakeUnloads()
+        let barrier = LifecycleGate()
+        fake.set { $0.barrier = barrier }
+        let lifecycle = make(fake)
+        let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
+        for _ in 0..<200 where fake.models.isEmpty { await Task.yield() }
+        let began = LockedFlag()
+        let use = Task {
+            let lease = try await lifecycle.beginUse(lmTarget())
+            began.set()
+            lease.end()
+        }
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertFalse(began.value, "a use never reaches a model that is being unloaded")
+        barrier.open()
+        _ = await release.value
+        try await use.value
+        XCTAssertTrue(began.value)
+    }
+
+    func testAUseGivesUpAfterTheUnloadWaitBound() async throws {
+        let fake = FakeUnloads()
+        let barrier = LifecycleGate()
+        fake.set { $0.barrier = barrier }
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
+        for _ in 0..<200 where fake.models.isEmpty { await Task.yield() }
+        let use = Task { try await lifecycle.beginUse(lmTarget()) }
+        await clock.waitForSleepers(1)
+        clock.fire()
+        do {
+            _ = try await use.value
+            XCTFail("expected a timeout")
+        } catch let error as LocalModelLifecycleError {
+            XCTAssertEqual(error, .unloadInProgress)
+        }
+        barrier.open()
+        _ = await release.value
+    }
+
+    func testAFailedUnloadStaysOwedAndIsRetried() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        try await owned(lifecycle, "i1")
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["i1"])
+        fake.set {
+            $0.instanceResult = false
+            $0.modelResult = false
+        }
+        let first = await lifecycle.release(.freeMemory, target: target())
+        XCTAssertEqual(first, .failed)
+        XCTAssertEqual(lifecycle.ownedCopies.count, 1, "a copy that could not be freed stays owed")
+        fake.set {
+            $0.instanceResult = true
+            $0.modelResult = true
+        }
+        let second = await lifecycle.release(.freeMemory, target: target())
+        XCTAssertEqual(second, .released)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
+    func testAnUnloadTriesTheKeySavedNowThenTheKeyTheCopyWasLoadedWith() async throws {
+        let fake = FakeUnloads()
+        fake.set {
+            $0.requiredKey = "old"
+            $0.modelResult = false
+        }
+        let lifecycle = make(fake)
+        try await owned(lifecycle, "i1", key: "old")
+        let outcome = await lifecycle.release(.freeMemory, target: target(key: "new"))
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.instances.map(\.key), ["new", "old"])
+    }
+
+    func testACopyOnAnotherServerIsLeftAloneByFreeMemory() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        try await owned(lifecycle, "i1")
+        let other = LocalModelTarget(
+            endpoint: "http://127.0.0.1:11434/v1", model: "m", app: .ollama, apiKey: nil)
+        _ = await lifecycle.release(.freeMemory, target: other)
+        XCTAssertTrue(fake.instances.isEmpty)
+        XCTAssertEqual(lifecycle.ownedCopies.count, 1)
+    }
+
+    func testTheIdleReleaseFreesOnlyScribeLoadedCopiesAndAsksTheAppNothing() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        try await owned(lifecycle, "i1")
+        await clock.waitForSleepers(1)
+        clock.fire()
+        for _ in 0..<500 where lifecycle.ownedCopies.count > 0 { await Task.yield() }
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertTrue(fake.models.isEmpty, "idle sends no explicit model unload")
+        XCTAssertEqual(fake.instances.map(\.id), ["i1"])
+    }
+
+    func testANewUseCancelsTheIdleCountdown() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        try await owned(lifecycle, "i1")
+        await clock.waitForSleepers(1)
+        let lease = try await lifecycle.beginUse(target())
+        clock.fire()
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertTrue(fake.instances.isEmpty, "a model in use is never freed by the idle countdown")
+        lease.end()
+    }
+
+    func testAnAbandonedLoadStillRecordsItsCopyAndKeepsItsLease() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let barrier = LifecycleGate()
+        let lease = try await lifecycle.beginUse(target())
+        let caller = Task {
+            await lifecycle.reconcileLMStudio(
+                target: lmTarget(), contextTokens: 8192, lease: lease,
+                read: { _, _ in .notRunning.reached },
+                load: { _, _, _ in
+                    try? await barrier.wait()
+                    return "late"
+                })
+        }
+        for _ in 0..<200 { await Task.yield() }
+        caller.cancel()
+        await caller.value
+        lease.end()
+        XCTAssertEqual(lifecycle.useCount, 1, "the abandoned load still counts as a use")
+        let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertTrue(fake.instances.isEmpty, "no release frees the model under the load")
+        barrier.open()
+        let outcome = await release.value
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.models, ["m"], "the copy the abandoned load made is freed once it lands")
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
+    func testARefusedSizeIsNotAskedForAgainUntilFreeMemory() async throws {
+        let lifecycle = make()
+        let loads = Counter()
+        for _ in 0..<2 {
+            let lease = try await lifecycle.beginUse(target())
+            await lifecycle.reconcileLMStudio(
+                target: target(), contextTokens: 8192, lease: lease,
+                read: { _, _ in .notRunning.reached },
+                load: { _, _, _ in
+                    loads.bump()
+                    return nil
+                })
+            lease.end()
+        }
+        XCTAssertEqual(loads.value, 1)
+        _ = await lifecycle.release(.freeMemory, target: target())
+        let lease = try await lifecycle.beginUse(target())
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: lease,
+            read: { _, _ in .notRunning.reached },
+            load: { _, _, _ in
+                loads.bump()
+                return nil
+            })
+        lease.end()
+        XCTAssertEqual(loads.value, 2)
+    }
+
+    func testACopyAtAnotherSizeIsReplacedOnlyWhileTheLeaseIsTheOnlyUse() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [LocalServerLoadedModel("m", 1, contextTokens: 4096, instanceID: "old", remainingTTLSeconds: 100)],
+            failureDetail: nil)
+        let loads = Counter()
+        let first = try await lifecycle.beginUse(target())
+        let second = try await lifecycle.beginUse(target())
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: first, read: { _, _ in held },
+            load: { _, _, _ in
+                loads.bump()
+                return "new"
+            })
+        XCTAssertEqual(loads.value, 0, "another use is in flight, so the copy is used as it is")
+        XCTAssertTrue(fake.instances.isEmpty)
+        second.end()
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: first, read: { _, _ in held },
+            load: { _, _, _ in
+                loads.bump()
+                return "new"
+            })
+        XCTAssertEqual(loads.value, 1)
+        XCTAssertEqual(fake.instances.map(\.id), ["old"])
+        first.end()
+    }
+
+    func testACopyLoadedByHandIsUsedAsItIs() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [LocalServerLoadedModel("m", 1, contextTokens: 4096, instanceID: "hand", remainingTTLSeconds: nil)],
+            failureDetail: nil)
+        let loads = Counter()
+        let lease = try await lifecycle.beginUse(target())
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: lease, read: { _, _ in held },
+            load: { _, _, _ in
+                loads.bump()
+                return "x"
+            })
+        lease.end()
+        XCTAssertEqual(loads.value, 0)
+        XCTAssertTrue(fake.instances.isEmpty)
+    }
+
+    func testACopyTheServerNoLongerListsIsForgotten() async throws {
+        let lifecycle = make()
+        try await owned(lifecycle, "gone")
+        let lease = try await lifecycle.beginUse(target())
+        let listing = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [LocalServerLoadedModel("m", 1, contextTokens: 8192, instanceID: "other", remainingTTLSeconds: 5)],
+            failureDetail: nil)
+        await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: lease, read: { _, _ in listing },
+            load: { _, _, _ in nil })
+        lease.end()
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
+    func testShutdownReleaseIsBoundedAndCancelledWorkReportsFailed() async throws {
+        let fake = FakeUnloads()
+        let barrier = LifecycleGate()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        try await owned(lifecycle, "i1")
+        fake.set { $0.barrier = barrier }
+        let release = Task { await lifecycle.release(.shutdown, target: nil) }
+        for _ in 0..<200 where fake.instances.isEmpty { await Task.yield() }
+        await clock.waitForSleepers(1)
+        clock.fire()
+        let outcome = await release.value
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(lifecycle.ownedCopies.count, 1, "an interrupted unload stays owed")
+    }
+
+    func testShutdownFreesEveryOwnedCopyWithoutAnExplicitModelUnload() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake)
+        try await owned(lifecycle, "i1")
+        try await owned(lifecycle, "i2")
+        let outcome = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(Set(fake.instances.map(\.id)), ["i1", "i2"])
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testNothingToReleaseIsReportedAsSuch() async {
+        let outcome = await make().release(.idle, target: nil)
+        XCTAssertEqual(outcome, .nothingToRelease)
+    }
+
+    func testTargetsCompareByServerAndModelAndIgnoreTheKey() {
+        let a = LocalModelTarget(endpoint: "http://localhost:1234/v1", model: "m", app: .lmStudio, apiKey: "a")
+        let b = LocalModelTarget(endpoint: "http://127.0.0.1:1234/v1", model: "m", app: .lmStudio, apiKey: "b")
+        let c = LocalModelTarget(endpoint: "http://127.0.0.1:1234/v1", model: "other", app: .lmStudio, apiKey: "a")
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, c)
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    func set() { lock.withLock { flag = true } }
+    var value: Bool { lock.withLock { flag } }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func bump() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
+extension LocalServerState {
+    fileprivate var reached: LocalServerState { self }
+}

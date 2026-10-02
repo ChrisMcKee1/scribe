@@ -821,4 +821,25 @@ final class DictationControllerTests: XCTestCase {
         await harness.waitUntilProcessed()
         try await harness.dictateAdmitted()
     }
+
+    // MARK: - Local model release
+
+    func testAPauseAsksForTheLocalModelToBeReleasedAndAResumeDoesNot() async {
+        let harness = makeHarness()
+        harness.controller.setPaused(false)
+        await Task.yield()
+        XCTAssertTrue(harness.cleanup.releases.isEmpty)
+
+        harness.controller.setPaused(true)
+        await waitUntil("the pause release is asked for") { harness.cleanup.releases == [.pause] }
+        harness.controller.setPaused(false)
+        await Task.yield()
+        XCTAssertEqual(harness.cleanup.releases, [.pause])
+    }
+
+    func testShutdownAsksForTheLocalModelToBeReleasedOnce() async {
+        let harness = makeHarness()
+        _ = await harness.controller.shutDown()
+        XCTAssertEqual(harness.cleanup.releases.filter { $0 == .shutdown }.count, 1)
+    }
 }

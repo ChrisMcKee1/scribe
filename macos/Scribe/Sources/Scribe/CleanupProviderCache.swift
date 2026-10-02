@@ -29,6 +29,7 @@ final class CleanupProviderCache: Sendable {
     private let checkTimer: @Sendable (Duration) async throws -> Void
     private let readinessTimer: @Sendable (Duration) async throws -> Void
     private let state = OSAllocatedUnfairLock(initialState: CleanupProviderCacheState())
+    let lifecycle: LocalModelLifecycle
 
     /// - Parameters:
     ///   - checkDeadline: How long Test Connection may take for a provider kind; tests shorten it.
@@ -41,8 +42,10 @@ final class CleanupProviderCache: Sendable {
             CleanupProviderCache.checkDeadline(for: $0)
         },
         checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        readinessTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        readinessTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        lifecycle: LocalModelLifecycle = .shared
     ) {
+        self.lifecycle = lifecycle
         self.store = store
         self.environment = environment
         self.factory = factory
@@ -95,6 +98,45 @@ final class CleanupProviderCache: Sendable {
     func invalidate() {
         state.withLock { $0.invalidate() }
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
+        // A configuration that no longer uses the model it served frees it, once its uses have ended. A, B, A is not
+        // a change: `wanted` is asked again when the release commits.
+        Task.detached { [self] in await releaseLocalModel(.configurationChanged) }
+    }
+
+    /// The local model the settings stored now would use, or nil when cleanup is off or not a model on this Mac.
+    func currentLocalTarget() -> LocalModelTarget? {
+        guard store.isEnabled,
+            let connection = try? CleanupProviderResolver.connection(store: store, environment: environment)
+        else { return nil }
+        switch connection.target {
+        case .ollama(let model):
+            return LocalModelTarget(
+                endpoint: ManagedOllamaCleanupProvider.defaultBaseURL.absoluteString, model: model, app: .ollama,
+                apiKey: nil)
+        case .openAICompatible(let url, let model, _, _):
+            guard connection.source == .settings else { return nil }
+            let app =
+                store.selectedLocalApp != .none ? store.selectedLocalApp : LocalAiServer.appAt(url.absoluteString)
+            guard app != .none else { return nil }
+            return LocalModelTarget(endpoint: url.absoluteString, model: model, app: app, apiKey: nil)
+        default:
+            return nil
+        }
+    }
+
+    /// Frees the model last served for `reason`. A configuration change is wanted only while the settings stored now
+    /// no longer use that model.
+    @discardableResult
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async -> LocalModelReleaseOutcome {
+        let served = lifecycle.servedTarget
+        guard served != nil || !lifecycle.ownedCopies.isEmpty else { return .nothingToRelease }
+        let wanted: @Sendable () -> Bool
+        if reason == .configurationChanged {
+            wanted = { [self] in currentLocalTarget() != served }
+        } else {
+            wanted = { true }
+        }
+        return await lifecycle.release(reason, target: served, wanted: wanted)
     }
 
     /// Starts only a known local model. Building the provider, waiting for the shared model lane, checking residency

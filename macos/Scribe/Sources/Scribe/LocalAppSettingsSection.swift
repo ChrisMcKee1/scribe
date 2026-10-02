@@ -55,10 +55,14 @@ final class LocalAppSettingsModel: ObservableObject {
     @Published private var states: [LocalServerApp: LocalServerState] = [:]
     @Published private var loading: Set<LocalServerApp> = []
 
-    private let client: LocalServerClient
+    @Published private(set) var freeMemoryNotice: String?
 
-    init(client: LocalServerClient = LocalServerClient()) {
+    private let client: LocalServerClient
+    private let lifecycle: LocalModelLifecycle
+
+    init(client: LocalServerClient = LocalServerClient(), lifecycle: LocalModelLifecycle = .shared) {
         self.client = client
+        self.lifecycle = lifecycle
     }
 
     func state(for app: LocalServerApp) -> LocalServerState? {
@@ -81,12 +85,16 @@ final class LocalAppSettingsModel: ObservableObject {
         guard app != .none, let endpoint else {
             return
         }
-        do {
-            _ = try await LocalModelDefaults.sharedLane.run {
-                await client.unload(endpoint, modelID: model)
-            }
-        } catch {
-            ScribeLog.warning(.cleanup, "Could not free the local model", .failure(error))
+        let target = LocalModelTarget(endpoint: endpoint, model: model, app: app, apiKey: nil)
+        let outcome = await lifecycle.release(.freeMemory, target: target)
+        switch outcome {
+        case .released, .nothingToRelease:
+            freeMemoryNotice = nil
+        case .drainTimedOut:
+            freeMemoryNotice = "The model is still in use. Try again in a moment."
+        default:
+            freeMemoryNotice = "Could not free the model."
+            ScribeLog.warning(.cleanup, "Could not free the local model", .name("outcome", outcome))
         }
         await refresh(for: app, endpoint: endpoint)
     }
@@ -263,6 +271,9 @@ struct CleanupProviderSettingsSection: View {
                 .disabled(!action.isEnabled)
                 Spacer()
             }
+        }
+        if let notice = local.freeMemoryNotice {
+            Text(notice).font(.caption).foregroundStyle(.secondary)
         }
     }
 

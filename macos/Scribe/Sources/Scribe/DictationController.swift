@@ -392,6 +392,9 @@ final class DictationController {
         } else {
             ScribeLog.info(.dictation, "Dictation resumed")
         }
+        if paused {
+            Task { await services.cleanup.releaseLocalModel(.pause) }
+        }
         if paused, let current = recording {
             endRecording(current.id, reason: .paused)
         } else {
@@ -1415,6 +1418,7 @@ final class DictationController {
         _ = await discardedSeal?.value
         await services.capture.waitUntilIdle()
 
+        await services.cleanup.releaseLocalModel(.shutdown)
         shutdownProgress = .drainingHistory
         let history = services.history
         let timeout = configuration.historyDrainTimeout

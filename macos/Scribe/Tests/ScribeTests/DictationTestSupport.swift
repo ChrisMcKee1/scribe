@@ -531,6 +531,9 @@ final class FakeCleanup: DictationCleaning {
         otherServiceApiStyle: .chatCompletions,
         secretRevision: "")
     private(set) var invalidations = 0
+    private(set) var releases: [LocalModelReleaseReason] = []
+
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async { releases.append(reason) }
 
     init(provider: any CleanupProvider = GatedCleanupProvider()) {
         cleanupProvider = provider

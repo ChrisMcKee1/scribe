@@ -195,6 +195,9 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   context size; only a missing or differently sized model gets a fixed local readying request. It contains no dictated
   text or vocabulary, has a bounded wait, and a failure leaves dictation text intact while cleanup is skipped. Cleanup
   failure notifications use plain language and are suppressed until cleanup recovers or its configuration changes.
+- `LocalModelLifecycle` frees a local model on pause, shutdown, cleanup off, a provider or model change and Free memory.
+  Every release waits for readiness, cleanup and Test connection uses in flight (bounded, cancellable), LM Studio copies
+  Scribe loaded are tracked and retired by instance id, and a failed unload stays owed. There is no idle-minutes setting.
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, and an opt-in AI summary that sends only your
   totals and the recurring terms that are dictionary spellings: never a word mined from your dictations,
