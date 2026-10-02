@@ -63,4 +63,29 @@ final class RealRecognizerScenarioTests: XCTestCase {
         report.note("failures", count: failures)
         report.write()
     }
+
+    func testLongCommittedFixtureUsesBoundedChunksWithTheInstalledRecognizer() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1, with Foundry Local installed, to run the real recognizer.")
+        }
+        let clip = try ScenarioLibrary.shared().clip("long-passage")
+        let samples = clip.samples + [Float](repeating: 0, count: clip.sampleRate) + clip.samples
+        let spans = TranscriptionChunker.plan(samples: samples, sampleRate: clip.sampleRate)
+        XCTAssertEqual(spans.count, 2)
+        XCTAssertTrue(spans.allSatisfy { $0.count <= TranscriptionChunker.maxChunkSeconds * clip.sampleRate })
+
+        let scratch = try makeScenarioDirectory("asr-long")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        let backend = try engine.resolveBackend()
+        XCTAssertEqual(backend.kind, .foundryLocal)
+        XCTAssertEqual(backend.foundryModelAlias, TranscriptionBackendResolver.defaultFoundryModelAlias)
+
+        let result = try await engine.transcribe(samples: samples, sampleRate: Double(clip.sampleRate))
+        let expectedOverlap = ScenarioText.wordOverlap(expected: clip.text, actual: result.text)
+        let recognizedWords = ScenarioPrivacy.words(result.text)
+
+        XCTAssertGreaterThanOrEqual(expectedOverlap, ScenarioText.minimumOverlap)
+        XCTAssertGreaterThanOrEqual(recognizedWords.count, ScenarioPrivacy.words(clip.text).count * 3 / 2)
+    }
 }
