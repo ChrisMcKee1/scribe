@@ -314,7 +314,7 @@ final class CleanupSettingsModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAFoundryLocalChoiceHidesTheLocalAppStatusWorkflow() {
+    func testConnectionTestIsAvailableForEveryProviderChoice() {
         let backing = CleanupSettingsBackingFake()
         let model = makeModel(backing)
 
@@ -322,9 +322,17 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertEqual(model.localAppChoice, .letScribeManageIt)
         XCTAssertTrue(model.showsConnectionTest)
 
+        model.setLocalAppChoice(.ollama)
+        XCTAssertTrue(model.showsConnectionTest)
+
         model.setLocalAppChoice(.lmStudio)
-        XCTAssertFalse(model.showsConnectionTest)
+        XCTAssertTrue(model.showsConnectionTest)
         XCTAssertEqual(backing.stored.openAIBaseURL, LocalAiServer.lmStudioAddress)
+
+        model.setProviderSelection(.otherService)
+        XCTAssertTrue(model.showsConnectionTest)
+        model.setProviderSelection(.microsoftFoundry)
+        XCTAssertTrue(model.showsConnectionTest)
     }
 
     @MainActor

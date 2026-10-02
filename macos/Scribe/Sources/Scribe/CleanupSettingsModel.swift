@@ -263,7 +263,7 @@ final class CleanupSettingsModel: ObservableObject {
     }
 
     var showsConnectionTest: Bool {
-        providerSelection != .onThisMac || localAppChoice == .letScribeManageIt
+        true
     }
 
     var cleanupSummary: String {

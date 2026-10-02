@@ -58,9 +58,9 @@ struct SettingsAdvancedPage: View {
                 SettingsCard(searchID: "advanced.typing-method") {
                     readOnlyCard(
                         title: "Typing method",
-                        value: "Accessibility insertion, then paste, then typing",
+                        value: "Unicode keystrokes",
                         description:
-                            "Scribe first writes through the macOS Accessibility API. If the focused element does not accept that, it borrows the pasteboard for a Command-V paste and restores it when it can. If the paste path is not safe, it types Unicode keystrokes."
+                            "Scribe types Unicode keystrokes directly. The legacy Accessibility and paste path is not selected by the app."
                     )
                 }
                 SettingsCard(searchID: "advanced.line-breaks") { lineBreaksCard }

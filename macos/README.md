@@ -166,9 +166,8 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   dictionary/snippet/profile row actions, stay immediate and are not rolled back by Discard.
   `SettingsWindowController.prepareForApplicationTermination()` reuses the same decisions for quit
   or restart, waits for pending saves/adds, shares an already-open close prompt, and returns false
-  on Keep editing, save failure or newer edits. It leaves Settings editable on refusal. The lifecycle
-  owner must await it before starting shutdown or scheduling a restart; this branch deliberately does
-  not wire AppDelegate, so application-wide protection is not complete until that hook is integrated.
+  on Keep editing, save failure or newer edits. It leaves Settings editable on refusal.
+  `AppDelegate.applicationShouldTerminate` awaits that decision before starting shutdown.
 - History shows the newest 200 stored dictations, with copy and confirmed per-item delete. Search
   runs asynchronously against every stored dictation's text and recorded app identity before limiting
   the displayed matches to 200, with a visible "first 200 matches, newest first" disclosure.
@@ -267,15 +266,17 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 
 ## Known gaps vs. Windows
 
-See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
-the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
-call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
-recognition; the Settings page structure, Find a setting and the Word packs editor now match Windows; automatic
-readiness for Ollama and LM Studio, including the "Starting local model" state, is now ported, but the full idle and
-pause memory-release policy for those models is not; and there is no
-auto-update story yet. Dev
-builds use a local self-signed certificate, and public releases use the Developer ID pipeline documented above. Since
-Windows 0.4.3 the port has gained the space after each dictation, the new recording indicator, Ollama and LM Studio
-under "On this PC", the mentioned-terms glossary disclosed in Settings, context size, the Chat Completions or
-Responses choice for another AI service, and the full word packs editor; see "Windows 0.4.4 to 0.5.4 parity pass" in
-`PORTING-PLAN.md`.
+See `PORTING-PLAN.md`, "Remaining parity gaps, checked against current source", for evidence, the smallest
+implementation surface and any dependency, runtime or credential blocker. Confirmed gaps include VAD trimming,
+multilingual and bundled ASR, chunking long recordings, GitHub Copilot cleanup, durable diagnostics export and logs,
+automatic updates, Intel validation, and full real-ASR scenario coverage. Settings also lacks a separate indicator
+preview and visibility toggle, global writing-style and advanced-prompt editing, Azure resource API-key auth, and
+speech-model/thread controls, an editable idle memory-release duration, and a tray microphone picker. Mouse-button
+shortcuts are not implemented; confirm that product-scope decision before treating them as platform-inapplicable.
+Shortcut input is one key, with Caps Lock as the only toggle, and is deliberately listen-only. Idle and pause release
+for local cleanup models remains incomplete.
+
+The macOS port deliberately keeps its distinct cleanup pipeline and privacy choices; those differences are documented
+separately and are not treated as missing features. The separate parity table also distinguishes those choices from
+stale historical rows. Build signing and release notarization still need real Developer ID credentials for
+end-to-end verification.
