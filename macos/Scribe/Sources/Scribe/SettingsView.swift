@@ -947,7 +947,8 @@ private struct CleanupSettingsTab: View {
                 model: model,
                 drafts: drafts,
                 persistenceStore: persistenceStore,
-                dictionaryLibraryService: dictionaryLibraryService)
+                dictionaryLibraryService: dictionaryLibraryService
+            )
                 .disabled(model.isDisabled(.providerDetails))
 
             if model.showsConnectionTest {

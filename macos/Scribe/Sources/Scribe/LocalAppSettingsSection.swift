@@ -235,7 +235,8 @@ struct CleanupProviderSettingsSection: View {
                 asked: ContextBudget.sanitize(askedContext),
                 vocabularyTokens: vocabularyStatus.wholeVocabularyTokens,
                 vocabularyRoom: vocabularyRoom(inUse: effectiveContext, asked: askedContext)
-            ))
+            )
+        )
             .font(.caption)
             .foregroundStyle(.secondary)
         if let action = status.primary {
