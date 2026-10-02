@@ -3,6 +3,29 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalStatusTests: XCTestCase {
+    func testOnlyUncredentialedLoopbackHTTPAddressesAreLocalEndpoints() throws {
+        for text in [
+            "http://127.0.0.1:5273", "http://127.10.20.30:5273", "https://localhost:5273/v1",
+            "http://[::1]:5273",
+        ] {
+            XCTAssertTrue(FoundryLocalStatus.isLocalEndpoint(try XCTUnwrap(URL(string: text))), text)
+        }
+        for text in [
+            "https://remote.example/v1", "http://127.attacker.example", "http://192.168.1.2:5273",
+            "file:///tmp/service", "http://user:password@localhost:5273", "http://localhost:5273?token=secret",
+            "http://localhost:5273#remote", "http://localhost.attacker.example:5273",
+        ] {
+            let url = try XCTUnwrap(URL(string: text))
+            XCTAssertFalse(FoundryLocalStatus.isLocalEndpoint(url), text)
+            let json = try JSONSerialization.data(
+                withJSONObject: ["service": ["ready": true, "webUrls": [text]]])
+            XCTAssertThrowsError(try FoundryLocalStatus.baseURL(fromStatusOutput: json, exitStatus: 0)) {
+                XCTAssertEqual(
+                    $0 as? CleanupProviderError, .endpointUnavailable(.foundryLocalEndpointNotLocal))
+            }
+        }
+    }
+
     func testAReadyServiceGivesItsFirstWebURL() throws {
         let json = #"{"service":{"ready":true,"webUrls":["http://127.0.0.1:5273","http://localhost:5273"]}}"#
 
@@ -86,6 +109,73 @@ final class FoundryLocalStatusTests: XCTestCase {
 }
 
 final class FoundryLocalCleanupProviderTests: XCTestCase {
+    func testAnInjectedRemoteStatusCannotSendTheTranscript() async throws {
+        let log = RequestLog()
+        let provider = makeProvider(status: FakeFoundryStatus(endpoints: ["https://remote.example/v1"])) { request in
+            log.record(request)
+            return StubReply.completion(request, "never")
+        }
+        let failure = try await cleanupFailure(of: provider)
+        XCTAssertEqual(failure, .endpointUnavailable(.foundryLocalEndpointNotLocal))
+        XCTAssertTrue(log.all.isEmpty)
+    }
+
+    func testAServiceRefreshCannotReplaceLoopbackWithARemoteDestination() async throws {
+        let log = RequestLog()
+        let moved = StubSwitch()
+        let provider = makeProvider(
+            status: FakeFoundryStatus(endpoints: ["http://127.0.0.1:5273", "https://remote.example/v1"])
+        ) { request in
+            log.record(request)
+            if moved.isOn { throw URLError(.cannotConnectToHost) }
+            return StubReply.completion(request, "Cleaned.")
+        }
+        _ = try await provider.clean(CleanupRequest(transcript: "first dictation"))
+        moved.turnOn()
+        let failure = try await cleanupFailure(of: provider)
+        XCTAssertEqual(failure, .endpointUnavailable(.foundryLocalEndpointNotLocal))
+        XCTAssertEqual(log.all.count, 2)
+        XCTAssertTrue(log.all.allSatisfy { $0.host == "127.0.0.1" })
+    }
+
+    func testFoundryTransportDropsProxyCookiesAndCacheButKeepsInjectedRoutingAndTimeouts() {
+        let original = URLSessionConfiguration.ephemeral
+        original.connectionProxyDictionary = ["HTTPEnable": 1, "HTTPProxy": "remote.example", "HTTPPort": 8080]
+        original.httpShouldSetCookies = true
+        original.urlCache = URLCache(memoryCapacity: 1024, diskCapacity: 1024)
+        original.protocolClasses = [StubURLProtocol.self]
+        original.timeoutIntervalForResource = 300
+        let safe = FoundryLocalCleanupProvider.localConfiguration(original)
+        XCTAssertEqual(safe.connectionProxyDictionary?.count, 0)
+        XCTAssertFalse(safe.httpShouldSetCookies)
+        XCTAssertEqual(safe.httpCookieAcceptPolicy, .never)
+        XCTAssertNil(safe.httpCookieStorage)
+        XCTAssertNil(safe.urlCache)
+        XCTAssertEqual(safe.timeoutIntervalForResource, 300)
+        XCTAssertTrue(safe.protocolClasses?.first == StubURLProtocol.self)
+    }
+
+    func testTheLocalTransportDelegateRefusesARedirectBeforeItsBodyCanBeForwarded() throws {
+        let session = makeStubSession { request in StubReply.completion(request, "never") }
+        defer { session.invalidateAndCancel() }
+        let initial = try XCTUnwrap(URL(string: "http://127.0.0.1:5273/v1/chat/completions"))
+        let destination = try XCTUnwrap(URL(string: "https://remote.example/v1/chat/completions"))
+        let task = session.dataTask(with: initial)
+        defer { task.cancel() }
+        let response = try XCTUnwrap(
+            HTTPURLResponse(
+                url: initial, statusCode: 307, httpVersion: nil,
+                headerFields: ["Location": destination.absoluteString]))
+        var called = false
+        LocalServerClient.RedirectRefusingURLSessionDelegate().urlSession(
+            session, task: task, willPerformHTTPRedirection: response, newRequest: URLRequest(url: destination)
+        ) { redirected in
+            called = true
+            XCTAssertNil(redirected)
+        }
+        XCTAssertTrue(called)
+    }
+
     private func makeProvider(
         status: FakeFoundryStatus, clock: TestClock = TestClock(), _ handler: @escaping StubURLProtocol.Handler
     ) -> FoundryLocalCleanupProvider {

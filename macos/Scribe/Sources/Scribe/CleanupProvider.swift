@@ -340,6 +340,7 @@ enum CleanupEndpointProblem: Error, Equatable, Sendable {
     case foundryLocalLaunchFailed
     case foundryLocalNotReady
     case foundryLocalStatusUnreadable
+    case foundryLocalEndpointNotLocal
     case foundryLocalStatusTimedOut
 
     var message: String {
@@ -354,6 +355,8 @@ enum CleanupEndpointProblem: Error, Equatable, Sendable {
                 + "again."
         case .foundryLocalStatusUnreadable:
             return "Foundry Local reported its status in a form Scribe could not read."
+        case .foundryLocalEndpointNotLocal:
+            return "Foundry Local did not report a valid address on this Mac. Scribe sent no text. Check Foundry Local."
         case .foundryLocalStatusTimedOut:
             return "Foundry Local did not report its status in time."
         }

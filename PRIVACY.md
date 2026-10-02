@@ -194,6 +194,13 @@ endpoint.
 AI features are optional. The default Foundry Local provider runs on the device,
 so the text it cleans, its instructions and your vocabulary stay on the device.
 
+The native macOS app requires Foundry Local's reported cleanup address to be
+HTTP or HTTPS on literal loopback or `localhost`, without embedded credentials,
+query or fragment. It sends no text to an address outside that boundary.
+Its Foundry Local transport bypasses proxies, refuses redirects, and keeps no
+cookies or response cache. A rejected address makes cleanup unavailable rather
+than changing where the text goes.
+
 A model on this PC, Foundry Local or Ollama or LM Studio at its own address, can
 also receive your whole vocabulary. With "Send your whole vocabulary when it
 fits" on for that app, each cleanup request carries all of the vocabulary

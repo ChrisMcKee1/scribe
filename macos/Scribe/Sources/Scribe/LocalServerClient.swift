@@ -601,7 +601,7 @@ extension LocalServerClient {
         case post = "POST"
     }
 
-    fileprivate final class RedirectRefusingURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    final class RedirectRefusingURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(
             _ session: URLSession,
             task: URLSessionTask,

@@ -252,6 +252,10 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
 - Scribe removes only what it made: the private recording it hands the recognizer, as soon as the recognizer
   returns, and any a crash left behind, at the next launch. It never deletes Foundry Local's or Ollama's model
   caches, which you installed and which other apps share
+- Foundry Local cleanup accepts only an HTTP or HTTPS address on literal loopback or `localhost`, without embedded
+  credentials, query or fragment. It bypasses proxies and refuses redirects, so a service response cannot move the
+  cleanup request to another destination. A refused address sends no text and reports why; the network session keeps
+  no cookies or response cache. An intentionally remote server belongs under Another AI service instead.
 
 ## Tests
 

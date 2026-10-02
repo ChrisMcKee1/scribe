@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import os
 
@@ -43,8 +44,25 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         self.modelAlias = modelAlias
         self.status = status
         self.timeout = timeout
-        self.transport = ChatCompletionsTransport(session: session)
+        self.transport = ChatCompletionsTransport(
+            session: URLSession(
+                configuration: Self.localConfiguration(session.configuration),
+                delegate: LocalServerClient.RedirectRefusingURLSessionDelegate(), delegateQueue: nil))
         self.now = now
+    }
+
+    static func localConfiguration(_ configuration: URLSessionConfiguration) -> URLSessionConfiguration {
+        configuration.connectionProxyDictionary = [:] as [AnyHashable: Any]
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
+    deinit {
+        transport.session.invalidateAndCancel()
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
@@ -77,6 +95,9 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         }
 
         let base = try await status.lookup()
+        guard FoundryLocalStatus.isLocalEndpoint(base) else {
+            throw CleanupProviderError.endpointUnavailable(.foundryLocalEndpointNotLocal)
+        }
         guard let url = OpenAICompatibleEndpoint.chatCompletionsURL(for: base) else {
             throw CleanupProviderError.endpointUnavailable(.foundryLocalStatusUnreadable)
         }
@@ -149,6 +170,19 @@ enum FoundryLocalCLI {
 /// The part of `foundry status -o json` the provider reads. See TranscriptionEngine.swift for the sibling
 /// `foundry transcribe -o json` contract, a different JSON shape.
 enum FoundryLocalStatus {
+    static func isLocalEndpoint(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+            components.user == nil, components.password == nil,
+            components.query == nil, components.fragment == nil,
+            let host = url.host(percentEncoded: false)?.lowercased()
+        else { return false }
+        if host == "localhost" || host == "::1" { return true }
+        var address = in_addr()
+        guard inet_pton(AF_INET, host, &address) == 1 else { return false }
+        return UInt32(bigEndian: address.s_addr) >> 24 == 127
+    }
+
     private struct Status: Decodable {
         struct Service: Decodable {
             let ready: Bool?
@@ -165,10 +199,11 @@ enum FoundryLocalStatus {
             throw CleanupProviderError.endpointUnavailable(
                 exitStatus == 0 ? .foundryLocalStatusUnreadable : .foundryLocalNotReady)
         }
-        guard status.service.ready == true, let text = status.service.webUrls?.first, let url = URL(string: text),
-            let host = url.host(percentEncoded: false), !host.isEmpty
-        else {
+        guard status.service.ready == true, let text = status.service.webUrls?.first, let url = URL(string: text) else {
             throw CleanupProviderError.endpointUnavailable(.foundryLocalNotReady)
+        }
+        guard isLocalEndpoint(url) else {
+            throw CleanupProviderError.endpointUnavailable(.foundryLocalEndpointNotLocal)
         }
         return url
     }

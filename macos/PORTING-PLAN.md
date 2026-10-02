@@ -110,6 +110,9 @@ real Mac.
   time after active uses finish. A newer use withdraws it and carries the new retention itself; lengthening the time
   or choosing Never unloads nothing. Test connection uses 180 s for recognized local apps. Foundry Local and speech-memory release
   remain unimplemented, not inapplicable.
+  Foundry Local cleanup now rejects any reported address outside literal loopback or `localhost`, and addresses
+  with embedded credentials, query or fragment. Its ephemeral transport disables proxies, cookies and response
+  caching and refuses redirects. Status parsing and the provider both enforce the destination before any text is sent.
   Cleanup failure notifications now use plain language and appear once per failure episode, resetting on successful
   cleanup or a cleanup configuration change. Real local-runtime release behavior still needs interactive verification.
 - **Rewritten menu bar notices** (0.5.0): applicable Windows dictation and tray notices are wired to the actual
