@@ -11,9 +11,12 @@ final class LibraryCsvFixtureTests: XCTestCase {
 
         for item in fixture.cases {
             let bytes = try fixtureBytes(item.file)
-            let actual = item.read == "managed"
-                ? DictionaryLibraryCsv.parseManaged(bytes)
-                : DictionaryLibraryCsv.parseImport(bytes)
+            let actual: LibraryCsvDocument
+            if item.read == "managed" {
+                actual = DictionaryLibraryCsv.parseManaged(bytes)
+            } else {
+                actual = DictionaryLibraryCsv.parseImport(bytes)
+            }
             XCTAssertTrue(actual.matches(item.expected), item.file)
         }
     }
@@ -238,7 +241,9 @@ extension LibraryCsvDocument {
             && description == rhs.description
             && basedOn == rhs.basedOn
             && terms == rhs.terms
-            && errors.map { RowErrorFixture(line: $0.line, kind: $0.kind, field: $0.field) } == rhs.errors
+            && errors.map {
+                RowErrorFixture(line: $0.line, kind: $0.kind, field: $0.field)
+            } == rhs.errors
             && encoding == LibraryTextEncoding(
                 codePage: rhs.encoding.codePage,
                 byteOrderMark: rhs.encoding.byteOrderMark,

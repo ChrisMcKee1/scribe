@@ -525,41 +525,48 @@ struct LibraryCsvCodec: Sendable {
         var formulaGuard: String?
 
         mutating func take(_ line: String) {
-            setIfNeeded(line, key: "name", value: &name)
-            setIfNeeded(line, key: "category", value: &category)
-            setIfNeeded(line, key: "description", value: &description)
-            setIfNeeded(line, key: "based-on", value: &basedOn)
-            setIfNeeded(line, key: "scribe-format", value: &format)
-            setIfNeeded(line, key: "formula-guard", value: &formulaGuard)
-        }
-
-        private mutating func setIfNeeded(_ line: String, key: String, value: inout String?) {
-            guard value == nil else {
+            guard let pair = metadataPair(from: line) else {
                 return
             }
 
+            switch pair.key {
+            case "name" where name == nil:
+                name = pair.value
+            case "category" where category == nil:
+                category = pair.value
+            case "description" where description == nil:
+                description = pair.value
+            case "based-on" where basedOn == nil:
+                basedOn = pair.value
+            case "scribe-format" where format == nil:
+                format = pair.value
+            case "formula-guard" where formulaGuard == nil:
+                formulaGuard = pair.value
+            default:
+                break
+            }
+        }
+
+        private func metadataPair(from line: String) -> (key: String, value: String)? {
             var body = line
             while body.first == "#" {
                 body.removeFirst()
             }
             body = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard body.count > key.count, body.lowercased().hasPrefix(key) else {
-                return
+            guard let colon = body.firstIndex(of: ":") else {
+                return nil
             }
 
-            let separator = body.index(body.startIndex, offsetBy: key.count)
-            guard body[separator] == ":" else {
-                return
-            }
-            value = String(body[body.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = String(body[..<colon]).lowercased()
+            let value = String(body[body.index(after: colon)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return key.isEmpty ? nil : (key, value)
         }
     }
 
     private func readRawHeader(_ text: String) -> HeaderValues {
         var header = HeaderValues()
-        let normalized = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+        let normalized = normalizeLineEndings(in: text)
 
         for rawLine in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(rawLine)
@@ -575,5 +582,10 @@ struct LibraryCsvCodec: Sendable {
         }
 
         return header
+    }
+
+    private func normalizeLineEndings(in text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
     }
 }

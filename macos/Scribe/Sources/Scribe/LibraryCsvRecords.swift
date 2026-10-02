@@ -53,21 +53,23 @@ enum LibraryCsvRecords {
                 inQuotes = true
                 fieldQuoted = true
             case ",":
-                rawComment = rawComment || endField(
+                let endedRawComment = endField(
                     fields: &fields,
                     field: &field,
                     quoted: fieldQuoted,
                     firstFieldRawPrefix: firstFieldRawPrefix)
+                rawComment = rawComment || endedRawComment
                 fieldQuoted = false
                 firstFieldRawPrefix = String.UnicodeScalarView()
             case "\r":
                 break
             case "\n":
-                rawComment = rawComment || endField(
+                let endedRawComment = endField(
                     fields: &fields,
                     field: &field,
                     quoted: fieldQuoted,
                     firstFieldRawPrefix: firstFieldRawPrefix)
+                rawComment = rawComment || endedRawComment
                 records.append(CsvRecord(line: recordStartLine, fields: fields, rawComment: rawComment))
                 fields = []
                 fieldQuoted = false
@@ -91,11 +93,12 @@ enum LibraryCsvRecords {
         }
 
         if !field.isEmpty || !fields.isEmpty {
-            rawComment = rawComment || endField(
+            let endedRawComment = endField(
                 fields: &fields,
                 field: &field,
                 quoted: fieldQuoted,
                 firstFieldRawPrefix: firstFieldRawPrefix)
+            rawComment = rawComment || endedRawComment
             records.append(CsvRecord(line: recordStartLine, fields: fields, rawComment: rawComment))
         }
 
