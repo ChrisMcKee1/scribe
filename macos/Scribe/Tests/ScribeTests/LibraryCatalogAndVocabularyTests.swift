@@ -2,7 +2,6 @@ import XCTest
 
 @testable import Scribe
 
-@MainActor
 final class LibraryCatalogAndVocabularyTests: XCTestCase {
     private var tempDirectory: URL!
     private var defaults: StorageTestDefaults!
@@ -37,7 +36,8 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
         XCTAssertEqual(catalog.generation, 1)
         XCTAssertTrue(catalog.localState.enabledIdSet.contains("github"))
         XCTAssertEqual(catalog.localState.aiPermissions["team"], true)
-        XCTAssertNotNil(try await store.loadStringSetting(key: DictionaryLibraryService.libraryStateKey))
+        let storedState = try await store.loadStringSetting(key: DictionaryLibraryService.libraryStateKey)
+        XCTAssertNotNil(storedState)
     }
 
     func testLoadCatalogAppliesBuiltInEditsDocument() async throws {

@@ -78,9 +78,8 @@ final class DictionaryLibraryService {
             self.librariesDirectory = overrideDirectory
         } else {
             let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.librariesDirectory = applicationSupportURL
-                .appendingPathComponent("Scribe", isDirectory: true)
-                .appendingPathComponent("Libraries", isDirectory: true)
+            let scribeDirectory = applicationSupportURL.appendingPathComponent("Scribe", isDirectory: true)
+            self.librariesDirectory = scribeDirectory.appendingPathComponent("Libraries", isDirectory: true)
         }
     }
 
@@ -113,9 +112,8 @@ final class DictionaryLibraryService {
         }
 
         let trimmedSuggestion = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = file.name
-            ?? (trimmedSuggestion?.isEmpty == false ? trimmedSuggestion : nil)
-            ?? LibraryNaming.importedLibraryBaseName
+        let fallbackName = trimmedSuggestion?.isEmpty == false ? trimmedSuggestion : nil
+        let name = file.name ?? fallbackName ?? LibraryNaming.importedLibraryBaseName
         let category = file.category ?? "Custom"
 
         try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
@@ -174,10 +172,10 @@ final class DictionaryLibraryService {
         let catalog = try await loadCatalog()
         let composition = compose(catalog: catalog)
         let permitted = catalog.libraries.reduce(into: [String: String?]()) { result, library in
-            let isEligible = isEnabled(library.id, in: catalog.localState)
-                && isUsable(library.state)
-                && isAIPermitted(library, state: catalog.localState)
-            guard isEligible else {
+            let enabled = isEnabled(library.id, in: catalog.localState)
+            let usable = isUsable(library.state)
+            let permitted = isAIPermitted(library, state: catalog.localState)
+            guard enabled && usable && permitted else {
                 return
             }
             result[library.id.lowercased()] = library.contentHash?.value
@@ -261,8 +259,8 @@ final class DictionaryLibraryService {
     private func loadCustomLibraries() -> [CatalogLibrary] {
         guard let fileURLs = try? fileManager.contentsOfDirectory(
             at: librariesDirectory,
-            includingPropertiesForKeys: nil)
-        else {
+            includingPropertiesForKeys: nil
+        ) else {
             return []
         }
 
@@ -404,9 +402,12 @@ final class DictionaryLibraryService {
         let markersByID = Dictionary(grouping: state.legacyMarkers) { $0.libraryId.lowercased() }
         return libraries.map { library in
             let marked = Set((markersByID[library.id.lowercased()] ?? []).map(\.termKey))
-            let authored = library.builtIn
-                ? library.library.authoredKeys
-                : Set(library.library.entries.map { LibraryTermKey.from($0.pattern) })
+            let authored: Set<LibraryTermKey>
+            if library.builtIn {
+                authored = library.library.authoredKeys
+            } else {
+                authored = Set(library.library.entries.map { LibraryTermKey.from($0.pattern) })
+            }
             let decoratedLibrary = DictionaryLibrary(
                 id: library.library.id,
                 name: library.library.name,
@@ -461,9 +462,7 @@ final class DictionaryLibraryService {
         }
 
         let aiEntries = rules.filter { rule in
-            guard let library = activeLibraries.first(where: {
-                $0.id.caseInsensitiveCompare(rule.libraryId) == .orderedSame
-            }) else {
+            guard let library = library(named: rule.libraryId, in: activeLibraries) else {
                 return false
             }
             return isAIPermitted(library, state: catalog.localState)
@@ -480,6 +479,11 @@ final class DictionaryLibraryService {
             aiEntries: aiEntries,
             aiExcludedLibraryIds: aiExcluded,
             enabledLibraries: activeLibraries.map(\.library))
+    }
+
+
+    private func library(named id: String, in libraries: [CatalogLibrary]) -> CatalogLibrary? {
+        libraries.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
     }
 
     private func isEnabled(_ id: String, in state: LibraryLocalState) -> Bool {
@@ -542,9 +546,8 @@ final class DictionaryLibraryService {
         let libraries = loadCatalogLibraries().filter {
             $0.id.caseInsensitiveCompare(id) != .orderedSame
         }
-        var state = try decodeState(
-            persistenceStore.readStringSetting(key: Self.libraryStateKey)
-        ) ?? migratedState(for: libraries)
+        let rawState = try persistenceStore.readStringSetting(key: Self.libraryStateKey)
+        var state = try decodeState(rawState) ?? migratedState(for: libraries)
         state.generation = max(1, state.generation + 1)
         state.setAcceptedContent(contentHash, for: id)
         state.setAIPermission(false, for: id)
@@ -569,10 +572,11 @@ final class DictionaryLibraryService {
 
     private func allKnownIDs() -> [String] {
         let builtIn = BuiltInDictionaryLibraries.all.map(\.id)
-        let custom = ((try? fileManager.contentsOfDirectory(
+        let discovered = try? fileManager.contentsOfDirectory(
             at: librariesDirectory,
             includingPropertiesForKeys: nil
-        )) ?? [])
+        )
+        let custom = (discovered ?? [])
             .filter { $0.pathExtension.lowercased() == "csv" }
             .map { $0.deletingPathExtension().lastPathComponent }
         return builtIn + custom
