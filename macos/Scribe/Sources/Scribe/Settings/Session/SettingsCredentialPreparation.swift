@@ -10,6 +10,12 @@ struct SettingsCredentialID: Hashable, Sendable {
     let slot: SettingsCredentialSlot
     let account: String
 
+    init(slot: SettingsCredentialSlot, account: String) {
+        self.slot = slot
+        self.account =
+            slot == .azureClientSecret ? CleanupSettingsStore.secretAccount(forClientId: account) : account
+    }
+
     var key: String { slot.rawValue + ":" + account }
 }
 
@@ -61,6 +67,9 @@ enum SettingsCredentialPreparer {
                     do {
                         for (id, edit) in edits {
                             guard !completion.isFinished else { throw CancellationError() }
+                            guard id.slot != .azureClientSecret || !id.account.isEmpty else {
+                                throw SettingsSaveFailure.credentials
+                            }
                             switch edit {
                             case .keep:
                                 break
@@ -98,8 +107,8 @@ enum SettingsCredentialPreparer {
                             worker.cancel()
                         }
                     }
-                    completion.register(timer)
                 }
+                completion.register(timer)
             }
         } onCancel: {
             _ = completion.finish(.failure(SettingsSaveFailure.cancelled))

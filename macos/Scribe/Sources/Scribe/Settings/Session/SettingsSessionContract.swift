@@ -278,8 +278,8 @@ struct SettingsCommitReceipt: Codable, Equatable, Sendable {
         id = try container.decode(UUID.self, forKey: .id)
         revision = try container.decode(UInt64.self, forKey: .revision)
         document = try container.decode(SettingsDocument.self, forKey: .document)
-        attachment = try container.decodeIfPresent(SettingsCommitAttachment.self, forKey: .attachment)
-            ?? SettingsCommitAttachment()
+        let decodedAttachment = try container.decodeIfPresent(SettingsCommitAttachment.self, forKey: .attachment)
+        attachment = decodedAttachment ?? SettingsCommitAttachment()
         rowIDs = try container.decodeIfPresent([String: Int64].self, forKey: .rowIDs) ?? [:]
     }
 }

@@ -752,6 +752,7 @@ final class PersistenceStore: Sendable {
 
     func commitSettingsSession(_ submission: SettingsSubmission) async throws -> SettingsCommitReceipt {
         guard SettingsSessionValidation.isValid(submission.document) else { throw SettingsSaveFailure.validation }
+        try Self.requirePreparedSessionCredentials(submission)
         let receipt = try await owner.withSessionAsync(.foreground) { session in
             try session.transaction(.write) {
                 let current = try Self.readSettingsSession(session)
@@ -813,6 +814,29 @@ final class PersistenceStore: Sendable {
         }
         removedText.record()
         return receipt
+    }
+
+    private static func requirePreparedSessionCredentials(_ submission: SettingsSubmission) throws {
+        guard submission.credentials.values.contains(where: { $0 != .keep }) else { return }
+        guard let encoded = submission.attachment.values[SettingsCredentialReference.storageKey] ?? nil else {
+            throw SettingsSaveFailure.credentials
+        }
+        let references = try JSONDecoder().decode(
+            [String: SettingsCredentialReference].self, from: Data(encoded.utf8))
+        for (id, edit) in submission.credentials {
+            switch edit {
+            case .keep:
+                break
+            case .remove:
+                guard references[id.key] == .absent else { throw SettingsSaveFailure.credentials }
+            case .replace:
+                guard case .account(let account)? = references[id.key], account.hasPrefix("settings-"),
+                    UUID(uuidString: String(account.dropFirst("settings-".count))) != nil
+                else {
+                    throw SettingsSaveFailure.credentials
+                }
+            }
+        }
     }
 
     func updateSettingsExternal(

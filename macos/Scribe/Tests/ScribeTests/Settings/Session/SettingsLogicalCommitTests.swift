@@ -216,6 +216,42 @@ final class SettingsLogicalCommitTests: XCTestCase {
         XCTAssertFalse(marker.contains("private-name"))
     }
 
+    func testCredentialEditWithoutPreparationIsRefusedRatherThanReportedSaved() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let baseline = try await fixture.adapter.load()
+        let session = SettingsSession(
+            initial: baseline, access: fixture.adapter.access(apply: { _ in .applied }))
+        session.editCredential(SettingsCredentialID(slot: .customApiKey, account: "default"), .remove)
+        let result = await session.save()
+        XCTAssertEqual(result, .notCommitted(.credentials))
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertNil(try fixture.store.readStringSetting(key: SettingsStoredDocument.key))
+    }
+
+    func testPreparedCredentialReferenceCommitsWithDocumentButSecretNeverEntersSQLite() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let secretStore = InMemorySecretStore(["default": "previous-secret"])
+        let preparation = SettingsSavePreparation(
+            database: fixture.store, stores: [.customApiKey: secretStore])
+        let session = SettingsSession(
+            initial: try await fixture.adapter.load(),
+            access: fixture.adapter.access(preparation: preparation, apply: { _ in .applied }))
+        session.editCredential(
+            SettingsCredentialID(slot: .customApiKey, account: "default"), .replace("never-store-this-secret"))
+        let result = await session.save()
+        XCTAssertTrue(result.mayClose)
+        let state = try await fixture.store.loadSettingsSession()
+        let references = try XCTUnwrap(state.stored?.credentialReferences)
+        let selected = SettingsReferencedSecretStore(
+            base: secretStore, slot: .customApiKey, references: references)
+        XCTAssertEqual(try selected.secret(for: "default"), "never-store-this-secret")
+        XCTAssertEqual(try secretStore.secret(for: "default"), "previous-secret")
+        let encoded = try XCTUnwrap(fixture.store.readStringSetting(key: SettingsStoredDocument.key))
+        XCTAssertFalse(encoded.contains("never-store-this-secret"))
+    }
+
     func testAnExternalWordAddedWithTheSameSpokenFormIsNotDuplicatedBySave() async throws {
         let fixture = try SessionStorageFixture()
         defer { fixture.remove() }

@@ -45,12 +45,15 @@ WS4 prepares images before commit and returns a `SettingsCommitAttachment`:
 var attachment = SettingsCommitAttachment()
 attachment.expectedValues["word_pack_state_v1"] = .some(previousState)
 attachment.values["word_pack_state_v1"] = nextState
-submission.attachment = attachment
+submission.attachment.expectedValues.merge(attachment.expectedValues) { _, value in value }
+submission.attachment.values.merge(attachment.values) { _, value in value }
 ```
 
 To expect absence, use `.some(nil)`; assigning nil to the dictionary subscript removes the check. Do not attach a write
 to `settings.document.v1` or `history_retention_days`: those belong to the session. `receipt.attachment` is available to
-the post-commit installer. Install/publication failure returns notApplied, never an ordinary partial Save.
+the post-commit installer. Merge into an existing attachment rather than replacing prepared credential references.
+Install/publication failure returns notApplied, never an ordinary partial Save. Durable receipt witnesses contain only
+identities; recovery re-reads current committed values rather than retaining deleted private text in receipt copies.
 
 `SettingsSavePreparation` composes bounded Keychain preparation and the participant. Use
 `SettingsLegacyStore.access(preparation:apply:)` to retire preparation ownership after commit and clean uncommitted

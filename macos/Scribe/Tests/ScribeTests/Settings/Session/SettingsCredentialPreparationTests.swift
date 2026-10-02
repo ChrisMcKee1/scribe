@@ -102,6 +102,20 @@ final class SettingsCredentialPreparationTests: XCTestCase {
         XCTAssertEqual(store.writes, 0)
         XCTAssertFalse(String(reflecting: SettingsCredentialEdit.replace("private")).contains("private"))
     }
+
+    func testAzureReferenceUsesTheLegacyTrimmedClientAccount() async throws {
+        let store = InMemorySecretStore(["client": "old"])
+        let id = SettingsCredentialID(slot: .azureClientSecret, account: " client ")
+        XCTAssertEqual(id.account, "client")
+        let prepared = try await SettingsCredentialPreparer.prepare(
+            edits: [id: .replace("new")], existing: [:], stores: [.azureClientSecret: store])
+        let selected = SettingsReferencedSecretStore(
+            base: store, slot: .azureClientSecret, references: prepared.references)
+        XCTAssertEqual(try selected.secret(for: "client"), "new")
+        for allocated in prepared.allocated {
+            try store.removeSecret(for: allocated.account)
+        }
+    }
 }
 
 private final class HoldingSessionSecretStore: SecretStore {
