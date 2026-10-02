@@ -265,8 +265,9 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
         case .openAIEndpointInvalid:
             fix = "Enter an endpoint address that starts with http:// or https:// and names a host"
         case .openAIOldCompletionsPath:
-            fix = "Enter the service base address, or one ending in /chat/completions or /responses. The older "
-                + "/completions path is not supported"
+            fix =
+                "Enter the service base address, or one ending in /chat/completions or /responses. "
+                + "The older /completions path is not supported"
         case .azureEndpointInvalid:
             fix =
                 "Enter the Microsoft Foundry endpoint as an https:// address that names the resource (for example "

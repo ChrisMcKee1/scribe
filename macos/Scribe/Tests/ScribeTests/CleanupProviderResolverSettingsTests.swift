@@ -253,7 +253,7 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         XCTAssertEqual(
             resolved.target,
             .openAICompatible(
-                serviceURL: URL(string: "http://127.0.0.1:1234/v1")!,
+                serviceURL: URL(string: "http://127.0.0.1:1234")!,
                 model: "local-model",
                 apiKey: .environment,
                 apiStyle: .chatCompletions))

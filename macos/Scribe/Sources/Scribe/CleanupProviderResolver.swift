@@ -291,7 +291,7 @@ enum CleanupProviderResolver {
         }
         guard let base = URL(string: baseText),
             let scheme = base.scheme?.lowercased(),
-            (scheme == "http" || scheme == "https"),
+            scheme == "http" || scheme == "https",
             base.host?.isEmpty == false
         else {
             throw CleanupProviderError.notConfigured(.openAIEndpointInvalid, source: source)
