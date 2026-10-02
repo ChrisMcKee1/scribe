@@ -11,6 +11,7 @@ struct CleanupSettingsValues: Equatable {
     var openAIModel: String
     var azureEndpoint: String
     var azureDeployment: String
+    var azurePromptCaching = true
     var azureAuthMode: AzureAuthMode
     var azureTenantId: String
     var azureClientId: String
@@ -57,6 +58,7 @@ extension CleanupSettingsAccess {
                     openAIModel: stored.openAIModel,
                     azureEndpoint: stored.azureEndpoint,
                     azureDeployment: stored.azureDeployment,
+                    azurePromptCaching: stored.azurePromptCaching,
                     azureAuthMode: stored.azureAuthMode,
                     azureTenantId: stored.azureTenantId,
                     azureClientId: stored.azureClientId)
@@ -72,6 +74,9 @@ extension CleanupSettingsAccess {
                 if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
                 if new.azureEndpoint != old.azureEndpoint { store.azureEndpoint = new.azureEndpoint }
                 if new.azureDeployment != old.azureDeployment { store.azureDeployment = new.azureDeployment }
+                if new.azurePromptCaching != old.azurePromptCaching {
+                    store.azurePromptCaching = new.azurePromptCaching
+                }
                 if new.azureAuthMode != old.azureAuthMode { store.azureAuthMode = new.azureAuthMode }
                 if new.azureTenantId != old.azureTenantId { store.azureTenantId = new.azureTenantId }
                 if new.azureClientId != old.azureClientId { store.azureClientId = new.azureClientId }

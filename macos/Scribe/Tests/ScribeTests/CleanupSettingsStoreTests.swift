@@ -17,6 +17,7 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.openAIModel, "")
         XCTAssertEqual(store.azureEndpoint, "")
         XCTAssertEqual(store.azureDeployment, "")
+        XCTAssertTrue(store.azurePromptCaching)
         XCTAssertEqual(store.azureAuthMode, .azureCli)
         XCTAssertEqual(store.azureTenantId, "")
         XCTAssertEqual(store.azureClientId, "")
@@ -38,6 +39,7 @@ final class CleanupSettingsStoreTests: XCTestCase {
         store.openAIModel = "local-model"
         store.azureEndpoint = endpoint
         store.azureDeployment = "gpt-5-mini"
+        store.azurePromptCaching = false
         store.azureAuthMode = .servicePrincipal
         store.azureTenantId = "11111111-1111-1111-1111-111111111111"
         store.azureClientId = "client-1"
@@ -47,7 +49,8 @@ final class CleanupSettingsStoreTests: XCTestCase {
             CleanupSettingsSnapshot(
                 isEnabled: true, providerKind: .microsoftFoundry, foundryLocalModelAlias: "qwen2.5-3b",
                 ollamaModel: "llama3.2:1b", openAIBaseURL: "http://localhost:1234", openAIModel: "local-model",
-                azureEndpoint: endpoint, azureDeployment: "gpt-5-mini", azureAuthMode: .servicePrincipal,
+                azureEndpoint: endpoint, azureDeployment: "gpt-5-mini", azurePromptCaching: false,
+                azureAuthMode: .servicePrincipal,
                 azureTenantId: "11111111-1111-1111-1111-111111111111", azureClientId: "client-1", secretRevision: ""))
         XCTAssertEqual(fixture.defaults.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)
         XCTAssertTrue(fixture.defaults.bool(forKey: "ScribeAiCleanupEnabled"))

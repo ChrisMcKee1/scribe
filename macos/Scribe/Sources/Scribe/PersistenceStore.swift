@@ -913,6 +913,21 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    /// `applyDictionaryChanges(inserts:updates:)` for main-actor callers.
+    func saveDictionaryChanges(inserts: [DictionaryEntry], updates: [DictionaryEntry]) async throws {
+        guard !inserts.isEmpty || !updates.isEmpty else {
+            return
+        }
+        try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) {
+                try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+            }
+        }
+        if !updates.isEmpty {
+            removedText.record()
+        }
+    }
+
     /// Imports parsed CSV rows against the dictionary as it is stored at that moment: the stored rows
     /// are read, merged with `imported` by spoken form (`DictionaryImportMerger`) and the result is
     /// written, all in one `BEGIN IMMEDIATE` transaction. So an import never plans against rows a

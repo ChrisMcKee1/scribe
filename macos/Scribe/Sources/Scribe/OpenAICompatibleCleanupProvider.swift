@@ -88,6 +88,8 @@ struct ChatCompletionsTransport: Sendable {
         model: String,
         bearerToken: String?,
         temperature: Double?,
+        reasoningEffort: String? = nil,
+        promptCacheMode: String? = nil,
         defaultTimeout: TimeInterval,
         provider: CleanupProviderKind
     ) async throws -> Completion {
@@ -107,7 +109,9 @@ struct ChatCompletionsTransport: Sendable {
                     ChatCompletionRequest.Message(role: "user", content: cleanupRequest.transcript),
                 ],
                 temperature: temperature,
+                reasoningEffort: reasoningEffort,
                 maxCompletionTokens: cleanupRequest.maxOutputTokens,
+                promptCacheOptions: promptCacheMode.map { ChatCompletionRequest.PromptCacheOptions(mode: $0) },
                 stream: false))
 
         let started = ContinuousClock.now
@@ -173,6 +177,10 @@ struct ChatCompletionsTransport: Sendable {
 // MARK: - Wire format
 
 struct ChatCompletionRequest: Encodable, Sendable {
+    struct PromptCacheOptions: Encodable, Sendable {
+        let mode: String
+    }
+
     struct Message: Encodable, Sendable {
         let role: String
         let content: String
@@ -182,16 +190,21 @@ struct ChatCompletionRequest: Encodable, Sendable {
     let messages: [Message]
     /// Left out of the body when `nil`.
     let temperature: Double?
+    /// Left out of the body when `nil`.
+    let reasoningEffort: String?
     /// Left out of the body when `nil`. `max_completion_tokens` rather than the older `max_tokens`, which reasoning
     /// deployments refuse; it is the field Windows' OpenAI client sends for the same limit.
     let maxCompletionTokens: Int?
+    let promptCacheOptions: PromptCacheOptions?
     let stream: Bool
 
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case temperature
+        case reasoningEffort = "reasoning_effort"
         case maxCompletionTokens = "max_completion_tokens"
+        case promptCacheOptions = "prompt_cache_options"
         case stream
     }
 }

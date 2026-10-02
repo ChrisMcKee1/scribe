@@ -42,7 +42,7 @@ final class DictationControllerTests: XCTestCase {
         harness.controller.setPaused(false)
         await harness.dictate()
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
     }
 
     /// A pause while the device is still opening ends the recording before it ever captured anything: the open's late
@@ -146,7 +146,7 @@ final class DictationControllerTests: XCTestCase {
         harness.capture.releaseSeal(first)
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.transcriber.sampleCounts, [1_600, 3_200])
-        XCTAssertEqual(harness.fakeInjector.texts, ["first words", "second words"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["first words ", "second words "])
         XCTAssertEqual(harness.history.dictationIDs, [first.rawValue, second.rawValue])
     }
 
@@ -196,7 +196,7 @@ final class DictationControllerTests: XCTestCase {
         _ = await bounded("the engine's device work to finish") { await engine.waitUntilIdle() }
 
         XCTAssertEqual(flush.releasedBy, .test)
-        XCTAssertEqual(harness.fakeInjector.texts, ["first words", "second words"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["first words ", "second words "])
         XCTAssertEqual(harness.transcriber.sampleCounts.count, 2)
         XCTAssertTrue(harness.transcriber.sampleCounts.allSatisfy { $0 > 0 }, "a dictation lost its samples")
         XCTAssertEqual(firstDevice.counts.closed, 1)
@@ -271,6 +271,38 @@ final class DictationControllerTests: XCTestCase {
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.transcriber.calls, 2)
         XCTAssertEqual(harness.fakeInjector.deliveries.count, 2)
+    }
+
+    func testASessionInterruptionEndsALiveRecordingAndStillProcessesWhatItCaptured() async throws {
+        let harness = makeHarness()
+
+        _ = try await harness.pressAdmitted()
+        await harness.waitUntilLive()
+        harness.controller.handleSessionInterruption()
+
+        await waitUntil("the interrupted recording stops") { harness.controller.currentRecording == nil }
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(harness.reports.latest?.stopReason, .sessionInterrupted)
+        XCTAssertEqual(harness.fakeInjector.deliveries.count, 1)
+    }
+
+    func testASessionInterruptionWhileTheMicrophoneOpensLeavesNothingRecordingAndNothingProcessed() async throws {
+        let harness = makeHarness()
+        harness.capture.holdsOpens = true
+
+        let id = try await harness.pressAdmitted()
+        await waitUntil("the open is pending") { harness.capture.pendingOpens == 1 }
+        harness.controller.handleSessionInterruption()
+        XCTAssertEqual(harness.capture.stopCount(for: id), 1)
+
+        harness.capture.completeOpen(id, .stoppedWhileOpening)
+        await waitUntil("the interrupted open answer is handled") { harness.controller.checkpoints.openAnswers == 1 }
+
+        XCTAssertNil(harness.controller.currentRecording)
+        XCTAssertEqual(harness.transcriber.calls, 0)
+        XCTAssertEqual(harness.controller.processingCount, 0)
+        XCTAssertFalse(harness.activity.isActive)
     }
 
     /// A held key never stops on silence, and neither does the toggle key (Caps Lock, the default) unless the user
@@ -546,8 +578,21 @@ final class DictationControllerTests: XCTestCase {
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.lastOverlay, .notice(.textKept))
         await waitUntil("the notice's end is scheduled") { harness.clock.sleeperCount == 1 }
-        harness.clock.advance(by: DictationController.Configuration().noticeDuration)
+        harness.clock.advance(by: PillTiming.noticeHold)
         await waitUntil("the notice ends") { harness.lastOverlay == .hidden }
+    }
+
+    func testASuccessfulDictationShowsTypedBrieflyThenHides() async {
+        let harness = makeHarness()
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(harness.lastOverlay, .notice(.typed))
+        XCTAssertEqual(harness.presenter.noticesShown().last, .typed)
+        await waitUntil("the typed outcome's end is scheduled") { harness.clock.sleeperCount == 1 }
+        harness.clock.advance(by: PillTiming.typedHold)
+        await waitUntil("the typed outcome ends") { harness.lastOverlay == .hidden }
     }
 
     // MARK: - Who owns the pill
@@ -568,8 +613,8 @@ final class DictationControllerTests: XCTestCase {
 
         reply.fail(DictationTestFailure(code: 5))
         await waitUntil("A is delivered raw") { harness.fakeInjector.deliveries.count == 1 }
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
-        XCTAssertEqual(harness.notifier.kinds, [.cleanupFellBack])
+        await waitUntil("the fallback notification is posted") { harness.notifier.kinds == [.cleanupFellBack] }
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
         XCTAssertTrue(isListening(harness.lastOverlay), "A's fallback covered B's meter")
         XCTAssertTrue(harness.controller.noticeSchedule.waiting.isEmpty, "the fallback also waits for the pill")
 
@@ -577,7 +622,7 @@ final class DictationControllerTests: XCTestCase {
         harness.cleanup.isEnabled = false
         harness.release()
         await harness.waitUntilProcessed()
-        XCTAssertFalse(harness.presenter.noticesShown().contains(.cleanupFellBack), "said twice")
+        XCTAssertFalse(harness.presenter.noticesShown().contains(.typedWithoutCleanup), "said twice")
     }
 
     /// The fallback notification goes out before the dictation is delivered, so it says nothing about insertion. Here

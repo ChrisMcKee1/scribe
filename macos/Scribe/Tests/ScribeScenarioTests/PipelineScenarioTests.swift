@@ -65,7 +65,7 @@ final class PipelineScenarioTests: XCTestCase {
         XCTAssertTrue(harness.notifier.notices.isEmpty, "a notice was posted: \(harness.notifier.notices.map(\.kind))")
         XCTAssertEqual(
             harness.recovery.recent(),
-            script.lines.suffix(LastTranscriptStore.capacity).reversed().map(\.delivered),
+            script.lines.suffix(LastTranscriptStore.capacity).reversed().map(\.recorded),
             "Recent Dictations does not hold the newest deliveries, newest first")
         assertNothingDictatedWasLogged(script, log)
 
@@ -84,7 +84,11 @@ final class PipelineScenarioTests: XCTestCase {
         let chosen = ["list", "snippet-signature", "long-passage", "dict-kubernetes"]
         let lines = editor.filter { chosen.contains($0.clip.name) }.map { line in
             PipelineLine(
-                clip: line.clip, sent: line.sent, reply: line.reply, cleaned: line.cleaned,
+                clip: line.clip,
+                sent: line.sent,
+                reply: line.reply,
+                cleaned: line.cleaned,
+                recorded: Self.flattened(line.recorded),
                 delivered: Self.flattened(line.delivered))
         }
         let script = PipelineScript(lines: lines)
@@ -174,8 +178,10 @@ final class PipelineScenarioTests: XCTestCase {
             let sent = ScenarioVocabulary.corrected(clip.text)
             let answered = reply ?? sent
             let carried = cleaned ?? answered
+            let recorded = delivered ?? carried
             return PipelineLine(
-                clip: clip, sent: sent, reply: answered, cleaned: carried, delivered: delivered ?? carried)
+                clip: clip, sent: sent, reply: answered, cleaned: carried, recorded: recorded,
+                delivered: DictationInsertion.textToType(recorded, addSpaceAfterDictation: true))
         }
         let passage = try library.clip("long-passage").text
         let longer = try library.clip("longer").text
@@ -284,7 +290,7 @@ final class PipelineScenarioTests: XCTestCase {
     /// it went to.
     private func assertHistory(_ script: PipelineScript, _ harness: PipelineHarness, targetApp: String) throws {
         let rows = try harness.store.fetchDictationHistory(limit: 100)
-        XCTAssertEqual(rows.map { $0.transcriptText ?? "" }, harness.injector.deliveries.map(\.text))
+        XCTAssertEqual(rows.map { $0.transcriptText ?? "" }, script.lines.map(\.recorded))
         XCTAssertEqual(rows.count, script.lines.count)
         XCTAssertTrue(rows.allSatisfy { $0.targetApp == targetApp }, "\(rows.map(\.targetApp))")
         XCTAssertTrue(rows.allSatisfy { $0.durationSeconds > 0 && $0.sampleCount > 0 })
@@ -304,7 +310,8 @@ final class PipelineScenarioTests: XCTestCase {
     /// or either unified log argument.
     private func assertNothingDictatedWasLogged(_ script: PipelineScript, _ log: ScenarioLogRecorder) {
         let texts =
-            script.lines.flatMap { [$0.clip.text, $0.sent, $0.reply, $0.cleaned, $0.delivered] } + Self.neverLogged
+            script.lines.flatMap { [$0.clip.text, $0.sent, $0.reply, $0.cleaned, $0.recorded, $0.delivered] }
+            + Self.neverLogged
         XCTAssertGreaterThan(log.renderings.count, 0, "nothing was logged, so nothing was checked")
         XCTAssertEqual(ScenarioPrivacy.leaks(of: texts, in: log), [], "dictated content reached the log")
     }

@@ -19,6 +19,7 @@ final class CleanupSettingsBackingFake {
         openAIModel: "",
         azureEndpoint: "",
         azureDeployment: "",
+        azurePromptCaching: true,
         azureAuthMode: .azureCli,
         azureTenantId: "",
         azureClientId: "")
@@ -133,6 +134,19 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertEqual(backing.saves.count, 1)
         XCTAssertEqual(backing.stored.openAIBaseURL, "http://localhost:1234")
         XCTAssertTrue(backing.stored.isEnabled)
+    }
+
+    @MainActor
+    func testThePromptCacheSwitchStoresTheNewestChoice() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        let model = makeModel(backing)
+
+        model.values.azurePromptCaching = false
+
+        XCTAssertFalse(backing.stored.azurePromptCaching)
+        backing.storeFromElsewhere { $0.azurePromptCaching = true }
+        XCTAssertTrue(model.values.azurePromptCaching)
     }
 
     /// The re-read on appear goes through the same path as a tray change, and must not store back what it read.

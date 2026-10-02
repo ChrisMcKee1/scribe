@@ -317,6 +317,10 @@ private struct HotkeySettingsTab: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+
+            Divider()
+
+            InputTypingSettingsSection()
             Spacer()
         }
         .onAppear {
@@ -407,6 +411,7 @@ private struct HotkeySettingsTab: View {
 private struct DictionarySettingsTab: View {
     @StateObject private var model: DictionarySettingsModel
     @ObservedObject private var drafts: SettingsDrafts
+    @State private var editorEntry: DictionaryEntry?
 
     init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
         _drafts = ObservedObject(wrappedValue: drafts)
@@ -421,15 +426,9 @@ private struct DictionarySettingsTab: View {
                 .font(.headline)
 
             HStack {
-                TextField("Spoken form (e.g. \"sherpa onnx\")", text: $drafts.dictionaryPattern)
-                TextField("Written form (e.g. \"sherpa-onnx\")", text: $drafts.dictionaryReplacement)
-                Button("Add") {
-                    Task { await model.addFromDrafts() }
+                Button("Add word") {
+                    editorEntry = DictionaryEntry(pattern: "", replacement: "")
                 }
-                .disabled(!model.canAdd)
-            }
-
-            HStack {
                 Button(model.isImporting ? "Importing\u{2026}" : "Import CSV\u{2026}", action: importCsv)
                     .disabled(model.isImporting)
                 Button("Export CSV\u{2026}", action: exportCsv)
@@ -466,6 +465,12 @@ private struct DictionarySettingsTab: View {
                             .foregroundStyle(.secondary)
                         Text(entry.replacement)
                         Spacer()
+                        Button {
+                            editorEntry = entry
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(.plain)
                         Button(role: .destructive) {
                             Task { await model.delete(entry) }
                         } label: {
@@ -493,6 +498,20 @@ private struct DictionarySettingsTab: View {
                     },
                     onCancel: { model.cleanupReport = nil })
             }
+        }
+        .sheet(item: $editorEntry) { entry in
+            DictionaryWordEditorView(
+                existing: model.entries,
+                title: entry.id == 0 ? "Add word" : "Edit word",
+                initialReplacement: entry.replacement,
+                initialForms: [entry.pattern],
+                onSave: { forms, replacement in
+                    if entry.id == 0 {
+                        return await model.addWords(replacement: replacement, forms: forms)
+                    }
+                    return await model.editWord(entry, replacement: replacement, forms: forms)
+                },
+                onCancel: { editorEntry = nil })
         }
     }
 
@@ -1029,6 +1048,15 @@ private struct CleanupSettingsTab: View {
                     "Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)",
                     text: $model.values.azureEndpoint)
                 TextField("Deployment name", text: $model.values.azureDeployment)
+                Toggle("Let Microsoft Foundry cache what Scribe sends", isOn: $model.values.azurePromptCaching)
+                Text(
+                    "On: Microsoft Foundry may keep temporary prompt-cache data derived from what Scribe sends. Off: "
+                        + "Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests. "
+                        + "Some older or provisioned deployments reject that request, and cleanup stays unavailable "
+                        + "until you turn it back on."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Picker("Authentication", selection: $model.values.azureAuthMode) {
                     Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
                     Text("Service principal").tag(AzureAuthMode.servicePrincipal)

@@ -43,6 +43,7 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var openAIModel: String
     var azureEndpoint: String
     var azureDeployment: String
+    var azurePromptCaching = true
     var azureAuthMode: AzureAuthMode
     var azureTenantId: String
     var azureClientId: String
@@ -83,6 +84,7 @@ struct CleanupSettingsStore: Sendable {
         static let openAIModel = "ScribeCleanupOpenAIModel"
         static let azureEndpoint = "ScribeCleanupAzureEndpoint"
         static let azureDeployment = "ScribeCleanupAzureDeployment"
+        static let azurePromptCaching = "ScribeCleanupAzurePromptCaching"
         static let azureAuthMode = "ScribeCleanupAzureAuthMode"
         static let azureTenantId = "ScribeCleanupAzureTenantId"
         static let azureClientId = "ScribeCleanupAzureClientId"
@@ -175,6 +177,16 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue, forKey: Key.azureDeployment) }
     }
 
+    var azurePromptCaching: Bool {
+        get {
+            guard let stored = defaults.object(forKey: Key.azurePromptCaching) as? Bool else {
+                return true
+            }
+            return stored
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.azurePromptCaching) }
+    }
+
     var azureAuthMode: AzureAuthMode {
         get { Self.azureAuthMode(in: defaults) }
         nonmutating set { defaults.set(newValue.rawValue, forKey: Key.azureAuthMode) }
@@ -211,6 +223,7 @@ struct CleanupSettingsStore: Sendable {
             openAIModel: defaults.string(forKey: Key.openAIModel) ?? "",
             azureEndpoint: defaults.string(forKey: Key.azureEndpoint) ?? "",
             azureDeployment: defaults.string(forKey: Key.azureDeployment) ?? "",
+            azurePromptCaching: (defaults.object(forKey: Key.azurePromptCaching) as? Bool) ?? true,
             azureAuthMode: Self.azureAuthMode(in: defaults),
             azureTenantId: defaults.string(forKey: Key.azureTenantId) ?? "",
             azureClientId: defaults.string(forKey: Key.azureClientId) ?? "",
