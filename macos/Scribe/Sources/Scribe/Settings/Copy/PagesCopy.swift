@@ -36,6 +36,10 @@ struct SnippetsCopy: CopyCatalog {
 /// Windows picks apps by program name; on the Mac an app is identified by its name in Finder.
 struct AppProfilesCopy: CopyCatalog {
     let prefix = "appProfiles"
+    let legacyMatch = CopyItem.added(
+        "appProfiles.legacyMatch",
+        "This profile matches by app name, so a profile matched to the app itself comes first.",
+        because: .macBehaviour)
     let title = CopyItem.same("appProfiles.title", "App profiles")
 
     let subtitle = CopyItem.same(
@@ -47,8 +51,12 @@ struct AppProfilesCopy: CopyCatalog {
     let delete = CopyItem.same("appProfiles.delete", "Delete...")
     let moveUp = CopyItem.same("appProfiles.moveUp", "Move up")
     let moveDown = CopyItem.same("appProfiles.moveDown", "Move down")
-    let order = CopyItem.same(
-        "appProfiles.order", "When an app matches more than one profile, Scribe uses the one higher in the list.")
+    let order = CopyItem.changed(
+        "appProfiles.order",
+        "Profiles matched to the app itself take priority over older profiles matched by app name. Within each kind, "
+            + "Scribe uses the one higher in the list.",
+        windows: "When an app matches more than one profile, Scribe uses the one higher in the list.",
+        because: .macBehaviour)
     let name = CopyItem.same("appProfiles.name", "Name")
     let nameExample = CopyItem.same("appProfiles.nameExample", "For example, Email")
     let apps = CopyItem.same("appProfiles.apps", "Apps")
@@ -103,6 +111,10 @@ struct HistoryCopy: CopyCatalog {
     let columnText = CopyItem.same("history.columnText", "Text")
     let columnCleanup = CopyItem.same("history.columnCleanup", "AI cleanup")
     let empty = CopyItem.same("history.empty", "No dictations yet. Hold your shortcut in any app and speak.")
+    let emptyToggle = CopyItem.added(
+        "history.emptyToggle",
+        "No dictations yet. Press your shortcut in any app, speak, then press it again.",
+        because: .macKeys)
     let loadOlder = CopyItem.same("history.loadOlder", "Load older")
     let selectedText = CopyItem.same("history.selectedText", "Selected dictation text")
     let useful = CopyItem.same("history.useful", "Useful")
@@ -118,10 +130,13 @@ struct HistoryCopy: CopyCatalog {
     let deleted = CopyItem.same("history.deleted", "Deleted the selected history entry.")
     let deleteFailed = CopyItem.same("history.deleteFailed", "Couldn't delete the history entry. Try again.")
     let deleteAllTitle = CopyItem.same("history.deleteAllTitle", "Delete all history?")
-    let deleteAllBody = CopyItem.same(
+    let deleteAllBody = CopyItem.changed(
         "history.deleteAllBody",
-        "This deletes every saved dictation and recording now, including ones not shown here. Your dictionary, "
-            + "snippets and settings are kept. This can't be undone.")
+        "This deletes every saved dictation now, including ones not shown here. Your dictionary, snippets and "
+            + "settings are kept. This can't be undone.",
+        windows: "This deletes every saved dictation and recording now, including ones not shown here. Your "
+            + "dictionary, snippets and settings are kept. This can't be undone.",
+        because: .macBehaviour)
     let deleteAllConfirm = CopyItem.same("history.deleteAllConfirm", "Delete all history")
     let cleared = CopyItem.same("history.cleared", "Cleared dictation history.")
     let clearFailed = CopyItem.same("history.clearFailed", "Couldn't clear history. Try again.")

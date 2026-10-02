@@ -51,4 +51,31 @@ final class SwiftStringScannerTests: XCTestCase {
         XCTAssertFalse(looks("%d"))
         XCTAssertFalse(looks(""))
     }
+
+    func testAcronymLabelsCountAsTextButKeysAndPathsDoNot() {
+        func looks(_ text: String) -> Bool { SwiftLiteral(text: text, line: 1, exempt: false).looksLikeText }
+        for label in ["P50", "P95", "RTF", "CLI", "DPAPI"] {
+            XCTAssertTrue(looks(label), label)
+        }
+        for key in ["p50", "Scribe.Overlay.exe", "libraries.state", "Privacy_Accessibility", "<transcript>"] {
+            XCTAssertFalse(looks(key), key)
+        }
+    }
+
+    func testStringsInsideAnInterpolationAreScannedToo() {
+        let found = texts(#"let a = "Words: \(flag ? "Provider" : "Library") left""#)
+        XCTAssertTrue(found.contains("Provider"))
+        XCTAssertTrue(found.contains("Library"))
+        XCTAssertTrue(found.contains("Words:  left"))
+    }
+
+    func testOnlyTheCallsOfACatalogAreExemptNotTheRestOfItsFile() {
+        let source = """
+            let loose = "The old hotkey"
+            let item = CopyItem.same("x.y", "The hotkey")
+            let omission = CopyOmission(windows: "The hotkey", because: .windowsOnly)
+            """
+        let found = SwiftStringScanner.literals(in: source)
+        XCTAssertEqual(found.filter { !$0.exempt }.map(\.text), ["The old hotkey"])
+    }
 }

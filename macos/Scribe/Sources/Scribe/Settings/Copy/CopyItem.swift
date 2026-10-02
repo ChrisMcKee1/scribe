@@ -28,6 +28,8 @@ enum CopyDeviation: String, CaseIterable, Sendable {
     case macTemplate
     /// The feature exists only on Windows, so the string is not carried over.
     case windowsOnly
+    /// The Mac applies this when the whole window is saved, as its staged window decides.
+    case stagedSave
 
     /// The sentence recorded for the deviation, shown in the report and in failing tests.
     var reason: String {
@@ -44,6 +46,7 @@ enum CopyDeviation: String, CaseIterable, Sendable {
         case .appliesAtOnce: return "This control applies at once on the Mac."
         case .macTemplate: return "The Mac fills this template in with its own values."
         case .windowsOnly: return "The feature exists only on Windows."
+        case .stagedSave: return "The Mac applies this when you save, as the staged window decides."
         }
     }
 }
@@ -94,15 +97,38 @@ struct CopyItem: Equatable, Sendable {
         return names
     }
 
-    /// The text a person reads: placeholders filled in and "..." turned into an ellipsis.
+    /// The text a person reads: placeholders filled in and "..." turned into an ellipsis. The template is read once,
+    /// left to right, so a value is inserted exactly as given (it may hold braces or three dots) and the order of
+    /// `values` never matters. A placeholder with no value is left as written.
     func render(_ values: [String: String] = [:]) -> String {
-        var result = text
-        for (name, value) in values {
-            result = result.replacingOccurrences(of: "{" + name + "}", with: value)
+        var result = ""
+        var literal = ""
+        var name: String?
+        func flushLiteral() {
+            result += literal.replacingOccurrences(of: "...", with: "\u{2026}")
+            literal = ""
         }
-        return result.replacingOccurrences(of: "...", with: "\u{2026}")
-    }
-}
+        for character in text {
+            if let open = name {
+                if character == "}" {
+                    flushLiteral()
+                    result += values[open] ?? "{" + open + "}"
+                    name = nil
+                } else {
+                    name = open + String(character)
+                }
+            } else if character == "{" {
+                name = ""
+            } else {
+                literal.append(character)
+            }
+        }
+        if let open = name {
+            literal += "{" + open
+        }
+        flushLiteral()
+        return result
+    }}
 
 /// A page's (or surface's) strings. The items are the stored `CopyItem` properties, so a catalog cannot list a
 /// string the manifest does not see, and the manifest cannot hold one a catalog does not have.

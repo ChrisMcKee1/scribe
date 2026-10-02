@@ -68,6 +68,7 @@ enum GlossaryAllowlist {
         entry("SettingsView.swift", "latency", 3, legacy),
         entry("SettingsView.swift", "library", 4, legacy),
         entry("SettingsView.swift", "overlay", 1, legacy),
+        entry("SettingsView.swift", "percentile", 4, legacy),
         entry("SettingsView.swift", "pill", 2, legacy),
         entry("SettingsView.swift", "playground", 2, legacy),
         entry("SettingsView.swift", "provider", 1, legacy),

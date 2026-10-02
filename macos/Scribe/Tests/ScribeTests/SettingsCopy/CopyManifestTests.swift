@@ -86,11 +86,41 @@ final class CopyManifestTests: XCTestCase {
         }
     }
 
+    func testAnAddedStringIsNotAWholeWindowsStringAlready() {
+        for item in SettingsCopy.allItems where item.windows == nil && item.placeholders.isEmpty {
+            XCTAssertFalse(
+                WindowsSources.isWholeLiteral(item.text), "\(item.id) exists in Windows as written, so it is not new")
+        }
+    }
+
+    func testProvenanceNeedsTheWholeSentenceInOrderWithItsPunctuation() {
+        let real = "Scribe stops after a few seconds of silence. A noisy room can stop it early."
+        XCTAssertTrue(WindowsSources.contains(real))
+        let reordered = "A noisy room can stop it early. Scribe stops after a few seconds of silence."
+        XCTAssertFalse(WindowsSources.contains(reordered))
+        XCTAssertFalse(WindowsSources.contains(real.replacingOccurrences(of: "early.", with: "early!")))
+        XCTAssertFalse(WindowsSources.contains("Choose {first} Settings {second} Microphone"))
+        XCTAssertTrue(WindowsSources.contains("Selected: {position}"))
+    }
+
     func testTheHelperReadsStringsSplitAcrossLinesAndEscapedQuotes() {
         let source = "var x = \"First half, \" +\n    \"second half\";\n<Button Content=\"Say &quot;hi&quot;\" />"
         let text = WindowsSources.normalize(source)
         XCTAssertTrue(text.contains("First half, second half"))
         XCTAssertTrue(text.contains("Say \"hi\""))
         XCTAssertEqual(WindowsSources.fragments(of: "Unsaved changes: {pages}"), ["Unsaved changes:"])
+    }
+
+    func testAValueIsInsertedAsGivenWhateverItHoldsAndWhateverTheOrder() {
+        let item = CopyItem.added("t.v", "{chosen} is unavailable, using {used}. Wait...")
+        let expected = "USB {used} is unavailable, using Built-in. Wait\u{2026}"
+        let one = ["chosen": "USB {used}", "used": "Built-in"]
+        let other = ["used": "Built-in", "chosen": "USB {used}"]
+        XCTAssertEqual(item.render(one), expected)
+        XCTAssertEqual(item.render(other), expected)
+        let dots = item.render(["chosen": "USB...Mic", "used": "x"])
+        XCTAssertEqual(dots, "USB...Mic is unavailable, using x. Wait\u{2026}")
+        XCTAssertEqual(item.render(["used": "x"]), "{chosen} is unavailable, using x. Wait\u{2026}")
+        XCTAssertEqual(CopyItem.added("t.w", "Half {open").render(), "Half {open")
     }
 }

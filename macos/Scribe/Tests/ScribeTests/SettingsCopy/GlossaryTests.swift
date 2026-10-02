@@ -7,17 +7,16 @@ final class GlossaryTests: XCTestCase {
     /// Files whose text is never Scribe's words to a person, with why. Paths are relative to Sources/Scribe.
     static let excludedFiles: [String: String] = [
         "Settings/Copy/CopyGlossary.swift": "The retired words themselves, as patterns.",
+        "Settings/Copy/CopyItem.swift": "Developer-facing reasons for a copy deviation, never shown to a person.",
         "Settings/Copy/SettingsPage.swift": "Page keywords keep the old names, so a search for \"hotkey\" still works.",
         "Settings/Copy/SettingsSearchIndex.swift": "Entry keywords keep the old names on purpose, as on Windows.",
     ]
 
-    /// The catalogs hold the Windows text they cite (windows:), which uses the retired words by design. What the
-    /// Mac shows is checked by 	estCatalogTextUsesNoRetiredName, so the catalog files are not scanned here.
+    /// A catalog's `CopyItem` and `CopyOmission` calls hold the Windows text they cite (`windows:`), which uses the
+    /// retired words by design, and the scanner leaves those calls alone; what the Mac shows is checked by
+    /// `testCatalogTextUsesNoRetiredName`. Any other string in a catalog file is scanned like the rest of the sources.
     static func isExcluded(_ relative: String) -> Bool {
-        if excludedFiles[relative] != nil { return true }
-        guard relative.hasPrefix("Settings/Copy/") else { return false }
-        let omitted = ["Settings/Copy/CopyItem.swift", "Settings/Copy/SettingsCopyOmissions.swift"]
-        return relative.hasSuffix("Copy.swift") || omitted.contains(relative)
+        excludedFiles[relative] != nil
     }
 
     func testCatalogTextUsesNoRetiredName() throws {

@@ -12,13 +12,18 @@ struct ProblemCopy: CopyCatalog {
     let tooQuickHold = CopyItem.same(
         "problem.tooQuickHold", "That was too quick. Hold {key} while you speak, then let go.")
     let noSoundTitle = CopyItem.same("problem.noSoundTitle", "No sound recorded")
-    let noSoundBody = CopyItem.same(
+    let noSoundBody = CopyItem.changed(
         "problem.noSoundBody",
-        "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another from the "
-            + "Microphone menu.")
-    let noSoundDeviceBody = CopyItem.same(
+        "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another in Settings, "
+            + "Dictation.",
+        windows: "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another from "
+            + "the Microphone menu.",
+        because: .macSystemFeature)
+    let noSoundDeviceBody = CopyItem.changed(
         "problem.noSoundDeviceBody",
-        "Scribe didn't get any sound from {device}. Choose another microphone from the Microphone menu.")
+        "Scribe didn't get any sound from {device}. Choose another microphone in Settings, Dictation.",
+        windows: "Scribe didn't get any sound from {device}. Choose another microphone from the Microphone menu.",
+        because: .macSystemFeature)
     let silenceTitle = CopyItem.same("problem.silenceTitle", "Only silence recorded")
     let silenceBody = CopyItem.same("problem.silenceBody", "Your microphone may be muted. Unmute it and try again.")
     let silenceDeviceBody = CopyItem.same(
@@ -26,9 +31,12 @@ struct ProblemCopy: CopyCatalog {
     let mutedTitle = CopyItem.same("problem.mutedTitle", "Your microphone is muted")
     let mutedBody = CopyItem.same("problem.mutedBody", "Unmute it to keep dictating. Scribe is still recording.")
     let unavailableTitle = CopyItem.same("problem.unavailableTitle", "Couldn't start recording")
-    let unavailableBody = CopyItem.same(
+    let unavailableBody = CopyItem.changed(
         "problem.unavailableBody",
-        "Scribe couldn't open your microphone. Check that it's connected, or choose another from the Microphone menu.")
+        "Scribe couldn't open your microphone. Check that it's connected, or choose another in Settings, Dictation.",
+        windows: "Scribe couldn't open your microphone. Check that it's connected, or choose another from the "
+            + "Microphone menu.",
+        because: .macSystemFeature)
     let disconnectedTitle = CopyItem.same("problem.disconnectedTitle", "Microphone disconnected")
     let disconnectedBody = CopyItem.same(
         "problem.disconnectedBody",
@@ -77,8 +85,7 @@ struct ProblemCopy: CopyCatalog {
     let fallbackTitle = CopyItem.same("problem.fallbackTitle", "Using another microphone")
     let fallbackBody = CopyItem.added(
         "problem.fallbackBody",
-        "{chosen} isn't available, so Scribe is using {used}. Choose a microphone from the Microphone menu to change "
-            + "it.",
+        "{chosen} isn't available, so Scribe is using {used}. Choose a microphone in Settings, Dictation to change it.",
         because: .macBehaviour)
     let genericTitle = CopyItem.same("problem.genericTitle", "Dictation didn't finish")
     let genericBody = CopyItem.same("problem.genericBody", "Try again.")
@@ -91,11 +98,13 @@ struct ProblemCopy: CopyCatalog {
         because: .foundryLocal)
     let noWhisperBody = CopyItem.added(
         "problem.noWhisperBody",
-        "Scribe couldn't find whisper-cli. In Terminal, run brew install whisper-cpp, then try again.",
+        "Scribe can't find whisper-cli, the speech tool it was set up to use. Open the setup help to fix it, or "
+            + "install Foundry Local instead.",
         because: .macBehaviour)
     let noWhisperModelBody = CopyItem.added(
         "problem.noWhisperModelBody",
-        "Scribe couldn't find the Whisper model ggml-tiny.en.bin. Download it, then try again.",
+        "Scribe can't find the Whisper model it was set up to use. Open the setup help to fix it, or install Foundry "
+            + "Local instead.",
         because: .macBehaviour)
     let microphoneAccessTitle = CopyItem.added(
         "problem.microphoneAccessTitle", "Scribe can't use the microphone", because: .macBehaviour)
@@ -128,8 +137,11 @@ struct ProblemCopy: CopyCatalog {
         "Choose a model {app} has, in Settings, AI cleanup. Until then, Scribe types what it hears.",
         because: .macBehaviour)
     let signInTitle = CopyItem.added("problem.signInTitle", "Not signed in to Azure", because: .macBehaviour)
-    let signInBody = CopyItem.same(
-        "problem.signInBody", "Not signed in to Azure. Until you sign in, Scribe types what it heard.")
+    let signInBody = CopyItem.changed(
+        "problem.signInBody",
+        "Open Settings, AI cleanup and sign in to Azure. Until you do, Scribe types what it heard.",
+        windows: "Not signed in to Azure. Until you sign in, Scribe types what it heard.",
+        because: .macTemplate)
 
     // The one-line format of Try dictation and the AI cleanup status: what happened, why, then the next step.
     let couldnt = CopyItem.added("problem.couldnt", "Couldn't {operation}. {why} {next}", because: .macTemplate)

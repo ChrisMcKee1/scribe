@@ -10,18 +10,45 @@ final class SettingsSearchIndexTests: XCTestCase {
         let label: String
         let context: String?
         let keywords: [String]
+        let requirements: [String]
     }
 
-    private static let labelConstants = [
-        "LocalModelTuningText.WholeVocabularyTitle": "Send your whole vocabulary when it fits",
-        "LocalModelTuningText.ContextSizeTitle": "Context size",
+    /// What a Windows requirement name stands for on the Mac: the anchor of the setting it needs.
+    private static let requirementAnchors = [
+        "RequiresAi": "ai.enabled", "RequiresLocal": "ai.local", "RequiresScribeModel": "ai.local.scribe",
+        "RequiresFoundry": "ai.foundry", "RequiresCustom": "ai.custom", "RequiresCopilot": "ai.copilot",
+        "RequiresOllama": "ai.local.ollama", "RequiresLmStudio": "ai.local.lmstudio",
+        "RequiresAzureCli": "ai.azure.auth.cli", "RequiresAzureServicePrincipal": "ai.azure.auth.sp",
+        "RequiresAzureApiKey": "ai.azure.auth.key", "RequiresAzureSignIn": "ai.azure.signin",
+        "RequiresAzureManualDetails": "ai.azure.manual",
     ]
+
+    /// A Windows string constant such as `LocalModelTuningText.ContextSizeTitle`, read from its source.
+    private func windowsConstant(_ reference: String) throws -> String {
+        let parts = reference.split(separator: ".").map(String.init)
+        let source = try WindowsSources.read("src/Scribe.Core/Settings/\(parts[0]).cs")
+        let regex = try NSRegularExpression(pattern: "const string \(parts[1]) = \"([^\"]*)\"")
+        let range = NSRange(source.startIndex..., in: source)
+        let match = try XCTUnwrap(regex.firstMatch(in: source, range: range), reference)
+        return String(source[try XCTUnwrap(Range(match.range(at: 1), in: source))])
+    }
 
     /// Windows entries whose search label differs from the label on their own page, so the Mac page label cannot match.
     private static let windowsLabelDrift = ["dictation.startup": "Start with Windows"]
 
+    /// The `Requires...` names that end an entry line, in order.
+    private static func requirementNames(in line: String) -> [String] {
+        guard let open = line.range(of: ", [Requires", options: .backwards) else { return [] }
+        let tail = line[line.index(open.lowerBound, offsetBy: 3)...]
+        return tail.trimmingCharacters(in: CharacterSet(charactersIn: "[]); ,")).split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
     private func windowsEntries() throws -> [WindowsEntry] {
-        let source = try WindowsSources.read("src/Scribe.Core/Settings/SettingsSearchIndex.cs")
+        try windowsEntries(from: try WindowsSources.read("src/Scribe.Core/Settings/SettingsSearchIndex.cs"))
+    }
+
+    private func windowsEntries(from source: String) throws -> [WindowsEntry] {
         let head =
             "Entry\\(\"([^\"]+)\", SettingsPage\\.(\\w+), \"\\w+\", (?:\"([^\"]*)\"|(LocalModelTuningText\\.\\w+)), "
         let regex = try NSRegularExpression(pattern: head + "\\[([^\\]]*)\\](?:, (null|\"[^\"]*\"))?")
@@ -32,7 +59,7 @@ final class SettingsSearchIndexTests: XCTestCase {
             func capture(_ index: Int) -> String? {
                 Range(match.range(at: index), in: text).map { String(text[$0]) }
             }
-            let label = capture(3) ?? Self.labelConstants[capture(4) ?? ""] ?? ""
+            let label = try capture(3) ?? capture(4).map { try windowsConstant($0) } ?? ""
             let keywordText = capture(5) ?? ""
             let keywords = keywordText.split(separator: ",").map {
                 $0.trimmingCharacters(in: CharacterSet(charactersIn: " \""))
@@ -41,9 +68,11 @@ final class SettingsSearchIndexTests: XCTestCase {
             if let raw = capture(6), raw != "null" {
                 context = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
             }
+            let requirements = Self.requirementNames(in: text)
             found.append(
                 WindowsEntry(
-                    id: capture(1) ?? "", page: capture(2) ?? "", label: label, context: context, keywords: keywords))
+                    id: capture(1) ?? "", page: capture(2) ?? "", label: label, context: context, keywords: keywords,
+                    requirements: requirements))
         }
         return found
     }
@@ -119,6 +148,74 @@ final class SettingsSearchIndexTests: XCTestCase {
                 XCTFail("\(entry.id) has context \(have), Windows has \(String(describing: entry.context))")
             }
         }
+    }
+
+    /// The Mac requirements that differ from a Windows source, as messages; empty when they agree or are recorded.
+    private func requirementDifferences(in source: String) throws -> [String] {
+        let mac = Dictionary(uniqueKeysWithValues: SettingsSearchIndex.entries.map { ($0.id, $0) })
+        var messages: [String] = []
+        for entry in try windowsEntries(from: source) {
+            guard let twin = mac[entry.id] else { continue }
+            let expected = entry.requirements.map { Self.requirementAnchors[$0] ?? "?\($0)" }
+            let actual = twin.requirements.map(\.anchor)
+            if SettingsSearchIndex.requirementDeviations[entry.id] != nil {
+                if expected == actual { messages.append("\(entry.id) is listed as different but is not") }
+            } else if expected != actual {
+                messages.append("\(entry.id) needs \(expected) on Windows and \(actual) here")
+            }
+        }
+        return messages
+    }
+
+    func testRequirementsFollowWindowsOrAreRecordedAsDifferent() throws {
+        let source = try WindowsSources.read("src/Scribe.Core/Settings/SettingsSearchIndex.cs")
+        XCTAssertEqual(try requirementDifferences(in: source), [])
+    }
+
+    func testAChangedWindowsDependencyIsDetected() throws {
+        let source = try WindowsSources.read("src/Scribe.Core/Settings/SettingsSearchIndex.cs")
+        let mutated = source.replacingOccurrences(
+            of: "[RequiresAi, RequiresLocal, RequiresOllama]", with: "[RequiresAi, RequiresOllama]")
+        XCTAssertNotEqual(mutated, source)
+        let differences = try requirementDifferences(in: mutated)
+        XCTAssertTrue(differences.contains { $0.hasPrefix("ai.local.ollama.context") }, "\(differences)")
+    }
+
+    func testRequirementLabelsAndKindsEqualTheirWindowsDefinitions() throws {
+        let source = try WindowsSources.read("src/Scribe.Core/Settings/SettingsSearchIndex.cs")
+        let pattern =
+            "SettingsSearchRequirement (\\w+) =\\s*new\\(\"\\w+\", \"([^\"]*)\", "
+            + "SettingsSearchRequirementKind\\.(\\w+)\\)"
+        let regex = try NSRegularExpression(pattern: pattern)
+        let range = NSRange(source.startIndex..., in: source)
+        let all = SettingsSearchIndex.entries.flatMap(\.requirements)
+        let deviations = SettingsCopy.allItems.filter { $0.deviation != nil && $0.windows != nil }
+        var checked = 0
+        for match in regex.matches(in: source, range: range) {
+            func capture(_ index: Int) -> String { String(source[Range(match.range(at: index), in: source)!]) }
+            let anchor = try XCTUnwrap(Self.requirementAnchors[capture(1)], capture(1))
+            guard let requirement = all.first(where: { $0.anchor == anchor }) else { continue }
+            checked += 1
+            if requirement.label != capture(2) {
+                let recorded = deviations.contains { $0.render() == requirement.label && $0.windows == capture(2) }
+                XCTAssertTrue(recorded, "\(anchor): \(requirement.label) against \(capture(2))")
+            }
+            XCTAssertEqual(String(describing: requirement.kind).lowercased(), capture(3).lowercased(), anchor)
+        }
+        XCTAssertGreaterThan(checked, 8)
+    }
+
+    func testTheDeclaredWindowsLabelDriftIsStillWhatWindowsHas() throws {
+        let windows = Dictionary(uniqueKeysWithValues: try windowsEntries().map { ($0.id, $0.label) })
+        for (id, label) in Self.windowsLabelDrift {
+            XCTAssertEqual(windows[id], label, "\(id) no longer has the label the drift table declares")
+        }
+    }
+
+    func testCopilotCanBeReadWithAICleanupOff() throws {
+        let entry = try XCTUnwrap(SettingsSearchIndex.entries.first { $0.id == "ai.copilot" })
+        XCTAssertTrue(entry.requirements.isEmpty)
+        XCTAssertNotNil(SettingsSearchIndex.requirementDeviations["ai.copilot"])
     }
 
     func testRequirementAnchorsPointAtASettingOrAKnownControl() {

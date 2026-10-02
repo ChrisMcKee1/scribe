@@ -52,6 +52,13 @@ enum SettingsSearchIndex {
         SettingsSearchOmission(id: "ai.copilot.model", because: .copilotUnavailable),
         SettingsSearchOmission(id: "advanced.accent", because: .windowsOnly),
         SettingsSearchOmission(id: "history.recordings", because: .macBehaviour),
+        SettingsSearchOmission(id: "advanced.free-memory", because: .macBehaviour),
+    ]
+
+    /// Shared entries whose requirements differ from Windows, with why. The Copilot entry explains why Copilot is
+    /// unavailable, so reading it must not need AI cleanup turned on.
+    static let requirementDeviations: [String: String] = [
+        "ai.copilot": "The explanation that Copilot is unavailable on the Mac needs nothing turned on."
     ]
 
     /// Mac entries Windows does not have, with why.
@@ -131,7 +138,7 @@ enum SettingsSearchIndex {
         return [
             entry("ai.enabled", .aiCleanup, c.use, ["polish", "grammar", "punctuation"]),
             entry("ai.local", .aiCleanup, c.onThisMac, ["provider", "offline", "local", "private"], requires: [ai]),
-            entry("ai.copilot", .aiCleanup, c.copilot, ["provider", "github", "unavailable"], requires: [ai]),
+            entry("ai.copilot", .aiCleanup, c.copilot, ["provider", "github", "unavailable"]),
             entry("ai.foundry", .aiCleanup, c.foundry, ["provider", "azure"], requires: [ai]),
             entry(
                 "ai.custom", .aiCleanup, c.anotherService, ["provider", "openrouter", "openai", "server"],
@@ -255,7 +262,6 @@ enum SettingsSearchIndex {
             entry(
                 "advanced.speech-model", .advanced, a.speechModel, ["model", "recognition", "parakeet", "moonshine"]),
             entry("advanced.threads", .advanced, a.threads, ["cpu", "decode", "advanced"]),
-            entry("advanced.free-memory", .advanced, a.freeMemory, ["idle", "release", "model", "memory"]),
             entry("advanced.trim-silence", .advanced, a.trimSilence, ["vad", "voice activity detection", "silence"]),
             entry("advanced.longest-recording", .advanced, a.longest, ["duration", "limit", "minutes"]),
             entry("advanced.typing-method", .advanced, a.typingMethod, ["paste", "clipboard", "type"]),

@@ -64,3 +64,10 @@ enum SettingsCopy {
         catalogs.flatMap { $0.items }
     }
 }
+
+extension HistoryCopy {
+    /// The empty History line for the shortcut the person has: hold for a held key, press twice for a toggle.
+    func emptyState(toggle: Bool) -> String {
+        (toggle ? emptyToggle : empty).render()
+    }
+}

@@ -121,13 +121,14 @@ struct DictationCopy: CopyCatalog {
         "Login Items settings",
         windows: "Windows startup settings",
         because: .macSystemFeature)
-    let appliesImmediately = CopyItem.same("dictation.appliesImmediately", "Applies immediately.")
+    let appliesWhenSaved = CopyItem.changed(
+        "dictation.appliesWhenSaved", "Applies when you save.", windows: "Applies immediately.", because: .stagedSave)
 
     // Permissions (the Mac asks for three; Windows asks for none)
     let permissions = CopyItem.added("dictation.permissions", "Permissions")
     let permissionsHint = CopyItem.added(
         "dictation.permissionsHint", "macOS asks you to allow each of these once. Scribe only uses them to dictate.")
-    let microphoneAccess = CopyItem.added("dictation.microphoneAccess", "Microphone")
+    let microphoneAccess = CopyItem.same("dictation.microphoneAccess", "Microphone")
     let microphoneAccessHint = CopyItem.added(
         "dictation.microphoneAccessHint", "Lets Scribe hear you while you dictate.")
     let accessibilityAccess = CopyItem.added("dictation.accessibilityAccess", "Accessibility")

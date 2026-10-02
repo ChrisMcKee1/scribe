@@ -159,8 +159,8 @@ struct WordPackCopy: CopyCatalog {
         because: .thisMac)
     let aiSends = CopyItem.changed(
         "wordPacks.aiSends",
-        "Sends the words of this word pack that your dictation seems to mention, as vocabulary with the AI cleanup "
-            + "request.",
+        "AI cleanup can use the words of this word pack that your dictation seems to mention, within its limit. On "
+            + "this Mac, Send your whole vocabulary when it fits can include other words too.",
         windows: "Sends this word pack's words as vocabulary with every AI cleanup request, whether or not you say "
             + "them.",
         because: .staleWindowsCorrected)

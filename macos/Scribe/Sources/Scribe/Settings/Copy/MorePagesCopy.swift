@@ -19,21 +19,9 @@ struct AdvancedCopy: CopyCatalog {
         "How many processor threads speech recognition uses. Automatic suits most Macs.",
         windows: "How many processor threads speech recognition uses. Automatic suits most PCs.",
         because: .thisMac)
-    let freeMemory = CopyItem.same("advanced.freeMemory", "Free memory when Scribe isn't used")
-    let freeMemoryHint = CopyItem.changed(
-        "advanced.freeMemoryHint",
-        "After this long without a dictation, Scribe frees the memory it uses for dictation. The next dictation may "
-            + "take longer before Scribe types it.",
-        windows: "After this long without a dictation, Scribe frees the memory its speech model and its own AI "
-            + "cleanup model use, and asks Ollama and LM Studio to free theirs. The next dictation may take longer "
-            + "before Scribe types it. Ollama and LM Studio may also free a model on their own.",
-        because: .staleWindowsCorrected)
     let restartNote = CopyItem.same(
         "advanced.restartNote",
         "Changes to the speech model and processor threads take effect after you restart Scribe.")
-    let idleNever = CopyItem.same("advanced.idleNever", "Never")
-    let idle5 = CopyItem.same("advanced.idle5", "After 5 minutes")
-    let idle10 = CopyItem.same("advanced.idle10", "After 10 minutes (default)")
 
     let recording = CopyItem.same("advanced.recording", "Recording")
     let trimSilence = CopyItem.same("advanced.trimSilence", "Trim silence")
@@ -64,11 +52,11 @@ struct AdvancedCopy: CopyCatalog {
     let chatSafe = CopyItem.same("advanced.chatSafe", "Don't send chat messages early")
     let chatSafeHint = CopyItem.changed(
         "advanced.chatSafeHint",
-        "Types line breaks as Shift-Return, so apps like Teams and Slack start a new line instead of sending. Turn it "
-            + "off if an app uses Shift-Return for something else.",
+        "When Scribe types text a key at a time, it uses Shift-Return for line breaks, so chat apps like Teams and "
+            + "Slack are less likely to send early. This doesn't change pasted text or text inserted directly.",
         windows: "Types line breaks as Shift+Enter, so apps like Teams and Slack start a new line instead of sending. "
             + "Turn it off if an app uses Shift+Enter for something else.",
-        because: .macKeys)
+        because: .macBehaviour)
     let textChanges = CopyItem.same("advanced.textChanges", "Text changes")
     let applyRules = CopyItem.same("advanced.applyRules", "Apply your dictionary and snippets")
     let applyRulesHint = CopyItem.same(
@@ -86,6 +74,10 @@ struct AdvancedCopy: CopyCatalog {
 /// lines go to the unified log, so the "Save diagnostics" and "Logs folder" rows become Console rows.
 struct DiagnosticsCopy: CopyCatalog {
     let prefix = "diagnostics"
+    let periodDay = CopyItem.added("diagnostics.periodDay", "in the last 24 hours", because: .macBehaviour)
+    let periodWeek = CopyItem.added("diagnostics.periodWeek", "in the last 7 days", because: .macBehaviour)
+    let periodMonth = CopyItem.added("diagnostics.periodMonth", "in the last 30 days", because: .macBehaviour)
+    let periodSession = CopyItem.added("diagnostics.periodSession", "in this session", because: .macBehaviour)
     let title = CopyItem.same("diagnostics.title", "Diagnostics")
 
     let subtitle = CopyItem.same(
@@ -106,17 +98,27 @@ struct DiagnosticsCopy: CopyCatalog {
         "Scribe's log lines appear in Console under com.scribe.macos. They record app events, timings and errors, "
             + "never your dictations. Read them before sharing.")
     let cleanupProblems = CopyItem.same("diagnostics.cleanupProblems", "AI cleanup problems")
-    let cleanupProblemsHint = CopyItem.same(
+    let cleanupProblemsHint = CopyItem.changed(
         "diagnostics.cleanupProblemsHint",
-        "Times AI cleanup couldn't finish in the last 7 days, so Scribe typed what it heard instead.")
+        "Times AI cleanup couldn't finish {period}, so Scribe typed what it heard instead.",
+        windows: "Times AI cleanup couldn't finish in the last 7 days, so Scribe typed what it heard instead.",
+        because: .macTemplate)
     let clearList = CopyItem.same("diagnostics.clearList", "Clear this list...")
     let columnWhen = CopyItem.same("diagnostics.columnWhen", "When")
     let columnModel = CopyItem.same("diagnostics.columnModel", "Model")
     let columnWhat = CopyItem.same("diagnostics.columnWhat", "What happened")
-    let noFailures = CopyItem.same("diagnostics.noFailures", "No AI cleanup failures recorded in the last 7 days.")
+    let noFailures = CopyItem.changed(
+        "diagnostics.noFailures",
+        "No AI cleanup failures recorded {period}.",
+        windows: "No AI cleanup failures recorded in the last 7 days.",
+        because: .macTemplate)
     let speed = CopyItem.same("diagnostics.speed", "Speed")
     let speedHint = CopyItem.same("diagnostics.speedHint", "How long each step takes")
-    let noRuns = CopyItem.same("diagnostics.noRuns", "No dictations in the last 7 days.")
+    let noRuns = CopyItem.changed(
+        "diagnostics.noRuns",
+        "No dictations {period}.",
+        windows: "No dictations in the last 7 days.",
+        because: .macTemplate)
     let tryAgain = CopyItem.same("diagnostics.tryAgain", "Try again")
     let speechRecognition = CopyItem.same("diagnostics.speechRecognition", "Speech recognition")
     let aiCleanup = CopyItem.same("diagnostics.aiCleanup", "AI cleanup")

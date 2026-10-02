@@ -45,6 +45,36 @@ final class HotkeyCaptureRulesTests: XCTestCase {
         XCTAssertEqual(verdict, .refused(text + "Press a key like Caps Lock, Right Option or F13."))
     }
 
+    func testKeypadEnterAndTheJapaneseKeysAreRefusedToo() {
+        guard case .refused(let enter) = HotkeyCaptureRules.evaluate(76) else {
+            return XCTFail("Keypad Enter was accepted")
+        }
+        XCTAssertTrue(enter.hasPrefix("Enter can't be a shortcut"), enter)
+        for code: UInt16 in [93, 94, 95] {
+            guard case .refused = HotkeyCaptureRules.evaluate(code) else {
+                XCTFail("Key \(code) was accepted")
+                continue
+            }
+        }
+    }
+
+    func testAnUnnamedKeyThatTypesACharacterOnThisLayoutIsRefused() {
+        guard case .refused(let text) = HotkeyCaptureRules.evaluate(200, typed: "\u{00E9}") else {
+            return XCTFail("A key that types a character was accepted")
+        }
+        XCTAssertTrue(text.hasPrefix("\u{00C9} can't be a shortcut"), text)
+        XCTAssertEqual(HotkeyCaptureRules.evaluate(200, typed: ""), .accepted(warnings: []))
+        XCTAssertEqual(HotkeyCaptureRules.evaluate(200, typed: "\u{F704}"), .accepted(warnings: []))
+        XCTAssertEqual(HotkeyCaptureRules.evaluate(61, typed: "x"), HotkeyCaptureRules.evaluate(61))
+    }
+
+    func testRulesJudgeNewRecordingsOnlySoSavedKeysKeepWorking() {
+        // Every key the app already offers is accepted, so nothing a person saved earlier needs revalidating.
+        for entry in HotkeyKeyCodeCatalog.entries {
+            XCTAssertEqual(HotkeyCaptureRules.name(UInt16(entry.keyCode)), entry.name)
+        }
+    }
+
     func testEditingKeysEscapeAndGlobeAreRefused() {
         for code: UInt16 in [36, 48, 49, 51, 117, 123, 124, 125, 126] {
             guard case .refused(let text) = HotkeyCaptureRules.evaluate(code) else {

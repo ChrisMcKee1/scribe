@@ -59,6 +59,10 @@ struct AiCleanupCopy: CopyCatalog {
     let lmStudio = CopyItem.same("aiCleanup.lmStudio", "LM Studio")
     let lmStudioHint = CopyItem.same("aiCleanup.lmStudioHint", "Uses a model you downloaded in LM Studio.")
     let model = CopyItem.same("aiCleanup.model", "Model")
+    let keepModel = CopyItem.added(
+        "aiCleanup.keepModel",
+        "Scribe asks {app} to keep the model for {duration} after a request. {app} decides when its memory is freed.",
+        because: .macBehaviour)
     let foundryAliasHint = CopyItem.added("aiCleanup.foundryAliasHint", "The name Foundry Local gives the model.")
     let foundryInstall = CopyItem.added(
         "aiCleanup.foundryInstall",

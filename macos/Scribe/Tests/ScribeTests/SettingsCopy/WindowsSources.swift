@@ -57,12 +57,49 @@ enum WindowsSources {
         text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
-    /// True when every literal fragment of `windowsText` (the parts between `{placeholders}`) is in the corpus.
+    /// True when `windowsText` is in the Windows sources as one run, in order: its literal parts, with each
+    /// `{placeholder}` standing for any short expression. A sentence that merely shares words with other strings
+    /// does not pass, and neither does one with its parts reordered or its closing punctuation changed.
     static func contains(_ windowsText: String) -> Bool {
-        let fragments = fragments(of: windowsText)
-        return !fragments.isEmpty && fragments.allSatisfy { corpus.contains($0) }
+        let parts = literalParts(windowsText)
+        let normalized = parts.map { part -> String in
+            part.trimmingCharacters(in: .whitespaces).isEmpty ? (part.isEmpty ? "" : " ") : collapse(part)
+        }
+        if normalized.count == 1 {
+            return corpus.contains(normalized[0])
+        }
+        let pattern = normalized.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: ".{0,160}?")
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return false
+        }
+        return regex.firstMatch(in: corpus, range: NSRange(corpus.startIndex..., in: corpus)) != nil
     }
 
+    /// The text between `{...}` placeholders, empty parts kept, so `a{x}b` gives `a` and `b`.
+    static func literalParts(_ text: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var inside = false
+        for character in text {
+            if !inside && character == "{" {
+                parts.append(current)
+                current = ""
+                inside = true
+            } else if inside && character == "}" {
+                inside = false
+            } else if !inside {
+                current.append(character)
+            }
+        }
+        parts.append(current)
+        return parts
+    }
+
+    /// True when `text` is a whole string literal or a whole element text in the Windows sources.
+    static func isWholeLiteral(_ text: String) -> Bool {
+        let flat = collapse(text)
+        return corpus.contains("\"" + flat + "\"") || corpus.contains(">" + flat + "<")
+    }
     /// The pieces of text outside `{...}` placeholders, collapsed, that are long enough to mean something.
     static func fragments(of windowsText: String) -> [String] {
         var pieces: [String] = []

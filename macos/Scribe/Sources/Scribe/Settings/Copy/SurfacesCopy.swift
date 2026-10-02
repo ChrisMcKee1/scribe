@@ -148,11 +148,11 @@ struct IndicatorCopy: CopyCatalog {
     let defaultMicrophone = CopyItem.same("indicator.defaultMicrophone", "Using the default mic")
     let noSpeechModel = CopyItem.same("indicator.noSpeechModel", "No speech model")
     let startingModel = CopyItem.added("indicator.startingModel", "Starting local model...")
-    let canTakeTime = CopyItem.added("indicator.canTakeTime", "This can take time")
+    let canTakeTime = CopyItem.same("indicator.canTakeTime", "This can take time")
     let allowAccessibility = CopyItem.added("indicator.allowAccessibility", "Allow Accessibility access")
     let allowMicrophone = CopyItem.added("indicator.allowMicrophone", "Allow Microphone access")
     let installFoundry = CopyItem.added("indicator.installFoundry", "Install Foundry Local")
-    let tryAgain = CopyItem.added("indicator.tryAgain", "Try again")
+    let tryAgain = CopyItem.same("indicator.tryAgain", "Try again")
 }
 
 /// The words Find a setting shows around its results. Windows: `SettingsWindow.xaml` (the box), `SettingsWindow.Search.cs`.

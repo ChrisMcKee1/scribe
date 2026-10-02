@@ -43,14 +43,27 @@ enum DictationProblemAction: Equatable, Sendable {
     case copyLastDictation
     case openSettings(SettingsPage)
     case openSystemSettings(SystemSettingsPane)
+    case openSetupHelp(SetupHelp)
 }
 
-/// The macOS Privacy & Security panes a notice can open.
-enum SystemSettingsPane: Equatable, Sendable {
+/// The setup instructions a notice can open.
+enum SetupHelp: Equatable, Sendable {
+    case speechRuntime
+}
+
+/// The macOS Privacy & Security panes a notice can open, one for each PrivacyPane the app already links to.
+enum SystemSettingsPane: CaseIterable, Equatable, Sendable {
     case microphone
     case accessibility
     case inputMonitoring
-    case sound
+
+    var privacyPane: PrivacyPane {
+        switch self {
+        case .microphone: return .microphone
+        case .accessibility: return .accessibility
+        case .inputMonitoring: return .inputMonitoring
+        }
+    }
 }
 
 /// The values a notice's text can need.
@@ -103,10 +116,20 @@ extension DictationProblem {
                 ["key": key],
                 pill: pill.render())
         case .noAudio:
-            return make(copy.noSoundTitle, copy.noSoundBody, pill: indicator.microphoneStep.render())
+            return make(
+                copy.noSoundTitle,
+                copy.noSoundBody,
+                pill: indicator.microphoneStep.render(),
+                .warning,
+                .openSettings(.dictation))
         case .noAudioFromDevice:
             return make(
-                copy.noSoundTitle, copy.noSoundDeviceBody, ["device": device], pill: indicator.otherMicrophone.render())
+                copy.noSoundTitle,
+                copy.noSoundDeviceBody,
+                ["device": device],
+                pill: indicator.otherMicrophone.render(),
+                .warning,
+                .openSettings(.dictation))
         case .onlySilence:
             return make(copy.silenceTitle, copy.silenceBody, pill: copy.pillMaybeMuted.render())
         case .onlySilenceFromDevice:
@@ -120,9 +143,14 @@ extension DictationProblem {
                 copy.unavailableBody,
                 pill: copy.pillUnavailable.render(),
                 .error,
-                .openSystemSettings(.sound))
+                .openSettings(.dictation))
         case .microphoneDisconnected:
-            return make(copy.disconnectedTitle, copy.disconnectedBody, pill: copy.pillUnavailable.render())
+            return make(
+                copy.disconnectedTitle,
+                copy.disconnectedBody,
+                pill: copy.pillUnavailable.render(),
+                .warning,
+                .openSettings(.dictation))
         case .microphoneAccessDenied:
             return make(
                 copy.microphoneAccessTitle,
@@ -164,21 +192,21 @@ extension DictationProblem {
                 copy.noFoundryBody,
                 pill: indicator.installFoundry.render(),
                 .warning,
-                .openSettings(.advanced))
+                .openSetupHelp(.speechRuntime))
         case .whisperMissing:
             return make(
                 copy.noSpeechModelTitle,
                 copy.noWhisperBody,
                 pill: indicator.noSpeechModel.render(),
                 .warning,
-                .openSettings(.advanced))
+                .openSetupHelp(.speechRuntime))
         case .whisperModelMissing:
             return make(
                 copy.noSpeechModelTitle,
                 copy.noWhisperModelBody,
                 pill: indicator.noSpeechModel.render(),
                 .warning,
-                .openSettings(.advanced))
+                .openSetupHelp(.speechRuntime))
         case .recognitionFailed:
             return make(
                 copy.recognitionFailedTitle,
@@ -203,7 +231,8 @@ extension DictationProblem {
                 copy.fallbackBody,
                 values,
                 pill: indicator.defaultMicrophone.render(),
-                .recordingWarning)
+                .recordingWarning,
+                .openSettings(.dictation))
         case .localAppNotRunning:
             return make(
                 copy.appNotRunningTitle,

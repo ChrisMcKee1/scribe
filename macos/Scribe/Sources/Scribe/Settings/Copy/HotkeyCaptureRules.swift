@@ -23,9 +23,9 @@ enum HotkeyCaptureRules {
         103: "F11", 111: "F12", 105: "F13", 107: "F14", 113: "F15", 106: "F16", 64: "F17", 79: "F18", 80: "F19",
         90: "F20",
     ]
-    /// Return, Tab, Space, Delete, Forward Delete and the arrow keys.
+    /// Return, Keypad Enter, Tab, Space, Delete, Forward Delete and the arrow keys.
     static let editing: [UInt16: String] = [
-        36: "Return", 48: "Tab", 49: "Space", 51: "Delete", 117: "Forward Delete", 123: "Left Arrow",
+        36: "Return", 76: "Enter", 48: "Tab", 49: "Space", 51: "Delete", 117: "Forward Delete", 123: "Left Arrow",
         124: "Right Arrow", 125: "Down Arrow", 126: "Up Arrow",
     ]
     private static let modifierNames: [UInt16: String] = [
@@ -36,7 +36,9 @@ enum HotkeyCaptureRules {
         53: "Escape", 114: "Help", 115: "Home", 116: "Page Up", 119: "End", 121: "Page Down",
     ]
 
-    private static let keypadPrintable: Set<UInt16> = [65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92]
+    private static let keypadPrintable: Set<UInt16> = [
+        65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95,
+    ]
 
     /// True for the letter, number, punctuation and keypad keys.
     static func isPrintable(_ keyCode: UInt16) -> Bool {
@@ -49,6 +51,19 @@ enum HotkeyCaptureRules {
             ?? "Key " + String(keyCode)
     }
 
+    /// True for a key the name table does not know, which a layout may still make a printable key.
+    static func isUnnamed(_ keyCode: UInt16) -> Bool {
+        !isPrintable(keyCode) && !modifiers.contains(keyCode) && functionKeys[keyCode] == nil && editing[keyCode] == nil
+            && otherNames[keyCode] == nil
+    }
+
+    /// True when `character` is one visible character, so the layout makes this key type something.
+    static func typesCharacter(_ character: String) -> Bool {
+        guard character.count == 1, let scalar = character.unicodeScalars.first else { return false }
+        let hidden = CharacterSet.controlCharacters.union(.whitespacesAndNewlines)
+        return !hidden.contains(scalar) && scalar.properties.generalCategory != .privateUse
+    }
+
     /// "Hold Right Option" or "Press Caps Lock", as the Dictation page names the action.
     static func describe(_ keyCode: UInt16, toggle: Bool) -> String {
         (toggle ? "Press " : "Hold ") + name(keyCode)
@@ -58,7 +73,8 @@ enum HotkeyCaptureRules {
     /// current layout, which names a printable key in a refusal.
     static func evaluate(_ keyCode: UInt16, typed: String? = nil) -> Verdict {
         let character = typed?.trimmingCharacters(in: .whitespaces) ?? ""
-        let key = isPrintable(keyCode) && !character.isEmpty ? character.uppercased() : name(keyCode)
+        let byCharacter = (isPrintable(keyCode) || isUnnamed(keyCode)) && typesCharacter(character)
+        let key = byCharacter ? character.uppercased() : name(keyCode)
         let copy = SettingsCopy.shortcut
         if keyCode == escape {
             return .refused(copy.cancel.render())
@@ -69,7 +85,7 @@ enum HotkeyCaptureRules {
         if editing[keyCode] != nil {
             return .refused(copy.refusedEditing.render(["key": key]))
         }
-        if isPrintable(keyCode) {
+        if isPrintable(keyCode) || byCharacter {
             return .refused(copy.refusedPrintable.render(["key": key]))
         }
         var warnings: [String] = []

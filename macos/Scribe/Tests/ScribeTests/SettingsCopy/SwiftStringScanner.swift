@@ -7,12 +7,15 @@ struct SwiftLiteral: Equatable {
     /// True for text that never reaches a person: a log call, a failure message or a regular expression.
     let exempt: Bool
 
-    /// True for text that reads like words a person sees: more than one word, or one capitalized word.
+    /// True for text that reads like words a person sees. As on Windows, a single token is a key, a path or a code
+    /// (not text) when it has no capital letter or carries the punctuation of one; anything with a space is text.
     var looksLikeText: Bool {
-        guard text.contains(where: { $0.isLetter }) else { return false }
-        if text.contains(" ") { return true }
-        guard let first = text.first, first.isUppercase else { return false }
-        return text.dropFirst().allSatisfy { $0.isLowercase }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains(where: { $0.isLetter }) else { return false }
+        if trimmed.contains(where: { $0.isWhitespace }) { return true }
+        let keyPunctuation = CharacterSet(charactersIn: ".-_<>/\\$:@=#")
+        return trimmed.contains(where: { $0.isUppercase })
+            && trimmed.unicodeScalars.allSatisfy { !keyPunctuation.contains($0) }
     }
 }
 
@@ -21,7 +24,7 @@ struct SwiftLiteral: Equatable {
 enum SwiftStringScanner {
     private static let exemptCalls = [
         "ScribeLog.", "fatalError(", "assertionFailure(", "preconditionFailure(", "precondition(", "assert(",
-        "NSRegularExpression(", "Regex(", "Logger(", "os_log(", "NSLog(",
+        "NSRegularExpression(", "Regex(", "Logger(", "os_log(", "NSLog(", "CopyItem.", "CopyOmission(",
     ]
 
     static func literals(in source: String) -> [SwiftLiteral] {
@@ -70,8 +73,11 @@ enum SwiftStringScanner {
                 if quote < chars.count && chars[quote] == "\"" {
                     let startLine = line
                     let exempt = isInsideExemptCall(code)
-                    let (text, end, lines) = readString(chars, quoteIndex: quote, hashes: hashes)
+                    let (text, end, lines, nested) = readString(chars, quoteIndex: quote, hashes: hashes)
                     found.append(SwiftLiteral(text: text, line: startLine, exempt: exempt))
+                    for inner in nested {
+                        found.append(SwiftLiteral(text: inner, line: startLine, exempt: exempt))
+                    }
                     line += lines
                     index = end
                     code.append("\"S\"")
@@ -107,13 +113,14 @@ enum SwiftStringScanner {
     /// number of line breaks it spans.
     private static func readString(
         _ chars: [Character], quoteIndex: Int, hashes: Int
-    ) -> (String, Int, Int) {
+    ) -> (String, Int, Int, [String]) {
         let multiline =
             quoteIndex + 2 < chars.count && chars[quoteIndex + 1] == "\"" && chars[quoteIndex + 2] == "\""
         let quotes = multiline ? 3 : 1
         var index = quoteIndex + quotes
         var text = ""
         var lines = 0
+        var nested: [String] = []
 
         func closesHere(_ at: Int) -> Bool {
             guard at + quotes + hashes <= chars.count else { return false }
@@ -136,7 +143,7 @@ enum SwiftStringScanner {
 
         while index < chars.count {
             if closesHere(index) {
-                return (text, index + quotes + hashes, lines)
+                return (text, index + quotes + hashes, lines, nested)
             }
             let char = chars[index]
             if escapeHere(index) {
@@ -160,6 +167,10 @@ enum SwiftStringScanner {
                             }
                         }
                         cursor += 1
+                    }
+                    if cursor > after + 1 {
+                        let inner = String(chars[(after + 1)..<min(cursor, chars.count)])
+                        nested.append(contentsOf: literals(in: inner).map(\.text))
                     }
                     index = cursor + 1
                 } else if marker == "u", after + 1 < chars.count, chars[after + 1] == "{" {
@@ -188,6 +199,6 @@ enum SwiftStringScanner {
                 index += 1
             }
         }
-        return (text, index, lines)
+        return (text, index, lines, nested)
     }
 }

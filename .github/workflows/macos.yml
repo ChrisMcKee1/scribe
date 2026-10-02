@@ -14,12 +14,28 @@ on:
       - 'macos/**'
       - 'tests/fixtures/speech/**'
       - '.github/workflows/macos.yml'
+      # The Settings copy tests read these Windows sources to keep the two apps in step.
+      - 'src/Scribe.Core/Settings/**'
+      - 'src/Scribe.Core/Tray/**'
+      - 'src/Scribe.Core/Overlay/**'
+      - 'src/Scribe.Core/Diagnostics/UserFacingError.cs'
+      - 'src/Scribe.App/Settings/**'
+      - 'src/Scribe.Overlay/**'
+      - 'tests/Scribe.Core.Tests/GlossarySourceTests.cs'
   pull_request:
     branches: [main]
     paths:
       - 'macos/**'
       - 'tests/fixtures/speech/**'
       - '.github/workflows/macos.yml'
+      # The Settings copy tests read these Windows sources to keep the two apps in step.
+      - 'src/Scribe.Core/Settings/**'
+      - 'src/Scribe.Core/Tray/**'
+      - 'src/Scribe.Core/Overlay/**'
+      - 'src/Scribe.Core/Diagnostics/UserFacingError.cs'
+      - 'src/Scribe.App/Settings/**'
+      - 'src/Scribe.Overlay/**'
+      - 'tests/Scribe.Core.Tests/GlossarySourceTests.cs'
   workflow_dispatch:
     inputs:
       real_asr:
