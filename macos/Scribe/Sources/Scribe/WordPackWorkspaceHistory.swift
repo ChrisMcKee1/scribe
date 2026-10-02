@@ -142,7 +142,8 @@ extension WordPackWorkspace {
                     let item = committed.find(id: $0.id)
                     return (
                         $0.id,
-                        WordPackExpectedContent(existed: item != nil, fileName: item?.fileName, hash: item?.contentHash))
+                        WordPackExpectedContent(existed: item != nil, fileName: item?.fileName, hash: item?.contentHash)
+                    )
                 }),
             localState: local, recentlyDeleted: state.deleted,
             purgeIDs: state.purgeIDs, restoreIDs: state.restoreIDs,

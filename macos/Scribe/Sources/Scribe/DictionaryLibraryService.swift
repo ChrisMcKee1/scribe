@@ -302,31 +302,31 @@ final class DictionaryLibraryService: @unchecked Sendable {
         }
     }
 
+    private func loadRetiredBuiltIns() -> [CatalogLibrary] {
+        let root = librariesDirectory.appendingPathComponent("edits", isDirectory: true)
+        let files = (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        let shipped = Set(BuiltInDictionaryLibraries.all.map { $0.id.lowercased() })
+        return files.compactMap { url in
+            let id = url.deletingPathExtension().lastPathComponent
+            guard url.pathExtension == "json", !shipped.contains(id.lowercased()),
+                !id.hasSuffix(".previous"), !id.contains(".backup-"),
+                let data = try? Data(contentsOf: url)
+            else { return nil }
+            let result = BuiltInLibraryOverlay.read(libraryID: id, data: data)
+            let entries = result.edits?.terms.compactMap { $0.value?.dictionaryEntry } ?? []
+            let library = DictionaryLibrary(
+                id: id, name: BuiltInDictionaryLibraries.humanize(id), category: "Built-in",
+                description: nil, builtIn: true, entries: entries)
+            return CatalogLibrary(
+                library: library, state: result.state, contentHash: LibraryContentHash(data: data),
+                origin: .retiredBuiltIn, edits: result.edits, previousEditsAvailable: false, readErrorCount: 0)
+        }
+    }
+
     private func loadCustomLibraries() -> [CatalogLibrary] {
         let fileURLs = libraryFiles().sorted { $0.lastPathComponent < $1.lastPathComponent }
         guard !fileURLs.isEmpty else {
             return []
-        }
-
-        private func loadRetiredBuiltIns() -> [CatalogLibrary] {
-            let root = librariesDirectory.appendingPathComponent("edits", isDirectory: true)
-            let files = (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-            let shipped = Set(BuiltInDictionaryLibraries.all.map { $0.id.lowercased() })
-            return files.compactMap { url in
-                let id = url.deletingPathExtension().lastPathComponent
-                guard url.pathExtension == "json", !shipped.contains(id.lowercased()),
-                    !id.hasSuffix(".previous"), !id.contains(".backup-"),
-                    let data = try? Data(contentsOf: url)
-                else { return nil }
-                let result = BuiltInLibraryOverlay.read(libraryID: id, data: data)
-                let entries = result.edits?.terms.compactMap { $0.value?.dictionaryEntry } ?? []
-                let library = DictionaryLibrary(
-                    id: id, name: BuiltInDictionaryLibraries.humanize(id), category: "Built-in",
-                    description: nil, builtIn: true, entries: entries)
-                return CatalogLibrary(
-                    library: library, state: result.state, contentHash: LibraryContentHash(data: data),
-                    origin: .retiredBuiltIn, edits: result.edits, previousEditsAvailable: false, readErrorCount: 0)
-            }
         }
 
         var libraries: [CatalogLibrary] = []
@@ -393,13 +393,15 @@ final class DictionaryLibraryService: @unchecked Sendable {
         var state = try decodeState(raw) ?? migratedState(for: libraries)
         state.normalize()
         let pending = try await persistenceStore.loadStringSetting(key: WordPackJournal.key)
-        let synced = pending == nil && state.health == .ok && synchronizeLegacyProjection(state: &state, libraries: libraries)
+        let synced =
+            pending == nil && state.health == .ok && synchronizeLegacyProjection(state: &state, libraries: libraries)
         var replaced = false
         if pending == nil && state.health == .ok {
             for library in libraries where library.state == .available || library.state == .partlyReadable {
                 let key = library.id.lowercased()
                 let accepted = state.acceptedContent[key]
-                let changed = library.builtIn
+                let changed =
+                    library.builtIn
                     ? accepted != library.contentHash?.value
                     : accepted == nil || accepted != library.contentHash?.value
                 if changed && (state.enabledIdSet.contains(key) || state.aiPermissions[key] == true) {

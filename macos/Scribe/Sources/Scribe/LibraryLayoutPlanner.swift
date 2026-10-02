@@ -41,11 +41,13 @@ enum LibraryLayoutPlanner {
         if horizontalOverflow { text = minimumText }
         func rows(short: Bool) -> Int {
             let subtitle = short ? 0 : 40 * scale
-            let card = input.height - 32 - 20 - 16 - 32 * scale - 22 - 28 * scale
+            let card =
+                input.height - 32 - 20 - 16 - 32 * scale - 22 - 28 * scale
                 - subtitle - 32 * scale - 10 - tabStrip * scale
             let notice = input.noticeVisible ? 48 * scale + 8 : 0
             let details = input.termDetailsOpen && !short ? 180 * scale : 0
-            let inCard = 32 + 16 + 102 * scale + (short ? 0 : 20 * scale) + notice
+            let inCard =
+                32 + 16 + 102 * scale + (short ? 0 : 20 * scale) + notice
                 + 32 * scale + 8 + 32 * scale + details
             return Int(floor(max(0, card - inCard) / (20 * scale + 8)))
         }

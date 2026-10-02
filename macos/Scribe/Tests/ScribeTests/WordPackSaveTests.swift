@@ -164,7 +164,8 @@ final class WordPackSaveTests: XCTestCase {
         expectEqual(await fixture.coordinator.commit(second), .saved)
         let previous = fixture.root.appendingPathComponent("edits/github.previous.json")
         XCTAssertEqual(
-            BuiltInLibraryOverlay.read(libraryID: "github", data: try Data(contentsOf: previous)).edits?.terms.first?.intent,
+            BuiltInLibraryOverlay.read(libraryID: "github", data: try Data(contentsOf: previous)).edits?.terms.first?
+                .intent,
             .off)
     }
 
@@ -248,7 +249,8 @@ final class WordPackSaveTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), broken)
         let prepared = try await fixture.coordinator.prepare(XCTUnwrap(workspace.captureChangeSet().changeSet))
         expectEqual(await fixture.coordinator.commit(prepared), .saved)
-        let files = try FileManager.default.contentsOfDirectory(at: url.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+        let files = try FileManager.default.contentsOfDirectory(
+            at: url.deletingLastPathComponent(), includingPropertiesForKeys: nil)
         let backup = try XCTUnwrap(files.first { $0.lastPathComponent.hasPrefix("github.backup-") })
         XCTAssertEqual(try Data(contentsOf: backup), broken)
         expectEqual(try await fixture.service.loadCatalog().find(id: "github")?.state, .available)

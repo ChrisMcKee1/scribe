@@ -16,7 +16,9 @@ enum WordPackComposition {
             for entry in item.library.entries where entry.enabled {
                 let key = LibraryTermKey.from(entry.pattern)
                 guard !key.isEmpty else { continue }
-                let tier: RuleTier = item.library.legacyMarkedKeys.contains(key) ? .legacy
+                let tier: RuleTier =
+                    item.library.legacyMarkedKeys.contains(key)
+                    ? .legacy
                     : (!item.builtIn || item.library.authoredKeys.contains(key) ? .authored : .shipped)
                 tiers[tier, default: []].append(
                     ComposedLibraryRule(entry: entry, libraryId: item.id, key: key, tier: tier))
@@ -57,7 +59,8 @@ extension WordPackWorkspace {
             if draft.builtIn, let source = shipped.first(where: { $0.id == draft.id }) {
                 edits = try BuiltInLibraryOverlay.collect(
                     shipped: source,
-                    committed: draft.recovering ? draft.recoveredEdits
+                    committed: draft.recovering
+                        ? draft.recoveredEdits
                         : (draft.resetEdits ? nil : committed.find(id: draft.id)?.edits),
                     rows: draft.rows.map(\.row))
                 hash = try edits.map { LibraryContentHash(data: try BuiltInLibraryOverlay.write($0)) }
@@ -75,18 +78,23 @@ extension WordPackWorkspace {
                 id: draft.id, name: draft.name, category: draft.category, description: draft.description,
                 builtIn: draft.builtIn, entries: values.map(\.dictionaryEntry),
                 fileName: committed.find(id: draft.id)?.fileName ?? "\(draft.id).csv", basedOn: draft.basedOn,
-                authoredKeys: Set(draft.rows.filter { $0.row.origin != .shipped && $0.row.origin != .off }.map { $0.row.key }),
+                authoredKeys: Set(
+                    draft.rows.filter { $0.row.origin != .shipped && $0.row.origin != .off }.map { $0.row.key }),
                 legacyMarkedKeys: marks)
             return CatalogLibrary(
-                library: library, state: draft.fileState, contentHash: contentChanged(draft) ? hash : committed.find(id: draft.id)?.contentHash,
+                library: library, state: draft.fileState,
+                contentHash: contentChanged(draft) ? hash : committed.find(id: draft.id)?.contentHash,
                 origin: draft.origin, edits: edits, previousEditsAvailable: false, readErrorCount: 0)
         }
-        return WordPackComposition.compose(LibraryCatalog(generation: committed.generation, libraries: libraries, localState: local))
+        return WordPackComposition.compose(
+            LibraryCatalog(generation: committed.generation, libraries: libraries, localState: local))
     }
 
     /// Exports the draft, including off rows, without applying it or writing a file.
     func exportSharing(_ libraryID: String) throws -> Data {
-        guard let library = draft.find(libraryID), library.fileState == .available else { throw WordPackError.unavailable }
+        guard let library = draft.find(libraryID), library.fileState == .available else {
+            throw WordPackError.unavailable
+        }
         return DictionaryLibraryCsv.exportSharing(
             LibraryCsvContent(
                 name: library.name, category: library.category, description: library.description,

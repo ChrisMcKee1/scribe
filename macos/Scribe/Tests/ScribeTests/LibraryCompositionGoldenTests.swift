@@ -60,14 +60,18 @@ final class LibraryCompositionGoldenTests: XCTestCase {
             }
             return "\(entry.pattern): not covered"
         }
-        XCTAssertEqual(badges, try golden.requiredSection("\(scenario): Dictionary page library badges (what covers each personal entry)"))
+        XCTAssertEqual(
+            badges,
+            try golden.requiredSection("\(scenario): Dictionary page library badges (what covers each personal entry)"))
         let redundant = coverage.filter { $0.kind == .redundant }.count
         let overrides = coverage.filter { $0.kind == .different }.count
-        let report = ["\(redundant) redundant, \(overrides) override"] + coverage.map {
-            let kind = $0.kind == .redundant ? "Redundant" : "Override"
-            let first = "\(kind) \($0.entry.pattern) -> \"\($0.entry.replacement)\""
-            return first + ", library writes \"\($0.written)\", named \"\($0.sourceName)\""
-        }
+        let report =
+            ["\(redundant) redundant, \(overrides) override"]
+            + coverage.map {
+                let kind = $0.kind == .redundant ? "Redundant" : "Override"
+                let first = "\(kind) \($0.entry.pattern) -> \"\($0.entry.replacement)\""
+                return first + ", library writes \"\($0.written)\", named \"\($0.sourceName)\""
+            }
         XCTAssertEqual(report, try golden.requiredSection("\(scenario): Save prompt report"))
         let vocabulary = CleanupPrompt.composeVocabulary(dictionary, composition.aiEntries)
         for (suffix, budget) in [
@@ -75,7 +79,8 @@ final class LibraryCompositionGoldenTests: XCTestCase {
             ("AI cleanup glossary, cut at 6 terms", 6),
         ] {
             if let expected = golden["\(scenario): \(suffix)"] {
-                XCTAssertEqual(CleanupPrompt.buildGlossary(vocabulary, maxTerms: budget), expected.joined(separator: "\n"))
+                XCTAssertEqual(
+                    CleanupPrompt.buildGlossary(vocabulary, maxTerms: budget), expected.joined(separator: "\n"))
             }
         }
         var effective: [(DictionaryEntry, String)] = []
@@ -83,7 +88,9 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         for entry in dictionary where entry.enabled && seen.insert(LibraryTermKey.from(entry.pattern)).inserted {
             effective.append((entry, "your dictionary"))
         }
-        for rule in composition.rules where seen.insert(rule.key).inserted { effective.append((rule.entry, rule.libraryId)) }
+        for rule in composition.rules where seen.insert(rule.key).inserted {
+            effective.append((rule.entry, rule.libraryId))
+        }
         if let expected = golden["\(scenario): every effective rule"] {
             XCTAssertEqual(effective.map { "\($0.0.pattern) => \($0.0.replacement) [\($0.1)]" }, expected)
         }
@@ -109,7 +116,8 @@ final class LibraryCompositionGoldenTests: XCTestCase {
             }
             XCTAssertEqual(
                 [summarize(sources)],
-                try golden.requiredSection("\(scenario): lines past the cloud glossary's 24,000 characters, by library"))
+                try golden.requiredSection("\(scenario): lines past the cloud glossary's 24,000 characters, by library")
+            )
         }
         let displacedName =
             "\(scenario): shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form"

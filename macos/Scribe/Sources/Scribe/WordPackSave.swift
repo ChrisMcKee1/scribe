@@ -82,7 +82,8 @@ actor WordPackSaveCoordinator {
             let contentChanged: Bool
             if let old {
                 let oldValues = old.library.entries.map { TermValues(entry: $0) }
-                contentChanged = draft.resetEdits || draft.recovering || draft.rows.map { $0.row.values } != oldValues
+                contentChanged =
+                    draft.resetEdits || draft.recovering || draft.rows.map { $0.row.values } != oldValues
                     || draft.name != old.library.name || draft.category != old.library.category
                     || draft.description != old.library.description || draft.basedOn != old.library.basedOn
                     || draft.builtIn && draft.rows.compactMap { $0.row.edit } != (old.edits?.terms ?? [])
@@ -110,10 +111,12 @@ actor WordPackSaveCoordinator {
                         rows: draft.rows.map(\.row))
                     data = try edits.map(BuiltInLibraryOverlay.write)
                     if let current {
-                        let previous = draft.recovering
+                        let previous =
+                            draft.recovering
                             ? "edits/\(draft.id).backup-\(UUID().uuidString).json"
                             : "edits/\(draft.id).previous.json"
-                        let previousURL = try WordPackMaterializer.safeURL(root: service.librariesDirectory, relativePath: previous)
+                        let previousURL = try WordPackMaterializer.safeURL(
+                            root: service.librariesDirectory, relativePath: previous)
                         let prior = try WordPackMaterializer.readIfPresent(previousURL)
                         images.append(
                             WordPackFileImage(
@@ -140,17 +143,23 @@ actor WordPackSaveCoordinator {
         local.normalize()
         // Old builds consume this projection. Withheld packs still apply locally in the new model.
         var projectionGroups: [String: [String]] = [:]
-        for item in catalog.libraries where !changes.libraries.contains(where: { $0.id == item.id && $0.pendingDelete }) {
-            let key = item.builtIn ? item.id : item.fileName.map {
-                URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
-            } ?? item.id
+        for item in catalog.libraries where !changes.libraries.contains(where: { $0.id == item.id && $0.pendingDelete })
+        {
+            let key =
+                item.builtIn
+                ? item.id
+                : item.fileName.map {
+                    URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
+                } ?? item.id
             projectionGroups[key, default: []].append(item.id)
         }
         for draft in changes.libraries where !draft.pendingDelete && catalog.find(id: draft.id) == nil {
             projectionGroups[draft.id, default: []].append(draft.id)
         }
         let projection = projectionGroups.filter { _, ids in
-            ids.allSatisfy { local.enabledIdSet.contains($0.lowercased()) && local.aiPermissions[$0.lowercased()] != false }
+            ids.allSatisfy {
+                local.enabledIdSet.contains($0.lowercased()) && local.aiPermissions[$0.lowercased()] != false
+            }
         }.map(\.key).sorted()
         local.legacyEnabledIds = projection
         let id = UUID()

@@ -42,7 +42,8 @@ final class BuiltInLibraryOverlayFixtureTests: XCTestCase {
         for item in fixture.collectCases {
             let shipped = try fixture.shippedLibrary(version: item.shippedVersion, libraryID: item.library)
             let committed = BuiltInLibraryOverlay.read(
-                libraryID: item.library, data: try fixture.documentData(item.committed)).edits
+                libraryID: item.library, data: try fixture.documentData(item.committed)
+            ).edits
             var rows = BuiltInLibraryOverlay.applyRows(shipped: shipped, edits: committed)
             rows = rows.filter { !item.omit.contains($0.key.value) }.compactMap {
                 item.restore.contains($0.key.value) ? BuiltInLibraryOverlay.restoreShipped($0) : $0
@@ -55,7 +56,8 @@ final class BuiltInLibraryOverlayFixtureTests: XCTestCase {
             if let collected {
                 XCTAssertEqual(
                     BuiltInLibraryOverlay.read(
-                        libraryID: item.library, data: try BuiltInLibraryOverlay.write(collected)).edits,
+                        libraryID: item.library, data: try BuiltInLibraryOverlay.write(collected)
+                    ).edits,
                     collected, item.name)
             }
         }

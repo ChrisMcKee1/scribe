@@ -4,7 +4,8 @@ enum WordPackMaterializer {
     /// Pending images are idempotent. An outside edit is never overwritten; its pack remains held back for review.
     static func recover(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
         guard let raw = try await store.loadStringSetting(key: WordPackJournal.key) else { return true }
-        guard let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1 else {
+        guard let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
+        else {
             return false
         }
         do {
@@ -45,7 +46,8 @@ enum WordPackMaterializer {
         }
     }
 
-    static func preserveOutsideChanges(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
+    static func preserveOutsideChanges(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool
+    {
         guard let raw = try await store.loadStringSetting(key: WordPackJournal.key),
             let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
         else { return false }
@@ -79,7 +81,8 @@ enum WordPackMaterializer {
 
     static func heldBackIDs(_ raw: String?) -> Set<String>? {
         guard let raw else { return [] }
-        guard let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1 else {
+        guard let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
+        else {
             return nil
         }
         return Set(journal.affectedIDs.map { $0.lowercased() })
@@ -96,9 +99,11 @@ enum WordPackMaterializer {
 
     static func safeURL(root: URL, relativePath: String) throws -> URL {
         let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard !components.isEmpty, components.allSatisfy({
-            !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains(":") && !$0.contains("\0")
-        }) else { throw WordPackError.unsafePath }
+        guard !components.isEmpty,
+            components.allSatisfy({
+                !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains(":") && !$0.contains("\0")
+            })
+        else { throw WordPackError.unsafePath }
         var url = root.standardizedFileURL
         var ancestors = [url]
         while url.path != "/" {
