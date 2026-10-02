@@ -55,11 +55,15 @@ final class CleanupDisclosureTests: XCTestCase {
         let settingsView = try String(
             contentsOf: root.appendingPathComponent("Sources").appendingPathComponent("Scribe")
                 .appendingPathComponent("SettingsView.swift"))
+        let settingsModel = try String(
+            contentsOf: root.appendingPathComponent("Sources").appendingPathComponent("Scribe")
+                .appendingPathComponent("CleanupSettingsModel.swift"))
         let section = try String(
             contentsOf: root.appendingPathComponent("Sources").appendingPathComponent("Scribe")
                 .appendingPathComponent("CleanupDisclosureSection.swift"))
 
-        XCTAssertTrue(settingsView.contains("CleanupDisclosure.summary("))
+        XCTAssertTrue(settingsView.contains("Text(model.cleanupSummary)"))
+        XCTAssertTrue(settingsModel.contains("CleanupDisclosure.summary("))
         XCTAssertTrue(settingsView.contains("CleanupDisclosureSection("))
         XCTAssertTrue(section.contains("CleanupDisclosure.whatCleanupSends"))
         XCTAssertTrue(section.contains("CleanupDisclosure.whatCleanupNeverSends"))

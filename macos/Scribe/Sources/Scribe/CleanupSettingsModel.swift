@@ -224,6 +224,13 @@ final class CleanupSettingsModel: ObservableObject {
         providerSelection != .onThisMac || localAppChoice == .letScribeManageIt
     }
 
+    var cleanupSummary: String {
+        CleanupDisclosure.summary(
+            for: values.providerKind,
+            endpoint: values.openAIBaseURL,
+            forceLocal: providerSelection == .onThisMac)
+    }
+
     func setProviderSelection(_ selection: CleanupProviderSelection) {
         switch selection {
         case .onThisMac:

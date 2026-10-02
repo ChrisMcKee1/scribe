@@ -926,13 +926,7 @@ private struct CleanupSettingsTab: View {
             Section {
                 Toggle("Enable AI Cleanup", isOn: $model.values.isEnabled)
                     .disabled(model.isDisabled(.enableSwitch))
-                Text(
-                    CleanupDisclosure.summary(
-                        for: model.values.providerKind,
-                        endpoint: model.values.openAIBaseURL,
-                        forceLocal: model.providerSelection == .onThisMac
-                    )
-                )
+                Text(model.cleanupSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
