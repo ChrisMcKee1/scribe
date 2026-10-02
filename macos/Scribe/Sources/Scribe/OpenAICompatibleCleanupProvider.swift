@@ -179,12 +179,17 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         let lifecycle = self.lifecycle
         let target = lifecycleTarget
         let timeout = self.timeout
+        let requiresChosenContext = CleanupProviderCache.isConnectionTest
         let work: @Sendable () async throws -> ChatCompletionsTransport.Completion = {
             if localServerApp == .lmStudio, contextTokens > 0 || !lifecycle.ownedCopies.isEmpty {
                 if let lease, let target {
-                    await lifecycle.reconcileLMStudio(
+                    let outcome = await lifecycle.reconcileLMStudio(
                         target: target, contextTokens: contextTokens, lease: lease,
                         read: readLocalServer, load: loadLocalContext)
+                    try Task.checkCancellation()
+                    if requiresChosenContext, contextTokens > 0, outcome != .ready {
+                        throw CleanupProviderError.localContextUnavailable(outcome)
+                    }
                 }
             }
 

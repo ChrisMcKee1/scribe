@@ -6,6 +6,63 @@ import os
 
 final class CleanupProviderCacheTests: XCTestCase {
     @MainActor
+    func testChosenSizeTestRefusesAFailedLoadForSavedAndCandidateSettings() async throws {
+        for candidateCheck in [false, true] {
+            let rig = try makeRig(
+                reply: { request in
+                    if request.url?.path == "/api/v1/chat" {
+                        return StubReply.json(request, status: 400, #"{"error":"size refused"}"#)
+                    }
+                    return StubReply.completion(request, "default-size-answer")
+                },
+                readLocalServer: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) })
+            configureOpenAICompatible(rig.store)
+            rig.store.selectedLocalApp = .lmStudio
+            rig.store.lmStudioContextTokens = 8192
+            let check: CleanupConnectionCheck
+            if candidateCheck {
+                let candidate = CleanupConnectionCandidate(
+                    settings: CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load(),
+                    openAIApiKey: nil, azureClientSecret: nil, azureApiKey: nil,
+                    writingStyle: "", frontierPrompt: "", localPrompt: "")
+                check = await rig.cache.checkConnection(candidate: candidate)
+            } else {
+                check = await rig.cache.checkConnection()
+            }
+            XCTAssertFalse(check.reachable)
+            XCTAssertTrue(check.message.contains("could not load the model at the chosen context size"), check.message)
+            XCTAssertEqual(rig.requests.all.map(\.path), ["/api/v1/chat"])
+            XCTAssertTrue(rig.cache.lifecycle.ownedCopies.isEmpty)
+        }
+    }
+
+    func testChosenSizeTestSendsNothingWhenAnotherRequestUsesTheModel() async throws {
+        let rig = try makeRig(
+            readLocalServer: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) })
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 8192
+        let active = try await rig.cache.lifecycle.beginUse(
+            LocalModelTarget(endpoint: "http://127.0.0.1:1234/v1", model: "m", app: .lmStudio, apiKey: nil))
+        defer { active.end() }
+        let check = await rig.cache.checkConnection()
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.contains("Test again when the other request has finished"), check.message)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    func testChosenSizeTestDoesNotSendAfterAnUnreadableResidencyCheck() async throws {
+        let rig = try makeRig(readLocalServer: { _, _ in .failed })
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 8192
+        let check = await rig.cache.checkConnection()
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.contains("could not confirm LM Studio's loaded model"), check.message)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
     func testLMStudioCandidateUsesItsOwnContextAppAndKeyWithoutSaving() async throws {
         let rig = try makeRig(
             reply: { request in

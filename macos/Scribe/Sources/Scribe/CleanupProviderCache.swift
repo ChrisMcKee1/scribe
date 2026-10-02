@@ -18,6 +18,7 @@ import os
 /// (`az login` as someone else). A change of settings needs no call, since the next `provider()` sees a different
 /// connection and builds a new provider, but one is harmless and drops the old credential at once.
 final class CleanupProviderCache: Sendable {
+    @TaskLocal static var isConnectionTest = false
     /// The app's cache, over the live settings store, the process environment and the live factory. No test uses it.
     static let shared = CleanupProviderCache(
         store: .live, environment: ProcessInfo.processInfo.environment, factory: .live)
@@ -324,6 +325,17 @@ final class CleanupProviderCache: Sendable {
         kind: CleanupProviderKind,
         systemPrompt: String? = nil,
         deadline: Duration? = nil
+    ) async throws -> ProbeAnswer {
+        try await $isConnectionTest.withValue(true) {
+            try await probeAnswer(provider, kind: kind, systemPrompt: systemPrompt, deadline: deadline)
+        }
+    }
+
+    private static func probeAnswer(
+        _ provider: any CleanupProvider,
+        kind: CleanupProviderKind,
+        systemPrompt: String?,
+        deadline: Duration?
     ) async throws -> ProbeAnswer {
         let capped = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),

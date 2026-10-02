@@ -194,7 +194,11 @@ final class LocalServerClient: @unchecked Sendable {
                     return nil
                 }
                 let body = try Self.jsonObject(from: data)
-                return Self.text(body["model_instance_id"]) ?? modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let instance = Self.text(body["model_instance_id"]) else {
+                    ScribeLog.warning(.cleanup, "LM Studio did not name the model copy it loaded")
+                    return nil
+                }
+                return instance
             }
         } catch {
             return nil

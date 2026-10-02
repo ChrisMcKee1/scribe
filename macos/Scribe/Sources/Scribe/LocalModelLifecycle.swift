@@ -22,6 +22,13 @@ enum LocalModelLifecycleError: Error, Equatable, Sendable {
     case drainTimedOut
 }
 
+enum LMStudioContextOutcome: Sendable, Equatable {
+    case ready
+    case busy
+    case loadRefused
+    case unavailable
+}
+
 enum LocalModelReleaseReason: Sendable, Equatable {
     /// The idle time passed: only copies Scribe loaded at a chosen size are freed. Every request carried the app's own
     /// keep-alive, so the apps free everything else by themselves.
@@ -459,16 +466,18 @@ final class LocalModelLifecycle: Sendable {
     /// use of the model. A copy at the right size is used as it is, one loaded by hand (no time to live) too, one at
     /// another size is unloaded first, and a size LM Studio refuses is not asked for again. A load another request
     /// abandons keeps a lease of its own until its copy is recorded, so no release frees the model under it.
+    @discardableResult
     func reconcileLMStudio(
         target: LocalModelTarget,
         contextTokens: Int,
         lease: Lease,
         read: @escaping @Sendable (_ endpoint: String, _ apiKey: String?) async -> LocalServerState,
         load: @escaping @Sendable (_ endpoint: String, _ model: String, _ contextTokens: Int) async -> String?
-    ) async {
+    ) async -> LMStudioContextOutcome {
         let refusedKey = "\(target.endpoint)|\(target.model)|\(contextTokens)"
         let revision = state.withLock { $0.revision }
         let observed = await read(target.endpoint, target.apiKey)
+        guard observed.reach == .reached || observed.reach == .notRunning else { return .unavailable }
         if observed.reach == .reached {
             let listed = Set(observed.loaded.compactMap { $0.instanceID })
             forgetUnlisted(endpoint: target.endpoint, model: target.model, listed: listed, ifUnchangedSince: revision)
@@ -496,48 +505,49 @@ final class LocalModelLifecycle: Sendable {
                 finishChange(gate)
             }
         }
-        guard contextTokens > 0 else { return }
-        guard !state.withLock({ $0.refused.contains(refusedKey) }) else { return }
+        guard contextTokens > 0 else { return .ready }
+        guard !state.withLock({ $0.refused.contains(refusedKey) }) else { return .loadRefused }
         if let held, held.contextTokens == contextTokens {
             state.withLock { _ = $0.refused.remove(refusedKey) }
-            return
+            return .ready
         }
-        if let held, held.remainingTTLSeconds == nil { return }
+        if let held, held.remainingTTLSeconds == nil { return .ready }
         let change = state.withLock { state -> LifecycleGate? in
             guard state.uses == 1, state.revision == revision, state.inFlightUnload == nil else { return nil }
             let gate = LifecycleGate()
             state.inFlightUnload = gate
             return gate
         }
-        guard let change else { return }
+        guard let change else { return .busy }
         var transferred = false
         defer { if !transferred { finishChange(change) } }
         if let held {
             // Loaded by hand, or by something that is not Scribe: used as it is.
-            guard held.remainingTTLSeconds != nil else { return }
-            guard lease.isSoleUse else { return }
+            guard held.remainingTTLSeconds != nil else { return .ready }
+            guard lease.isSoleUse else { return .busy }
             if let instance = held.instanceID {
                 guard
                     await unload(
                         Copy(
                             endpoint: target.endpoint, model: target.model, instanceID: instance,
                             loadedKey: target.apiKey), currentKey: target.apiKey)
-                else { return }
+                else { return .loadRefused }
                 state.withLock { state in
                     state.copies.removeAll {
                         $0.instanceID == instance && Self.sameServer($0.endpoint, target.endpoint)
                     }
                 }
             } else {
-                return
+                return .unavailable
             }
         } else if !lease.isSoleUse {
-            return
+            return .busy
         }
-        guard lease.isSoleUse, !Task.isCancelled else { return }
+        guard lease.isSoleUse, !Task.isCancelled else { return .busy }
 
         let settleLease = lease.extend()
         let done = LifecycleGate()
+        let outcome = OSAllocatedUnfairLock(initialState: LMStudioContextOutcome.busy)
         transferred = true
         let settle = Task { [self] in
             defer {
@@ -548,6 +558,7 @@ final class LocalModelLifecycle: Sendable {
                 try await loadLane.run {
                     let instance = await load(target.endpoint, target.model, contextTokens)
                     self.recordLoad(target: target, contextTokens: contextTokens, instance: instance)
+                    outcome.withLock { $0 = instance == nil ? .loadRefused : .ready }
                 }
             } catch {
                 ScribeLog.debug(.cleanup, "A local model load was cancelled before it started")
@@ -557,6 +568,7 @@ final class LocalModelLifecycle: Sendable {
         _ = settle
         // A cancelled caller returns here at once; the load keeps its lease and records its copy when it lands.
         try? await done.wait()
+        return outcome.withLock { $0 }
     }
 
     private func finishChange(_ gate: LifecycleGate) {

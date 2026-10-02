@@ -109,6 +109,7 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
     /// The request never got an HTTP answer. The URL error carries only its code.
     case transport(URLError)
     case timedOut
+    case localContextUnavailable(LMStudioContextOutcome)
     /// The endpoint answered with a status outside 200 to 299.
     case rejected(status: Int, provider: CleanupProviderKind, reply: CleanupServiceReply)
     /// The endpoint answered with a success status but not with a usable completion.
@@ -152,6 +153,16 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
             return Self.transportMessage(error.code)
         case .timedOut:
             return "The cleanup request timed out before the model answered."
+        case .localContextUnavailable(let outcome):
+            switch outcome {
+            case .busy:
+                return "LM Studio is in use. Test again when the other request has finished; no copy was replaced."
+            case .loadRefused:
+                return
+                    "LM Studio could not load the model at the chosen context size. Choose another size and test again."
+            case .unavailable, .ready:
+                return "Scribe could not confirm LM Studio's loaded model. Check LM Studio and test again."
+            }
         case .rejected(let status, let provider, _):
             return provider == .microsoftFoundry
                 ? Self.microsoftFoundryRejection(status)

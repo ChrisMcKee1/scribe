@@ -4,6 +4,12 @@ import XCTest
 @testable import Scribe
 
 final class LocalServerClientTests: XCTestCase {
+    func testALoadWithoutAnInstanceIDDoesNotInventOwnershipFromTheModelName() async {
+        let client = makeClient { request in StubReply.json(request, status: 200, "{}") }
+        let instance = await client.loadWithContext("http://localhost:1234/v1", modelID: "m", contextTokens: 8192)
+        XCTAssertNil(instance)
+    }
+
     func testInjectedSessionConfigurationKeepsTestRoutingButRemovesProxiesAndCaching() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpAdditionalHeaders = ["X-Scribe-Test-Route": "isolated"]
