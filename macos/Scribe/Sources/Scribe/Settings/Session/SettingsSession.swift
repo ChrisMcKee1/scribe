@@ -140,7 +140,6 @@ final class SettingsSession: ObservableObject {
             showExternal(setting, external)
         }
         waiting.removeAll()
-        credentialEdits.removeAll()
     }
 
     func cancel() -> Bool {
@@ -148,6 +147,7 @@ final class SettingsSession: ObservableObject {
         draft = baseline
         intents.removeAll()
         waiting.removeAll()
+        credentialEdits.removeAll()
         revision += 1
         return true
     }

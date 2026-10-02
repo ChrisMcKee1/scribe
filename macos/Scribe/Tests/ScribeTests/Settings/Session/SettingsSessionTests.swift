@@ -145,6 +145,21 @@ final class SettingsSessionTests: XCTestCase {
         XCTAssertFalse(session.hasUnsavedChanges)
     }
 
+    func testReleasingDeferredOutsideChoicesNeverDiscardsATypedCredential() {
+        let state = SessionCommitRecorder()
+        let session = makeSession(state: state)
+        let id = SettingsCredentialID(slot: .customApiKey, account: "default")
+        session.editCredential(id, .replace("typed-but-unsaved"))
+        session.adoptExternal(
+            .overlayAnchor,
+            values: ["ScribeOverlayAnchor": .string("topLeft")],
+            revision: SettingsIntentRevision.next(),
+            canShowNow: false)
+        session.releaseExternalChanges()
+        XCTAssertEqual(session.credentialEdits[id], .replace("typed-but-unsaved"))
+        XCTAssertEqual(session.dirtyPages, [.aiCleanup])
+    }
+
     func testStoredOnlyReapplyAfterFailedSaveCannotSendTheEditingProviderLive() async {
         let state = SessionCommitRecorder()
         state.failure = .storage
