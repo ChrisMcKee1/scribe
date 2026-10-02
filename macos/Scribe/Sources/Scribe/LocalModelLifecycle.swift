@@ -36,6 +36,7 @@ enum LocalModelReleaseReason: Sendable, Equatable {
     case pause
     case configurationChanged
     case retentionShortened
+    case candidateFinished
     case freeMemory
     case shutdown
 }
@@ -65,6 +66,26 @@ enum LocalModelReleaseOutcome: Sendable, Equatable {
 /// Nothing here sends a request outside loopback: the unload and load actions are `LocalServerClient`'s, which refuses
 /// every other host.
 final class LocalModelLifecycle: Sendable {
+    final class Candidate: Sendable {
+        let id = UUID()
+        let wanted: @Sendable () -> Bool
+        private let ended = OSAllocatedUnfairLock(initialState: false)
+
+        init(wanted: @escaping @Sendable () -> Bool) { self.wanted = wanted }
+        var isFinished: Bool { ended.withLock { $0 } }
+        func finish(in lifecycle: LocalModelLifecycle) {
+            ended.withLock { $0 = true }
+            retire(in: lifecycle)
+        }
+        func retire(in lifecycle: LocalModelLifecycle) {
+            Task.detached {
+                _ = await lifecycle.release(
+                    .candidateFinished, target: nil, candidateID: self.id, wanted: self.wanted)
+            }
+        }
+    }
+
+    @TaskLocal static var candidate: Candidate?
     struct Bounds: Sendable {
         /// An idle or pause release waits this long for uses in flight. It is deferred, not dropped: the next idle
         /// countdown or pause asks again.
@@ -99,6 +120,7 @@ final class LocalModelLifecycle: Sendable {
         var model: String
         var instanceID: String
         var loadedKey: String?
+        var candidateID: UUID? = nil
     }
 
     /// One use of a model. `end()` is idempotent and synchronous, so it is safe in a `defer`.
@@ -289,10 +311,12 @@ final class LocalModelLifecycle: Sendable {
     func release(
         _ reason: LocalModelReleaseReason,
         target: LocalModelTarget?,
+        candidateID: UUID? = nil,
         wanted: @escaping @Sendable () -> Bool = { true }
     ) async -> LocalModelReleaseOutcome {
         let revision = state.withLock { $0.revision }
-        return await release(reason, target: target, decidedAt: revision, generation: nil, wanted: wanted)
+        return await release(
+            reason, target: target, decidedAt: revision, generation: nil, candidateID: candidateID, wanted: wanted)
     }
 
     private func release(
@@ -300,6 +324,7 @@ final class LocalModelLifecycle: Sendable {
         target: LocalModelTarget?,
         decidedAt revision: UInt64,
         generation: UInt64?,
+        candidateID: UUID? = nil,
         wanted: @escaping @Sendable () -> Bool = { true }
     ) async -> LocalModelReleaseOutcome {
         let drainBound: Duration
@@ -314,6 +339,7 @@ final class LocalModelLifecycle: Sendable {
             try await self.releaseLane.run {
                 try await self.runRelease(
                     reason, target: target, revision: revision, generation: generation, drainBound: drainBound,
+                    candidateID: candidateID,
                     wanted: wanted)
             }
         }
@@ -340,6 +366,7 @@ final class LocalModelLifecycle: Sendable {
         revision: UInt64,
         generation: UInt64?,
         drainBound: Duration,
+        candidateID: UUID?,
         wanted: @Sendable () -> Bool
     ) async throws -> LocalModelReleaseOutcome {
         while true {
@@ -370,9 +397,12 @@ final class LocalModelLifecycle: Sendable {
                 if decidedByRevision, state.revision != revision { return .stop(.notWanted) }
                 if let generation, state.idleGeneration != generation { return .stop(.notWanted) }
                 guard wanted() else { return .stop(.notWanted) }
-                let explicit: LocalModelTarget? = (reason == .idle || reason == .shutdown) ? nil : target
+                let explicit: LocalModelTarget? =
+                    (reason == .idle || reason == .shutdown || reason == .candidateFinished) ? nil : target
                 let copies: [Copy]
                 switch reason {
+                case .candidateFinished:
+                    copies = state.copies.filter { candidateID != nil && $0.candidateID == candidateID }
                 case .freeMemory, .configurationChanged, .retentionShortened:
                     copies = state.copies.filter { copy in
                         guard let target else { return false }
@@ -546,6 +576,7 @@ final class LocalModelLifecycle: Sendable {
         guard lease.isSoleUse, !Task.isCancelled else { return .busy }
 
         let settleLease = lease.extend()
+        let candidate = Self.candidate
         let done = LifecycleGate()
         let outcome = OSAllocatedUnfairLock(initialState: LMStudioContextOutcome.busy)
         transferred = true
@@ -553,11 +584,13 @@ final class LocalModelLifecycle: Sendable {
             defer {
                 finishChange(change)
                 settleLease.end()
+                if let candidate, candidate.isFinished { candidate.retire(in: self) }
             }
             do {
                 try await loadLane.run {
                     let instance = await load(target.endpoint, target.model, contextTokens)
-                    self.recordLoad(target: target, contextTokens: contextTokens, instance: instance)
+                    self.recordLoad(
+                        target: target, contextTokens: contextTokens, instance: instance, candidateID: candidate?.id)
                     outcome.withLock { $0 = instance == nil ? .loadRefused : .ready }
                 }
             } catch {
@@ -578,15 +611,22 @@ final class LocalModelLifecycle: Sendable {
         gate.open()
     }
 
-    private func recordLoad(target: LocalModelTarget, contextTokens: Int, instance: String?) {
+    private func recordLoad(
+        target: LocalModelTarget, contextTokens: Int, instance: String?, candidateID: UUID?
+    ) {
         state.withLock { state in
             guard let instance else {
                 state.refused.insert("\(target.endpoint)|\(target.model)|\(contextTokens)")
                 return
             }
             let copy = Copy(
-                endpoint: target.endpoint, model: target.model, instanceID: instance, loadedKey: target.apiKey)
-            if !state.copies.contains(copy) { state.copies.append(copy) }
+                endpoint: target.endpoint, model: target.model, instanceID: instance, loadedKey: target.apiKey,
+                candidateID: candidateID)
+            if !state.copies.contains(where: {
+                Self.sameServer($0.endpoint, copy.endpoint) && $0.instanceID == copy.instanceID
+            }) {
+                state.copies.append(copy)
+            }
         }
     }
 

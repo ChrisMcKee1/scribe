@@ -51,6 +51,7 @@ private final class FakeUnloads: @unchecked Sendable {
     private var storedInstanceResult = true
     private var storedBarrier: LifecycleGate?
     let modelStarted = LifecycleGate()
+    let instanceStarted = LifecycleGate()
 
     var models: [String] { lock.withLock { storedModels } }
     var instances: [(id: String, key: String?)] { lock.withLock { storedInstances } }
@@ -82,6 +83,7 @@ private final class FakeUnloads: @unchecked Sendable {
             },
             unloadInstance: { [self] _, id, key in
                 lock.withLock { storedInstances.append((id, key)) }
+                instanceStarted.open()
                 if (try? await barrier?.wait()) == nil, barrier != nil { return false }
                 return lock.withLock { requiredKey.map { $0 == key } ?? instanceResult }
             })
@@ -95,6 +97,67 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testFinishedCandidateRetiresOnlyItsOwnCopies() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "served", model: "saved")
+        let owner = LocalModelLifecycle.Candidate { true }
+        try await LocalModelLifecycle.$candidate.withValue(owner) {
+            try await owned(lifecycle, "candidate", model: "unsaved")
+        }
+        owner.finish(in: lifecycle)
+        try await fake.instanceStarted.wait()
+        _ = await lifecycle.release(.candidateFinished, target: nil, candidateID: owner.id)
+        XCTAssertEqual(fake.instances.map(\.id), ["candidate"])
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["served"])
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
+    func testCandidateThatBecameSavedIsNotRetired() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        let owner = LocalModelLifecycle.Candidate { false }
+        try await LocalModelLifecycle.$candidate.withValue(owner) { try await owned(lifecycle, "saved") }
+        let outcome = await lifecycle.release(
+            .candidateFinished, target: nil, candidateID: owner.id, wanted: owner.wanted)
+        XCTAssertEqual(outcome, .notWanted)
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["saved"])
+        XCTAssertTrue(fake.instances.isEmpty)
+    }
+
+    func testCancelledCandidateRetiresACopyThatLandsAfterTheCheckFinished() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        let owner = LocalModelLifecycle.Candidate { true }
+        let started = LifecycleGate()
+        let land = LifecycleGate()
+        let lease = try await lifecycle.beginUse(target())
+        let check = Task {
+            await LocalModelLifecycle.$candidate.withValue(owner) {
+                await lifecycle.reconcileLMStudio(
+                    target: lmTarget(), contextTokens: 8192, lease: lease,
+                    read: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) },
+                    load: { _, _, _ in
+                        started.open()
+                        try? await land.wait()
+                        return "late-candidate"
+                    })
+            }
+        }
+        try await started.wait()
+        check.cancel()
+        _ = await check.value
+        lease.end()
+        owner.finish(in: lifecycle)
+        XCTAssertTrue(fake.instances.isEmpty)
+        land.open()
+        try await fake.instanceStarted.wait()
+        _ = await lifecycle.release(.candidateFinished, target: nil, candidateID: owner.id)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertEqual(fake.instances.map(\.id), ["late-candidate"])
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
     func testReconciliationRetiresOtherOwnedCopiesAndKeepsTheCopyRequestsReach() async throws {
         let fake = FakeUnloads()
         let lifecycle = make(fake, idle: .zero)

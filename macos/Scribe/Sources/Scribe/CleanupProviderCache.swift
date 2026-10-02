@@ -260,7 +260,14 @@ final class CleanupProviderCache: Sendable {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
         }
-        return await checkConnection(for: connection, candidate: candidate)
+        let owner = LocalModelLifecycle.Candidate { [self] in
+            guard store.isEnabled else { return true }
+            return (try? CleanupProviderResolver.connection(store: store, environment: environment)) != connection
+        }
+        defer { owner.finish(in: lifecycle) }
+        return await LocalModelLifecycle.$candidate.withValue(owner) {
+            await checkConnection(for: connection, candidate: candidate)
+        }
     }
 
     private func checkConnection(

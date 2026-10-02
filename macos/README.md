@@ -208,6 +208,8 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   and key, not the saved settings; a refused load, unreadable residency or concurrent use fails that test before a
   completion is sent. A copy loaded by hand is tested as it is and never replaced for the test. Only an instance id
   returned by LM Studio establishes ownership, never an invented id from the model name.
+  A copy loaded solely for an unsaved Test connection candidate is retired by its instance id after that check,
+  including a load that lands after cancellation. It is kept when those settings became the saved configuration.
   Management loads/unloads go to the configured address once, never raced across
   loopback aliases. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
