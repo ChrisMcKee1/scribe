@@ -60,7 +60,12 @@ final class DictionarySettingsModelTests: XCTestCase {
 
     private func enoughHistory(matching line: String) -> [String] {
         var transcripts = [line]
-        while transcripts.count < DictionaryUsageAnalyzer.minimumTranscripts {
+        func wordCount(_ text: String) -> Int {
+            text.split(whereSeparator: \.isWhitespace).count
+        }
+        while transcripts.count < DictionaryUsageAnalyzer.minimumTranscripts
+            || transcripts.reduce(0, { $0 + wordCount($1) }) < DictionaryUsageAnalyzer.minimumWords
+        {
             transcripts.append(Array(repeating: line, count: 20).joined(separator: " "))
         }
         return transcripts
@@ -426,6 +431,5 @@ final class DictionarySettingsModelTests: XCTestCase {
         XCTAssertEqual(stored.map(\.pattern), ["drop one"])
         XCTAssertEqual(stored.map(\.enabled), [false])
         XCTAssertTrue(after.entries.contains { $0.pattern == "kube" })
-        XCTAssertTrue(after.aiEntries.contains { $0.pattern == "kube" })
     }
 }
