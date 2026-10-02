@@ -208,12 +208,14 @@ actor WordPackSaveCoordinator {
         do {
             try await store.commitSettingsParticipants(participants + [prepared.participant])
         } catch {
-            guard let receipt = try? await store.loadStringSetting(key: WordPackJournal.receiptKey) else {
+            do {
+                let receipt = try await store.loadStringSetting(key: WordPackJournal.receiptKey)
+                guard receipt == prepared.id.uuidString else {
+                    preparations.removeValue(forKey: prepared.id)
+                    return .notCommitted
+                }
+            } catch {
                 return .commitUnknown
-            }
-            guard receipt == prepared.id.uuidString else {
-                preparations.removeValue(forKey: prepared.id)
-                return .notCommitted
             }
         }
         return await complete(prepared)
@@ -221,15 +223,17 @@ actor WordPackSaveCoordinator {
 
     /// Call after the shared SQLite commit, even after an uncertain return. It verifies the durable receipt first.
     func complete(_ prepared: WordPackPreparedSave) async -> WordPackCommitOutcome {
+        var committed = false
         do {
             guard try await store.loadStringSetting(key: WordPackJournal.receiptKey) == prepared.id.uuidString else {
                 return .notCommitted
             }
+            committed = true
             preparations.removeValue(forKey: prepared.id)
             return try await WordPackMaterializer.recover(store: store, service: service)
                 ? .saved : .savedPendingRecovery
         } catch {
-            return .savedPendingRecovery
+            return committed ? .savedPendingRecovery : .commitUnknown
         }
     }
 
