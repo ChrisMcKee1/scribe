@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Cloud AI cleanup via Microsoft Foundry (Azure), reached directly over REST rather than through an SDK (Azure's .NET
 /// Agent Framework and Azure.Identity have no macOS-relevant Swift equivalent). Authenticates with the user's own
@@ -129,8 +130,9 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
                 guard let next = Self.retryMode(after: mode, for: error) else {
                     throw error
                 }
+                let currentMode = mode
                 mode = reasoningMode.withLock { state in
-                    if state == mode {
+                    if state == currentMode {
                         state = next
                     }
                     return state
