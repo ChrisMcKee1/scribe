@@ -52,12 +52,12 @@ struct LibraryCsvCodec: Sendable {
     }
 
     func writeManaged(_ content: LibraryCsvContent) throws -> Data {
-        guard LibraryMetadata.readsBackInOlderVersions(
+        let readsBack = LibraryMetadata.readsBackInOlderVersions(
             content.name,
             content.category,
             content.description,
             content.basedOn)
-        else {
+        guard readsBack else {
             throw LibraryCsvCodecError.metadataUnreadableInOlderVersions
         }
 
@@ -75,12 +75,12 @@ struct LibraryCsvCodec: Sendable {
 
     func readImport(_ data: Data) -> LibraryCsvDocument {
         if data.count > LibraryLimits.maxImportBytes {
-            let encoding = decodeDeclaredEncoding(Array(data.prefix(4)))
-                ?? LibraryTextEncoding(
-                    codePage: 65001,
-                    byteOrderMark: false,
-                    ansiFallback: false,
-                    invalidBytesReplaced: false)
+            let declared = decodeDeclaredEncoding(Array(data.prefix(4)))
+            let encoding = declared ?? LibraryTextEncoding(
+                codePage: 65001,
+                byteOrderMark: false,
+                ansiFallback: false,
+                invalidBytesReplaced: false)
             return LibraryCsvDocument(
                 name: nil,
                 category: nil,
@@ -448,7 +448,8 @@ struct LibraryCsvCodec: Sendable {
                     codePage: codePage,
                     byteOrderMark: byteOrderMark,
                     ansiFallback: false,
-                    invalidBytesReplaced: false))
+                    invalidBytesReplaced: false)
+            )
         }
 
         let replacement = encoding == .utf8 ? String(decoding: data, as: UTF8.self) : ""
@@ -467,14 +468,16 @@ struct LibraryCsvCodec: Sendable {
             return managed
         }
 
-        let text = String(data: data, encoding: .windowsCP1252) ?? String(decoding: data, as: UTF8.self)
+        let text = String(data: data, encoding: .windowsCP1252)
+            ?? String(decoding: data, as: UTF8.self)
         return (
             text,
             LibraryTextEncoding(
                 codePage: ansiCodePage,
                 byteOrderMark: false,
                 ansiFallback: true,
-                invalidBytesReplaced: false))
+                invalidBytesReplaced: false)
+        )
     }
 
     private func decodeDeclaredEncoding(_ prefix: [UInt8]) -> LibraryTextEncoding? {

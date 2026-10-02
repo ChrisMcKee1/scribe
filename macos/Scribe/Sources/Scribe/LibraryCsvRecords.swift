@@ -57,7 +57,8 @@ enum LibraryCsvRecords {
                     fields: &fields,
                     field: &field,
                     quoted: fieldQuoted,
-                    firstFieldRawPrefix: firstFieldRawPrefix)
+                    firstFieldRawPrefix: firstFieldRawPrefix
+                )
                 rawComment = rawComment || endedRawComment
                 fieldQuoted = false
                 firstFieldRawPrefix = String.UnicodeScalarView()
@@ -68,7 +69,8 @@ enum LibraryCsvRecords {
                     fields: &fields,
                     field: &field,
                     quoted: fieldQuoted,
-                    firstFieldRawPrefix: firstFieldRawPrefix)
+                    firstFieldRawPrefix: firstFieldRawPrefix
+                )
                 rawComment = rawComment || endedRawComment
                 records.append(CsvRecord(line: recordStartLine, fields: fields, rawComment: rawComment))
                 fields = []

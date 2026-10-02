@@ -105,6 +105,12 @@ final class DictionaryLibraryService {
         return DictionaryLibraryComposer.composeLibraries(matching)
     }
 
+    /// Compatibility wrapper for existing callers that still hand the CSV in as UTF-8 text.
+    @discardableResult
+    func `import`(csv: String, suggestedName: String?) throws -> DictionaryLibrary {
+        try `import`(data: Data(csv.utf8), suggestedName: suggestedName)
+    }
+
     /// Imports a library from CSV text, writing it into the libraries folder as a new custom
     /// library and returning it. The display name comes from the file's `name` header, else
     /// `suggestedName` (typically the file name). Throws if the CSV has no usable entries.

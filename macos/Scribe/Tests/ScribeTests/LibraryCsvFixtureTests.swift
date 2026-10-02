@@ -11,12 +11,7 @@ final class LibraryCsvFixtureTests: XCTestCase {
 
         for item in fixture.cases {
             let bytes = try fixtureBytes(item.file)
-            let actual: LibraryCsvDocument
-            if item.read == "managed" {
-                actual = DictionaryLibraryCsv.parseManaged(bytes)
-            } else {
-                actual = DictionaryLibraryCsv.parseImport(bytes)
-            }
+            let actual = parsedDocument(for: item, bytes: bytes)
             XCTAssertTrue(actual.matches(item.expected), item.file)
         }
     }
@@ -234,21 +229,34 @@ private struct EncodingFixture: Decodable, Equatable {
     let invalidBytesReplaced: Bool
 }
 
+private func parsedDocument(
+    for item: ReadCasesFixture.ReadCase,
+    bytes: Data
+) -> LibraryCsvDocument {
+    if item.read == "managed" {
+        return DictionaryLibraryCsv.parseManaged(bytes)
+    }
+    return DictionaryLibraryCsv.parseImport(bytes)
+}
+
 extension LibraryCsvDocument {
     fileprivate func matches(_ rhs: ExpectedDocument) -> Bool {
-        name == rhs.name
+        let errorMatches = errors.map {
+            RowErrorFixture(line: $0.line, kind: $0.kind, field: $0.field)
+        } == rhs.errors
+        let encodingMatches = encoding == LibraryTextEncoding(
+            codePage: rhs.encoding.codePage,
+            byteOrderMark: rhs.encoding.byteOrderMark,
+            ansiFallback: rhs.encoding.ansiFallback,
+            invalidBytesReplaced: rhs.encoding.invalidBytesReplaced)
+
+        return name == rhs.name
             && category == rhs.category
             && description == rhs.description
             && basedOn == rhs.basedOn
             && terms == rhs.terms
-            && errors.map {
-                RowErrorFixture(line: $0.line, kind: $0.kind, field: $0.field)
-            } == rhs.errors
-            && encoding == LibraryTextEncoding(
-                codePage: rhs.encoding.codePage,
-                byteOrderMark: rhs.encoding.byteOrderMark,
-                ansiFallback: rhs.encoding.ansiFallback,
-                invalidBytesReplaced: rhs.encoding.invalidBytesReplaced)
+            && errorMatches
+            && encodingMatches
             && formulaGuardVersion == rhs.formulaGuardVersion
             && issues.names == rhs.issues
     }
