@@ -36,6 +36,20 @@ final class AdvancedDictationSettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.newlineMode, .smartFlatten)
     }
 
+    func testSpeechModelDefaultsToParakeetForExistingDocuments() {
+        XCTAssertEqual(store.speechModelAlias, TranscriptionEngine.defaultFoundryModelAlias)
+    }
+
+    func testSpeechModelSelectionRoundTripsAndRejectsUnknownAliases() {
+        store.speechModelAlias = "whisper-base"
+        XCTAssertEqual(AdvancedDictationSettingsStore(defaults: suite.defaults).speechModelAlias, "whisper-base")
+
+        store.speechModelAlias = "not-a-speech-model"
+        XCTAssertEqual(store.speechModelAlias, "whisper-base")
+        suite.defaults.set("unknown-model", forKey: "ScribeSpeechModelAlias")
+        XCTAssertEqual(store.speechModelAlias, TranscriptionEngine.defaultFoundryModelAlias)
+    }
+
     @MainActor
     func testLiveConfigurationReadsStoredLineBreakMode() {
         store.newlineMode = .keepNewlines

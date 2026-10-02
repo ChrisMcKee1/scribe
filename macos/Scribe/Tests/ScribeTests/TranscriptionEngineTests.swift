@@ -32,11 +32,17 @@ final class TranscriptionEngineTests: XCTestCase {
         scratch: ScratchAudioDirectory,
         deadlines: TranscriptionDeadlines = TranscriptionDeadlines(),
         resolutionLifetime: Duration = TranscriptionEngine.defaultResolutionLifetime,
+        foundryModelAlias: String? = nil,
+        selectedFoundryModelAlias: @escaping @Sendable () -> String = {
+            AdvancedDictationSettingsStore.live.speechModelAlias
+        },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) -> TranscriptionEngine {
-        TranscriptionEngine(
+        var environment = ["SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)]
+        environment["SCRIBE_FOUNDRY_ASR_MODEL"] = foundryModelAlias
+        return TranscriptionEngine(
             resolver: TranscriptionBackendResolver(
-                environment: ["SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)],
+                environment: environment,
                 searchPath: [],
                 whisperCliCandidates: [],
                 whisperModelCandidates: []),
@@ -44,6 +50,7 @@ final class TranscriptionEngineTests: XCTestCase {
             deadlines: deadlines,
             resolutionLifetime: resolutionLifetime,
             killGracePeriod: .milliseconds(500),
+            selectedFoundryModelAlias: selectedFoundryModelAlias,
             now: now)
     }
 
@@ -179,6 +186,46 @@ final class TranscriptionEngineTests: XCTestCase {
         let result = try await engine.transcribe(samples: tone, sampleRate: 16_000)
 
         XCTAssertEqual(result.text, "hello")
+    }
+
+    func testUncachedSelectedSpeechModelFailsBeforeStartingTranscription() async throws {
+        let directory = try makeTemporaryDirectory(label: "uncached-speech-model")
+        let started = directory.appendingPathComponent("transcribe-started")
+        let startedPath = started.path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            if [ "$1" = cache ]; then
+              printf '{"models":[{"alias":"whisper-base","cached":false}]}'
+              exit 0
+            fi
+            touch '\(startedPath)'
+            printf '{"text":"must not run"}'
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch, foundryModelAlias: "whisper-base")
+
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: tone, sampleRate: 16_000)
+        }
+
+        XCTAssertEqual(failure, .speechModelNotCached)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: startedPath))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testStoredModelSelectionInvalidatesTheResolvedBackendImmediately() throws {
+        let selected = OSAllocatedUnfairLock(initialState: TranscriptionEngine.defaultFoundryModelAlias)
+        let directory = try makeTemporaryDirectory(label: "speech-model-selection")
+        let script = try makeScript("printf '{\"text\":\"unused\"}'", in: directory)
+        let engine = makeEngine(
+            foundry: script,
+            scratch: ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true)),
+            resolutionLifetime: .seconds(60),
+            selectedFoundryModelAlias: { selected.withLock { $0 } })
+
+        XCTAssertEqual(try engine.resolveBackend().foundryModelAlias, TranscriptionEngine.defaultFoundryModelAlias)
+        selected.withLock { $0 = "whisper-base" }
+        XCTAssertEqual(try engine.resolveBackend().foundryModelAlias, "whisper-base")
     }
 
     func testLongFoundryCapturesAreSentAsSequentialBoundedWavsWithoutChangingTheirSamples() async throws {

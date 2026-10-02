@@ -28,6 +28,10 @@ enum TranscriptionError: LocalizedError, Equatable {
     case emptyOutput
     /// The recognizer's reply could not be read.
     case malformedOutput
+    /// The selected non-default Foundry speech model has not been explicitly downloaded.
+    case speechModelNotCached
+    /// Foundry could not confirm whether the selected speech model is cached.
+    case speechModelCacheUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -58,6 +62,11 @@ enum TranscriptionError: LocalizedError, Equatable {
             return "The speech recognizer returned no text."
         case .malformedOutput:
             return "The speech recognizer's reply could not be read."
+        case .speechModelNotCached:
+            return
+                "The selected speech model is not downloaded. Open Advanced settings and download it before dictating."
+        case .speechModelCacheUnavailable:
+            return "Scribe could not check the selected speech model. Check Foundry Local and try again."
         }
     }
 }
@@ -122,7 +131,7 @@ struct TranscriptionBackendResolver: Sendable {
     }
 
     /// Throws `TranscriptionError.backendMissing`.
-    func resolve() throws -> TranscriptionBackendConfiguration {
+    func resolve(foundryModelAlias: String? = nil) throws -> TranscriptionBackendConfiguration {
         let fileManager = FileManager.default
         if let cli = environment["SCRIBE_WHISPER_CLI"], let model = environment["SCRIBE_WHISPER_MODEL"],
             fileManager.isExecutableFile(atPath: cli), fileManager.fileExists(atPath: model)
@@ -136,7 +145,8 @@ struct TranscriptionBackendResolver: Sendable {
                 kind: .foundryLocal,
                 cliURL: foundry,
                 modelURL: nil,
-                foundryModelAlias: environment["SCRIBE_FOUNDRY_ASR_MODEL"] ?? Self.defaultFoundryModelAlias)
+                foundryModelAlias: environment["SCRIBE_FOUNDRY_ASR_MODEL"] ?? foundryModelAlias
+                    ?? Self.defaultFoundryModelAlias)
         }
 
         let cli =
@@ -157,6 +167,10 @@ struct TranscriptionBackendResolver: Sendable {
             return URL(fileURLWithPath: override)
         }
         return ProcessRunner.locateExecutable(named: "foundry", searchPath: searchPath)
+    }
+
+    func foundryExecutable() -> URL? {
+        locateFoundry()
     }
 
     private static func whisper(cli: URL, model: URL) -> TranscriptionBackendConfiguration {
@@ -230,6 +244,7 @@ final class TranscriptionEngine: Sendable {
     private let deadlines: TranscriptionDeadlines
     private let resolutionLifetime: Duration
     private let killGracePeriod: Duration
+    private let selectedFoundryModelAlias: @Sendable () -> String
     private let now: @Sendable () -> ContinuousClock.Instant
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -246,6 +261,9 @@ final class TranscriptionEngine: Sendable {
         deadlines: TranscriptionDeadlines = TranscriptionDeadlines(),
         resolutionLifetime: Duration = TranscriptionEngine.defaultResolutionLifetime,
         killGracePeriod: Duration = ProcessRunner.defaultKillGracePeriod,
+        selectedFoundryModelAlias: @escaping @Sendable () -> String = {
+            AdvancedDictationSettingsStore.live.speechModelAlias
+        },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.resolver = resolver
@@ -253,6 +271,7 @@ final class TranscriptionEngine: Sendable {
         self.deadlines = deadlines
         self.resolutionLifetime = resolutionLifetime
         self.killGracePeriod = killGracePeriod
+        self.selectedFoundryModelAlias = selectedFoundryModelAlias
         self.now = now
     }
 
@@ -260,9 +279,11 @@ final class TranscriptionEngine: Sendable {
     func resolveBackend() throws -> TranscriptionBackendConfiguration {
         let instant = now()
         let lifetime = resolutionLifetime
+        let requestedAlias = resolver.environment["SCRIBE_FOUNDRY_ASR_MODEL"] ?? selectedFoundryModelAlias()
         let cached = state.withLock { state -> TranscriptionBackendConfiguration? in
             guard let resolved = state.resolved, let resolvedAt = state.resolvedAt,
-                resolvedAt.duration(to: instant) < lifetime
+                resolvedAt.duration(to: instant) < lifetime,
+                resolved.kind != .foundryLocal || resolved.foundryModelAlias == requestedAlias
             else {
                 return nil
             }
@@ -273,7 +294,7 @@ final class TranscriptionEngine: Sendable {
         }
 
         do {
-            let backend = try resolver.resolve()
+            let backend = try resolver.resolve(foundryModelAlias: requestedAlias)
             state.withLock { state in
                 state.resolved = backend
                 state.resolvedAt = instant
@@ -298,6 +319,7 @@ final class TranscriptionEngine: Sendable {
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+        try await requireFoundryModelIsCached(backend)
 
         if backend.kind == .foundryLocal,
             let integerSampleRate = Self.integerSampleRate(sampleRate),
@@ -404,9 +426,30 @@ final class TranscriptionEngine: Sendable {
     func transcribe(wavFileAt url: URL) async throws -> TranscriptionResult {
         guard url.pathExtension.lowercased() == "wav" else { throw TranscriptionError.unsupportedAudioFile }
         let backend = try resolveBackend()
+        try await requireFoundryModelIsCached(backend)
         // Estimated at the sparsest common WAV density, 8 kHz 16-bit mono, so the deadline can only err long.
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         return try await run(backend, audioURL: url, audioSeconds: Double(max(0, size - 44)) / 16_000)
+    }
+
+    private func requireFoundryModelIsCached(_ backend: TranscriptionBackendConfiguration) async throws {
+        guard backend.kind == .foundryLocal,
+            backend.foundryModelAlias != Self.defaultFoundryModelAlias
+        else {
+            return
+        }
+        do {
+            let cached = try await FoundrySpeechModelCatalog.cachedAliases(cliURL: backend.cliURL)
+            guard cached.contains(backend.foundryModelAlias) else {
+                throw TranscriptionError.speechModelNotCached
+            }
+        } catch is CancellationError {
+            throw TranscriptionError.cancelled
+        } catch let error as TranscriptionError {
+            throw error
+        } catch {
+            throw TranscriptionError.speechModelCacheUnavailable
+        }
     }
 
     // MARK: - Running the recognizer
