@@ -128,7 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 recovery: lastTranscriptStore,
                 reports: pipelineReportStore),
             configuration: DictationController.Configuration(
-                toggleKeyStopsOnSilence: { HotkeySettingsStore.live.autoStopOnSilence }),
+                toggleKeyStopsOnSilence: { HotkeySettingsStore.live.autoStopOnSilence },
+                addSpaceAfterDictation: { TypingSettingsStore.live.addSpaceAfterDictation }),
             isPaused: UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey))
         controller.triggers = hotkeyManager
         return controller

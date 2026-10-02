@@ -317,6 +317,10 @@ private struct HotkeySettingsTab: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+
+            Divider()
+
+            InputTypingSettingsSection()
             Spacer()
         }
         .onAppear {

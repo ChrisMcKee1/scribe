@@ -41,7 +41,7 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertFalse(request.writingStylePrompt.contains("Harbor"), "a snippet template reached the prompt")
         XCTAssertEqual(
             harness.fakeInjector.texts,
-            ["Please \(Self.snippetTemplate), and deploy it with Kubeflow."])
+            ["Please \(Self.snippetTemplate), and deploy it with Kubeflow. "])
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .cleaned)
         XCTAssertEqual(harness.reports.latest?.sentText, "please insert my address and deploy it with Kubeflow")
         XCTAssertEqual(harness.reports.latest?.cleanedText, "Please insert my address, and deploy it with Kubeflow.")
@@ -67,7 +67,7 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(
             provider.requests.map(\.transcript),
             [CleanupPrompt.wrapTranscript("switch the agent to Claude Opus 4.8 today")])
-        XCTAssertEqual(harness.fakeInjector.texts, ["Switch the agent to Claude Opus 4.8 today."])
+        XCTAssertEqual(harness.fakeInjector.texts, ["Switch the agent to Claude Opus 4.8 today. "])
         // The stand-in model does what the test says it does: given the spoken form, it loses the library's match.
         XCTAssertEqual(
             Self.writingNumbersAsDigits("switch the agent to cloud opus four point eight today"),
@@ -104,7 +104,7 @@ final class DictationPipelineTests: XCTestCase {
             XCTAssertFalse(request.transcript.contains(text), "a template-like replacement reached the provider")
             XCTAssertFalse(request.writingStylePrompt.contains(text), "a template-like replacement reached the prompt")
         }
-        XCTAssertEqual(harness.fakeInjector.texts, ["deploy it with Kubeflow then \(signature) and the \(footer)."])
+        XCTAssertEqual(harness.fakeInjector.texts, ["deploy it with Kubeflow then \(signature) and the \(footer). "])
     }
 
     /// A casing fix, an expansion that holds its own spoken form, and a spelling whose output is another rule's spoken
@@ -132,13 +132,13 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(
             provider.requests.map(\.transcript),
             [CleanupPrompt.wrapTranscript("move Azure to New York then open GitHub and add my signature")])
-        XCTAssertEqual(harness.fakeInjector.texts, ["move Azure to New York then open GitHub and add my signature."])
+        XCTAssertEqual(harness.fakeInjector.texts, ["move Azure to New York then open GitHub and add my signature. "])
 
         // The same rules with cleanup off: one pass, the same words.
         harness.cleanup.isEnabled = false
         await harness.dictate()
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts.last, "move Azure to New York then open GitHub and add my signature")
+        XCTAssertEqual(harness.fakeInjector.texts.last, "move Azure to New York then open GitHub and add my signature ")
     }
 
     /// A reply that cannot be used falls back to exactly what cleanup off gives: the vocabulary step is dropped, and
@@ -261,7 +261,7 @@ final class DictationPipelineTests: XCTestCase {
 
         let sent = provider.requests.last.map(RecordingCleanupProvider.transcript(in:))
         XCTAssertEqual(sent, "deploy Kubeflow \u{2014} then my sig")
-        XCTAssertEqual(harness.fakeInjector.texts.last, "deploy Kubeflow, then \(template)")
+        XCTAssertEqual(harness.fakeInjector.texts.last, "deploy Kubeflow, then \(template) ")
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .cleaned)
     }
 
@@ -282,7 +282,7 @@ final class DictationPipelineTests: XCTestCase {
 
         XCTAssertEqual(provider.requests.map(\.transcript), [CleanupPrompt.wrapTranscript(name)])
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .cleaned)
-        XCTAssertEqual(harness.fakeInjector.texts, ["\(name)."])
+        XCTAssertEqual(harness.fakeInjector.texts, ["\(name). "])
         if case .accepted = CleanupResponseGuard.sanitize(candidate: "\(name).", original: "c e k p") {
             XCTFail("against the raw transcript the same reply should have been rejected")
         }
@@ -322,7 +322,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.waitUntilProcessed()
 
         XCTAssertFalse(try XCTUnwrap(provider.requests.first).writingStylePrompt.contains("one physical line"))
-        XCTAssertEqual(harness.fakeInjector.texts, [Self.snippetTemplate])
+        XCTAssertEqual(harness.fakeInjector.texts, [Self.snippetTemplate + " "])
     }
 
     /// The model's dashes are normalized away, and the user's own text keeps its dash: dash normalization applies to
@@ -362,7 +362,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         await harness.waitUntilProcessed()
 
-        XCTAssertEqual(harness.fakeInjector.texts, ["can you check the build"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["can you check the build "])
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
         XCTAssertTrue(harness.presenter.noticesShown().contains(.cleanupFellBack))
     }
@@ -378,14 +378,14 @@ final class DictationPipelineTests: XCTestCase {
 
         await harness.dictate()
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["ship it on friday"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["ship it on friday "])
         XCTAssertEqual(harness.presenter.noticesShown(), [.cleanupFellBack])
         XCTAssertTrue(harness.notifier.notices.isEmpty)
 
         harness.cleanup.providerError = CleanupProviderError.notConfigured(.openAIModelMissing, source: .settings)
         await harness.dictate()
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["ship it on friday", "ship it on friday"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["ship it on friday ", "ship it on friday "])
         XCTAssertEqual(harness.presenter.noticesShown(), [.cleanupFellBack, .cleanupFellBack])
         XCTAssertEqual(provider.requests.count, 1, "a provider that could not be built was sent a request")
     }
@@ -509,7 +509,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.transcriber.calls, 2)
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
     }
 
     // MARK: - Order across dictations
@@ -541,7 +541,7 @@ final class DictationPipelineTests: XCTestCase {
         replyA.open("Alpha words.")
         await harness.waitUntilProcessed()
 
-        XCTAssertEqual(harness.fakeInjector.texts, ["Alpha words.", "Beta words."])
+        XCTAssertEqual(harness.fakeInjector.texts, ["Alpha words. ", "Beta words. "])
         XCTAssertEqual(harness.history.records.map(\.transcriptText), ["Alpha words.", "Beta words."])
         XCTAssertEqual(harness.recovery.recent(), ["Beta words.", "Alpha words."])
         XCTAssertEqual(harness.transcriber.mostActiveAtOnce, 1)
@@ -564,7 +564,7 @@ final class DictationPipelineTests: XCTestCase {
         await waitUntil("B's recognizer runs") { second.waitingCount == 1 }
         second.open("second")
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["first", "second"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["first ", "second "])
         XCTAssertEqual(harness.transcriber.mostActiveAtOnce, 1)
     }
 
@@ -582,7 +582,7 @@ final class DictationPipelineTests: XCTestCase {
 
         harness.load(dictionary: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")])
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["deploy it with Kubeflow"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["deploy it with Kubeflow "])
     }
 
     /// A first rule load that failed opens the gate degraded: dictation still works, without stored rules.
@@ -591,7 +591,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         harness.gate.open(.withoutStoredRules)
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
     }
 
     // MARK: - Privacy

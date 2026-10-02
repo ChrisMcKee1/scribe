@@ -42,7 +42,7 @@ final class DictationControllerTests: XCTestCase {
         harness.controller.setPaused(false)
         await harness.dictate()
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
     }
 
     /// A pause while the device is still opening ends the recording before it ever captured anything: the open's late
@@ -146,7 +146,7 @@ final class DictationControllerTests: XCTestCase {
         harness.capture.releaseSeal(first)
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.transcriber.sampleCounts, [1_600, 3_200])
-        XCTAssertEqual(harness.fakeInjector.texts, ["first words", "second words"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["first words ", "second words "])
         XCTAssertEqual(harness.history.dictationIDs, [first.rawValue, second.rawValue])
     }
 
@@ -196,7 +196,7 @@ final class DictationControllerTests: XCTestCase {
         _ = await bounded("the engine's device work to finish") { await engine.waitUntilIdle() }
 
         XCTAssertEqual(flush.releasedBy, .test)
-        XCTAssertEqual(harness.fakeInjector.texts, ["first words", "second words"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["first words ", "second words "])
         XCTAssertEqual(harness.transcriber.sampleCounts.count, 2)
         XCTAssertTrue(harness.transcriber.sampleCounts.allSatisfy { $0 > 0 }, "a dictation lost its samples")
         XCTAssertEqual(firstDevice.counts.closed, 1)
@@ -568,7 +568,7 @@ final class DictationControllerTests: XCTestCase {
 
         reply.fail(DictationTestFailure(code: 5))
         await waitUntil("A is delivered raw") { harness.fakeInjector.deliveries.count == 1 }
-        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer"])
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer "])
         XCTAssertEqual(harness.notifier.kinds, [.cleanupFellBack])
         XCTAssertTrue(isListening(harness.lastOverlay), "A's fallback covered B's meter")
         XCTAssertTrue(harness.controller.noticeSchedule.waiting.isEmpty, "the fallback also waits for the pill")

@@ -215,6 +215,9 @@ final class DictationController {
         var toggleKeyStopsOnSilence: @MainActor @Sendable () -> Bool = { false }
         /// Line-break handling when no app profile overrides it.
         var newlineMode: NewlineInjectionMode = .smartFlatten
+        /// Whether the target gets one trailing space after each dictation. Read for the dictation being inserted, so
+        /// a change applies to the next delivery that reaches insertion.
+        var addSpaceAfterDictation: @MainActor @Sendable () -> Bool = { true }
         /// How long a notice stays on the pill.
         var noticeDuration: Duration = .milliseconds(1_800)
         /// A press while this many dictations are still processing is turned away, which bounds the audio held.
@@ -738,16 +741,20 @@ final class DictationController {
         // Delivery in dictation order. The check after the wait is the last one: recovery and delivery follow with
         // no suspension in between.
         guard await deliveryTurns.waitForTurn(id), mayContinue else { return stopped(dictation, at: .beforeDelivery) }
-        services.recovery.set(insertion)
-        let recoveryGeneration = services.recovery.generation
         let deliveryStarted = clock.now
-        let injection: InjectionResult
-        if let destination = target?.injection {
-            injection = await services.injector.inject(text: insertion, into: destination, shiftReturnLineBreaks: true)
-        } else {
+        let insertionResult = await DictationInsertion.insert(
+            insertion,
+            addSpaceAfterDictation: configuration.addSpaceAfterDictation(),
+            recovery: services.recovery
+        ) { typed in
+            if let destination = target?.injection {
+                return await services.injector.inject(text: typed, into: destination, shiftReturnLineBreaks: true)
+            }
             // A target that could not be captured is never taken to mean "wherever focus is now".
-            injection = InjectionResult(delivery: .targetUnknown)
+            return InjectionResult(delivery: .targetUnknown)
         }
+        let recoveryGeneration = services.recovery.generation
+        let injection = insertionResult.injection
         report.injectionDuration = deliveryStarted.duration(to: clock.now).seconds
         report.injectionResult = injection
         ScribeLog.log(
@@ -772,11 +779,11 @@ final class DictationController {
                 sampleCount: summary.sampleCount,
                 decodeMilliseconds: decode.seconds * 1_000,
                 cleanupMilliseconds: report.cleanupDuration.map { $0 * 1_000 },
-                transcriptText: insertion,
+                transcriptText: insertionResult.recorded,
                 targetApp: target?.bundleIdentifier ?? target?.processName),
             dictationID: id.rawValue)
         services.reports.publish(report)
-        announce(injection, of: dictation, transcript: insertion, recoveryGeneration: recoveryGeneration)
+        announce(injection, of: dictation, transcript: insertionResult.recorded, recoveryGeneration: recoveryGeneration)
     }
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
