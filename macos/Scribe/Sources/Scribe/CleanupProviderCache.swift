@@ -60,6 +60,35 @@ final class CleanupProviderCache: Sendable {
         return try entry(for: connection).provider
     }
 
+    struct OneOffAdmission: Sendable {
+        fileprivate let connection: CleanupConnection
+        fileprivate let handoff: CleanupSendHandoff
+    }
+
+    func admitOneOff() throws -> OneOffAdmission {
+        try CleanupSettingsHandoff.shared.synchronized {
+            let handoff = CleanupSendHandoff(store: store)
+            return try handoff.perform {
+                OneOffAdmission(
+                    connection: try CleanupProviderResolver.connection(store: store, environment: environment),
+                    handoff: handoff)
+            }
+        }
+    }
+
+    func completeOneOff(
+        _ request: CleanupRequest, admission: OneOffAdmission
+    ) async throws -> CleanupResponse {
+        try Task.checkCancellation()
+        try admission.handoff.perform {}
+        let provider = try entry(for: admission.connection).provider
+        let response = try await CleanupSendHandoff.$current.withValue(admission.handoff) {
+            try await provider.clean(request)
+        }
+        try Task.checkCancellation()
+        return try admission.handoff.perform { response }
+    }
+
     /// Drops the cached provider and credential, and with them any token or secret held in memory, in one step. No
     /// `provider()` that begins after this returns can be handed anything from before it: a build still running
     /// across the call hands its provider to its own caller once and keeps nothing (`CleanupProviderCacheState`).

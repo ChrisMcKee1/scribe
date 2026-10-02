@@ -5,6 +5,47 @@ import os
 @testable import Scribe
 
 final class CleanupProviderCacheTests: XCTestCase {
+    func testOneOffAdmissionRefusesAConfigurationThatChangedBack() async throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        let admission = try rig.cache.admitOneOff()
+        let model = rig.store.openAIModel
+        rig.store.openAIModel = "other"
+        rig.store.openAIModel = model
+        do {
+            _ = try await rig.cache.completeOneOff(
+                CleanupRequest(transcript: "private sample", writingStylePrompt: "instructions"),
+                admission: admission)
+            XCTFail("the admission must not survive a configuration change")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    func testOneOffDropsTheReplyWhenSettingsChangeAfterHandoff() async throws {
+        let fixture = makeCleanupStore()
+        fixture.store.isEnabled = true
+        configureOpenAICompatible(fixture.store)
+        let store = fixture.store
+        let session = makeStubSession { request in
+            store.isEnabled = false
+            return StubReply.completion(request, "stale reply")
+        }
+        let factory = CleanupProviderFactory.testing(session: session)
+        let cache = CleanupProviderCache(store: fixture.store, environment: [:], factory: factory)
+        let admission = try cache.admitOneOff()
+        do {
+            _ = try await cache.completeOneOff(
+                CleanupRequest(transcript: "private sample", writingStylePrompt: "instructions"),
+                admission: admission)
+            XCTFail("a stale reply must not be presented")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+    }
+
     private struct Rig {
         let fixture: CleanupStoreFixture
         let cache: CleanupProviderCache

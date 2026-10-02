@@ -108,9 +108,11 @@ final class UsageSummaryModel: ObservableObject {
     /// The production request: the provider AI cleanup would use right now, from the shared provider cache, which
     /// throws for an unfinished setup instead of stopping the app.
     nonisolated static func summarizeWithConfiguredProvider(_ payload: String) async throws -> String {
-        let provider = try CleanupProviderCache.shared.provider()
-        let response = try await provider.clean(
-            CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt))
+        let cache = CleanupProviderCache.shared
+        let admission = try cache.admitOneOff()
+        let response = try await cache.completeOneOff(
+            CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt),
+            admission: admission)
         return response.cleanedText
     }
 }
