@@ -362,7 +362,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertEqual(
             probe.messageContents,
             [
-                CleanupPrompt.systemPrompt(writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: false),
+                CleanupPrompt.systemPrompt(writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: true),
                 "<transcript>\nok\n</transcript>",
             ])
         XCTAssertEqual(rig.requests.count, 2)
@@ -527,7 +527,12 @@ final class CleanupProviderCacheTests: XCTestCase {
             XCTAssertEqual(bodies.count, 2, "\(kind)")
             XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, ceiling, "\(kind)")
             XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")
-            XCTAssertNil(bodies.first?["max_tokens"], "\(kind)")
+            let copiedLimit = bodies.first?["max_tokens"] as? Int
+            if kind == .ollama || kind == .openAICompatible {
+                XCTAssertEqual(copiedLimit, ceiling, "\(kind)")
+            } else {
+                XCTAssertNil(copiedLimit, "\(kind)")
+            }
         }
     }
 
@@ -595,10 +600,11 @@ final class CleanupProviderCacheTests: XCTestCase {
     /// never writes text) would fail every dictation, so it fails the check: the confirmation without a ceiling stops
     /// the same way. A confirmation refused outright fails it too. Either way there is no third request.
     func testAServerThatStopsEveryRequestAtLengthFailsTheCheck() async throws {
-        let replies: [(name: String, reply: @Sendable (URLRequest) -> (HTTPURLResponse, Data))] = [
-            ("always length", { request in StubReply.completion(request, nil, finishReason: "length") }),
+        let replies: [(name: String, sent: Int, reply: @Sendable (URLRequest) -> (HTTPURLResponse, Data))] = [
+            ("always length", 2, { request in StubReply.completion(request, nil, finishReason: "length") }),
             (
                 "length, then refused",
+                3,
                 { request in
                     RecordedRequest(request).jsonBody["max_completion_tokens"] == nil
                         ? StubReply.json(request, status: 400, #"{"error":{"message":"refused"}}"#)
@@ -606,14 +612,14 @@ final class CleanupProviderCacheTests: XCTestCase {
                 }
             ),
         ]
-        for (name, reply) in replies {
+        for (name, sent, reply) in replies {
             let rig = try makeRig(reply: reply)
             configureOpenAICompatible(rig.store)
 
             let check = try await boundedCheck(rig.cache)
 
             XCTAssertFalse(check.reachable, "\(name): \(check.message)")
-            XCTAssertEqual(rig.requests.count, 2, name)
+            XCTAssertEqual(rig.requests.count, sent, name)
             XCTAssertNil(rig.requests.all.last?.jsonBody["max_completion_tokens"], name)
         }
         let alwaysLength = try makeRig { request in StubReply.completion(request, nil, finishReason: "length") }
@@ -660,7 +666,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertFalse(check.reachable)
         XCTAssertEqual(
             check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
-        XCTAssertEqual(rig.requests.count, 2)
+        XCTAssertEqual(rig.requests.count, 3)
     }
 
     /// A strict server that declares only `max_tokens` and forbids every other field (vLLM 0.6.0) refuses the ceiling,
@@ -669,7 +675,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     func testAServerThatRefusesTheCeilingFieldPassesOnTheRetryWithout() async throws {
         for status in [400, 422] {
             let rig = try makeRig { request in
-                let allowed: Set<String> = ["model", "messages", "temperature", "stream", "max_tokens"]
+                let allowed: Set<String> = ["model", "messages", "temperature", "stream"]
                 guard Set(RecordedRequest(request).jsonBody.keys).isSubset(of: allowed) else {
                     return StubReply.json(
                         request, status: status,
@@ -687,7 +693,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
             XCTAssertTrue(check.reachable, "\(status): \(check.message)")
             let bodies = rig.requests.all.map(\.jsonBody)
-            XCTAssertEqual(bodies.count, 2, "\(status)")
+            XCTAssertEqual(bodies.count, 4, "\(status)")
             XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, 16, "\(status)")
             XCTAssertNil(bodies.last?["max_completion_tokens"], "\(status)")
             XCTAssertNil(bodies.last?["max_tokens"], "\(status): the retry sends no ceiling at all")
@@ -701,7 +707,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     /// Only a 400 or 422 to a request that carried the ceiling is retried, and only once: the retry's own 400 is the
     /// answer, and a 401 or a 404 is never retried.
     func testOnlyARefusalOfTheCeilingIsRetriedAndOnlyOnce() async throws {
-        for (status, sent) in [(400, 2), (422, 2), (401, 1), (404, 1)] {
+        for (status, sent) in [(400, 4), (422, 4), (401, 1), (404, 1)] {
             let rig = try makeRig { request in
                 StubReply.json(request, status: status, #"{"error":{"message":"refused"}}"#)
             }

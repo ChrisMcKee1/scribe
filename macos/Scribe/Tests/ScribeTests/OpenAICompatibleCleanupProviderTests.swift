@@ -31,7 +31,7 @@ final class OpenAICompatibleEndpointTests: XCTestCase {
 }
 
 final class OpenAICompatibleCleanupProviderTests: XCTestCase {
-    private let completionsURL = URL(string: "http://127.0.0.1:9999/v1/chat/completions")!
+    private let completionsURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
 
     private func makeProvider(
         apiKey: String? = nil, _ handler: @escaping StubURLProtocol.Handler
@@ -66,6 +66,69 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(sent.messageContents, ["Be terse.", "raw text"])
         let roles = (sent.jsonBody["messages"] as? [[String: Any]])?.compactMap { $0["role"] as? String }
         XCTAssertEqual(roles, ["system", "user"])
+    }
+
+    func testALocalServerGetsOnDeviceGenerationSettings() async throws {
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "test-model",
+            completionsURL: URL(string: "http://127.0.0.1:1234/v1/chat/completions")!,
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Cleaned.")
+            })
+
+        _ = try await provider.clean(
+            CleanupRequest(
+                transcript: "raw text",
+                writingStylePrompt: "Be terse.",
+                maxOutputTokens: 16))
+
+        let sent = try XCTUnwrap(log.all.first)
+        XCTAssertEqual(sent.jsonBody["temperature"] as? Double, CleanupSampling.onDeviceTemperature)
+        XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, CleanupReasoningEffort.none)
+        XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 16)
+        XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, 16)
+    }
+
+    func testALocalServerThatRejectsTheExtraFieldsFallsBackToPlainRequests() async throws {
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "test-model",
+            completionsURL: URL(string: "http://127.0.0.1:1234/v1/chat/completions")!,
+            session: makeStubSession { request in
+                log.record(request)
+                let body = RecordedRequest(request).jsonBody
+                if body["reasoning_effort"] != nil || body["max_tokens"] != nil {
+                    return StubReply.json(
+                        request,
+                        status: 400,
+                        """
+                        {"error":{"message":"reasoning_effort: Input should be 'low', 'medium' or 'high'",
+                        "type":"BadRequestError"}}
+                        """
+                    )
+                }
+                return StubReply.completion(request, "Cleaned.")
+            })
+
+        let first = try await provider.clean(
+            CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse.", maxOutputTokens: 16))
+        let second = try await provider.clean(
+            CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse.", maxOutputTokens: 16))
+
+        XCTAssertEqual(first.cleanedText, "Cleaned.")
+        XCTAssertEqual(second.cleanedText, "Cleaned.")
+
+        let bodies = log.all.map(\.jsonBody)
+        XCTAssertEqual(bodies.count, 3)
+        XCTAssertNotNil(bodies[0]["reasoning_effort"])
+        XCTAssertNotNil(bodies[0]["max_tokens"])
+        XCTAssertNil(bodies[1]["reasoning_effort"])
+        XCTAssertNil(bodies[1]["max_tokens"])
+        XCTAssertEqual(bodies[1]["max_completion_tokens"] as? Int, 16)
+        XCTAssertNil(bodies[2]["reasoning_effort"])
+        XCTAssertNil(bodies[2]["max_tokens"])
     }
 
     func testWithoutAKeyNoAuthorizationIsSent() async throws {
@@ -225,8 +288,12 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
         let sent = try XCTUnwrap(log.all.first)
         XCTAssertEqual(sent.url?.absoluteString, "http://127.0.0.1:11434/v1/chat/completions")
         XCTAssertNil(sent.header("Authorization"))
-        XCTAssertEqual(Set(sent.jsonBody.keys), ["model", "messages", "temperature", "stream"])
+        XCTAssertEqual(
+            Set(sent.jsonBody.keys),
+            ["model", "messages", "temperature", "reasoning_effort", "keep_alive", "stream"])
         XCTAssertEqual(sent.jsonBody["model"] as? String, "qwen2.5:3b")
         XCTAssertEqual(sent.jsonBody["temperature"] as? Double, CleanupSampling.onDeviceTemperature)
+        XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, CleanupReasoningEffort.none)
+        XCTAssertEqual(sent.jsonBody["keep_alive"] as? String, "\(LocalModelDefaults.keepAliveMinutes)m")
     }
 }

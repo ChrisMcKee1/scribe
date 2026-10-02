@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A cleanup provider for any OpenAI-compatible `/v1/chat/completions` endpoint the user brings: LM Studio,
 /// OpenRouter, a self-hosted server, or Ollama addressed by hand. The managed providers (Foundry Local, Ollama) and
@@ -9,9 +10,14 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     let model: String
     /// `{base}/v1/chat/completions`, from `OpenAICompatibleEndpoint.chatCompletionsURL(for:)`.
     let completionsURL: URL
+    let usesLocalCleanupPrompt: Bool
+    let localServerApp: LocalServerApp
     private let apiKey: String?
+    private let keepAliveMinutes: Int
+    private let localModelLane: AsyncLane
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
+    private let plainRequests = OSAllocatedUnfairLock(initialState: false)
 
     init(
         id: String = "openai-compatible",
@@ -19,6 +25,9 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         model: String,
         apiKey: String? = nil,
         completionsURL: URL,
+        localServerApp: LocalServerApp = .none,
+        keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
+        localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
@@ -27,17 +36,72 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.model = model
         self.apiKey = apiKey
         self.completionsURL = completionsURL
+        self.usesLocalCleanupPrompt = LocalAiServer.isOnThisMac(completionsURL.absoluteString)
+        self.localServerApp = localServerApp
+        self.keepAliveMinutes = keepAliveMinutes
+        self.localModelLane = localModelLane
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
-        // No temperature: a bring-your-own endpoint can serve a reasoning model, which rejects or ignores one.
-        let completion = try await transport.complete(
-            request, at: completionsURL, model: model, bearerToken: apiKey, temperature: nil,
-            defaultTimeout: timeout, provider: .openAICompatible)
-        return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+        let local = usesLocalCleanupPrompt
+        let plain = local && plainRequests.withLock { $0 }
+
+        do {
+            let completion = try await complete(
+                request,
+                plain: plain,
+                local: local)
+            return CleanupResponse(
+                cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+        } catch let error as CleanupProviderError {
+            guard local, !plain, case .rejected(let status, _, _) = error, status == 400 || status == 422 else {
+                throw error
+            }
+
+            plainRequests.withLock { $0 = true }
+            do {
+                let completion = try await complete(
+                    request,
+                    plain: true,
+                    local: local)
+                return CleanupResponse(
+                    cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+            } catch {
+                plainRequests.withLock { $0 = false }
+                throw error
+            }
+        }
+    }
+
+    private func complete(
+        _ request: CleanupRequest,
+        plain: Bool,
+        local: Bool
+    ) async throws -> ChatCompletionsTransport.Completion {
+        let keepAlive = localServerApp == .ollama && keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil
+        let ttl = localServerApp == .lmStudio && keepAliveMinutes > 0 ? keepAliveMinutes * 60 : nil
+        let transport = self.transport
+        let completionsURL = self.completionsURL
+        let model = self.model
+        let apiKey = self.apiKey
+        let timeout = self.timeout
+        let work: @Sendable () async throws -> ChatCompletionsTransport.Completion = {
+            try await transport.complete(
+                request,
+                at: completionsURL,
+                model: model,
+                bearerToken: apiKey,
+                temperature: local ? CleanupSampling.onDeviceTemperature : nil,
+                reasoningEffort: local && !plain ? CleanupReasoningEffort.none : nil,
+                includeLegacyMaxTokens: local && !plain,
+                keepAlive: keepAlive,
+                ttl: ttl,
+                defaultTimeout: timeout,
+                provider: .openAICompatible)
+        }
+        return local ? try await localModelLane.run(work) : try await work()
     }
 }
 
@@ -90,6 +154,9 @@ struct ChatCompletionsTransport: Sendable {
         temperature: Double?,
         reasoningEffort: String? = nil,
         promptCacheMode: String? = nil,
+        includeLegacyMaxTokens: Bool = false,
+        keepAlive: String? = nil,
+        ttl: Int? = nil,
         defaultTimeout: TimeInterval,
         provider: CleanupProviderKind
     ) async throws -> Completion {
@@ -112,6 +179,9 @@ struct ChatCompletionsTransport: Sendable {
                 reasoningEffort: reasoningEffort,
                 maxCompletionTokens: cleanupRequest.maxOutputTokens,
                 promptCacheOptions: promptCacheMode.map { ChatCompletionRequest.PromptCacheOptions(mode: $0) },
+                maxTokens: includeLegacyMaxTokens ? cleanupRequest.maxOutputTokens : nil,
+                keepAlive: keepAlive,
+                ttl: ttl,
                 stream: false))
 
         let started = ContinuousClock.now
@@ -196,6 +266,12 @@ struct ChatCompletionRequest: Encodable, Sendable {
     /// deployments refuse; it is the field Windows' OpenAI client sends for the same limit.
     let maxCompletionTokens: Int?
     let promptCacheOptions: PromptCacheOptions?
+    /// Left out of the body when `nil`. Local servers on this Mac still read the older field.
+    let maxTokens: Int?
+    /// Left out of the body when `nil`. Ollama's OpenAI-compatible endpoint keeps the model this long.
+    let keepAlive: String?
+    /// Left out of the body when `nil`. LM Studio's OpenAI-compatible endpoint keeps the model this long, in seconds.
+    let ttl: Int?
     let stream: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -205,6 +281,9 @@ struct ChatCompletionRequest: Encodable, Sendable {
         case reasoningEffort = "reasoning_effort"
         case maxCompletionTokens = "max_completion_tokens"
         case promptCacheOptions = "prompt_cache_options"
+        case maxTokens = "max_tokens"
+        case keepAlive = "keep_alive"
+        case ttl
         case stream
     }
 }

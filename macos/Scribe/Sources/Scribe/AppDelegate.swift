@@ -33,7 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
             let libraryEntries = await self?.enabledLibraryEntries() ?? []
-            return await DictationRuleSnapshot.compile(rules, libraryEntries: libraryEntries)
+            let cleanupVocabularyEntries = await self?.cleanupVocabularyEntries() ?? []
+            return await DictationRuleSnapshot.compile(
+                rules,
+                libraryEntries: libraryEntries,
+                cleanupVocabularyEntries: cleanupVocabularyEntries)
         },
         apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
@@ -47,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var textInjector = TextInjector(logSink: { line in ScribeLog.legacyUnshapedLine(line) })
     private lazy var hotkeyManager = HotkeyManager()
     let dictionaryLibraryService = DictionaryLibraryService()
+    private lazy var cleanupVocabularySource: any CleanupVocabularyLibrarySource = dictionaryLibraryService
     private let lastTranscriptStore = LastTranscriptStore()
     let pipelineReportStore = PipelineReportStore()
     private let overlayPanelController = OverlayPanelController()
@@ -137,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             isPaused: UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey))
         controller.triggers = hotkeyManager
         return controller
+    }
+
+    private func cleanupVocabularyEntries() async -> [DictionaryEntry] {
+        await cleanupVocabularySource.cleanupVocabularyEntries()
     }
 
     private static func makeNotifier(recovery: LastTranscriptStore) -> any DictationNotifying {

@@ -850,11 +850,12 @@ final class DictationHarness {
     /// Applies rules as the app's refresher would; `libraries` are the entries of the switched-on libraries.
     func load(
         dictionary: [DictionaryEntry] = [], snippets: [Snippet] = [], profiles: [AppProfile] = [],
-        libraries: [DictionaryEntry] = [], openingGate: Bool = true
+        libraries: [DictionaryEntry] = [], cleanupLibraries: [DictionaryEntry]? = nil, openingGate: Bool = true
     ) {
         rules.apply(
             PersistenceRuleSet(dictionaryEntries: dictionary, snippets: snippets, appProfiles: profiles),
-            libraryEntries: libraries)
+            libraryEntries: libraries,
+            cleanupVocabularyEntries: cleanupLibraries ?? libraries)
         if openingGate {
             gate.open(.ready)
         }

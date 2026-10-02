@@ -107,6 +107,26 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(harness.fakeInjector.texts, ["deploy it with Kubeflow then \(signature) and the \(footer). "])
     }
 
+    func testCleanupPromptCarriesOnlyMentionedVocabularyAndUsesTheCleanupVocabularySource() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(
+            dictionary: [DictionaryEntry(pattern: "o llama", replacement: "Ollama")],
+            libraries: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")],
+            cleanupLibraries: [DictionaryEntry(pattern: "kubernetes", replacement: "Kubernetes")])
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        harness.transcriber.defaultText = "please run this through o llama"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        let prompt = try XCTUnwrap(provider.requests.first?.writingStylePrompt)
+        XCTAssertTrue(prompt.contains(CleanupPrompt.glossaryHeader))
+        XCTAssertTrue(prompt.contains("Ollama"))
+        XCTAssertFalse(prompt.contains("Kubeflow"), "a local-only word pack entry reached AI cleanup")
+        XCTAssertFalse(prompt.contains("Kubernetes"), "an unmentioned cleanup vocabulary entry reached AI cleanup")
+    }
+
     /// A casing fix, an expansion that holds its own spoken form, and a spelling whose output is another rule's spoken
     /// form each land once with cleanup on: they run on the text the provider is sent and never again on the reply,
     /// and one rule's output never feeds another rule after cleanup either.
@@ -303,7 +323,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.waitUntilProcessed()
 
         let request = try XCTUnwrap(provider.requests.first)
-        XCTAssertTrue(request.writingStylePrompt.hasSuffix(CleanupPrompt.singleLineWritingStyle))
+        XCTAssertTrue(request.writingStylePrompt.contains(CleanupPrompt.singleLineWritingStyle))
         XCTAssertTrue(request.singleLineMode)
         let delivered = try XCTUnwrap(harness.fakeInjector.texts.first)
         XCTAssertFalse(delivered.contains("\n"), "a newline reached a terminal")

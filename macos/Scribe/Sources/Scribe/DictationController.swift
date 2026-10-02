@@ -722,7 +722,12 @@ final class DictationController {
                 post = rules.postProcess(raw)
             } else {
                 report.sentText = pass.text
-                let stage = await cleanUp(pass.text, dictation: dictation, profile: profile, singleLine: singleLine)
+                let stage = await cleanUp(
+                    pass.text,
+                    dictationText: raw,
+                    dictation: dictation,
+                    profile: profile,
+                    singleLine: singleLine)
                 guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
                 report.cleanupOutcome = stage.outcome
                 report.cleanupDuration = stage.requestDuration?.seconds
@@ -815,7 +820,11 @@ final class DictationController {
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
     private func cleanUp(
-        _ sent: String, dictation: AdmittedDictation, profile: AppProfile?, singleLine: Bool
+        _ sent: String,
+        dictationText raw: String,
+        dictation: AdmittedDictation,
+        profile: AppProfile?,
+        singleLine: Bool
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
@@ -833,10 +842,16 @@ final class DictationController {
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
 
         let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
+        let glossary = services.rules.cleanupVocabulary.glossary(
+            maxTerms: CleanupPrompt.glossaryTermBudget(useLocalPrompt: provider.usesLocalCleanupPrompt),
+            mode: .mentioned,
+            dictation: raw)
         let request = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript(sent),
             writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: style, useLocalPrompt: provider.usesLocalCleanupPrompt),
+                writingStyle: style,
+                useLocalPrompt: provider.usesLocalCleanupPrompt,
+                glossary: glossary),
             singleLineMode: singleLine)
         let started = clock.now
         let response: CleanupResponse

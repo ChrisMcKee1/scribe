@@ -945,44 +945,38 @@ private struct CleanupSettingsTab: View {
             Section {
                 Toggle("Enable AI Cleanup", isOn: $model.values.isEnabled)
                     .disabled(model.isDisabled(.enableSwitch))
-                Text(
-                    "Cleans up punctuation and phrasing after each dictation using a locally or "
-                        + "remotely hosted model. Strictly opt-in and off by default: only the "
-                        + "transcribed text is ever sent to a cleanup provider, never audio."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(model.cleanupSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            Section("Provider") {
-                Picker("Provider", selection: $model.values.providerKind) {
-                    ForEach(CleanupProviderKind.allCases) { kind in
-                        Text(kind.displayName).tag(kind)
-                    }
-                }
-            }
-            .disabled(model.isDisabled(.provider))
-
-            providerConfigurationSection
+            CleanupProviderSettingsSection(model: model, drafts: drafts)
                 .disabled(model.isDisabled(.providerDetails))
 
-            Section {
-                HStack {
-                    Button(model.isTesting ? "Testing\u{2026}" : "Test Connection") {
-                        Task { await model.testConnection() }
+            if model.showsConnectionTest {
+                Section {
+                    HStack {
+                        Button(model.isTesting ? "Testing\u{2026}" : "Test Connection") {
+                            Task { await model.testConnection() }
+                        }
+                        .disabled(model.isDisabled(.connectionTest))
+                        if model.isTesting {
+                            ProgressView().controlSize(.small)
+                            Button("Cancel") { model.cancelConnectionTest() }
+                        }
+                        Spacer()
                     }
-                    .disabled(model.isDisabled(.connectionTest))
-                    if model.isTesting {
-                        ProgressView().controlSize(.small)
-                        Button("Cancel") { model.cancelConnectionTest() }
+                    if let errorMessage = model.errorMessage {
+                        Text(errorMessage).foregroundStyle(.red).font(.caption)
+                    } else if let statusMessage = model.statusMessage {
+                        Text(statusMessage).foregroundStyle(.secondary).font(.caption)
                     }
-                    Spacer()
                 }
-                if let errorMessage = model.errorMessage {
-                    Text(errorMessage).foregroundStyle(.red).font(.caption)
-                } else if let statusMessage = model.statusMessage {
-                    Text(statusMessage).foregroundStyle(.secondary).font(.caption)
-                }
+
+                CleanupDisclosureSection(
+                    providerKind: model.values.providerKind,
+                    endpoint: model.values.openAIBaseURL,
+                    forceLocal: model.providerSelection == .onThisMac)
             }
         }
         .formStyle(.grouped)
@@ -994,102 +988,6 @@ private struct CleanupSettingsTab: View {
         // `SettingsWindowController.willCloseNotification`, in case the window goes without this firing.
         .onDisappear {
             model.cancelConnectionTest()
-        }
-    }
-
-    @ViewBuilder
-    private var providerConfigurationSection: some View {
-        switch model.values.providerKind {
-        case .foundryLocal:
-            Section("Foundry Local") {
-                TextField("Model alias", text: $model.values.foundryLocalModelAlias)
-                Text(
-                    "Runs fully on-device via Foundry Local. Requires "
-                        + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
-                        + "first use."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        case .ollama:
-            Section("Local model (Ollama managed)") {
-                TextField("Model", text: $model.values.ollamaModel)
-                Text(
-                    "Runs fully on-device via a local Ollama installation "
-                        + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        case .openAICompatible:
-            Section("OpenAI-compatible endpoint") {
-                TextField("Base URL (e.g. http://localhost:1234)", text: $model.values.openAIBaseURL)
-                TextField("Model", text: $model.values.openAIModel)
-                SecureField(
-                    model.hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
-                    text: $drafts.openAIApiKey)
-                HStack {
-                    Button("Save Key") { model.saveOpenAIApiKey() }
-                        .disabled(!model.canSaveOpenAIApiKey)
-                    if model.hasSavedOpenAIApiKey {
-                        Button("Clear Key", role: .destructive) { model.clearOpenAIApiKey() }
-                    }
-                }
-                Text(
-                    "For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
-                        + "key, if any, is stored in Keychain, never in plain text."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        case .microsoftFoundry:
-            Section("Microsoft Foundry (cloud)") {
-                TextField(
-                    "Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)",
-                    text: $model.values.azureEndpoint)
-                TextField("Deployment name", text: $model.values.azureDeployment)
-                Toggle("Let Microsoft Foundry cache what Scribe sends", isOn: $model.values.azurePromptCaching)
-                Text(
-                    "On: Microsoft Foundry may keep temporary prompt-cache data derived from what Scribe sends. Off: "
-                        + "Scribe asks Microsoft Foundry not to use its prompt cache for new cleanup requests. "
-                        + "Some older or provisioned deployments reject that request, and cleanup stays unavailable "
-                        + "until you turn it back on."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                Picker("Authentication", selection: $model.values.azureAuthMode) {
-                    Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
-                    Text("Service principal").tag(AzureAuthMode.servicePrincipal)
-                }
-
-                if model.values.azureAuthMode == .servicePrincipal {
-                    TextField("Tenant ID", text: $model.values.azureTenantId)
-                    TextField("Client ID", text: $model.values.azureClientId)
-                    SecureField(
-                        model.hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
-                        text: $drafts.azureClientSecret)
-                    HStack {
-                        Button("Save Secret") { model.saveAzureClientSecret() }
-                            .disabled(!model.canSaveAzureClientSecret)
-                        if model.hasSavedAzureClientSecret {
-                            Button("Clear Secret", role: .destructive) { model.clearAzureClientSecret() }
-                        }
-                    }
-                    Text(
-                        "The client secret is stored in Keychain, never in an environment "
-                            + "variable, a plist, or a script."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                } else {
-                    Text(
-                        "Uses the signed-in 'az login' session on this Mac. Install the Azure "
-                            + "CLI and run 'az login' once."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
         }
     }
 }
