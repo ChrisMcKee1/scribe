@@ -90,8 +90,23 @@ struct CleanupProviderSettingsSection: View {
     @ObservedObject var model: CleanupSettingsModel
     @ObservedObject var drafts: SettingsDrafts
     @StateObject private var local = LocalAppSettingsModel()
+    @StateObject private var vocabularyStatus: CleanupVocabularyStatusModel
 
     private let defaultIdleMinutes = LocalModelDefaults.keepAliveMinutes
+
+    init(
+        model: CleanupSettingsModel,
+        drafts: SettingsDrafts,
+        persistenceStore: PersistenceStore,
+        dictionaryLibraryService: DictionaryLibraryService
+    ) {
+        _model = ObservedObject(wrappedValue: model)
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _vocabularyStatus = StateObject(
+            wrappedValue: CleanupVocabularyStatusModel(
+                persistenceStore: persistenceStore,
+                librarySource: dictionaryLibraryService))
+    }
 
     var body: some View {
         Group {
@@ -118,6 +133,7 @@ struct CleanupProviderSettingsSection: View {
             }
         }
         .task(id: localRefreshKey) {
+            await vocabularyStatus.refresh()
             let choice = model.localAppChoice
             let app = choice.serverApp
             guard app != .none else {
@@ -148,6 +164,14 @@ struct CleanupProviderSettingsSection: View {
             switch model.localAppChoice {
             case .letScribeManageIt:
                 TextField("Model alias", text: $model.values.foundryLocalModelAlias)
+                Toggle(
+                    LocalModelTuningText.wholeVocabularyTitle,
+                    isOn: Binding(
+                        get: { model.sendsWholeVocabulary(for: .letScribeManageIt) },
+                        set: { model.setSendsWholeVocabulary($0, for: .letScribeManageIt) }))
+                Text(LocalModelTuningText.foundryWholeVocabularyHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text(
                     "Runs fully on-device via Foundry Local. Requires "
                         + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on first use."
@@ -168,6 +192,8 @@ struct CleanupProviderSettingsSection: View {
         let state = local.state(for: app)
         let choices = LocalAppSetup.modelChoices(state?.models ?? [], selectedModel)
         let status = LocalAppSetup.describe(app, state, choices.selected, idleMinutes: defaultIdleMinutes)
+        let askedContext = model.localContextTokens(for: choice)
+        let effectiveContext = state?.loaded(for: choices.selected)?.contextTokens ?? 0
         Picker(
             "Model",
             selection: Binding(
@@ -178,9 +204,40 @@ struct CleanupProviderSettingsSection: View {
                 Text(localModel.displayName).tag(localModel.id)
             }
         }
+        Picker(
+            LocalModelTuningText.contextSizeTitle,
+            selection: Binding(
+                get: { askedContext },
+                set: { model.setLocalContextTokens($0, for: choice) })
+        ) {
+            ForEach(LocalModelTuningText.contextSizes(app.displayName, stored: askedContext), id: \.tokens) { size in
+                Text(size.label).tag(size.tokens)
+            }
+        }
+        Text(app == .ollama ? LocalModelTuningText.ollamaContextSizeHint : LocalModelTuningText.lmStudioContextSizeHint)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        Toggle(
+            LocalModelTuningText.wholeVocabularyTitle,
+            isOn: Binding(
+                get: { model.sendsWholeVocabulary(for: choice) },
+                set: { model.setSendsWholeVocabulary($0, for: choice) }))
+        Text(LocalModelTuningText.appWholeVocabularyHint)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         Text(status.text)
             .font(.caption)
             .foregroundStyle(color(for: status.kind))
+        Text(
+            LocalModelTuningText.contextStatus(
+                app.displayName,
+                inUse: effectiveContext,
+                asked: ContextBudget.sanitize(askedContext),
+                vocabularyTokens: vocabularyStatus.wholeVocabularyTokens,
+                vocabularyRoom: vocabularyRoom(inUse: effectiveContext, asked: askedContext)
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
         if let action = status.primary {
             HStack {
                 Button(action.text) {
@@ -291,5 +348,17 @@ struct CleanupProviderSettingsSection: View {
         case .busy, .info, .none:
             return .secondary
         }
+    }
+
+    private func vocabularyRoom(inUse: Int, asked: Int) -> Int? {
+        let context = inUse > 0 ? inUse : ContextBudget.sanitize(asked)
+        guard context > 0 else {
+            return nil
+        }
+        return ContextBudget.vocabularyRoom(
+            context,
+            instructions: CleanupPrompt.systemPrompt(
+                writingStyle: CleanupPrompt.defaultWritingStyle,
+                useLocalPrompt: true))
     }
 }

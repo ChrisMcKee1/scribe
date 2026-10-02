@@ -11,6 +11,11 @@ struct CleanupSettingsValues: Equatable {
     var selectedLocalApp: LocalServerApp
     var openAIBaseURL: String
     var openAIModel: String
+    var ollamaContextTokens: Int
+    var lmStudioContextTokens: Int
+    var foundryLocalSendWholeVocabulary: Bool
+    var ollamaSendWholeVocabulary: Bool
+    var lmStudioSendWholeVocabulary: Bool
     var otherServiceBaseURL: String
     var otherServiceModel: String
     var azureEndpoint: String
@@ -61,6 +66,11 @@ extension CleanupSettingsAccess {
                     selectedLocalApp: store.selectedLocalApp,
                     openAIBaseURL: store.openAIBaseURL,
                     openAIModel: store.openAIModel,
+                    ollamaContextTokens: store.ollamaContextTokens,
+                    lmStudioContextTokens: store.lmStudioContextTokens,
+                    foundryLocalSendWholeVocabulary: store.foundryLocalSendWholeVocabulary,
+                    ollamaSendWholeVocabulary: store.ollamaSendWholeVocabulary,
+                    lmStudioSendWholeVocabulary: store.lmStudioSendWholeVocabulary,
                     otherServiceBaseURL: store.otherServiceBaseURL,
                     otherServiceModel: store.otherServiceModel,
                     azureEndpoint: store.azureEndpoint,
@@ -81,6 +91,21 @@ extension CleanupSettingsAccess {
                 if new.selectedLocalApp != old.selectedLocalApp { store.selectedLocalApp = new.selectedLocalApp }
                 if new.openAIBaseURL != old.openAIBaseURL { store.openAIBaseURL = new.openAIBaseURL }
                 if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
+                if new.ollamaContextTokens != old.ollamaContextTokens {
+                    store.ollamaContextTokens = new.ollamaContextTokens
+                }
+                if new.lmStudioContextTokens != old.lmStudioContextTokens {
+                    store.lmStudioContextTokens = new.lmStudioContextTokens
+                }
+                if new.foundryLocalSendWholeVocabulary != old.foundryLocalSendWholeVocabulary {
+                    store.foundryLocalSendWholeVocabulary = new.foundryLocalSendWholeVocabulary
+                }
+                if new.ollamaSendWholeVocabulary != old.ollamaSendWholeVocabulary {
+                    store.ollamaSendWholeVocabulary = new.ollamaSendWholeVocabulary
+                }
+                if new.lmStudioSendWholeVocabulary != old.lmStudioSendWholeVocabulary {
+                    store.lmStudioSendWholeVocabulary = new.lmStudioSendWholeVocabulary
+                }
                 if new.otherServiceBaseURL != old.otherServiceBaseURL {
                     store.otherServiceBaseURL = new.otherServiceBaseURL
                 }
@@ -324,6 +349,56 @@ final class CleanupSettingsModel: ObservableObject {
             updated.openAIModel = saved.stored.model ?? ""
             updated.otherServiceBaseURL = saved.remembered.endpoint ?? ""
             updated.otherServiceModel = saved.remembered.model ?? ""
+        }
+        values = updated
+    }
+
+    func localContextTokens(for choice: CleanupLocalAppChoice? = nil) -> Int {
+        switch choice ?? localAppChoice {
+        case .letScribeManageIt:
+            return 0
+        case .ollama:
+            return values.ollamaContextTokens
+        case .lmStudio:
+            return values.lmStudioContextTokens
+        }
+    }
+
+    func setLocalContextTokens(_ tokens: Int, for choice: CleanupLocalAppChoice? = nil) {
+        let choice = choice ?? localAppChoice
+        var updated = values
+        switch choice {
+        case .letScribeManageIt:
+            break
+        case .ollama:
+            updated.ollamaContextTokens = tokens
+        case .lmStudio:
+            updated.lmStudioContextTokens = tokens
+        }
+        values = updated
+    }
+
+    func sendsWholeVocabulary(for choice: CleanupLocalAppChoice? = nil) -> Bool {
+        switch choice ?? localAppChoice {
+        case .letScribeManageIt:
+            return values.foundryLocalSendWholeVocabulary
+        case .ollama:
+            return values.ollamaSendWholeVocabulary
+        case .lmStudio:
+            return values.lmStudioSendWholeVocabulary
+        }
+    }
+
+    func setSendsWholeVocabulary(_ enabled: Bool, for choice: CleanupLocalAppChoice? = nil) {
+        let choice = choice ?? localAppChoice
+        var updated = values
+        switch choice {
+        case .letScribeManageIt:
+            updated.foundryLocalSendWholeVocabulary = enabled
+        case .ollama:
+            updated.ollamaSendWholeVocabulary = enabled
+        case .lmStudio:
+            updated.lmStudioSendWholeVocabulary = enabled
         }
         values = updated
     }

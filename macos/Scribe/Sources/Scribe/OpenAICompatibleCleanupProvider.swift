@@ -15,6 +15,9 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     private let apiKey: String?
     private let keepAliveMinutes: Int
     private let localModelLane: AsyncLane
+    private let localTuning: @Sendable () -> LocalModelTuning
+    private let localServerEndpoint: String?
+    private let loadLocalContext: @Sendable (_ endpoint: String, _ model: String, _ contextTokens: Int) async -> String?
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let plainRequests = OSAllocatedUnfairLock(initialState: false)
@@ -28,6 +31,17 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         localServerApp: LocalServerApp = .none,
         keepAliveMinutes: Int = LocalModelDefaults.keepAliveMinutes,
         localModelLane: AsyncLane = LocalModelDefaults.sharedLane,
+        localTuning: @escaping @Sendable () -> LocalModelTuning = { .none },
+        loadLocalContext: @escaping @Sendable (
+            _ endpoint: String,
+            _ model: String,
+            _ contextTokens: Int
+        ) async -> String? = {
+            endpoint,
+            model,
+            contextTokens in
+            await LocalServerClient().loadWithContext(endpoint, modelID: model, contextTokens: contextTokens)
+        },
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
@@ -40,6 +54,9 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.localServerApp = localServerApp
         self.keepAliveMinutes = keepAliveMinutes
         self.localModelLane = localModelLane
+        self.localTuning = localTuning
+        self.localServerEndpoint = OpenAICompatibleEndpoint.serviceURL(for: completionsURL)?.absoluteString
+        self.loadLocalContext = loadLocalContext
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
@@ -80,14 +97,33 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         plain: Bool,
         local: Bool
     ) async throws -> ChatCompletionsTransport.Completion {
+        let tuning = localTuning()
         let keepAlive = localServerApp == .ollama && keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil
         let ttl = localServerApp == .lmStudio && keepAliveMinutes > 0 ? keepAliveMinutes * 60 : nil
+        let contextTokens = ContextBudget.sanitize(tuning.contextTokens)
         let transport = self.transport
         let completionsURL = self.completionsURL
         let model = self.model
         let apiKey = self.apiKey
+        let localServerApp = self.localServerApp
+        let localServerEndpoint = self.localServerEndpoint
+        let loadLocalContext = self.loadLocalContext
         let timeout = self.timeout
         let work: @Sendable () async throws -> ChatCompletionsTransport.Completion = {
+            if localServerApp == .lmStudio, contextTokens > 0, let localServerEndpoint {
+                _ = await loadLocalContext(localServerEndpoint, model, contextTokens)
+            }
+
+            if localServerApp == .ollama, contextTokens > 0 {
+                return try await transport.completeOllama(
+                    request,
+                    at: completionsURL,
+                    model: model,
+                    keepAlive: keepAlive,
+                    contextTokens: contextTokens,
+                    defaultTimeout: timeout)
+            }
+
             try await transport.complete(
                 request,
                 at: completionsURL,
@@ -129,6 +165,19 @@ enum OpenAICompatibleEndpoint {
         components.fragment = nil
         return components.url
     }
+
+    static func serviceURL(for completionsURL: URL) -> URL? {
+        guard var components = URLComponents(url: completionsURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        let path = components.percentEncodedPath
+        guard path.lowercased().hasSuffix("/v1/chat/completions") else {
+            return nil
+        }
+        components.percentEncodedPath = String(path.dropLast("/chat/completions".count))
+        components.fragment = nil
+        return components.url
+    }
 }
 
 /// One chat completions request and its answer, shared by every provider.
@@ -145,6 +194,74 @@ struct ChatCompletionsTransport: Sendable {
     }
 
     let session: URLSession
+
+    func completeOllama(
+        _ cleanupRequest: CleanupRequest,
+        at url: URL,
+        model: String,
+        keepAlive: String?,
+        contextTokens: Int,
+        defaultTimeout: TimeInterval
+    ) async throws -> Completion {
+        guard let chatURL = OpenAICompatibleEndpoint.serviceURL(for: url)?.appendingPathComponent("chat") else {
+            throw CleanupProviderError.transport(URLError(.badURL))
+        }
+        var request = URLRequest(url: chatURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONEncoder().encode(
+            OllamaChatRequest(
+                model: model,
+                messages: [
+                    ChatCompletionRequest.Message(role: "system", content: cleanupRequest.writingStylePrompt),
+                    ChatCompletionRequest.Message(role: "user", content: cleanupRequest.transcript),
+                ],
+                keepAlive: keepAlive,
+                think: false,
+                options: .init(
+                    numContext: contextTokens,
+                    temperature: CleanupSampling.onDeviceTemperature,
+                    numPredict: cleanupRequest.maxOutputTokens ?? 4096),
+                stream: false))
+
+        let started = ContinuousClock.now
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw Self.transportFailure(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CleanupProviderError.invalidResponse(.notHTTP)
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw CleanupProviderError.rejected(
+                status: httpResponse.statusCode,
+                provider: .openAICompatible,
+                reply: CleanupServiceReply(errorBody: data))
+        }
+        guard let decoded = try? JSONDecoder().decode(OllamaChatResponse.self, from: data) else {
+            throw CleanupProviderError.invalidResponse(.undecodable)
+        }
+        let text = CleanupPrompt.stripTranscriptTags(decoded.message.content ?? "")
+        guard !text.isEmpty else {
+            throw CleanupProviderError.invalidResponse(
+                decoded.doneReason == "length" ? .outputLimitReachedBeforeText : .emptyCompletion)
+        }
+
+        let elapsed = started.duration(to: .now)
+        ScribeLog.debug(
+            .cleanup,
+            "Cleanup request finished",
+            .name("provider", .openAICompatible),
+            .duration("elapsed", elapsed),
+            .count("characters", text.count))
+        return Completion(text: text, latency: Self.seconds(elapsed))
+    }
 
     func complete(
         _ cleanupRequest: CleanupRequest,
@@ -256,6 +373,36 @@ struct ChatCompletionRequest: Encodable, Sendable {
         let content: String
     }
 
+    struct OllamaChatRequest: Encodable, Sendable {
+        struct Options: Encodable, Sendable {
+            let numContext: Int
+            let temperature: Double
+            let numPredict: Int
+
+            enum CodingKeys: String, CodingKey {
+                case numContext = "num_ctx"
+                case temperature
+                case numPredict = "num_predict"
+            }
+        }
+
+        let model: String
+        let messages: [ChatCompletionRequest.Message]
+        let keepAlive: String?
+        let think: Bool
+        let options: Options
+        let stream: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case model
+            case messages
+            case keepAlive = "keep_alive"
+            case think
+            case options
+            case stream
+        }
+    }
+
     let model: String
     let messages: [Message]
     /// Left out of the body when `nil`.
@@ -292,6 +439,20 @@ struct ChatCompletionResponse: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable {
             let content: String?
+        }
+
+        struct OllamaChatResponse: Decodable {
+            struct Message: Decodable {
+                let content: String?
+            }
+
+            let message: Message
+            let doneReason: String?
+
+            enum CodingKeys: String, CodingKey {
+                case message
+                case doneReason = "done_reason"
+            }
         }
         let message: Message
         /// Why the model stopped: `stop`, `length` when the output limit ran out, or another value some servers send.

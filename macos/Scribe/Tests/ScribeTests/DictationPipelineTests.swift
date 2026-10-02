@@ -127,6 +127,42 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertFalse(prompt.contains("Kubernetes"), "an unmentioned cleanup vocabulary entry reached AI cleanup")
     }
 
+    func testALocalAppContextCanSendTheWholeVocabularyAndAddsAnOutputCeiling() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        let dictionary = (0..<120).map { DictionaryEntry(pattern: "spoken term \($0)", replacement: "Term\($0)") }
+        harness.load(dictionary: dictionary)
+        harness.cleanup.isEnabled = true
+        harness.cleanup.settings = CleanupSettingsSnapshot(
+            isEnabled: true,
+            providerKind: .openAICompatible,
+            foundryLocalModelAlias: CleanupSettingsStore.defaultFoundryLocalModelAlias,
+            ollamaModel: CleanupSettingsStore.defaultOllamaModel,
+            selectedLocalApp: .ollama,
+            openAIBaseURL: LocalAiServer.ollamaAddress,
+            openAIModel: "gemma4:e4b",
+            ollamaContextTokens: 32768,
+            lmStudioContextTokens: 0,
+            foundryLocalSendWholeVocabulary: false,
+            ollamaSendWholeVocabulary: true,
+            lmStudioSendWholeVocabulary: false,
+            azureEndpoint: "",
+            azureDeployment: "",
+            azureAuthMode: .azureCli,
+            azureTenantId: "",
+            azureClientId: "",
+            secretRevision: "")
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        harness.transcriber.defaultText = "spoken term 119 and spoken term 0"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        let request = try XCTUnwrap(provider.requests.first)
+        XCTAssertNotNil(request.maxOutputTokens)
+        XCTAssertTrue(request.writingStylePrompt.contains("Term0"))
+        XCTAssertTrue(request.writingStylePrompt.contains("Term119"))
+    }
+
     /// A casing fix, an expansion that holds its own spoken form, and a spelling whose output is another rule's spoken
     /// form each land once with cleanup on: they run on the text the provider is sent and never again on the reply,
     /// and one rule's output never feeds another rule after cleanup either.

@@ -46,6 +46,9 @@ protocol DictationCleaning {
     /// main actor.
     func provider() async throws -> any CleanupProvider
 
+    /// The cleanup settings stored now, for request shaping that belongs outside the provider cache.
+    func currentSettings() -> CleanupSettingsSnapshot
+
     /// Drops the cached provider and credential (`CleanupProviderCache.invalidate()`).
     func invalidate()
 }
@@ -200,6 +203,10 @@ struct LiveDictationCleanup: DictationCleaning {
         return try await Task.detached(priority: .userInitiated) {
             try cache.provider()
         }.value
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        cache.store.snapshot()
     }
 
     func invalidate() {

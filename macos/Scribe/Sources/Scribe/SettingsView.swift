@@ -121,7 +121,10 @@ struct SettingsView: View {
             AppProfilesSettingsTab(
                 persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .aiCleanup:
-            CleanupSettingsTab(drafts: drafts)
+            CleanupSettingsTab(
+                drafts: drafts,
+                persistenceStore: persistenceStore,
+                dictionaryLibraryService: dictionaryLibraryService)
         case .playground:
             PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
         case .diagnostics:
@@ -934,10 +937,19 @@ private struct AppProfilesSettingsTab: View {
 private struct CleanupSettingsTab: View {
     @StateObject private var model: CleanupSettingsModel
     @ObservedObject private var drafts: SettingsDrafts
+    private let persistenceStore: PersistenceStore
+    private let dictionaryLibraryService: DictionaryLibraryService
 
-    init(drafts: SettingsDrafts, access: CleanupSettingsAccess = .live) {
+    init(
+        drafts: SettingsDrafts,
+        persistenceStore: PersistenceStore,
+        dictionaryLibraryService: DictionaryLibraryService,
+        access: CleanupSettingsAccess = .live
+    ) {
         _drafts = ObservedObject(wrappedValue: drafts)
         _model = StateObject(wrappedValue: CleanupSettingsModel(access: access, drafts: drafts))
+        self.persistenceStore = persistenceStore
+        self.dictionaryLibraryService = dictionaryLibraryService
     }
 
     var body: some View {
@@ -950,7 +962,11 @@ private struct CleanupSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            CleanupProviderSettingsSection(model: model, drafts: drafts)
+            CleanupProviderSettingsSection(
+                model: model,
+                drafts: drafts,
+                persistenceStore: persistenceStore,
+                dictionaryLibraryService: dictionaryLibraryService)
                 .disabled(model.isDisabled(.providerDetails))
 
             if model.showsConnectionTest {

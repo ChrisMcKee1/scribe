@@ -144,8 +144,24 @@ enum CleanupProviderResolver {
             case .secretStore:
                 apiKey = try readSecret { try store.readOpenAIApiKey() }
             }
+            let localServerApp: LocalServerApp
+            if connection.source == .settings {
+                localServerApp =
+                    store.selectedLocalApp != .none
+                    ? store.selectedLocalApp
+                    : (apiKey == nil ? LocalAiServer.appForChatCompletionsURL(completionsURL) : .none)
+            } else {
+                localServerApp = .none
+            }
             return OpenAICompatibleCleanupProvider(
-                model: model, apiKey: apiKey, completionsURL: completionsURL, session: factory.session)
+                model: model,
+                apiKey: apiKey,
+                completionsURL: completionsURL,
+                localServerApp: localServerApp,
+                localTuning: {
+                    connection.source == .settings ? LocalModelTuning.forSettings(store.snapshot()) : .none
+                },
+                session: factory.session)
         case .microsoftFoundry(let inferenceBase, let deployment, let identity):
             let credential = try credentialSource(identity) {
                 try makeCredential(

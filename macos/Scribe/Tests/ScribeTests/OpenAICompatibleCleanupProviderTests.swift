@@ -131,6 +131,61 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertNil(bodies[2]["max_tokens"])
     }
 
+    func testAnOllamaContextSizeUsesTheNativeChatAPI() async throws {
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "gemma4:e4b",
+            completionsURL: URL(string: "http://127.0.0.1:11434/v1/chat/completions")!,
+            localServerApp: .ollama,
+            localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: false) },
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.json(
+                    request,
+                    """
+                    {"model":"gemma4:e4b","message":{"role":"assistant","content":"Cleaned."},
+                    "done":true,"done_reason":"stop"}
+                    """
+                )
+            })
+
+        _ = try await provider.clean(
+            CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse.", maxOutputTokens: 16))
+
+        let sent = try XCTUnwrap(log.all.first)
+        XCTAssertEqual(sent.url?.path, "/v1/chat")
+        XCTAssertEqual(sent.jsonBody["keep_alive"] as? String, "\(LocalModelDefaults.keepAliveMinutes)m")
+        XCTAssertEqual(sent.jsonBody["think"] as? Bool, false)
+        let options = try XCTUnwrap(sent.jsonBody["options"] as? [String: Any])
+        XCTAssertEqual(options["num_ctx"] as? Int, 32768)
+        XCTAssertEqual(options["num_predict"] as? Int, 16)
+    }
+
+    func testALMStudioContextSizeLoadsTheModelBeforeChatCompletions() async throws {
+        let log = RequestLog()
+        var load: (endpoint: String, model: String, context: Int)?
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "google/gemma-4-e2b",
+            completionsURL: URL(string: "http://127.0.0.1:1234/v1/chat/completions")!,
+            localServerApp: .lmStudio,
+            localTuning: { LocalModelTuning(contextTokens: 16384, sendWholeVocabulary: false) },
+            loadLocalContext: { endpoint, model, contextTokens in
+                load = (endpoint, model, contextTokens)
+                return "instance-1"
+            },
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Cleaned.")
+            })
+
+        _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse."))
+
+        XCTAssertEqual(load?.endpoint, LocalAiServer.lmStudioAddress)
+        XCTAssertEqual(load?.model, "google/gemma-4-e2b")
+        XCTAssertEqual(load?.context, 16384)
+        XCTAssertEqual(log.all.first?.url?.path, "/v1/chat/completions")
+    }
+
     func testWithoutAKeyNoAuthorizationIsSent() async throws {
         let log = RequestLog()
         let provider = makeProvider(apiKey: "") { request in

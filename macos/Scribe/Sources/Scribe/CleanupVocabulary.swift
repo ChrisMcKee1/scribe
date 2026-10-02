@@ -13,6 +13,14 @@ struct CleanupVocabulary: Sendable {
 
     let glossaryEntries: [DictionaryEntry]
 
+    var wholeGlossaryTokens: Int {
+        let lines = CleanupPrompt.glossaryLines(glossaryEntries)
+        guard !lines.isEmpty else {
+            return 0
+        }
+        return CleanupPrompt.glossaryHeaderTokens + CleanupPrompt.tokens(lines)
+    }
+
     func glossary(maxTerms: Int, mode: CleanupVocabularyMode, dictation: String?) -> String? {
         switch mode {
         case .none:
@@ -29,5 +37,44 @@ struct CleanupVocabulary: Sendable {
                 maxTerms: maxTerms)
             return glossary.isEmpty ? nil : glossary
         }
+    }
+
+    func glossary(
+        mode: CleanupVocabularyMode,
+        everything: Bool,
+        dictation: String?,
+        tokenBudget: Int,
+        maxTerms: Int
+    ) -> String? {
+        guard mode != .none, !glossaryEntries.isEmpty else {
+            return nil
+        }
+
+        let all = CleanupPrompt.glossaryLines(glossaryEntries)
+        let lines: [GlossaryLineInfo]
+        if mode == .all || dictation?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            if mode != .all && !everything {
+                return nil
+            }
+            lines = CleanupPrompt.takeWhileFits(
+                all,
+                room: tokenBudget - CleanupPrompt.glossaryHeaderTokens,
+                maxTerms: maxTerms)
+        } else {
+            let mentioned = CleanupPrompt.glossaryLines(VocabularyMentions.select(glossaryEntries, dictation))
+            lines = CleanupPrompt.fitGlossary(
+                all,
+                mentioned: mentioned,
+                everything: everything,
+                tokenBudget: tokenBudget,
+                maxTerms: maxTerms)
+        }
+
+        guard !lines.isEmpty else {
+            return nil
+        }
+
+        let glossary = CleanupPrompt.renderGlossary(lines)
+        return glossary.isEmpty ? nil : glossary
     }
 }

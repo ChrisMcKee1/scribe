@@ -442,6 +442,7 @@ enum CleanupPrompt {
     static let glossaryHeader =
         "Preferred vocabulary. When the transcript refers to any of these, use the exact spelling shown here. Treat "
         + "this list as a style guide rather than a closed set, and apply it regardless of the writing style above:\n"
+    static let glossaryHeaderTokens = TokenEstimate.vocabulary(glossaryHeader)
 
     static let defaultWritingStyle = """
         Write in the speaker's language using clear, natural, well-structured text. Never \
@@ -550,7 +551,7 @@ enum CleanupPrompt {
         guard !lines.isEmpty else {
             return ""
         }
-        return glossaryHeader + lines.joined(separator: "\n")
+        return renderGlossary(lines)
     }
 
     /// Combines a guardrail preamble with the (possibly user-customized) writing style into the
@@ -592,16 +593,16 @@ enum CleanupPrompt {
         return GlossaryCount(included: included, eligible: eligible)
     }
 
-    private static func glossaryLines(
+    static func glossaryLines(
         _ entries: [DictionaryEntry],
         maxTerms: Int = .max,
         maxCharacters: Int = .max
-    ) -> [String] {
+    ) -> [GlossaryLineInfo] {
         guard maxTerms > 0 else {
             return []
         }
 
-        var lines: [String] = []
+        var lines: [GlossaryLineInfo] = []
         var seen = Set<String>()
         var characters = 0
         for entry in entries where TextPostProcessor.isVocabulary(entry) {
@@ -619,18 +620,95 @@ enum CleanupPrompt {
                 continue
             }
 
-            let line = glossaryLine(canonical: canonical, spoken: spoken)
-            if characters + line.count + 1 > maxCharacters {
+            let text = glossaryLine(canonical: canonical, spoken: spoken)
+            if characters + text.count + 1 > maxCharacters {
                 break
             }
 
-            characters += line.count + 1
-            lines.append(line)
+            characters += text.count + 1
+            lines.append(GlossaryLineInfo(key: key, text: text, tokens: TokenEstimate.vocabulary(text) + 1))
             if lines.count >= maxTerms {
                 break
             }
         }
         return lines
+    }
+
+    static func renderGlossary(_ lines: [GlossaryLineInfo]) -> String {
+        guard !lines.isEmpty else {
+            return ""
+        }
+        return glossaryHeader + lines.map(\.text).joined(separator: "\n")
+    }
+
+    static func takeWhileFits(_ lines: [GlossaryLineInfo], room: Int, maxTerms: Int) -> [GlossaryLineInfo] {
+        guard room > 0, maxTerms > 0 else {
+            return []
+        }
+
+        var used = 0
+        var kept: [GlossaryLineInfo] = []
+        kept.reserveCapacity(min(lines.count, maxTerms))
+        for line in lines.prefix(maxTerms) {
+            if used + line.tokens > room {
+                break
+            }
+            used += line.tokens
+            kept.append(line)
+        }
+        return kept
+    }
+
+    static func fitGlossary(
+        _ all: [GlossaryLineInfo],
+        mentioned: [GlossaryLineInfo],
+        everything: Bool,
+        tokenBudget: Int,
+        maxTerms: Int
+    ) -> [GlossaryLineInfo] {
+        let room = tokenBudget - glossaryHeaderTokens
+        guard room > 0, maxTerms > 0 else {
+            return []
+        }
+
+        if !everything {
+            return takeWhileFits(mentioned, room: room, maxTerms: maxTerms)
+        }
+
+        if all.count <= maxTerms && tokens(all) <= room {
+            return all
+        }
+
+        let kept = takeWhileFits(mentioned, room: room, maxTerms: maxTerms)
+        let keptKeys = Set(kept.map(\.key))
+        var left = room - tokens(kept)
+        var lines: [GlossaryLineInfo] = []
+        var inRun = Set<String>()
+
+        for line in all {
+            let mentionedHere = keptKeys.contains(line.key)
+            let cost = mentionedHere ? 0 : line.tokens
+            let termsAfter = lines.count + 1 + (kept.count - inRun.count - (mentionedHere ? 1 : 0))
+            if cost > left || termsAfter > maxTerms {
+                break
+            }
+
+            left -= cost
+            lines.append(line)
+            if mentionedHere {
+                inRun.insert(line.key)
+            }
+        }
+
+        for line in kept where !inRun.contains(line.key) {
+            lines.append(line)
+        }
+
+        return lines
+    }
+
+    static func tokens(_ lines: [GlossaryLineInfo]) -> Int {
+        lines.reduce(0) { $0 + $1.tokens }
     }
 
     private static func glossaryLine(canonical: String, spoken: String?) -> String {
@@ -678,4 +756,10 @@ enum CleanupPrompt {
 struct GlossaryCount: Equatable, Sendable {
     let included: Int
     let eligible: Int
+}
+
+struct GlossaryLineInfo: Equatable, Sendable {
+    let key: String
+    let text: String
+    let tokens: Int
 }

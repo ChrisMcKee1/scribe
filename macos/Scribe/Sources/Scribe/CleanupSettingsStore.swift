@@ -39,8 +39,14 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var providerKind: CleanupProviderKind
     var foundryLocalModelAlias: String
     var ollamaModel: String
+    var selectedLocalApp: LocalServerApp
     var openAIBaseURL: String
     var openAIModel: String
+    var ollamaContextTokens: Int
+    var lmStudioContextTokens: Int
+    var foundryLocalSendWholeVocabulary: Bool
+    var ollamaSendWholeVocabulary: Bool
+    var lmStudioSendWholeVocabulary: Bool
     var azureEndpoint: String
     var azureDeployment: String
     var azurePromptCaching = true
@@ -84,6 +90,11 @@ struct CleanupSettingsStore: Sendable {
         static let selectedLocalApp = "ScribeCleanupSelectedLocalApp"
         static let openAIBaseURL = "ScribeCleanupOpenAIBaseURL"
         static let openAIModel = "ScribeCleanupOpenAIModel"
+        static let ollamaContextTokens = "ScribeCleanupOllamaContextTokens"
+        static let lmStudioContextTokens = "ScribeCleanupLmStudioContextTokens"
+        static let foundryLocalSendWholeVocabulary = "ScribeCleanupFoundryLocalSendWholeVocabulary"
+        static let ollamaSendWholeVocabulary = "ScribeCleanupOllamaSendWholeVocabulary"
+        static let lmStudioSendWholeVocabulary = "ScribeCleanupLmStudioSendWholeVocabulary"
         static let otherServiceBaseURL = "ScribeCleanupOtherServiceBaseURL"
         static let otherServiceModel = "ScribeCleanupOtherServiceModel"
         static let azureEndpoint = "ScribeCleanupAzureEndpoint"
@@ -181,6 +192,31 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue, forKey: Key.openAIModel) }
     }
 
+    var ollamaContextTokens: Int {
+        get { defaults.integer(forKey: Key.ollamaContextTokens) }
+        nonmutating set { defaults.set(newValue, forKey: Key.ollamaContextTokens) }
+    }
+
+    var lmStudioContextTokens: Int {
+        get { defaults.integer(forKey: Key.lmStudioContextTokens) }
+        nonmutating set { defaults.set(newValue, forKey: Key.lmStudioContextTokens) }
+    }
+
+    var foundryLocalSendWholeVocabulary: Bool {
+        get { defaults.bool(forKey: Key.foundryLocalSendWholeVocabulary) }
+        nonmutating set { defaults.set(newValue, forKey: Key.foundryLocalSendWholeVocabulary) }
+    }
+
+    var ollamaSendWholeVocabulary: Bool {
+        get { defaults.bool(forKey: Key.ollamaSendWholeVocabulary) }
+        nonmutating set { defaults.set(newValue, forKey: Key.ollamaSendWholeVocabulary) }
+    }
+
+    var lmStudioSendWholeVocabulary: Bool {
+        get { defaults.bool(forKey: Key.lmStudioSendWholeVocabulary) }
+        nonmutating set { defaults.set(newValue, forKey: Key.lmStudioSendWholeVocabulary) }
+    }
+
     var otherServiceBaseURL: String {
         get { defaults.string(forKey: Key.otherServiceBaseURL) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.otherServiceBaseURL) }
@@ -243,8 +279,14 @@ struct CleanupSettingsStore: Sendable {
             foundryLocalModelAlias: defaults.string(forKey: Key.foundryLocalModelAlias)
                 ?? Self.defaultFoundryLocalModelAlias,
             ollamaModel: defaults.string(forKey: Key.ollamaModel) ?? Self.defaultOllamaModel,
+            selectedLocalApp: LocalServerApp(rawValue: defaults.string(forKey: Key.selectedLocalApp) ?? "") ?? .none,
             openAIBaseURL: defaults.string(forKey: Key.openAIBaseURL) ?? "",
             openAIModel: defaults.string(forKey: Key.openAIModel) ?? "",
+            ollamaContextTokens: defaults.integer(forKey: Key.ollamaContextTokens),
+            lmStudioContextTokens: defaults.integer(forKey: Key.lmStudioContextTokens),
+            foundryLocalSendWholeVocabulary: defaults.bool(forKey: Key.foundryLocalSendWholeVocabulary),
+            ollamaSendWholeVocabulary: defaults.bool(forKey: Key.ollamaSendWholeVocabulary),
+            lmStudioSendWholeVocabulary: defaults.bool(forKey: Key.lmStudioSendWholeVocabulary),
             azureEndpoint: defaults.string(forKey: Key.azureEndpoint) ?? "",
             azureDeployment: defaults.string(forKey: Key.azureDeployment) ?? "",
             azurePromptCaching: (defaults.object(forKey: Key.azurePromptCaching) as? Bool) ?? true,
