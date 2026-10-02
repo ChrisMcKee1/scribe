@@ -180,7 +180,7 @@ final class DictionaryLibraryService {
             guard enabled && usable && permitted else {
                 return
             }
-            result[library.id.lowercased()] = library.contentHash?.value
+            result[library.id.lowercased()] = .some(library.contentHash?.value)
         }
         return LibraryVocabulary(
             generation: catalog.generation,
