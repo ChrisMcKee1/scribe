@@ -242,7 +242,6 @@ private struct GoldenFixture {
     }
 }
 
-
 private struct GoldenFixtureFile {
     let fileName: String
     let csv: String
