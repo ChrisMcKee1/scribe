@@ -690,6 +690,32 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    /// Compare and write every participant in one transaction. No file or Keychain work runs under the SQLite hold.
+    func commitSettingsParticipants(_ participants: [StoredSettingsParticipant]) async throws {
+        let removed = try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) {
+                let checks = participants.flatMap(\.checks)
+                let writes = participants.flatMap(\.writes)
+                guard Set(writes.map(\.key)).count == writes.count else {
+                    throw StoredSettingsCommitError.repeatedKey
+                }
+                for check in checks {
+                    guard try Self.readSetting(key: check.key, session) == check.expected else {
+                        throw StoredSettingsCommitError.conflict
+                    }
+                }
+                var removed = false
+                for write in writes {
+                    let old = try Self.readSetting(key: write.key, session)
+                    removed = removed || old != nil && old != write.value
+                    try Self.writeSetting(key: write.key, value: write.value, session)
+                }
+                return removed
+            }
+        }
+        if removed { removedText.record() }
+    }
+
     func readStringSetting(key: String) throws -> String? {
         try owner.withSession(.foreground) { session in
             try Self.readSetting(key: key, session)

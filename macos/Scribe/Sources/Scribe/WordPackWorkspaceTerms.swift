@@ -73,12 +73,52 @@ extension WordPackWorkspace {
             throw WordPackError.unavailable
         }
         var next = state
+        next.libraries[index].resetEdits = true
         next.libraries[index].rows = next.libraries[index].rows.compactMap { row in
             BuiltInLibraryOverlay.restoreShipped(row.row).map {
                 DraftTermRow(rowID: row.rowID, row: $0, removalIntent: false, legacyEmpty: $0.values.written.isEmpty)
             }
         }
         change(next, label: "Restore all built-in values")
+    }
+
+    /// Recovery is explicit and staged. The corrupt/newer document is backed up before installation after commit.
+    mutating func recoverBuiltIn(_ libraryID: String, previous: BuiltInLibraryEdits?) throws {
+        try ensureWritable()
+        guard let index = index(libraryID), state.libraries[index].builtIn,
+            let shipped = shipped.first(where: { $0.id == libraryID })
+        else { throw WordPackError.unavailable }
+        if let previous {
+            guard previous.library == libraryID, BuiltInLibraryOverlay.valid(previous) else {
+                throw WordPackError.invalidEdits
+            }
+        }
+        var next = state
+        next.libraries[index].rows = BuiltInLibraryOverlay.applyRows(shipped: shipped, edits: previous).map {
+            newRow($0, legacyEmpty: $0.values.written.isEmpty)
+        }
+        next.libraries[index].fileState = .available
+        next.libraries[index].resetEdits = true
+        next.libraries[index].recovering = true
+        change(next, label: previous == nil ? "Back up and reset" : "Restore the previous copy")
+    }
+
+    mutating func keepRetiredBuiltIn(_ libraryID: String) throws -> String {
+        try ensureWritable()
+        guard let item = committed.find(id: libraryID), item.origin == .retiredBuiltIn, let edits = item.edits else {
+            throw WordPackError.unavailable
+        }
+        let id = create(
+            name: LibraryNaming.uniqueName(item.library.name, takenNames: names),
+            category: "Custom", description: item.library.description, basedOn: nil,
+            origin: .retiredBuiltIn, permission: showsAIPermission(libraryID))
+        var next = state
+        next.libraries[index(id)!].rows = edits.terms.compactMap(\.value).map {
+            newRow(.custom($0), legacyEmpty: $0.written.isEmpty)
+        }
+        next.local.setEnabled(false, for: libraryID)
+        change(next, label: "Keep retired word pack")
+        return id
     }
 
     mutating func resolveReview(_ libraryID: String, rowID: Int64, choice: TermReviewChoice) throws {

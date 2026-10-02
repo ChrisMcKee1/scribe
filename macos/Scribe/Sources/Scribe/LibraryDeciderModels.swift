@@ -57,6 +57,8 @@ struct DraftLibrary: Equatable, Sendable {
     var pendingDelete: Bool
     var fileState: LibraryFileState = .available
     var origin: LibraryOrigin = .existing
+    var resetEdits = false
+    var recovering = false
 
     init(
         id: String,

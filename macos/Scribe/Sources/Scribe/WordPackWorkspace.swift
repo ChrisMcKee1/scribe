@@ -265,6 +265,7 @@ struct WordPackWorkspace: Equatable, Sendable {
         guard let old = baseline.libraries.first(where: { $0.id == library.id }) else { return !virgin(library) }
         return old.name != library.name || old.category != library.category || old.description != library.description
             || old.rows != library.rows || old.basedOn != library.basedOn || old.pendingDelete != library.pendingDelete
+            || old.resetEdits != library.resetEdits || old.recovering != library.recovering
     }
 
     static func rowIDIn(_ draft: LibraryDraft, _ libraryID: String, _ index: Int) -> Int64? {

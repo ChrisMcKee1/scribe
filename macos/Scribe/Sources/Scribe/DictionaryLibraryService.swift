@@ -166,6 +166,9 @@ final class DictionaryLibraryService: @unchecked Sendable {
     }
 
     func loadCatalog() async throws -> LibraryCatalog {
+        if let persistenceStore {
+            _ = try await WordPackMaterializer.recover(store: persistenceStore, service: self)
+        }
         let libraries = loadCatalogLibraries()
         let state = try await loadResolvedState(for: libraries)
         let decorated = decorate(libraries: libraries, with: state)
@@ -194,7 +197,25 @@ final class DictionaryLibraryService: @unchecked Sendable {
     private func loadCatalogLibraries() -> [CatalogLibrary] {
         let builtIns = loadBuiltIns()
         let customs = loadCustomLibraries()
-        return sortCatalogLibraries(builtIns + customs)
+        let libraries = sortCatalogLibraries(builtIns + customs)
+        guard let persistenceStore else { return libraries }
+        let held: Set<String>?
+        do {
+            held = WordPackMaterializer.heldBackIDs(try persistenceStore.readStringSetting(key: WordPackJournal.key))
+        } catch {
+            held = nil
+        }
+        return libraries.map { item in
+            guard held == nil || held!.contains(item.id.lowercased()) else { return item }
+            let library = DictionaryLibrary(
+                id: item.id, name: item.library.name, category: item.library.category,
+                description: item.library.description, builtIn: item.builtIn, entries: [],
+                fileName: item.fileName, basedOn: item.library.basedOn)
+            return CatalogLibrary(
+                library: library, state: .awaitingRelease, contentHash: item.contentHash,
+                origin: item.origin, edits: item.edits, previousEditsAvailable: item.previousEditsAvailable,
+                readErrorCount: item.readErrorCount)
+        }
     }
 
     private func loadBuiltIns() -> [CatalogLibrary] {
@@ -337,7 +358,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
         let raw = try await persistenceStore.loadStringSetting(key: Self.libraryStateKey)
         var state = try decodeState(raw) ?? migratedState(for: libraries)
         state.normalize()
-        let synced = synchronizeLegacyProjection(state: &state, libraries: libraries)
+        let synced = state.health == .ok && synchronizeLegacyProjection(state: &state, libraries: libraries)
         if raw == nil || synced {
             try await saveState(state)
         }
@@ -382,6 +403,15 @@ final class DictionaryLibraryService: @unchecked Sendable {
         for library in libraries where !library.builtIn {
             state.aiPermissions[library.id.lowercased()] = true
             state.setAcceptedContent(library.contentHash, for: library.id)
+            let shipped = DictionaryLibraryComposer.composeLibraries(BuiltInDictionaryLibraries.all)
+            for entry in library.library.entries {
+                let key = LibraryTermKey.from(entry.pattern)
+                if let original = shipped.first(where: { LibraryTermKey.from($0.pattern) == key }),
+                    original.replacement != entry.replacement || original.wholeWord != entry.wholeWord
+                {
+                    state.legacyMarkers.append(LegacyMarker(libraryId: library.id, key: key.value))
+                }
+            }
         }
         for library in libraries where library.builtIn {
             state.aiPermissions[library.id.lowercased()] = true
@@ -447,7 +477,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
         }
     }
 
-    private func compose(catalog: LibraryCatalog) -> LibraryComposition {
+    func compose(catalog: LibraryCatalog) -> LibraryComposition {
         let activeLibraries = catalog.libraries.filter {
             isEnabled($0.id, in: catalog.localState) && isUsable($0.state)
         }

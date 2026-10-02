@@ -18,16 +18,17 @@ final class LibraryCompositionGoldenTests: XCTestCase {
         defer { fixture.cleanup() }
         let golden = try GoldenSections.load()
 
-        for scenario in GoldenFixture.supportedScenarios {
+        for scenario in GoldenFixture.scenarios {
             fixture.service.settings.enabledLibraryIds = Set(scenario.enabledIds)
             let catalog = try await fixture.service.loadCatalog()
-            let rules = Self.composeRules(from: catalog)
+            let composition = fixture.service.compose(catalog: catalog)
+            let rules = composition.rules.filter { GoldenFixture.fixtureKeys.contains($0.key.value) }
             let effective = Self.effectiveWinners(dictionary: GoldenFixture.sortedPersonalEntries, rules: rules)
             let processor = TextPostProcessor()
             processor.reload(
                 dictionaryEntries: GoldenFixture.sortedPersonalEntries.filter(\.enabled),
                 snippets: [],
-                libraryEntries: rules.map(\.entry))
+                libraryEntries: composition.entries)
 
             let enabled = try golden.requiredSection("\(scenario.name): enabled libraries in composition order")
             XCTAssertEqual([Self.enabledLibraryIDs(in: catalog).joined(separator: ", ")], enabled, scenario.name)
@@ -41,7 +42,73 @@ final class LibraryCompositionGoldenTests: XCTestCase {
                 GoldenFixture.sentences.map { "\($0) => \(processor.processDetailed($0).text)" },
                 try golden.requiredSection("\(scenario.name): finished text from the post-processor"),
                 scenario.name)
+            try Self.checkAdditionalSections(
+                scenario: scenario.name, composition: composition, golden: golden)
         }
+    }
+
+    private static func checkAdditionalSections(
+        scenario: String, composition: LibraryComposition, golden: [String: [String]]
+    ) throws {
+        let dictionary = GoldenFixture.sortedPersonalEntries
+        let coverage = WordPackCoverage.analyze(dictionary: dictionary, composition: composition)
+        let badges = dictionary.map { entry in
+            if let rule = composition.rules.first(where: { $0.key == LibraryTermKey.from(entry.pattern) }),
+                let source = composition.enabledLibraries.first(where: { $0.id == rule.libraryId })
+            {
+                return "\(entry.pattern): \"\(source.name)\" writes \"\(rule.entry.replacement)\""
+            }
+            return "\(entry.pattern): not covered"
+        }
+        XCTAssertEqual(badges, try golden.requiredSection("\(scenario): Dictionary page library badges (what covers each personal entry)"))
+        let redundant = coverage.filter { $0.kind == .redundant }.count
+        let overrides = coverage.filter { $0.kind == .override }.count
+        let report = ["\(redundant) redundant, \(overrides) override"] + coverage.map {
+            let kind = $0.kind == .redundant ? "Redundant" : "Override"
+            let first = "\(kind) \($0.entry.pattern) -> \"\($0.entry.replacement)\""
+            return first + ", library writes \"\($0.written)\", named \"\($0.sourceName)\""
+        }
+        XCTAssertEqual(report, try golden.requiredSection("\(scenario): Save prompt report"))
+        let vocabulary = CleanupPrompt.composeVocabulary(dictionary, composition.aiEntries)
+        for (suffix, budget) in [
+            ("AI cleanup glossary, on-device", 80), ("AI cleanup glossary, cloud", 5_000),
+            ("AI cleanup glossary, cut at 6 terms", 6),
+        ] {
+            if let expected = golden["\(scenario): \(suffix)"] {
+                XCTAssertEqual(CleanupPrompt.buildGlossary(vocabulary, maxTerms: budget), expected.joined(separator: "\n"))
+            }
+        }
+        var effective: [(DictionaryEntry, String)] = []
+        var seen = Set<LibraryTermKey>()
+        for entry in dictionary where entry.enabled && seen.insert(LibraryTermKey.from(entry.pattern)).inserted {
+            effective.append((entry, "your dictionary"))
+        }
+        for rule in composition.rules where seen.insert(rule.key).inserted { effective.append((rule.entry, rule.libraryId)) }
+        if let expected = golden["\(scenario): every effective rule"] {
+            XCTAssertEqual(effective.map { "\($0.0.pattern) => \($0.0.replacement) [\($0.1)]" }, expected)
+        }
+        if let expected = golden["\(scenario): sources of the first 80 effective rules"] {
+            XCTAssertEqual([summarize(Array(effective.prefix(80)).map { $0.1 })], expected)
+        }
+        for (suffix, budget) in [("on-device glossary's 80 lines", 80), ("cloud glossary's included lines", 5_000)] {
+            if let expected = golden["\(scenario): sources of the \(suffix)"] {
+                let included = CleanupPrompt.glossaryLines(vocabulary, maxTerms: budget, maxCharacters: 24_000)
+                let sources = included.compactMap { line in
+                    effective.first { CleanupPrompt.glossaryLines([$0.0]).first?.key == line.key }?.1
+                }
+                XCTAssertEqual([summarize(sources)], expected, scenario)
+            }
+        }
+    }
+
+    private static func summarize(_ sources: [String]) -> String {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for source in sources {
+            if counts[source] == nil { order.append(source) }
+            counts[source, default: 0] += 1
+        }
+        return order.map { "\($0) x\(counts[$0]!)" }.joined(separator: ", ")
     }
 
     private static func describeLibrary(_ library: DictionaryLibrary) -> String {
@@ -218,8 +285,6 @@ private struct GoldenFixture {
                     .reversed()
             ) + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())),
     ]
-
-    static let supportedScenarios = scenarios.filter { $0.name == "custom only" || $0.name == "default install" }
 
     static let sortedPersonalEntries = personalEntries.sorted {
         $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending
