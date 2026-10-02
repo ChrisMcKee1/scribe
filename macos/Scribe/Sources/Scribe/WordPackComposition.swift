@@ -19,7 +19,8 @@ enum WordPackComposition {
             for entry in item.library.entries where entry.enabled {
                 let key = LibraryTermKey.from(entry.pattern)
                 guard !key.isEmpty else { continue }
-                let markerActive = item.library.legacyMarkedKeys.contains(key)
+                let markerActive =
+                    item.library.legacyMarkedKeys.contains(key)
                     && (builtInRows[key] ?? []).contains {
                         $0.replacement != entry.replacement || $0.wholeWord != entry.wholeWord
                     }

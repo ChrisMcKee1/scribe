@@ -66,7 +66,8 @@ enum WordPackMaterializer {
         }
     }
 
-    private static func preserveInLane(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool {
+    private static func preserveInLane(store: PersistenceStore, service: DictionaryLibraryService) async throws -> Bool
+    {
         guard let raw = try await store.loadStringSetting(key: WordPackJournal.key),
             let journal = try? JSONDecoder().decode(WordPackJournal.self, from: Data(raw.utf8)), journal.version == 1
         else { return false }
@@ -82,28 +83,6 @@ enum WordPackMaterializer {
                     images.append(WordPackFileImage(relativePath: archive, expectedHash: nil, data: current))
                 }
 
-                /// Actor reentrancy alone does not order file installation and the legacy projection across SQLite awaits.
-                private actor WordPackMaterializationLane {
-                    private var tails: [String: (UUID, Task<Void, Never>)] = [:]
-
-                    func run<T: Sendable>(
-                        root: URL, operation: @escaping @Sendable () async throws -> T
-                    ) async throws -> T {
-                        let key = root.standardizedFileURL.resolvingSymlinksInPath().path
-                        let previous = tails[key]?.1
-                        let id = UUID()
-                        let task = Task {
-                            await previous?.value
-                            return try await operation()
-                        }
-                        let tail = Task { _ = try? await task.value }
-                        tails[key] = (id, tail)
-                        defer {
-                            if tails[key]?.0 == id { tails.removeValue(forKey: key) }
-                        }
-                        return try await task.value
-                    }
-                }
                 images.append(
                     WordPackFileImage(relativePath: image.relativePath, expectedHash: hash, data: image.data))
             } else {
