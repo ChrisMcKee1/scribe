@@ -56,7 +56,8 @@ struct LibraryCsvCodec: Sendable {
             content.name,
             content.category,
             content.description,
-            content.basedOn)
+            content.basedOn
+        )
         guard readsBack else {
             throw LibraryCsvCodecError.metadataUnreadableInOlderVersions
         }
@@ -76,11 +77,7 @@ struct LibraryCsvCodec: Sendable {
     func readImport(_ data: Data) -> LibraryCsvDocument {
         if data.count > LibraryLimits.maxImportBytes {
             let declared = decodeDeclaredEncoding(Array(data.prefix(4)))
-            let encoding = declared ?? LibraryTextEncoding(
-                codePage: 65001,
-                byteOrderMark: false,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            let encoding = declared ?? makeEncoding(codePage: 65001)
             return LibraryCsvDocument(
                 name: nil,
                 category: nil,
@@ -155,6 +152,7 @@ struct LibraryCsvCodec: Sendable {
             terms.append(TermValues(spoken, written, wholeWord, enabled))
         }
 
+        errors.sort { $0.line < $1.line }
         return (terms, errors)
     }
 
@@ -188,6 +186,7 @@ struct LibraryCsvCodec: Sendable {
                 errors: &errors)
         }
 
+        errors.sort { $0.line < $1.line }
         return (terms, errors)
     }
 
@@ -236,6 +235,7 @@ struct LibraryCsvCodec: Sendable {
                 errors: &errors)
         }
 
+        errors.sort { $0.line < $1.line }
         return LibraryCsvDocument(
             name: nullIfBlank(header.name),
             category: nullIfBlank(header.category),
@@ -444,11 +444,7 @@ struct LibraryCsvCodec: Sendable {
         if let text = String(data: data, encoding: encoding) {
             return (
                 text,
-                LibraryTextEncoding(
-                    codePage: codePage,
-                    byteOrderMark: byteOrderMark,
-                    ansiFallback: false,
-                    invalidBytesReplaced: false)
+                makeEncoding(codePage: codePage, byteOrderMark: byteOrderMark)
             )
         }
 
@@ -472,51 +468,41 @@ struct LibraryCsvCodec: Sendable {
             ?? String(decoding: data, as: UTF8.self)
         return (
             text,
-            LibraryTextEncoding(
-                codePage: ansiCodePage,
-                byteOrderMark: false,
-                ansiFallback: true,
-                invalidBytesReplaced: false)
+            makeEncoding(codePage: ansiCodePage, ansiFallback: true)
         )
     }
 
     private func decodeDeclaredEncoding(_ prefix: [UInt8]) -> LibraryTextEncoding? {
         if prefix.starts(with: [0xEF, 0xBB, 0xBF]) {
-            return LibraryTextEncoding(
-                codePage: 65001,
-                byteOrderMark: true,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            return makeEncoding(codePage: 65001, byteOrderMark: true)
         }
         if prefix.starts(with: [0xFF, 0xFE, 0x00, 0x00]) {
-            return LibraryTextEncoding(
-                codePage: 12000,
-                byteOrderMark: true,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            return makeEncoding(codePage: 12000, byteOrderMark: true)
         }
         if prefix.starts(with: [0x00, 0x00, 0xFE, 0xFF]) {
-            return LibraryTextEncoding(
-                codePage: 12001,
-                byteOrderMark: true,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            return makeEncoding(codePage: 12001, byteOrderMark: true)
         }
         if prefix.starts(with: [0xFF, 0xFE]) {
-            return LibraryTextEncoding(
-                codePage: 1200,
-                byteOrderMark: true,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            return makeEncoding(codePage: 1200, byteOrderMark: true)
         }
         if prefix.starts(with: [0xFE, 0xFF]) {
-            return LibraryTextEncoding(
-                codePage: 1201,
-                byteOrderMark: true,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            return makeEncoding(codePage: 1201, byteOrderMark: true)
         }
         return nil
+    }
+
+
+    private func makeEncoding(
+        codePage: Int,
+        byteOrderMark: Bool = false,
+        ansiFallback: Bool = false,
+        invalidBytesReplaced: Bool = false
+    ) -> LibraryTextEncoding {
+        LibraryTextEncoding(
+            codePage: codePage,
+            byteOrderMark: byteOrderMark,
+            ansiFallback: ansiFallback,
+            invalidBytesReplaced: invalidBytesReplaced)
     }
 
     private struct HeaderValues {

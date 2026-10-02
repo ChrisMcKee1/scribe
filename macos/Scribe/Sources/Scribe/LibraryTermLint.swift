@@ -12,16 +12,16 @@ struct TermHints: OptionSet, Equatable, Sendable {
 }
 
 enum LibraryTermLint {
-    private static let commonWordList = [
-        "il", "di", "la", "le", "les", "de", "du", "des", "un", "une", "et", "en", "au", "ce",
-        "se", "si", "su", "da", "del", "che", "non", "per", "con", "una", "el", "los", "las",
-        "es", "als", "das", "der", "die", "den", "und", "ist", "im", "am", "an", "zu", "so",
-        "no", "na", "os", "as", "em", "ao", "ou", "je", "tu", "me", "te", "ne", "on", "ma",
-        "a", "i", "an", "as", "at", "be", "by", "do", "go", "he", "if", "in", "is", "it", "me",
-        "my", "no", "of", "on", "or", "so", "to", "up", "us", "we",
-    ]
-
-    static let commonWords = Set(commonWordList.map { $0.lowercased() })
+    static let commonWords = Set(
+        [
+            "il", "di", "la", "le", "les", "de", "du", "des", "un", "une", "et", "en", "au", "ce",
+            "se", "si", "su", "da", "del", "che", "non", "per", "con", "una", "el", "los", "las",
+            "es", "als", "das", "der", "die", "den", "und", "ist", "im", "am", "an", "zu", "so",
+            "no", "na", "os", "as", "em", "ao", "ou", "je", "tu", "me", "te", "ne", "on", "ma",
+            "a", "i", "an", "as", "at", "be", "by", "do", "go", "he", "if", "in", "is", "it", "me",
+            "my", "no", "of", "on", "or", "so", "to", "up", "us", "we",
+        ].map { $0.lowercased() }
+    )
 
     static let alwaysLowercaseNames = Set([
         "npm", "pnpm", "kubectl", "webpack", "pandas", "conda", "dbt", "htmx",

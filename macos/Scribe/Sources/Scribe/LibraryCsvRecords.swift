@@ -53,24 +53,14 @@ enum LibraryCsvRecords {
                 inQuotes = true
                 fieldQuoted = true
             case ",":
-                let endedRawComment = endField(
-                    fields: &fields,
-                    field: &field,
-                    quoted: fieldQuoted,
-                    firstFieldRawPrefix: firstFieldRawPrefix
-                )
+                let endedRawComment = endField(&fields, &field, fieldQuoted, firstFieldRawPrefix)
                 rawComment = rawComment || endedRawComment
                 fieldQuoted = false
                 firstFieldRawPrefix = String.UnicodeScalarView()
             case "\r":
                 break
             case "\n":
-                let endedRawComment = endField(
-                    fields: &fields,
-                    field: &field,
-                    quoted: fieldQuoted,
-                    firstFieldRawPrefix: firstFieldRawPrefix
-                )
+                let endedRawComment = endField(&fields, &field, fieldQuoted, firstFieldRawPrefix)
                 rawComment = rawComment || endedRawComment
                 records.append(CsvRecord(line: recordStartLine, fields: fields, rawComment: rawComment))
                 fields = []
@@ -95,11 +85,7 @@ enum LibraryCsvRecords {
         }
 
         if !field.isEmpty || !fields.isEmpty {
-            let endedRawComment = endField(
-                fields: &fields,
-                field: &field,
-                quoted: fieldQuoted,
-                firstFieldRawPrefix: firstFieldRawPrefix)
+            let endedRawComment = endField(&fields, &field, fieldQuoted, firstFieldRawPrefix)
             rawComment = rawComment || endedRawComment
             records.append(CsvRecord(line: recordStartLine, fields: fields, rawComment: rawComment))
         }
@@ -164,10 +150,10 @@ enum LibraryCsvRecords {
     }
 
     private static func endField(
-        fields: inout [CsvField],
-        field: inout String.UnicodeScalarView,
-        quoted: Bool,
-        firstFieldRawPrefix: String.UnicodeScalarView
+        _ fields: inout [CsvField],
+        _ field: inout String.UnicodeScalarView,
+        _ quoted: Bool,
+        _ firstFieldRawPrefix: String.UnicodeScalarView
     ) -> Bool {
         let text = String(field)
         field = String.UnicodeScalarView()

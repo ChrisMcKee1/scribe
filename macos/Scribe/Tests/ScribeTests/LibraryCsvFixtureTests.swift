@@ -244,11 +244,12 @@ extension LibraryCsvDocument {
         let errorMatches = errors.map {
             RowErrorFixture(line: $0.line, kind: $0.kind, field: $0.field)
         } == rhs.errors
-        let encodingMatches = encoding == LibraryTextEncoding(
+        let expectedEncoding = LibraryTextEncoding(
             codePage: rhs.encoding.codePage,
             byteOrderMark: rhs.encoding.byteOrderMark,
             ansiFallback: rhs.encoding.ansiFallback,
-            invalidBytesReplaced: rhs.encoding.invalidBytesReplaced)
+            invalidBytesReplaced: rhs.encoding.invalidBytesReplaced
+        )
 
         return name == rhs.name
             && category == rhs.category
@@ -256,7 +257,7 @@ extension LibraryCsvDocument {
             && basedOn == rhs.basedOn
             && terms == rhs.terms
             && errorMatches
-            && encodingMatches
+            && encoding == expectedEncoding
             && formulaGuardVersion == rhs.formulaGuardVersion
             && issues.names == rhs.issues
     }
