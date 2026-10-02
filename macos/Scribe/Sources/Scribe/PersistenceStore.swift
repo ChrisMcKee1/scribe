@@ -757,8 +757,18 @@ final class PersistenceStore: Sendable {
         guard SettingsSessionValidation.isValid(submission.document) else { throw SettingsSaveFailure.validation }
         try Self.requirePreparedSessionCredentials(submission)
         let receipt = try await owner.withSessionAsync(.foreground) { session in
-            try publication {
-                try Self.commitSessionTransaction(submission, session)
+            var committed = false
+            do {
+                let receipt = try publication {
+                    let receipt = try Self.commitSessionTransaction(submission, session)
+                    committed = true
+                    return receipt
+                }
+                guard committed else { throw SettingsSaveFailure.validation }
+                return receipt
+            } catch {
+                if committed { throw SettingsCommitUncertain(id: submission.id) }
+                throw error
             }
         }
         removedText.record()
@@ -854,9 +864,19 @@ final class PersistenceStore: Sendable {
         publication: @escaping SettingsExternalPublication = { try $0() }
     ) async throws -> SettingsStorageRead {
         try await owner.withSessionAsync(.foreground) { session in
-            try publication {
-                try Self.commitExternalSettingsTransaction(
-                    setting, values: values, revision: revision, legacy: legacy, session)
+            var committed = false
+            do {
+                let read = try publication {
+                    let read = try Self.commitExternalSettingsTransaction(
+                        setting, values: values, revision: revision, legacy: legacy, session)
+                    committed = true
+                    return read
+                }
+                guard committed else { throw SettingsSaveFailure.validation }
+                return read
+            } catch {
+                if committed { throw SettingsExternalCommitUncertain(setting: setting, revision: revision) }
+                throw error
             }
         }
     }

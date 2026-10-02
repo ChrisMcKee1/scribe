@@ -325,6 +325,11 @@ struct SettingsCommitUncertain: Error, Sendable {
     let id: UUID
 }
 
+struct SettingsExternalCommitUncertain: Error, Sendable {
+    let setting: SettingsExternalSetting
+    let revision: UInt64
+}
+
 enum SettingsCommand: String, CaseIterable, Sendable {
     case usageAddToDictionary
     case freeMemory

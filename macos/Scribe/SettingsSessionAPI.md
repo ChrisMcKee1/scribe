@@ -42,6 +42,8 @@ Post-commit projection must not throw. Derive it from immutable inputs and fail 
 Never await, access Keychain, construct a provider, acquire the provider cache lock, or synchronously reenter this store
 under the gate. The independent read-only connection in the barrier test is an observation proving COMMIT visibility,
 not a production projection. Recovery must publish a verified current pair; stale async rebuilds must not restore it.
+An adapter failure after the transaction thunk returned is classified as an uncertain committed outcome, not a
+pre-commit failure that may discard the referenced credentials.
 
 The default wrapper executes only the transaction for backward compatibility. The coherent shell cutover must inject the
 actual WS3 adapter for both whole-window Save and immediate outside writes; async `access.apply` is not that adapter.

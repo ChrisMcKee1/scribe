@@ -357,6 +357,29 @@ final class SettingsLogicalCommitTests: XCTestCase {
         XCTAssertNil(try fixture.store.readStringSetting(key: SettingsStoredDocument.key))
     }
 
+    func testAnAdapterFailureAfterCommitIsNotMisreportedAsAPreCommitFailure() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let baseline = try await fixture.adapter.load()
+        var changed = baseline
+        changed.preferences.addSpaceAfterDictation = false
+        let submission = SettingsSubmission(
+            id: UUID(), revision: 1, baseline: baseline, document: changed, intents: [:])
+        do {
+            _ = try await fixture.store.commitSettingsSession(
+                submission,
+                publication: {
+                    _ = try $0()
+                    throw SettingsSaveFailure.storage
+                })
+            XCTFail("The adapter failure was ignored")
+        } catch {
+            XCTAssertEqual((error as? SettingsCommitUncertain)?.id, submission.id)
+        }
+        let recovered = try await fixture.store.loadSettingsReceipt(submission.id)
+        XCTAssertEqual(recovered?.document.preferences.addSpaceAfterDictation, false)
+    }
+
     func testImmediateOutsideWriteUsesTheSameSynchronousPublicationSeam() async throws {
         let fixture = try SessionStorageFixture()
         defer { fixture.remove() }
@@ -392,56 +415,56 @@ private final class SessionStorageFixture {
         adapter = SettingsLegacyStore(defaults: defaults.defaults, database: store)
     }
 
-    private final class SessionPublicationBarrier: Sendable {
-        private struct State {
-            var published: Bool?
-            var started = 0
-            var visible = false
-        }
-
-        private let lock = NSLock()
-        private let pause = DispatchSemaphore(value: 0)
-        private let state = OSAllocatedUnfairLock(initialState: State())
-        let entered = FirstOutcome()
-        let attempted = FirstOutcome()
-
-        var started: Int { state.withLock { $0.started } }
-        var published: Bool? { state.withLock { $0.published } }
-        var commitWasVisible: Bool { state.withLock { $0.visible } }
-
-        func publish<Value>(_ transaction: () throws -> Value, project: (Value) -> Bool) rethrows -> Value {
-            lock.lock()
-            defer { lock.unlock() }
-            entered.settle(true)
-            pause.wait()
-            let value = try transaction()
-            let published = project(value)
-            state.withLock { $0.published = published }
-            return value
-        }
-
-        func start() -> Bool? {
-            attempted.settle(true)
-            lock.lock()
-            defer { lock.unlock() }
-            return state.withLock {
-                $0.started += 1
-                return $0.published
-            }
-        }
-
-        func recordVisible(_ visible: Bool) {
-            state.withLock { $0.visible = visible }
-        }
-
-        func release() {
-            pause.signal()
-        }
-    }
-
     func remove() {
         store.closeConnection()
         directory.remove()
         defaults.remove()
+    }
+}
+
+private final class SessionPublicationBarrier: Sendable {
+    private struct State {
+        var published: Bool?
+        var started = 0
+        var visible = false
+    }
+
+    private let lock = NSLock()
+    private let pause = DispatchSemaphore(value: 0)
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    let entered = FirstOutcome()
+    let attempted = FirstOutcome()
+
+    var started: Int { state.withLock { $0.started } }
+    var published: Bool? { state.withLock { $0.published } }
+    var commitWasVisible: Bool { state.withLock { $0.visible } }
+
+    func publish<Value>(_ transaction: () throws -> Value, project: (Value) -> Bool) rethrows -> Value {
+        lock.lock()
+        defer { lock.unlock() }
+        entered.settle(true)
+        pause.wait()
+        let value = try transaction()
+        let published = project(value)
+        state.withLock { $0.published = published }
+        return value
+    }
+
+    func start() -> Bool? {
+        attempted.settle(true)
+        lock.lock()
+        defer { lock.unlock() }
+        return state.withLock {
+            $0.started += 1
+            return $0.published
+        }
+    }
+
+    func recordVisible(_ visible: Bool) {
+        state.withLock { $0.visible = visible }
+    }
+
+    func release() {
+        pause.signal()
     }
 }
