@@ -94,10 +94,9 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   dictation, Settings, AI Cleanup/Pause toggles, Recent Dictations, Quick Add to Dictionary,
   Welcome, and Quit
 - Global push-to-talk hotkey, real audio capture, and text injection into the app that had focus when the
-  recording started. Scribe inserts through Accessibility where it can; otherwise it borrows the clipboard
-  only when it is empty or holds plain text, keeps its own copy off Universal Clipboard and marks it so
-  clipboard history tools skip it, and puts your text back only if nothing replaced it in the meantime.
-  With anything else on the clipboard it types the text instead. If focus moves to another app before or
+  recording started. Scribe types Unicode keyboard events directly, matching Windows' default, without
+  changing your clipboard or writing the editor's Accessibility text attributes. Accessibility permission
+  is still required for keyboard events and focus checks. If focus moves to another app before or
   while the text is going in, Scribe stops and keeps the dictation for recovery
 - The dictation pipeline: raw speech recognition; with AI cleanup on, every replacement decided on that
   transcript exactly as cleanup off would make it, your dictionary and library spellings made in the text sent

@@ -172,7 +172,10 @@ final class InjectionHarness {
     let editorField: AXUIElement
     let otherField: AXUIElement
 
-    init(operations: PasteboardOperations = .live) {
+    init(
+        operations: PasteboardOperations = .live,
+        method: InjectionMethod = .accessibilityThenPaste
+    ) {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("com.scribe.macos.tests.injector.\(UUID().uuidString)"))
         let editorField = AXUIElementCreateApplication(4_001)
@@ -198,6 +201,7 @@ final class InjectionHarness {
             system: system,
             pacer: pacer,
             borrower: PasteboardBorrower(pasteboard: pasteboard, operations: operations),
+            method: method,
             logSink: { line in log.lines.append(line) })
     }
 
@@ -230,6 +234,36 @@ private let dictation = "Dictated words for the editor, long enough to need seve
 private let usersText = "The user's own clipboard text."
 
 final class TextInjectorTests: XCTestCase {
+    @MainActor
+    func testDirectTypingNeverWritesAccessibilityOrBorrowsTheClipboard() async {
+        let harness = InjectionHarness(method: .unicodeTyping)
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let count = harness.pasteboard.changeCount
+        harness.system.accessibilityOutcome = .inserted
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed))
+        XCTAssertEqual(harness.system.accessibilityAttempts, 0)
+        XCTAssertEqual(harness.system.postedKeystrokes, KeystrokePlan.keystrokes(for: dictation))
+        XCTAssertEqual(harness.pasteboard.changeCount, count)
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testDirectTypingStopsAfterFocusMovesWithoutRetrying() async {
+        let harness = InjectionHarness(method: .unicodeTyping)
+        defer { harness.releasePasteboard() }
+        harness.pacer.onPause = { _ in harness.moveFocusToAnotherApplication() }
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result.delivery, .typedPartially)
+        XCTAssertEqual(harness.system.posted.count, 1)
+        XCTAssertEqual(harness.system.accessibilityAttempts, 0)
+    }
+
     @MainActor
     func testAccessibilityInsertionLeavesThePasteboardAlone() async {
         let harness = InjectionHarness()
