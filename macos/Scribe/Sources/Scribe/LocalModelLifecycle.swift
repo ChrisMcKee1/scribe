@@ -167,6 +167,7 @@ final class LocalModelLifecycle: Sendable {
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let savedKeySource = OSAllocatedUnfairLock<(@Sendable (String) throws -> String?)?>(initialState: nil)
     private let bounds: Bounds
     private let actions: Actions
     private let sleeper: @Sendable (Duration) async throws -> Void
@@ -191,6 +192,20 @@ final class LocalModelLifecycle: Sendable {
     var useCount: Int { state.withLock { $0.uses } }
     var ownedCopies: [Copy] { state.withLock { $0.copies } }
     var servedTarget: LocalModelTarget? { state.withLock { $0.served } }
+
+    func useSavedKeys(_ source: @escaping @Sendable (String) throws -> String?) {
+        savedKeySource.withLock { $0 = source }
+    }
+
+    private func currentKey(at endpoint: String, fallback: String?) -> String? {
+        guard let source = savedKeySource.withLock({ $0 }) else { return fallback }
+        do {
+            return try source(endpoint)
+        } catch {
+            ScribeLog.warning(.cleanup, "A local retirement could not read the saved key", .failure(error))
+            return fallback
+        }
+    }
 
     func notePause(_ paused: Bool) {
         state.withLock {
@@ -425,7 +440,11 @@ final class LocalModelLifecycle: Sendable {
                 var freed: [Copy] = []
                 var modelFreed = false
                 if let explicit {
-                    modelFreed = await actions.unloadModel(explicit.endpoint, explicit.model, explicit.apiKey)
+                    let key = currentKey(at: explicit.endpoint, fallback: explicit.apiKey)
+                    modelFreed = await actions.unloadModel(explicit.endpoint, explicit.model, key)
+                    if !modelFreed, key != explicit.apiKey {
+                        modelFreed = await actions.unloadModel(explicit.endpoint, explicit.model, explicit.apiKey)
+                    }
                 }
                 var copyFailed = false
                 for copy in copies {
@@ -470,8 +489,9 @@ final class LocalModelLifecycle: Sendable {
 
     /// The key saved now first, then the one the copy was loaded with.
     private func unload(_ copy: Copy, currentKey: String?) async -> Bool {
-        if await actions.unloadInstance(copy.endpoint, copy.instanceID, currentKey) { return true }
-        if copy.loadedKey != currentKey,
+        let key = self.currentKey(at: copy.endpoint, fallback: currentKey)
+        if await actions.unloadInstance(copy.endpoint, copy.instanceID, key) { return true }
+        if copy.loadedKey != key,
             await actions.unloadInstance(copy.endpoint, copy.instanceID, copy.loadedKey)
         {
             return true

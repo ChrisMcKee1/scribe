@@ -97,6 +97,32 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testRetirementTriesTheRotatedSavedKeyBeforeTheOriginalLoadedKey() async throws {
+        let fake = FakeUnloads()
+        fake.requiredKey = "rotated"
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "copy", key: "original")
+        lifecycle.useSavedKeys { endpoint in
+            XCTAssertTrue(LocalModelLifecycle.sameServer(endpoint, "http://localhost:1234/v1"))
+            return "rotated"
+        }
+        let outcome = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.instances.count, 1)
+        XCTAssertEqual(fake.instances.first?.key, "rotated")
+    }
+
+    func testAnUnreadableCurrentKeyUsesOnlyTheOriginalCopyKeyAndLogsByShape() async throws {
+        let fake = FakeUnloads()
+        fake.requiredKey = "original"
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "copy", key: "original")
+        lifecycle.useSavedKeys { _ in throw CleanupSendHandoff.Refusal.settingsChanged }
+        let outcome = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(outcome, .released)
+        XCTAssertEqual(fake.instances.map(\.key), [nil, "original"])
+    }
+
     func testFinishedCandidateRetiresOnlyItsOwnCopies() async throws {
         let fake = FakeUnloads()
         let lifecycle = make(fake, idle: .zero)

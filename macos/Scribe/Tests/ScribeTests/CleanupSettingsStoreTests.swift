@@ -6,6 +6,65 @@ import XCTest
 /// `CleanupSettingsStore` over a defaults suite and secret stores of each test's own: nothing here reads, replaces or
 /// deletes the developer's AI cleanup settings or Keychain items, and the suites can run in parallel worker processes.
 final class CleanupSettingsStoreTests: XCTestCase {
+    func testRetirementReadsTheKeySavedForTheSameLocalServerEvenWithCleanupOff() throws {
+        let fixture = makeCleanupStore()
+        fixture.store.openAIBaseURL = "http://localhost:1234/v1"
+        fixture.store.isEnabled = false
+        try fixture.store.setOpenAIApiKey("rotated-local-key")
+        XCTAssertEqual(
+            try fixture.store.localRetirementKey(for: "http://127.0.0.1:1234/v1"), "rotated-local-key")
+        let reads = fixture.apiKeys.reads
+        XCTAssertNil(try fixture.store.localRetirementKey(for: "http://127.0.0.1:11434/v1"))
+        XCTAssertEqual(fixture.apiKeys.reads, reads)
+        fixture.store.openAIBaseURL = "https://remote.example/v1"
+        XCTAssertNil(try fixture.store.localRetirementKey(for: "http://localhost:1234/v1"))
+        XCTAssertEqual(fixture.apiKeys.reads, reads)
+    }
+
+    func testRetirementKeyReadIsRefusedWhenSettingsChangeWhileKeychainIsReading() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.openAIBaseURL = "http://localhost:1234/v1"
+        try store.setOpenAIApiKey("local-key")
+        let pause = fixture.apiKeys.pauseNextRead()
+        let read = Task.detached { try store.localRetirementKey(for: "http://localhost:1234/v1") }
+        await pause.waitUntilReached()
+        store.openAIBaseURL = "http://localhost:11434/v1"
+        pause.release()
+        do {
+            _ = try await read.value
+            XCTFail("A key read across a destination change must be refused")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+    }
+
+    func testRetirementKeyReadRejectsAKeyChangedAwayAndBackDuringTheRead() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.openAIBaseURL = "http://localhost:1234/v1"
+        try store.setOpenAIApiKey("original")
+        let pause = fixture.apiKeys.pauseNextRead()
+        let read = Task.detached { try store.localRetirementKey(for: "http://localhost:1234/v1") }
+        await pause.waitUntilReached()
+        try store.setOpenAIApiKey("other")
+        try store.setOpenAIApiKey("original")
+        pause.release()
+        do {
+            _ = try await read.value
+            XCTFail("Returning to the old key does not restore a retired reading")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+    }
+
+    func testRetirementDoesNotHideAKeychainReadFailure() throws {
+        let fixture = makeCleanupStore()
+        fixture.store.openAIBaseURL = "http://localhost:1234/v1"
+        fixture.apiKeys.failNextRead(with: errSecInteractionNotAllowed)
+        XCTAssertThrowsError(try fixture.store.localRetirementKey(for: "http://localhost:1234/v1"))
+    }
+
     func testIdleTimeIsInTheSnapshotAndCannotOverflowTheRetentionField() {
         let store = makeCleanupStore().store
         store.localModelIdleMinutes = 30

@@ -210,6 +210,9 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   returned by LM Studio establishes ownership, never an invented id from the model name.
   A copy loaded solely for an unsaved Test connection candidate is retired by its instance id after that check,
   including a load that lands after cancellation. It is kept when those settings became the saved configuration.
+  Saving or rotating its key does not change which local copy those settings use. Retirement tries the key saved for
+  that same server now, even with cleanup off, then the key used to load the copy. A settings or key change during
+  the Keychain read refuses that reading; an unreadable key is logged by shape and the original key can still be tried.
   Management loads/unloads go to the configured address once, never raced across
   loopback aliases. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.

@@ -5,6 +5,21 @@ import os
 @testable import Scribe
 
 final class CleanupProviderCacheTests: XCTestCase {
+    func testSavingACandidateKeyDoesNotMakeItsCopyLookLikeAnotherConfiguration() throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 8192
+        let before = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        try rig.store.setOpenAIApiKey("newly-saved-candidate-key")
+        let after = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        XCTAssertNotEqual(before, after)
+        XCTAssertTrue(CleanupProviderCache.usesSameLocalCopy(before, after))
+        rig.store.lmStudioContextTokens = 4096
+        let changedSize = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        XCTAssertFalse(CleanupProviderCache.usesSameLocalCopy(before, changedSize))
+    }
+
     @MainActor
     func testChosenSizeTestRefusesAFailedLoadForSavedAndCandidateSettings() async throws {
         for candidateCheck in [false, true] {

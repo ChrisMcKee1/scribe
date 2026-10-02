@@ -411,6 +411,23 @@ struct CleanupSettingsStore: Sendable {
         try apiKeys.secret(for: Self.openAIApiKeyAccount)
     }
 
+    func localRetirementKey(for endpoint: String) throws -> String? {
+        let captured = CleanupSettingsHandoff.shared.synchronized {
+            (snapshot(), CleanupSettingsHandoff.shared.revision(for: domain))
+        }
+        guard LocalAiServer.appAt(captured.0.openAIBaseURL) != .none,
+            LocalModelLifecycle.sameServer(endpoint, captured.0.openAIBaseURL)
+        else { return nil }
+        let key = try readOpenAIApiKey()
+        return try CleanupSettingsHandoff.shared.synchronized {
+            guard snapshot() == captured.0,
+                CleanupSettingsHandoff.shared.revision(for: domain) == captured.1,
+                !CleanupSettingsHandoff.shared.hasSecretChange(domain)
+            else { throw CleanupSendHandoff.Refusal.settingsChanged }
+            return key
+        }
+    }
+
     /// The saved key for the Settings window, where a Keychain that cannot be read shows as no key.
     func openAIApiKey() -> String? {
         try? readOpenAIApiKey()
