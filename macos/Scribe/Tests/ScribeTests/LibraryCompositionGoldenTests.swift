@@ -132,6 +132,7 @@ private struct GoldenFixture {
             contoso,Contoso Ltd,true,true
             pipeline,Pipelines,true,true
             """),
+
         (
             "team-terms-2.csv",
             """
@@ -142,6 +143,7 @@ private struct GoldenFixture {
             north star,NorthStar,true,true
             pipeline,Pipeline,true,false
             """),
+
         (
             "alpha.csv",
             """
@@ -150,6 +152,7 @@ private struct GoldenFixture {
             contoso,CONTOSO
             fabrikam,Fabrikam
             """),
+
         (
             "Zulu Notes.csv",
             """
@@ -158,6 +161,7 @@ private struct GoldenFixture {
             fabrikam,FabriKam
             tailspin,Tailspin Toys
             """),
+
         (
             "release-10.csv",
             """
@@ -166,6 +170,7 @@ private struct GoldenFixture {
             sprint,Sprint 10
             retro,Retro
             """),
+
         (
             "release-9.csv",
             """
@@ -175,6 +180,7 @@ private struct GoldenFixture {
             standup,Stand-up
             gpt five six terra,GPT 5.6 Terra
             """),
+
     ]
 
     static let personalEntries: [DictionaryEntry] = [
@@ -204,11 +210,16 @@ private struct GoldenFixture {
         (
             "custom only",
             ["release-9", "Zulu Notes", "team-terms-2", "alpha", "release-10", "team-terms"]),
+
         ("default install", ["ai-model-names", "ai-terminology"]),
+
         (
             "everything",
-            customFiles.map { URL(fileURLWithPath: $0.0).deletingPathExtension().lastPathComponent }.reversed()
-                + BuiltInDictionaryLibraries.all.map(\.id).reversed()),
+            Array(
+                customFiles
+                    .map { URL(fileURLWithPath: $0.0).deletingPathExtension().lastPathComponent }
+                    .reversed())
+                + Array(BuiltInDictionaryLibraries.all.map(\.id).reversed())),
     ]
 
     static let fixtureKeys: Set<String> = Set(
@@ -279,8 +290,8 @@ private enum GoldenSections {
     }
 }
 
-private extension Dictionary where Key == String, Value == [String] {
-    func requiredSection(_ name: String) throws -> [String] {
+extension Dictionary where Key == String, Value == [String] {
+    fileprivate func requiredSection(_ name: String) throws -> [String] {
         guard let lines = self[name] else {
             throw NSError(
                 domain: "LibraryCompositionGoldenTests",
