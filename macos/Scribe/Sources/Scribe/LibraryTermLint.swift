@@ -37,7 +37,10 @@ enum LibraryTermLint {
         if !values.wholeWord {
             hints.insert(.wholeWordOff)
         }
-        if forcesLowercase(spoken.trimmingCharacters(in: .whitespacesAndNewlines), written.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        if forcesLowercase(
+            spoken.trimmingCharacters(in: .whitespacesAndNewlines),
+            written.trimmingCharacters(in: .whitespacesAndNewlines))
+        {
             hints.insert(.forcesLowercase)
         }
         if !CleanupPrompt.isVocabularyReplacement(written) {
@@ -69,10 +72,8 @@ enum LibraryTermLint {
             return false
         }
 
-        for char in written {
-            if String(char).uppercased() != String(char) {
-                return true
-            }
+        for char in written where String(char).uppercased() != String(char) {
+            return true
         }
 
         return false

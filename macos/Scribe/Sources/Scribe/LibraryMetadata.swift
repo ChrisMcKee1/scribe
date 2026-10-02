@@ -11,7 +11,9 @@ enum LibraryMetadata {
             return ""
         }
 
-        let cleaned = value.unicodeScalars.map { $0.properties.isControl ? " " : Character($0) }
+        let cleaned = value.unicodeScalars.map {
+            CharacterSet.controlCharacters.contains($0) ? " " : Character($0)
+        }
         return String(cleaned).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

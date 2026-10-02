@@ -5,7 +5,9 @@ import XCTest
 
 final class LibraryCsvFixtureTests: XCTestCase {
     func testReadFixturesMatchExpectedDocuments() throws {
-        let fixture = try JSONDecoder().decode(ReadCasesFixture.self, from: csvFixtureData("read-cases.json"))
+        let fixture = try JSONDecoder().decode(
+            ReadCasesFixture.self,
+            from: csvFixtureData("read-cases.json"))
 
         for item in fixture.cases {
             let bytes = try fixtureBytes(item.file)
@@ -17,7 +19,9 @@ final class LibraryCsvFixtureTests: XCTestCase {
     }
 
     func testWriteFixturesMatchPinnedBytes() throws {
-        let fixture = try JSONDecoder().decode(WriteCasesFixture.self, from: csvFixtureData("write-cases.json"))
+        let fixture = try JSONDecoder().decode(
+            WriteCasesFixture.self,
+            from: csvFixtureData("write-cases.json"))
 
         for item in fixture.cases {
             let managed = try DictionaryLibraryCsv.exportManaged(item.content.libraryCsvContent)
@@ -60,6 +64,7 @@ final class LibraryCsvMetadataTests: XCTestCase {
 
             let managed = try DictionaryLibraryCsv.exportManaged(content)
             XCTAssertEqual(managed, try metadataBytes("\(item.label).managed.csv"), item.label)
+
             let managedRead = DictionaryLibraryCsv.parseManaged(managed)
             XCTAssertEqual(managedRead.name, content.name, item.label)
             XCTAssertEqual(managedRead.category, content.category, item.label)
@@ -69,6 +74,7 @@ final class LibraryCsvMetadataTests: XCTestCase {
 
             let exported = DictionaryLibraryCsv.exportSharing(content)
             XCTAssertEqual(exported, try metadataBytes("\(item.label).export.csv"), item.label)
+
             let exportRead = DictionaryLibraryCsv.parseImport(exported)
             XCTAssertEqual(exportRead.name, content.name, item.label)
             XCTAssertEqual(exportRead.category, content.category, item.label)
@@ -91,7 +97,12 @@ final class LibraryCsvMetadataTests: XCTestCase {
         let rows = fixture.rows
 
         for item in fixture.unpaired {
-            XCTAssertFalse(LibraryMetadata.readsBackInOlderVersions(item.name, item.category, item.description, nil))
+            XCTAssertFalse(
+                LibraryMetadata.readsBackInOlderVersions(
+                    item.name,
+                    item.category,
+                    item.description,
+                    nil))
             let content = item.libraryCsvContent(rows: rows)
             XCTAssertThrowsError(try DictionaryLibraryCsv.exportManaged(content), item.name)
 
@@ -205,18 +216,6 @@ private struct ExpectedDocument: Decodable, Equatable {
     let encoding: EncodingFixture
     let formulaGuardVersion: Int?
     let issues: [String]
-
-    private enum CodingKeys: String, CodingKey {
-        case name
-        case category
-        case description
-        case basedOn
-        case terms
-        case errors
-        case encoding
-        case formulaGuardVersion
-        case issues
-    }
 }
 
 private struct RowErrorFixture: Decodable, Equatable {
@@ -232,8 +231,8 @@ private struct EncodingFixture: Decodable, Equatable {
     let invalidBytesReplaced: Bool
 }
 
-private extension LibraryCsvDocument {
-    func matches(_ rhs: ExpectedDocument) -> Bool {
+extension LibraryCsvDocument {
+    fileprivate func matches(_ rhs: ExpectedDocument) -> Bool {
         name == rhs.name
             && category == rhs.category
             && description == rhs.description

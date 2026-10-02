@@ -1,6 +1,17 @@
 import Foundation
 
-final class LibraryCsvCodec {
+enum LibraryCsvCodecError: LocalizedError {
+    case metadataUnreadableInOlderVersions
+
+    var errorDescription: String? {
+        switch self {
+        case .metadataUnreadableInOlderVersions:
+            return "The library metadata does not read back in older versions."
+        }
+    }
+}
+
+struct LibraryCsvCodec: Sendable {
     static let shared = LibraryCsvCodec(ansiCodePage: 1252)
 
     private let ansiCodePage: Int
@@ -12,6 +23,7 @@ final class LibraryCsvCodec {
     func readManaged(_ data: Data) -> LibraryCsvDocument {
         let decoded = decodeManaged(data)
         let header = readRawHeader(decoded.text)
+
         if header.format == "2" {
             let parsed = readStrictManagedRows(decoded.text)
             return LibraryCsvDocument(
@@ -40,8 +52,13 @@ final class LibraryCsvCodec {
     }
 
     func writeManaged(_ content: LibraryCsvContent) throws -> Data {
-        guard LibraryMetadata.readsBackInOlderVersions(content.name, content.category, content.description, content.basedOn) else {
-            throw NSError(domain: "Scribe.LibraryCsvCodec", code: 1, userInfo: [NSLocalizedDescriptionKey: "The library metadata does not read back in older versions."])
+        guard LibraryMetadata.readsBackInOlderVersions(
+            content.name,
+            content.category,
+            content.description,
+            content.basedOn)
+        else {
+            throw LibraryCsvCodecError.metadataUnreadableInOlderVersions
         }
 
         var text = "# name: \(content.name)\r\n# category: \(content.category)\r\n"
@@ -58,11 +75,12 @@ final class LibraryCsvCodec {
 
     func readImport(_ data: Data) -> LibraryCsvDocument {
         if data.count > LibraryLimits.maxImportBytes {
-            let encoding = decodeDeclaredEncoding(Array(data.prefix(4))) ?? LibraryTextEncoding(
-                codePage: 65001,
-                byteOrderMark: false,
-                ansiFallback: false,
-                invalidBytesReplaced: false)
+            let encoding = decodeDeclaredEncoding(Array(data.prefix(4)))
+                ?? LibraryTextEncoding(
+                    codePage: 65001,
+                    byteOrderMark: false,
+                    ansiFallback: false,
+                    invalidBytesReplaced: false)
             return LibraryCsvDocument(
                 name: nil,
                 category: nil,
@@ -94,20 +112,16 @@ final class LibraryCsvCodec {
         return Data([0xEF, 0xBB, 0xBF] + Array(text.utf8))
     }
 
-    func readLegacy(_ text: String?) -> LibraryCsvDocument {
-        readManaged(Data((text ?? "").utf8))
-    }
-
     private func readLegacyRows(_ text: String) -> (terms: [TermValues], errors: [LibraryCsvRowError]) {
         var errors: [LibraryCsvRowError] = []
         var terms: [TermValues] = []
+
         for record in LibraryCsvRecords.read(text, errors: &errors) {
             let fields = record.fields
-            guard let first = fields.first else { continue }
-            if (fields.count == 1 && first.text.trimmingCharacters(in: .whitespaces).isEmpty)
-                || first.text.trimmingCharacters(in: .whitespaces).hasPrefix("#")
-                || first.text.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare("pattern") == .orderedSame
-            {
+            guard let first = fields.first else {
+                continue
+            }
+            if isLegacyIgnored(fields, firstField: first) {
                 continue
             }
             if fields.count < 2 {
@@ -121,23 +135,41 @@ final class LibraryCsvCodec {
                 continue
             }
             guard let wholeWord = parseFlag(fields.count > 2 ? fields[2].text : nil) else {
-                errors.append(LibraryCsvRowError(line: record.line, kind: .invalidWholeWord, field: fields[2].text.trimmingCharacters(in: .whitespaces)))
+                errors.append(
+                    LibraryCsvRowError(
+                        line: record.line,
+                        kind: .invalidWholeWord,
+                        field: fields[2].text.trimmingCharacters(in: .whitespaces)))
                 continue
             }
             guard let enabled = parseFlag(fields.count > 3 ? fields[3].text : nil) else {
-                errors.append(LibraryCsvRowError(line: record.line, kind: .invalidEnabled, field: fields[3].text.trimmingCharacters(in: .whitespaces)))
+                errors.append(
+                    LibraryCsvRowError(
+                        line: record.line,
+                        kind: .invalidEnabled,
+                        field: fields[3].text.trimmingCharacters(in: .whitespaces)))
                 continue
             }
 
-            terms.append(TermValues(spoken, fields[1].text.trimmingCharacters(in: .whitespaces), wholeWord, enabled))
+            let written = fields[1].text.trimmingCharacters(in: .whitespaces)
+            terms.append(TermValues(spoken, written, wholeWord, enabled))
         }
+
         return (terms, errors)
+    }
+
+    private func isLegacyIgnored(_ fields: [CsvField], firstField: CsvField) -> Bool {
+        (fields.count == 1 && firstField.text.trimmingCharacters(in: .whitespaces).isEmpty)
+            || firstField.text.trimmingCharacters(in: .whitespaces).hasPrefix("#")
+            || firstField.text.trimmingCharacters(in: .whitespaces)
+                .caseInsensitiveCompare("pattern") == .orderedSame
     }
 
     private func readStrictManagedRows(_ text: String) -> (terms: [TermValues], errors: [LibraryCsvRowError]) {
         var errors: [LibraryCsvRowError] = []
         var terms: [TermValues] = []
         var firstDataRecord = true
+
         for record in LibraryCsvRecords.read(text, errors: &errors) {
             if record.rawComment || isBlank(record) {
                 continue
@@ -148,8 +180,14 @@ final class LibraryCsvCodec {
                     continue
                 }
             }
-            readStrictRow(record, reverseGuard: false, capFields: false, terms: &terms, errors: &errors)
+            readStrictRow(
+                record,
+                reverseGuard: false,
+                capFields: false,
+                terms: &terms,
+                errors: &errors)
         }
+
         return (terms, errors)
     }
 
@@ -166,6 +204,7 @@ final class LibraryCsvCodec {
             if isBlank(record) {
                 continue
             }
+
             if beforeData {
                 if record.fields.first?.text.trimmingCharacters(in: .whitespaces).hasPrefix("#") == true {
                     if takeMetadataRecord(&header, record: record) {
@@ -173,6 +212,7 @@ final class LibraryCsvCodec {
                     }
                     continue
                 }
+
                 beforeData = false
                 reverseGuard = parseVersion(header.formulaGuard) == LibraryFormulaGuard.version
                 if isHeader(record) {
@@ -186,8 +226,14 @@ final class LibraryCsvCodec {
                 issues.insert(.rowLimitExceeded)
                 break
             }
+
             dataRecords += 1
-            readStrictRow(record, reverseGuard: reverseGuard, capFields: true, terms: &terms, errors: &errors)
+            readStrictRow(
+                record,
+                reverseGuard: reverseGuard,
+                capFields: true,
+                terms: &terms,
+                errors: &errors)
         }
 
         return LibraryCsvDocument(
@@ -230,15 +276,30 @@ final class LibraryCsvCodec {
             errors.append(LibraryCsvRowError(line: record.line, kind: .fieldTooLong, field: field))
             return
         }
-        guard let wholeWord = parseFlag(fields.count > 2 ? fields[2].text : nil) else {
-            errors.append(LibraryCsvRowError(line: record.line, kind: .invalidWholeWord, field: strictValue(fields[2])))
+        if let wholeWordField = field(at: 2, in: fields), parseFlag(wholeWordField.text) == nil {
+            errors.append(
+                LibraryCsvRowError(
+                    line: record.line,
+                    kind: .invalidWholeWord,
+                    field: strictValue(wholeWordField)))
             return
         }
-        guard let enabled = parseFlag(fields.count > 3 ? fields[3].text : nil) else {
-            errors.append(LibraryCsvRowError(line: record.line, kind: .invalidEnabled, field: strictValue(fields[3])))
+        if let enabledField = field(at: 3, in: fields), parseFlag(enabledField.text) == nil {
+            errors.append(
+                LibraryCsvRowError(
+                    line: record.line,
+                    kind: .invalidEnabled,
+                    field: strictValue(enabledField)))
             return
         }
+
+        let wholeWord = parseFlag(field(at: 2, in: fields)?.text) ?? true
+        let enabled = parseFlag(field(at: 3, in: fields)?.text) ?? true
         terms.append(TermValues(spoken, written, wholeWord, enabled))
+    }
+
+    private func field(at index: Int, in fields: [CsvField]) -> CsvField? {
+        index < fields.count ? fields[index] : nil
     }
 
     private func strictValue(_ field: CsvField) -> String {
@@ -246,8 +307,10 @@ final class LibraryCsvCodec {
     }
 
     private func isBlank(_ record: CsvRecord) -> Bool {
-        for field in record.fields where field.quoted || !field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return false
+        for field in record.fields {
+            if field.quoted || !field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return false
+            }
         }
         return true
     }
@@ -260,12 +323,15 @@ final class LibraryCsvCodec {
         guard fields.count >= 2, fields.count <= 4 else {
             return false
         }
+
         let expected = ["pattern", "replacement", "whole_word", "enabled"]
         for index in fields.indices {
-            if fields[index].text.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(expected[index]) != .orderedSame {
+            let text = fields[index].text.trimmingCharacters(in: .whitespaces)
+            if text.caseInsensitiveCompare(expected[index]) != .orderedSame {
                 return false
             }
         }
+
         return fields.count > 2 || (!fields[0].quoted && !fields[1].quoted)
     }
 
@@ -274,6 +340,7 @@ final class LibraryCsvCodec {
         while fields.count > 1, let last = fields.last, !last.quoted && last.text.isEmpty {
             fields.removeLast()
         }
+
         let line = fields.count == 1 ? fields[0].text : fields.map(\.text).joined(separator: ",")
         header.take(line.trimmingCharacters(in: .whitespaces))
         return fields.count < record.fields.count
@@ -284,7 +351,12 @@ final class LibraryCsvCodec {
         for row in rows {
             let spoken = guardValues ? LibraryFormulaGuard.encode(row.spoken) : row.spoken
             let written = guardValues ? LibraryFormulaGuard.encode(row.written) : row.written
-            LibraryCsvRecords.appendRow(&text, spoken: spoken, written: written, wholeWord: row.wholeWord, enabled: row.enabled)
+            LibraryCsvRecords.appendRow(
+                &text,
+                spoken: spoken,
+                written: written,
+                wholeWord: row.wholeWord,
+                enabled: row.enabled)
             text += "\r\n"
         }
     }
@@ -298,15 +370,21 @@ final class LibraryCsvCodec {
         guard let field, !field.trimmingCharacters(in: .whitespaces).isEmpty else {
             return true
         }
+
         switch field.trimmingCharacters(in: .whitespaces).lowercased() {
-        case "true", "yes", "1": return true
-        case "false", "no", "0": return false
-        default: return nil
+        case "true", "yes", "1":
+            return true
+        case "false", "no", "0":
+            return false
+        default:
+            return nil
         }
     }
 
     private func parseVersion(_ value: String?) -> Int? {
-        guard let value else { return nil }
+        guard let value else {
+            return nil
+        }
         return Int(value)
     }
 
@@ -320,32 +398,67 @@ final class LibraryCsvCodec {
     private func decodeManaged(_ data: Data) -> (text: String, encoding: LibraryTextEncoding) {
         let bytes = Array(data)
         if bytes.starts(with: [0xEF, 0xBB, 0xBF]) {
-            let body = Data(bytes.dropFirst(3))
-            if let text = String(data: body, encoding: .utf8) {
-                return (text, LibraryTextEncoding(codePage: 65001, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false))
-            }
-            return (String(decoding: body, as: UTF8.self), LibraryTextEncoding(codePage: 65001, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: true))
+            return decoded(
+                Data(bytes.dropFirst(3)),
+                using: .utf8,
+                codePage: 65001,
+                byteOrderMark: true)
         }
         if bytes.starts(with: [0xFF, 0xFE, 0x00, 0x00]) {
-            let body = Data(bytes.dropFirst(4))
-            return (String(data: body, encoding: .utf32LittleEndian) ?? "", LibraryTextEncoding(codePage: 12000, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false))
+            return decoded(
+                Data(bytes.dropFirst(4)),
+                using: .utf32LittleEndian,
+                codePage: 12000,
+                byteOrderMark: true)
         }
         if bytes.starts(with: [0x00, 0x00, 0xFE, 0xFF]) {
-            let body = Data(bytes.dropFirst(4))
-            return (String(data: body, encoding: .utf32BigEndian) ?? "", LibraryTextEncoding(codePage: 12001, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false))
+            return decoded(
+                Data(bytes.dropFirst(4)),
+                using: .utf32BigEndian,
+                codePage: 12001,
+                byteOrderMark: true)
         }
         if bytes.starts(with: [0xFF, 0xFE]) {
-            let body = Data(bytes.dropFirst(2))
-            return (String(data: body, encoding: .utf16LittleEndian) ?? "", LibraryTextEncoding(codePage: 1200, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false))
+            return decoded(
+                Data(bytes.dropFirst(2)),
+                using: .utf16LittleEndian,
+                codePage: 1200,
+                byteOrderMark: true)
         }
         if bytes.starts(with: [0xFE, 0xFF]) {
-            let body = Data(bytes.dropFirst(2))
-            return (String(data: body, encoding: .utf16BigEndian) ?? "", LibraryTextEncoding(codePage: 1201, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false))
+            return decoded(
+                Data(bytes.dropFirst(2)),
+                using: .utf16BigEndian,
+                codePage: 1201,
+                byteOrderMark: true)
         }
-        if let text = String(data: data, encoding: .utf8) {
-            return (text, LibraryTextEncoding(codePage: 65001, byteOrderMark: false, ansiFallback: false, invalidBytesReplaced: false))
+        return decoded(data, using: .utf8, codePage: 65001, byteOrderMark: false)
+    }
+
+    private func decoded(
+        _ data: Data,
+        using encoding: String.Encoding,
+        codePage: Int,
+        byteOrderMark: Bool
+    ) -> (text: String, encoding: LibraryTextEncoding) {
+        if let text = String(data: data, encoding: encoding) {
+            return (
+                text,
+                LibraryTextEncoding(
+                    codePage: codePage,
+                    byteOrderMark: byteOrderMark,
+                    ansiFallback: false,
+                    invalidBytesReplaced: false))
         }
-        return (String(decoding: data, as: UTF8.self), LibraryTextEncoding(codePage: 65001, byteOrderMark: false, ansiFallback: false, invalidBytesReplaced: true))
+
+        let replacement = encoding == .utf8 ? String(decoding: data, as: UTF8.self) : ""
+        return (
+            replacement,
+            LibraryTextEncoding(
+                codePage: codePage,
+                byteOrderMark: byteOrderMark,
+                ansiFallback: false,
+                invalidBytesReplaced: true))
     }
 
     private func decodeImport(_ data: Data) -> (text: String, encoding: LibraryTextEncoding) {
@@ -355,24 +468,50 @@ final class LibraryCsvCodec {
         }
 
         let text = String(data: data, encoding: .windowsCP1252) ?? String(decoding: data, as: UTF8.self)
-        return (text, LibraryTextEncoding(codePage: ansiCodePage, byteOrderMark: false, ansiFallback: true, invalidBytesReplaced: false))
+        return (
+            text,
+            LibraryTextEncoding(
+                codePage: ansiCodePage,
+                byteOrderMark: false,
+                ansiFallback: true,
+                invalidBytesReplaced: false))
     }
 
     private func decodeDeclaredEncoding(_ prefix: [UInt8]) -> LibraryTextEncoding? {
         if prefix.starts(with: [0xEF, 0xBB, 0xBF]) {
-            return LibraryTextEncoding(codePage: 65001, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false)
+            return LibraryTextEncoding(
+                codePage: 65001,
+                byteOrderMark: true,
+                ansiFallback: false,
+                invalidBytesReplaced: false)
         }
         if prefix.starts(with: [0xFF, 0xFE, 0x00, 0x00]) {
-            return LibraryTextEncoding(codePage: 12000, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false)
+            return LibraryTextEncoding(
+                codePage: 12000,
+                byteOrderMark: true,
+                ansiFallback: false,
+                invalidBytesReplaced: false)
         }
         if prefix.starts(with: [0x00, 0x00, 0xFE, 0xFF]) {
-            return LibraryTextEncoding(codePage: 12001, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false)
+            return LibraryTextEncoding(
+                codePage: 12001,
+                byteOrderMark: true,
+                ansiFallback: false,
+                invalidBytesReplaced: false)
         }
         if prefix.starts(with: [0xFF, 0xFE]) {
-            return LibraryTextEncoding(codePage: 1200, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false)
+            return LibraryTextEncoding(
+                codePage: 1200,
+                byteOrderMark: true,
+                ansiFallback: false,
+                invalidBytesReplaced: false)
         }
         if prefix.starts(with: [0xFE, 0xFF]) {
-            return LibraryTextEncoding(codePage: 1201, byteOrderMark: true, ansiFallback: false, invalidBytesReplaced: false)
+            return LibraryTextEncoding(
+                codePage: 1201,
+                byteOrderMark: true,
+                ansiFallback: false,
+                invalidBytesReplaced: false)
         }
         return nil
     }
@@ -386,29 +525,42 @@ final class LibraryCsvCodec {
         var formulaGuard: String?
 
         mutating func take(_ line: String) {
-            assign(line, key: "name", to: &name)
-            assign(line, key: "category", to: &category)
-            assign(line, key: "description", to: &description)
-            assign(line, key: "based-on", to: &basedOn)
-            assign(line, key: "scribe-format", to: &format)
-            assign(line, key: "formula-guard", to: &formulaGuard)
+            setIfNeeded(line, key: "name", value: &name)
+            setIfNeeded(line, key: "category", value: &category)
+            setIfNeeded(line, key: "description", value: &description)
+            setIfNeeded(line, key: "based-on", value: &basedOn)
+            setIfNeeded(line, key: "scribe-format", value: &format)
+            setIfNeeded(line, key: "formula-guard", value: &formulaGuard)
         }
 
-        private mutating func assign(_ line: String, key: String, to value: inout String?) {
-            guard value == nil else { return }
+        private mutating func setIfNeeded(_ line: String, key: String, value: inout String?) {
+            guard value == nil else {
+                return
+            }
+
             var body = line
-            while body.first == "#" { body.removeFirst() }
+            while body.first == "#" {
+                body.removeFirst()
+            }
             body = body.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard body.count > key.count, body.lowercased().hasPrefix(key) else { return }
+            guard body.count > key.count, body.lowercased().hasPrefix(key) else {
+                return
+            }
+
             let separator = body.index(body.startIndex, offsetBy: key.count)
-            guard body[separator] == ":" else { return }
+            guard body[separator] == ":" else {
+                return
+            }
             value = String(body[body.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
     private func readRawHeader(_ text: String) -> HeaderValues {
         var header = HeaderValues()
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
         for rawLine in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(rawLine)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -421,6 +573,7 @@ final class LibraryCsvCodec {
             }
             break
         }
+
         return header
     }
 }

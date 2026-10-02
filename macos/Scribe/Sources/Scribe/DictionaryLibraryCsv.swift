@@ -1,7 +1,5 @@
 import Foundation
 
-/// Outcome of parsing a library CSV: the header metadata (any of which may be `nil` when the file
-/// omits it), the usable entries, and per-line errors.
 struct DictionaryLibraryFile {
     let name: String?
     let category: String?
@@ -11,15 +9,20 @@ struct DictionaryLibraryFile {
     let errors: [String]
 }
 
-/// CSV round-tripping for a dictionary library. The compatibility wrappers below keep the current
-/// service and tests working while the full Swift word-pack model is still being ported.
 enum DictionaryLibraryCsv {
     private static let codec = LibraryCsvCodec.shared
 
     static func parse(_ csv: String?) -> DictionaryLibraryFile {
         guard let csv else {
-            return DictionaryLibraryFile(name: nil, category: nil, description: nil, basedOn: nil, entries: [], errors: [])
+            return DictionaryLibraryFile(
+                name: nil,
+                category: nil,
+                description: nil,
+                basedOn: nil,
+                entries: [],
+                errors: [])
         }
+
         let document = codec.readManaged(Data(csv.utf8))
         return DictionaryLibraryFile(
             name: document.name,
@@ -44,7 +47,7 @@ enum DictionaryLibraryCsv {
             category: library.category,
             description: library.description,
             basedOn: nil,
-            rows: library.entries.map(TermValues.init(entry:)))
+            rows: library.entries.map { TermValues(entry: $0) })
         let data = try? codec.writeManaged(content)
         return String(data: data ?? Data(), encoding: .utf8) ?? ""
     }
