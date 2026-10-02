@@ -66,6 +66,11 @@ enum BuiltInDictionaryLibraries {
         if FileManager.default.fileExists(atPath: packaged.path, isDirectory: &isDirectory), isDirectory.boolValue {
             return packaged
         }
+        // Bundle.module calls fatalError when its bundle is missing, so a packaged app that lacks
+        // its libraries shows none rather than crashing.
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            return nil
+        }
         return Bundle.module.url(forResource: "Libraries", withExtension: nil)
     }
 

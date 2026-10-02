@@ -43,8 +43,16 @@ chmod +x "$APP_DIR/Contents/MacOS/Scribe"
 # checks that path first and only touches Bundle.module (which requires the app-root layout) as a
 # dev-only fallback when running via `swift build`/`swift run` outside a packaged .app.
 RESOURCE_BUNDLE="$BIN_DIR/ScribeMac_Scribe.bundle"
-if [ -d "$RESOURCE_BUNDLE/Libraries" ]; then
+# Newer SwiftPM toolchains lay the resource bundle out as a real macOS bundle
+# (Contents/Resources/Libraries); older ones put Libraries at the bundle root. Accept either, and
+# fail the build rather than ship an app without its word packs.
+if [ -d "$RESOURCE_BUNDLE/Contents/Resources/Libraries" ]; then
+    cp -R "$RESOURCE_BUNDLE/Contents/Resources/Libraries" "$APP_DIR/Contents/Resources/Libraries"
+elif [ -d "$RESOURCE_BUNDLE/Libraries" ]; then
     cp -R "$RESOURCE_BUNDLE/Libraries" "$APP_DIR/Contents/Resources/Libraries"
+else
+    echo "error: no Libraries folder in $RESOURCE_BUNDLE; the app would ship without its word packs." >&2
+    exit 1
 fi
 
 # Same brand mark as the Windows build (src/Scribe.App/Assets/scribe.ico) and the Store listing
