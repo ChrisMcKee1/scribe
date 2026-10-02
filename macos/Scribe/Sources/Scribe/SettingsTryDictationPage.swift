@@ -1,13 +1,44 @@
 import SwiftUI
 
-
 struct SettingsTryDictationPage: View {
     let pipelineReportStore: PipelineReportStore
 
     var body: some View {
         SettingsPage(title: "Try dictation", subtitle: "Check that dictation works, and see what Scribe changed.") {
-            SettingsGroupHeader("Result")
-            SettingsCard { PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore) }
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsGroupHeader("Try it")
+                SettingsCard { TryDictationInputCard() }
+
+                SettingsGroupHeader("Result")
+                SettingsCard { PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore) }
+            }
+        }
+    }
+}
+
+private struct TryDictationInputCard: View {
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Click in the box, hold your dictation shortcut, and speak.").cardTitle()
+            Text("Try a short sentence first, such as: Scribe typed this on my Mac.")
+                .cardDescription()
+            TextEditor(text: $text)
+                .font(.body)
+                .frame(minHeight: 150, maxHeight: 280)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1))
+            HStack {
+                Spacer()
+                Button("Clear") { text = "" }
+                    .disabled(text.isEmpty)
+            }
         }
     }
 }
@@ -15,95 +46,95 @@ struct SettingsTryDictationPage: View {
 // MARK: - Playground tab
 
 /// Live view of the last dictation run through the full pipeline: raw recognition, replacement
-/// highlights, and per-step timings. Mirrors Windows' Playground panel (see
-/// src/Scribe.App/Settings/SettingsWindow.xaml, "Playground" section), which is populated from
+/// highlights, and per-step timings. Mirrors Windows' Try dictation result panel, populated from
 /// `DictationController.PipelineReported`. On macOS the analogous signal is `PipelineReportStore`,
-/// published by `DictationController` after every real dictation (hotkey or the
-/// "Start Test Dictation" menu item). There is no separate "Run" button here because macOS's
-/// push-to-talk hotkey already works regardless of which window is focused, so simply dictating
-/// normally while this tab is open is enough to see a report land.
+/// published by `DictationController` after every real dictation.
 struct PlaygroundSettingsTab: View {
     @ObservedObject var pipelineReportStore: PipelineReportStore
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Latest dictation")
-                    .font(.headline)
-                Text(
-                    """
-                    Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw \
-                    transcript, dictionary/snippet replacements, and per-step timings for the most recent run.
-                    """
-                )
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            if let report = pipelineReportStore.latest {
+                summary(for: report)
 
-                if let report = pipelineReportStore.latest {
-                    if let failureStage = report.failureStage {
-                        Label(
-                            "Failed at \(failureStage.rawValue): \(report.failureReason ?? "unknown error")",
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .foregroundStyle(.red)
-                    }
+                resultSection(title: "What Scribe heard") {
+                    monospaceText(report.rawText?.isEmpty == false ? report.rawText! : "(no speech recognized)")
+                }
 
-                    GroupBox("Raw Recognition") {
-                        Text(report.rawText?.isEmpty == false ? report.rawText! : "(no speech recognized)")
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                    }
+                resultSection(title: "What Scribe typed") {
+                    monospaceText(report.finalText?.isEmpty == false ? report.finalText! : report.postProcessing?.text ?? "(no text)")
+                }
 
-                    if let sent = report.sentText {
-                        GroupBox("Sent to AI cleanup (vocabulary applied)") {
-                            Text(sent)
-                                .font(.system(.body, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 4)
-                        }
-                    }
-
-                    GroupBox("Processed Text (Replacements Highlighted)") {
-                        highlightedText(for: report.postProcessing)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                    }
-
-                    GroupBox("Timings") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            timingRow("Capture", report.captureDuration)
-                            timingRow("Speech Recognition (Decode)", report.decodeDuration)
-                            if let cleanupDuration = report.cleanupDuration {
-                                timingRow(
-                                    report.cleanupApplied ? "AI cleanup" : "AI cleanup (failed, raw text used)",
-                                    cleanupDuration)
-                            }
-                            timingRow("Dictionary / snippets", report.postProcessingDuration)
-                            timingRow("Text Insertion", report.injectionDuration)
-                            Divider()
-                            timingRow("Total", report.totalDuration)
-                            if let rtf = report.realTimeFactor {
-                                Text("Real-time factor: \(String(format: "%.2fx", rtf))")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                resultSection(title: changesTitle(for: report)) {
+                    highlightedText(for: report.postProcessing)
+                        .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
-                    }
+                }
 
-                    // No row for voice activity detection: macOS runs none as a step of its own (silence auto-stop
-                    // is `SilenceAutoStopTracker`, inside capture), so there is nothing separate to time.
+                DisclosureGroup("Timing details") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        timingRow("Recording", report.captureDuration)
+                        timingRow("Speech recognition", report.decodeDuration)
+                        if let cleanupDuration = report.cleanupDuration {
+                            timingRow(
+                                report.cleanupApplied ? "AI cleanup" : "AI cleanup, raw text used",
+                                cleanupDuration)
+                        }
+                        timingRow("Dictionary and snippets", report.postProcessingDuration)
+                        timingRow("Typing", report.injectionDuration)
+                        Divider()
+                        timingRow("Processing, all steps", report.totalDuration)
+                        if let rtf = report.realTimeFactor {
+                            Text("Real-time factor: \(String(format: "%.2fx", rtf))")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            } else {
+                Text("Your result appears here after you dictate into the box.")
+                    .cardDescription()
+            }
+        }
+    }
+
+    private func summary(for report: PipelineReport) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: report.failureStage == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(report.failureStage == nil ? Color.green : Color.red)
+            VStack(alignment: .leading, spacing: 2) {
+                if let failureStage = report.failureStage {
+                    Text("Failed at \(failureStage.rawValue)").cardTitle()
+                    Text(report.failureReason ?? "Unknown error")
+                        .cardDescription()
                 } else {
-                    Text("No dictation captured yet this session.")
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
+                    Text("Dictation captured").cardTitle()
+                    Text("Review what Scribe heard, what it typed, and how long each step took.")
+                        .cardDescription()
                 }
             }
-            .padding(.vertical, 8)
         }
+    }
+
+    private func resultSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            content()
+        }
+    }
+
+    private func monospaceText(_ value: String) -> some View {
+        Text(value)
+            .font(.system(.body, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+    }
+
+    private func changesTitle(for report: PipelineReport) -> String {
+        let replacements = report.postProcessing?.replacements.count ?? 0
+        return replacements == 0 ? "No dictionary or snippet changes" : "Dictionary and snippet changes"
     }
 
     private func timingRow(_ label: String, _ duration: TimeInterval?) -> some View {
@@ -150,4 +181,3 @@ struct PlaygroundSettingsTab: View {
             .font(.system(.body, design: .monospaced))
     }
 }
-

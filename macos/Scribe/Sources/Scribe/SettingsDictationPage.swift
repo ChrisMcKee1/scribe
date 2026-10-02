@@ -6,6 +6,7 @@ struct SettingsDictationPage: View {
     let hotkeyStore: HotkeySettingsStore
     let audioDeviceStore: AudioDeviceStore
     let onHotkeyChanged: (CGKeyCode) -> Void
+    let onTryDictation: () -> Void
 
     var body: some View {
         SettingsPage(
@@ -16,7 +17,8 @@ struct SettingsDictationPage: View {
                 overlayPanelController: overlayPanelController,
                 hotkeyStore: hotkeyStore,
                 audioDeviceStore: audioDeviceStore,
-                onHotkeyChanged: onHotkeyChanged)
+                onHotkeyChanged: onHotkeyChanged,
+                onTryDictation: onTryDictation)
         }
     }
 }
@@ -28,12 +30,16 @@ private struct SettingsDictationControls: View {
     @State private var isRecording = false
     @State private var localMonitor: Any?
 
+    private let onTryDictation: () -> Void
+
     init(
         overlayPanelController: OverlayPanelController,
         hotkeyStore: HotkeySettingsStore,
         audioDeviceStore: AudioDeviceStore,
-        onHotkeyChanged: @escaping (CGKeyCode) -> Void
+        onHotkeyChanged: @escaping (CGKeyCode) -> Void,
+        onTryDictation: @escaping () -> Void
     ) {
+        self.onTryDictation = onTryDictation
         _input = StateObject(
             wrappedValue: InputSettingsModel(
                 hotkeyStore: hotkeyStore,
@@ -53,6 +59,7 @@ private struct SettingsDictationControls: View {
 
             SettingsGroupHeader("Recording indicator")
             SettingsCard { recordingIndicatorCard }
+            SettingsCard { recordingPositionCard }
 
             SettingsGroupHeader("Startup")
             SettingsCard { startupCard }
@@ -68,7 +75,7 @@ private struct SettingsDictationControls: View {
     }
 
     private var microphoneCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Microphone").cardTitle()
             Text("Mac default follows the microphone you choose in System Settings.")
                 .cardDescription()
@@ -76,9 +83,9 @@ private struct SettingsDictationControls: View {
                 "Microphone",
                 selection: Binding(get: { input.selectedDeviceUID }, set: { input.selectDevice(uid: $0) })
             ) {
-                Text("System default (recommended)").tag(String?.none)
+                Text(defaultMicrophoneLabel).tag(String?.none)
                 ForEach(input.devices) { device in
-                    Text(device.isDefault ? "\(device.name) (default)" : device.name)
+                    Text(device.isDefault ? "\(device.name) (Mac default)" : device.name)
                         .tag(String?.some(device.uid))
                 }
                 if let label = input.unavailableSelectionLabel, let uid = input.selectedDeviceUID {
@@ -86,61 +93,86 @@ private struct SettingsDictationControls: View {
                 }
             }
             .labelsHidden()
-            .frame(maxWidth: 380)
+            .frame(maxWidth: 420)
+
+            HStack(spacing: 8) {
+                Button("Sound settings") { openSoundSettings() }
+                Button("Try dictation") { onTryDictation() }
+            }
         }
+    }
+
+    private var defaultMicrophoneLabel: String {
+        if let device = input.devices.first(where: \.isDefault) {
+            return "Mac default: \(device.name)"
+        }
+        return "Mac default"
     }
 
     private var shortcutCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Dictation shortcut").cardTitle()
-            Text(input.hint).cardDescription()
-            Text(
-                "If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > "
-                    + "Privacy & Security > Input Monitoring, then relaunch Scribe."
-            )
-            .cardDescription()
-
             HStack(spacing: 12) {
                 Text(isRecording ? "Press any key..." : input.binding.displayName)
                     .font(.title3.bold())
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .frame(minWidth: 160)
+                    .frame(minWidth: 180)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(isRecording ? Color.accentColor.opacity(0.2) : Color.gray.opacity(0.12)))
 
-                Button(isRecording ? "Cancel" : "Record New Key") {
+                Button(isRecording ? "Cancel" : "Change") {
                     isRecording ? stopRecording() : startRecording()
                 }
 
-                if !input.isDefaultBinding {
-                    Button("Reset to \(HotkeyKeyCodeCatalog.displayName(for: HotkeySettingsStore.defaultKeyCode))") {
-                        input.apply(keyCode: HotkeySettingsStore.defaultKeyCode)
-                    }
-                }
+                Text(shortcutModeText)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
 
-            Text("Common choices")
-                .font(.subheadline.weight(.semibold))
-                .padding(.top, 4)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                ForEach(HotkeyKeyCodeCatalog.entries) { entry in
-                    Button {
-                        input.apply(keyCode: entry.keyCode)
-                    } label: {
-                        Text(entry.name)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(
-                                input.binding.keyCode == entry.keyCode
-                                    ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
-                            )
-                            .cornerRadius(6)
-                    }
-                    .buttonStyle(.plain)
-                }
+            Text(input.hint).cardDescription()
+            Text(
+                "If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > Privacy & Security > Input Monitoring, then relaunch Scribe."
+            )
+            .cardDescription()
+
+            Button("Restore default shortcut") {
+                input.apply(keyCode: HotkeySettingsStore.defaultKeyCode)
             }
+            .disabled(input.isDefaultBinding)
+
+            DisclosureGroup("Common choices") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                    ForEach(HotkeyKeyCodeCatalog.entries) { entry in
+                        Button {
+                            input.apply(keyCode: entry.keyCode)
+                        } label: {
+                            Text(entry.name)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                                .background(
+                                    input.binding.keyCode == entry.keyCode
+                                        ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
+                                )
+                                .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.top, 8)
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.top, 2)
+        }
+    }
+
+    private var shortcutModeText: String {
+        switch input.binding.gesture {
+        case .hold:
+            return "Hold to dictate"
+        case .toggle:
+            return "Press to start or stop"
         }
     }
 
@@ -158,10 +190,15 @@ private struct SettingsDictationControls: View {
     }
 
     private var recordingIndicatorCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Show the recording indicator").cardTitle()
             Text("A small bar with a live sound level appears while Scribe listens.")
                 .cardDescription()
+        }
+    }
+
+    private var recordingPositionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Where it appears").cardTitle()
             Text("Choose a spot for the recording indicator on your screen.")
                 .cardDescription()
@@ -181,6 +218,8 @@ private struct SettingsDictationControls: View {
                     .buttonStyle(.plain)
                 }
             }
+            Text("Selected: \(overlay.anchor.displayName)")
+                .cardDescription()
         }
     }
 
@@ -215,6 +254,11 @@ private struct SettingsDictationControls: View {
 
     private var autoStopBinding: Binding<Bool> {
         Binding(get: { input.autoStopOnSilence }, set: { input.setAutoStopOnSilence($0) })
+    }
+
+    private func openSoundSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func startRecording() {

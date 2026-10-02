@@ -145,7 +145,8 @@ struct SettingsView: View {
                 overlayPanelController: overlayPanelController,
                 hotkeyStore: hotkeyStore,
                 audioDeviceStore: audioDeviceStore,
-                onHotkeyChanged: onHotkeyChanged)
+                onHotkeyChanged: onHotkeyChanged,
+                onTryDictation: { drafts.section = .tryDictation })
         case .tryDictation:
             SettingsTryDictationPage(pipelineReportStore: pipelineReportStore)
         case .aiCleanup:

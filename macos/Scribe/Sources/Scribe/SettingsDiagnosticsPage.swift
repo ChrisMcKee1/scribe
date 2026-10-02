@@ -1,13 +1,12 @@
+import AppKit
 import SwiftUI
-
 
 struct SettingsDiagnosticsPage: View {
     let persistenceStore: PersistenceStore
 
     var body: some View {
         SettingsPage(title: "Diagnostics", subtitle: "Get help, see what went wrong, and check how fast dictation runs.") {
-            SettingsGroupHeader("Performance")
-            SettingsCard { DiagnosticsSettingsTab(persistenceStore: persistenceStore) }
+            DiagnosticsSettingsTab(persistenceStore: persistenceStore)
         }
     }
 }
@@ -15,20 +14,91 @@ struct SettingsDiagnosticsPage: View {
 // MARK: - Diagnostics tab
 
 /// Read-only performance panel over `dictation_history`, mirroring Windows' Diagnostics tab
-/// (P50/P95 decode latency, real-time factor). Computed with `DictationStats.compute`, the same
+/// P50 and P95 decode latency and real-time factor. Computed with `DictationStats.compute`, the same
 /// aggregation used by `Scribe --diagnostics` for headless verification.
 struct DiagnosticsSettingsTab: View {
     @StateObject private var model: DiagnosticsSettingsModel
+    let persistenceStore: PersistenceStore
+
+    private static let newIssueURL = URL(string: "https://github.com/x3nc0n/scribe/issues/new")!
 
     init(persistenceStore: PersistenceStore) {
+        self.persistenceStore = persistenceStore
         _model = StateObject(wrappedValue: DiagnosticsSettingsModel(access: .live(persistenceStore)))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Performance")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsGroupHeader("Get help")
+            SettingsCard { helpCard }
+
+            SettingsGroupHeader("Diagnostic data")
+            SettingsCard { diagnosticDataCard }
+
+            SettingsGroupHeader("Speed")
+            SettingsCard { speedCard }
+            SettingsCard { speedDetailsCard }
+
+            SettingsGroupHeader("This Mac")
+            SettingsCard { thisMacCard }
+
+            SettingsGroupHeader("Where Scribe keeps your data")
+            SettingsCard { dataFileCard }
+        }
+        .onAppear {
+            Task { await model.reload() }
+        }
+    }
+
+    private var helpCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Report a problem").cardTitle()
+                    Text("Opens GitHub to report a problem or suggest a feature. Do not include dictations, recordings, keys or secrets in a public report.")
+                        .cardDescription()
+                }
+                Spacer()
+                Button("Report a problem") {
+                    NSWorkspace.shared.open(Self.newIssueURL)
+                }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Save diagnostics").cardTitle()
+                Text("The macOS port does not create a diagnostics zip yet. Use this page for timings, system shape and local paths, and read any details before sharing them.")
+                    .cardDescription()
+            }
+        }
+    }
+
+    private var diagnosticDataCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Logs").cardTitle()
+            Text("Scribe for macOS writes app events to Apple unified logging with subsystem com.scribe.macos. Dictation text is not logged by Scribe.")
+                .cardDescription()
+            Text("AI cleanup problems").cardTitle()
+                .padding(.top, 8)
+            Text("Cleanup failures are surfaced on the dictation result and in the pipeline report for this session. There is not yet a stored macOS failure list like Windows has.")
+                .cardDescription()
+        }
+    }
+
+    private var speedCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("How long each step takes").cardTitle()
+                    Text(speedSummaryText).cardDescription()
+                    if let coverageNote = model.coverageNote {
+                        Text(coverageNote).cardDescription()
+                    }
+                    if let errorMessage = model.errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
                 Spacer()
                 Picker("Window", selection: $model.windowDays) {
                     Text("24 hours").tag(1.0)
@@ -42,81 +112,122 @@ struct DiagnosticsSettingsTab: View {
                 }
             }
 
-            if let errorMessage = model.errorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-            }
-
             if let snapshot = model.stats {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let coverageNote = model.coverageNote {
-                            Text(coverageNote)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        metricRow(label: "Dictations", value: "\(snapshot.count)")
-                        metricRow(
-                            label: "Total audio",
-                            value: String(
-                                format: "%.1f s (longest %.1f s)", snapshot.totalAudioSeconds,
-                                snapshot.longestAudioSeconds))
+                HStack(alignment: .top, spacing: 16) {
+                    metricBlock(title: "Speech recognition", typical: snapshot.decodeMs?.p50, p95: snapshot.decodeMs?.p95)
+                    metricBlock(title: "AI cleanup", typical: snapshot.cleanupMs?.p50, p95: snapshot.cleanupMs?.p95)
+                    metricBlock(title: "Both", typical: snapshot.combinedMs?.p50, p95: snapshot.combinedMs?.p95)
+                }
+            }
+        }
+    }
 
-                        Divider()
+    private var speedDetailsCard: some View {
+        DisclosureGroup("Speed details") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let snapshot = model.stats {
+                    Text("\(snapshot.count) dictation(s), \(String(format: "%.1f s", snapshot.totalAudioSeconds)) of audio, longest \(String(format: "%.1f s", snapshot.longestAudioSeconds)).")
+                        .cardDescription()
+                    Text("Best real-time factor: \(String(format: "%.3fx", snapshot.fastestRtf)). P50 \(String(format: "%.3fx", snapshot.rtfP50)), P95 \(String(format: "%.3fx", snapshot.rtfP95)).")
+                        .cardDescription()
+                    metricSummary("Speech recognition", snapshot.decodeMs)
+                    metricSummary("AI cleanup", snapshot.cleanupMs)
+                    metricSummary("Recognition plus AI cleanup", snapshot.combinedMs)
+                } else {
+                    Text("No dictations in this window yet.").cardDescription()
+                }
+            }
+            .padding(.top, 8)
+        }
+    }
 
-                        if let decodeMs = snapshot.decodeMs {
-                            Text("Decode latency (ms)")
-                                .font(.subheadline.bold())
-                            metricRow(label: "Average", value: String(format: "%.0f", decodeMs.average))
-                            metricRow(label: "P50", value: String(format: "%.0f", decodeMs.p50))
-                            metricRow(label: "P95", value: String(format: "%.0f", decodeMs.p95))
-                            metricRow(
-                                label: "Min / Max", value: String(format: "%.0f / %.0f", decodeMs.min, decodeMs.max))
+    private var speedSummaryText: String {
+        guard let snapshot = model.stats else {
+            return "No dictations in the selected window yet."
+        }
+        return "Based on \(snapshot.count) dictation(s) in the selected window."
+    }
 
-                            Divider()
+    private var thisMacCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(systemSummary).cardDescription()
+            Text("Speech recognition uses the Foundry Local command-line recognizer when available, with whisper.cpp as a developer fallback.")
+                .cardDescription()
+        }
+    }
 
-                            Text("Real-time factor")
-                                .font(.subheadline.bold())
-                            metricRow(label: "Fastest", value: String(format: "%.3fx", snapshot.fastestRtf))
-                            metricRow(label: "P50", value: String(format: "%.3fx", snapshot.rtfP50))
-                            metricRow(label: "P95", value: String(format: "%.3fx", snapshot.rtfP95))
-                        } else {
-                            Text(
-                                "No timed dictations yet. Decode latency is recorded starting with the next dictation."
-                            )
-                            .foregroundStyle(.secondary)
-                        }
+    private var dataFileCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Scribe data file").cardTitle()
+            Text("Never send or share this file. It holds your dictation history, dictionary, snippets, app profiles and saved cleanup settings.")
+                .cardDescription()
+            HStack {
+                Text(persistenceStore.databaseURL.path)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Button("Copy") { copy(persistenceStore.databaseURL.path) }
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([persistenceStore.databaseURL])
+                }
+            }
+        }
+    }
 
-                        if let cleanupMs = snapshot.cleanupMs {
-                            Divider()
-                            Text("AI cleanup latency (ms)")
-                                .font(.subheadline.bold())
-                            metricRow(label: "Average", value: String(format: "%.0f", cleanupMs.average))
-                            metricRow(
-                                label: "Min / Max", value: String(format: "%.0f / %.0f", cleanupMs.min, cleanupMs.max))
-                        }
-                    }
+    private var systemSummary: String {
+        let info = ProcessInfo.processInfo
+        let memoryGB = Double(info.physicalMemory) / 1_073_741_824.0
+        return "\(info.operatingSystemVersionString), \(info.processorCount) processor(s), \(String(format: "%.1f GB", memoryGB)) memory."
+    }
+
+    private func metricBlock(title: String, typical: Double?, p95: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(typical.map(formatMs) ?? "n/a")
+                .font(.title3.weight(.semibold))
+                .monospacedDigit()
+            Text("Typical")
+                .cardDescription()
+            Text(p95.map { "19 in 20 within \(formatMs($0))" } ?? "No data yet")
+                .cardDescription()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func metricSummary(_ title: String, _ summary: DictationStats.MetricSummary?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).cardTitle()
+            if let summary {
+                HStack {
+                    detailMetric("average", summary.average)
+                    detailMetric("fastest", summary.min)
+                    detailMetric("slowest", summary.max)
                 }
             } else {
-                Text("No dictations in this window yet.")
-                    .foregroundStyle(.secondary)
+                Text("No runs in this period yet.").cardDescription()
             }
-
-            Spacer()
-        }
-        .onAppear {
-            Task { await model.reload() }
         }
     }
 
-    private func metricRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
+    private func detailMetric(_ label: String, _ value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(formatMs(value))
+                .font(.callout.weight(.semibold))
                 .monospacedDigit()
+            Text(label).cardDescription()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func formatMs(_ value: Double) -> String {
+        "\(String(format: "%.0f", value)) ms"
+    }
+
+    private func copy(_ value: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
     }
 }
-
