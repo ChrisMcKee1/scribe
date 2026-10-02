@@ -48,10 +48,10 @@ final class SettingsSessionTests: XCTestCase {
     func testEditsDuringSaveRemainUnsavedAndPreventClose() async {
         let gate = SettingsTestGate()
         let state = SessionCommitRecorder()
-        let session = makeSession(state: state, prepare: {
+        let session = makeSession(state: state) {
             await gate.pass()
             return $0
-        })
+        }
         session.edit { $0.preferences.addSpaceAfterDictation = false }
         let task = Task { await session.saveAndClose() }
         await gate.waitForArrival()
@@ -133,6 +133,36 @@ final class SettingsSessionTests: XCTestCase {
         XCTAssertTrue(session.hasUnsavedChanges)
     }
 
+    func testUncertainCommitIsRecoveredWithoutAnotherWriteOrDiscardingPreparedCredentials() async {
+        let state = SessionCommitRecorder()
+        let holder = UncertainReceiptHolder()
+        let session = SettingsSession(
+            initial: SettingsDocument(),
+            access: SettingsSessionAccess(
+                commit: {
+                    state.commits += 1
+                    holder.receipt = SettingsCommitReceipt(id: $0.id, revision: $0.revision, document: $0.document)
+                    throw SettingsCommitUncertain(id: $0.id)
+                },
+                recover: { _ in holder.receipt },
+                apply: { _ in .applied },
+                discardPreparation: { _ in
+                    XCTFail("Credentials were discarded before the commit outcome was known")
+                }))
+        session.edit { $0.preferences.addSpaceAfterDictation = false }
+        let unknown = await session.save()
+        if case .outcomeUnknown = unknown {
+            XCTAssertTrue(session.hasUnresolvedCommit)
+        } else {
+            XCTFail("An uncertain write was reported as a pre-commit failure")
+        }
+        XCTAssertFalse(session.cancel())
+        let recovered = await session.saveAndClose()
+        XCTAssertTrue(recovered)
+        XCTAssertEqual(state.commits, 1)
+        XCTAssertFalse(session.hasUnresolvedCommit)
+    }
+
     private func makeSession(
         state: SessionCommitRecorder,
         prepare: @escaping @MainActor (SettingsSubmission) async throws -> SettingsSubmission = { $0 }
@@ -159,4 +189,9 @@ private final class SessionCommitRecorder {
     var applies = 0
     var failure: SettingsSaveFailure?
     var application = SettingsApplicationOutcome.applied
+}
+
+@MainActor
+private final class UncertainReceiptHolder {
+    var receipt: SettingsCommitReceipt?
 }

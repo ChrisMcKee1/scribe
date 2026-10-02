@@ -34,6 +34,7 @@ enum SettingsSessionPage: String, CaseIterable, Codable, Sendable {
 enum SettingsValue: Codable, Equatable, Sendable {
     case bool(Bool)
     case integer(Int)
+    case number(Double)
     case string(String)
     case strings([String])
     case data(Data)
@@ -59,6 +60,9 @@ enum SettingsValue: Codable, Equatable, Sendable {
         case .integer(let value):
             if strict { return (NSNumber(value: value) as? Bool) ?? fallback }
             return value != 0
+        case .number(let value):
+            if strict { return (NSNumber(value: value) as? Bool) ?? fallback }
+            return NSNumber(value: value).boolValue
         case .string(let value): return strict ? fallback : (value as NSString).boolValue
         default: return fallback
         }
@@ -67,9 +71,19 @@ enum SettingsValue: Codable, Equatable, Sendable {
     var legacyInteger: Int {
         switch self {
         case .integer(let value): return value
+        case .number(let value): return NSNumber(value: value).intValue
         case .bool(let value): return value ? 1 : 0
         case .string(let value): return (value as NSString).integerValue
         default: return 0
+        }
+    }
+
+    var legacyRawInteger: Int? {
+        switch self {
+        case .integer(let value): return value
+        case .bool(let value): return NSNumber(value: value) as? Int
+        case .number(let value): return NSNumber(value: value) as? Int
+        default: return nil
         }
     }
 }
@@ -90,7 +104,9 @@ struct SettingsPreferences: Codable, Equatable, Sendable {
 
     var shortcutKeyCode: Int {
         get {
-            guard let value = values["ScribePushToTalkKeyCode"]?.integer, value >= 0, value <= Int(UInt16.max) else {
+            guard let value = values["ScribePushToTalkKeyCode"]?.legacyRawInteger,
+                value >= 0, value <= Int(UInt16.max)
+            else {
                 return Int(HotkeySettingsStore.defaultKeyCode)
             }
             return value
@@ -234,6 +250,7 @@ enum SettingsSaveFailure: String, Error, Codable, Sendable {
 enum SettingsSaveResult: Equatable, Sendable {
     case unchanged
     case notCommitted(SettingsSaveFailure)
+    case outcomeUnknown(UUID)
     case committed(SettingsCommitReceipt, SettingsApplicationOutcome, changedWhileSaving: Bool)
 
     var mayClose: Bool {
@@ -241,6 +258,11 @@ enum SettingsSaveResult: Equatable, Sendable {
         case .unchanged: return true
         case .committed(_, .applied, changedWhileSaving: false): return true
         default: return false
+        }
+
+        /// An adapter that loses a commit reply must not classify it as a pre-commit failure or discard its credentials.
+        struct SettingsCommitUncertain: Error, Sendable {
+            let id: UUID
         }
     }
 }

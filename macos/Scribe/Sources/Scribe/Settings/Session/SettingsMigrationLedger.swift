@@ -14,19 +14,22 @@ struct SettingsMigrationField: Sendable {
     let page: SettingsSessionPage?
     let missingValue: SettingsValue?
     let immediate: Bool
+    let introduced: Bool
 
     init(
         _ key: String,
         _ page: SettingsSessionPage?,
         _ missingValue: SettingsValue? = nil,
         location: SettingsStorageLocation = .userDefaults,
-        immediate: Bool = false
+        immediate: Bool = false,
+        introduced: Bool = false
     ) {
         self.key = key
         self.location = location
         self.page = page
         self.missingValue = missingValue
         self.immediate = immediate
+        self.introduced = introduced
     }
 }
 
@@ -63,14 +66,14 @@ enum SettingsMigrationLedger {
         .init("ScribeCleanupAzureTenantId", .aiCleanup, .string("")),
         .init("ScribeCleanupAzureClientId", .aiCleanup, .string("")),
         .init("ScribeCleanupSecretRevision", nil, .string("")),
-        .init("ScribeCleanupWritingStyle", .aiCleanup, .string("")),
-        .init("ScribeCleanupPromptStyle", .aiCleanup, .string("automatic")),
-        .init("ScribeCleanupDetailedInstructions", .aiCleanup, .string("")),
-        .init("ScribeCleanupShortInstructions", .aiCleanup, .string("")),
-        .init("ScribeNewlineMode", .advanced, .string("smartFlatten")),
-        .init("ScribeApplyDictionaryAndSnippets", .advanced, .bool(true)),
-        .init("ScribeShiftReturnLineBreaks", .advanced, .bool(true)),
-        .init("ScribeShowRecordingIndicator", .dictation, .bool(true)),
+        .init("ScribeCleanupWritingStyle", .aiCleanup, .string(""), introduced: true),
+        .init("ScribeCleanupPromptStyle", .aiCleanup, .string("automatic"), introduced: true),
+        .init("ScribeCleanupDetailedInstructions", .aiCleanup, .string(""), introduced: true),
+        .init("ScribeCleanupShortInstructions", .aiCleanup, .string(""), introduced: true),
+        .init("ScribeNewlineMode", .advanced, .string("smartFlatten"), introduced: true),
+        .init("ScribeApplyDictionaryAndSnippets", .advanced, .bool(true), introduced: true),
+        .init("ScribeShiftReturnLineBreaks", .advanced, .bool(true), introduced: true),
+        .init("ScribeShowRecordingIndicator", .dictation, .bool(true), introduced: true),
         .init("ScribeEnabledDictionaryLibraryIds", .dictionary, .strings([])),
         .init("ScribeHasCompletedFirstRun", nil, .bool(false), immediate: true),
         .init("ScribeIsPaused", nil, .bool(false), immediate: true),
@@ -104,6 +107,8 @@ enum SettingsMigrationLedger {
             if CFGetTypeID(number) == CFBooleanGetTypeID() {
                 return .bool(number.boolValue)
             }
+            let type = String(cString: number.objCType)
+            if type == "d" || type == "f" { return .number(number.doubleValue) }
             return .integer(number.intValue)
         }
         if let string = raw as? String { return .string(string) }
@@ -116,6 +121,7 @@ enum SettingsMigrationLedger {
         switch value {
         case .bool(let value): return value
         case .integer(let value): return value
+        case .number(let value): return value
         case .string(let value): return value
         case .strings(let value): return value
         case .data(let value): return value

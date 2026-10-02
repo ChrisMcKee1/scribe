@@ -60,9 +60,10 @@ final class SettingsLogicalCommitTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(receipt.document.dictionary?.first?.id), 0)
         XCTAssertEqual(try fixture.store.readStringSetting(key: "word_pack_state_v1"), "{\"generation\":2}")
         XCTAssertNil(fixture.defaults.defaults.object(forKey: "ScribeAiCleanupEnabled"))
-        XCTAssertTrue(CleanupSettingsStore(
+        let legacyStore = CleanupSettingsStore(
             domain: .suite(fixture.defaults.suiteName), apiKeys: InMemorySecretStore(),
-            clientSecrets: InMemorySecretStore()).isEnabled == false)
+            clientSecrets: InMemorySecretStore())
+        XCTAssertFalse(legacyStore.isEnabled)
     }
 
     func testParticipantConflictRollsBackAllRowsAndPreferences() async throws {

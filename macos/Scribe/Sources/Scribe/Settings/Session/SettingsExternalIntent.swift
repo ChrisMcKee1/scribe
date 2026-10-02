@@ -10,6 +10,10 @@ enum SettingsIntentRevision {
             return $0
         }
     }
+
+    static func observe(_ revision: UInt64) {
+        counter.withLock { $0 = max($0, revision) }
+    }
 }
 
 /// Port of Windows' ExternalChoiceSync: request and completion carry the same event-time revision.

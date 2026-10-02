@@ -75,6 +75,7 @@ final class SettingsMainMenu: NSObject, NSMenuItemValidation {
     }
 
     @objc private func quit() {
+        if commands.settingsIsKey() && !SettingsCloseGuard.canRunCommand(commands.ownership()) { return }
         commands.quit()
     }
 

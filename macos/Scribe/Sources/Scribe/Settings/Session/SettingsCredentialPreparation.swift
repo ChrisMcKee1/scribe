@@ -80,13 +80,13 @@ enum SettingsCredentialPreparer {
                         let prepared = SettingsPreparedCredentials(references: references, allocated: allocated)
                         if completion.finish(.success(prepared)) { return }
                     } catch {
-                        let failure = (error as? SettingsSaveFailure)
-                            ?? (error is CancellationError ? .cancelled : .credentials)
+                        let failure =
+                            (error as? SettingsSaveFailure) ?? (error is CancellationError ? .cancelled : .credentials)
                         _ = completion.finish(.failure(failure))
                     }
                     cleanup(allocated, stores: stores)
                 }
-                Task {
+                let timer = Task {
                     do {
                         try await sleep(limit)
                         if completion.finish(.failure(SettingsSaveFailure.preparationTimedOut)) {
@@ -98,6 +98,7 @@ enum SettingsCredentialPreparer {
                             worker.cancel()
                         }
                     }
+                    completion.register(timer)
                 }
             }
         } onCancel: {
@@ -129,11 +130,21 @@ private final class SettingsCredentialPreparationCompletion: Sendable {
         var continuation: CheckedContinuation<SettingsPreparedCredentials, any Error>?
         var result: Result<SettingsPreparedCredentials, any Error>?
         var finished = false
+        var timer: Task<Void, Never>?
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     var isFinished: Bool { state.withLock { $0.finished } }
+
+    func register(_ timer: Task<Void, Never>) {
+        let finished = state.withLock {
+            if $0.finished { return true }
+            $0.timer = timer
+            return false
+        }
+        if finished { timer.cancel() }
+    }
 
     func install(_ continuation: CheckedContinuation<SettingsPreparedCredentials, any Error>) {
         let result = state.withLock {
@@ -146,14 +157,19 @@ private final class SettingsCredentialPreparationCompletion: Sendable {
 
     @discardableResult
     func finish(_ result: Result<SettingsPreparedCredentials, any Error>) -> Bool {
-        let decision = state.withLock { state -> (Bool, CheckedContinuation<SettingsPreparedCredentials, any Error>?) in
-            guard !state.finished else { return (false, nil) }
+        let decision = state.withLock { state -> (
+            Bool, CheckedContinuation<SettingsPreparedCredentials, any Error>?, Task<Void, Never>?
+        ) in
+            guard !state.finished else { return (false, nil, nil) }
             state.finished = true
             state.result = result
             let continuation = state.continuation
             state.continuation = nil
-            return (true, continuation)
+            let timer = state.timer
+            state.timer = nil
+            return (true, continuation, timer)
         }
+        decision.2?.cancel()
         decision.1?.resume(with: result)
         return decision.0
     }

@@ -4,6 +4,7 @@ struct SettingsSessionAccess {
     var validate: @MainActor (SettingsDocument) -> Bool = SettingsSessionValidation.isValid
     var prepare: @MainActor (SettingsSubmission) async throws -> SettingsSubmission = { $0 }
     var commit: @MainActor (SettingsSubmission) async throws -> SettingsCommitReceipt
+    var recover: @MainActor (UUID) async throws -> SettingsCommitReceipt? = { _ in throw SettingsSaveFailure.storage }
     var apply: @MainActor (SettingsCommitReceipt) async -> SettingsApplicationOutcome
     var discardPreparation: @MainActor (UUID) async -> Void = { _ in }
 }
@@ -23,6 +24,7 @@ final class SettingsSession: ObservableObject {
     private var outsideRevisions: [SettingsExternalSetting: UInt64] = [:]
     private var waiting: [SettingsExternalSetting: SettingsExternalIntent] = [:]
     private var nextTemporaryID: Int64 = -1
+    private var uncertainSubmission: SettingsSubmission?
 
     init(initial: SettingsDocument, access: SettingsSessionAccess) {
         baseline = initial
@@ -55,6 +57,7 @@ final class SettingsSession: ObservableObject {
     }
 
     var hasUnsavedChanges: Bool { !dirtyPages.isEmpty }
+    var hasUnresolvedCommit: Bool { uncertainSubmission != nil }
 
     func edit(_ change: (inout SettingsDocument) -> Void) {
         let before = draft
@@ -132,7 +135,7 @@ final class SettingsSession: ObservableObject {
     }
 
     func cancel() -> Bool {
-        guard !isSaving else { return false }
+        guard !isSaving, uncertainSubmission == nil else { return false }
         draft = baseline
         intents.removeAll()
         waiting.removeAll()
@@ -141,7 +144,8 @@ final class SettingsSession: ObservableObject {
     }
 
     func closeDecision(_ trigger: SettingsCloseTrigger) -> SettingsCloseDecision {
-        SettingsCloseGuard.decide(dirty: hasUnsavedChanges, saving: isSaving, trigger: trigger)
+        SettingsCloseGuard.decide(
+            dirty: hasUnsavedChanges, saving: isSaving || hasUnresolvedCommit, trigger: trigger)
     }
 
     func resolveClose(_ choice: SettingsCloseChoice) async -> Bool {
@@ -158,6 +162,23 @@ final class SettingsSession: ObservableObject {
 
     func save() async -> SettingsSaveResult {
         guard !isSaving else { return .notCommitted(.busy) }
+        if let submission = uncertainSubmission {
+            isSaving = true
+            defer { isSaving = false }
+            do {
+                guard let receipt = try await access.recover(submission.id) else {
+                    uncertainSubmission = nil
+                    await access.discardPreparation(submission.id)
+                    let result = SettingsSaveResult.notCommitted(.storage)
+                    lastSave = result
+                    return result
+                }
+                uncertainSubmission = nil
+                return await acknowledge(receipt, submission: submission)
+            } catch {
+                return .outcomeUnknown(submission.id)
+            }
+        }
         if !hasUnsavedChanges {
             if case .committed(let receipt, .notApplied, _)? = lastSave {
                 let applied = await access.apply(receipt)
@@ -186,12 +207,24 @@ final class SettingsSession: ObservableObject {
             try Task.checkCancellation()
             receipt = try await access.commit(submission)
         } catch {
+            if let uncertain = error as? SettingsCommitUncertain {
+                uncertainSubmission = submission
+                let result = SettingsSaveResult.outcomeUnknown(uncertain.id)
+                lastSave = result
+                return result
+            }
             await access.discardPreparation(submission.id)
             let failure = (error as? SettingsSaveFailure) ?? (error is CancellationError ? .cancelled : .storage)
             let result = SettingsSaveResult.notCommitted(failure)
             lastSave = result
             return result
         }
+        return await acknowledge(receipt, submission: submission)
+    }
+
+    private func acknowledge(
+        _ receipt: SettingsCommitReceipt, submission: SettingsSubmission
+    ) async -> SettingsSaveResult {
         let changed = revision != submission.revision
         baseline = receipt.document
         if !changed {

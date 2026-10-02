@@ -41,7 +41,33 @@ final class SettingsLegacyStore {
 
     func load() async throws -> SettingsDocument {
         let legacy = SettingsMigrationLedger.capture(defaults)
-        return try await database.loadSettingsSession().document(legacy: legacy)
+        let read = try await database.loadSettingsSession()
+        if let greatest = read.stored?.savedThrough.values.max() {
+            guard greatest < UInt64.max else { throw SettingsSaveFailure.storage }
+            SettingsIntentRevision.observe(greatest)
+        }
+        return read.document(legacy: legacy)
+    }
+
+    func access(
+        preparation: SettingsSavePreparation,
+        apply: @escaping @MainActor (SettingsCommitReceipt) async -> SettingsApplicationOutcome
+    ) -> SettingsSessionAccess {
+        SettingsSessionAccess(
+            validate: SettingsSessionValidation.isValid,
+            prepare: preparation.prepare,
+            commit: { [database] in
+                let receipt = try await database.commitSettingsSession($0)
+                preparation.committed(receipt.id)
+                return receipt
+            },
+            recover: { [database] in
+                let receipt = try await database.loadSettingsReceipt($0)
+                if let receipt { preparation.committed(receipt.id) }
+                return receipt
+            },
+            apply: apply,
+            discardPreparation: { preparation.discard($0) })
     }
 
     func access(
@@ -53,6 +79,7 @@ final class SettingsLegacyStore {
             validate: SettingsSessionValidation.isValid,
             prepare: prepare,
             commit: { [database] in try await database.commitSettingsSession($0) },
+            recover: { [database] in try await database.loadSettingsReceipt($0) },
             apply: apply,
             discardPreparation: discardPreparation)
     }
@@ -63,8 +90,9 @@ final class SettingsLegacyStore {
         revision: UInt64
     ) async throws -> SettingsDocument {
         let legacy = SettingsMigrationLedger.capture(defaults)
-        return try await database.updateSettingsExternal(
-            setting, values: values, revision: revision, legacy: legacy).document(legacy: legacy)
+        let read = try await database.updateSettingsExternal(
+            setting, values: values, revision: revision, legacy: legacy)
+        return read.document(legacy: legacy)
     }
 }
 
@@ -72,24 +100,27 @@ enum SettingsSessionValidation {
     static func isValid(_ document: SettingsDocument) -> Bool {
         if let rows = document.dictionary {
             guard Set(rows.map(\.id)).count == rows.count else { return false }
-            guard rows.allSatisfy({ !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            let invalid = rows.contains { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            if invalid {
                 return false
             }
         }
         if let rows = document.snippets {
             guard Set(rows.map(\.id)).count == rows.count else { return false }
-            guard rows.allSatisfy({
-                !$0.phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.template.isEmpty
-            }) else {
+            let invalid = rows.contains {
+                $0.phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.template.isEmpty
+            }
+            if invalid {
                 return false
             }
         }
         if let rows = document.profiles {
             guard Set(rows.map(\.id)).count == rows.count else { return false }
-            guard rows.allSatisfy({
-                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    && (!$0.bundleIdentifiers.isEmpty || !$0.processNames.isEmpty)
-            }) else {
+            let invalid = rows.contains {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || ($0.bundleIdentifiers.isEmpty && $0.processNames.isEmpty)
+            }
+            if invalid {
                 return false
             }
         }

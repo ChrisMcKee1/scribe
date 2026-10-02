@@ -22,9 +22,11 @@ final class SettingsSavePreparation {
         var submission = original
         if !submission.credentials.isEmpty {
             let previous = try await database.loadStringSetting(key: SettingsCredentialReference.storageKey)
-            let references = try previous.map {
-                try JSONDecoder().decode([String: SettingsCredentialReference].self, from: Data($0.utf8))
-            } ?? [:]
+            var references: [String: SettingsCredentialReference] = [:]
+            if let previous {
+                references = try JSONDecoder().decode(
+                    [String: SettingsCredentialReference].self, from: Data(previous.utf8))
+            }
             let credentials = try await SettingsCredentialPreparer.prepare(
                 edits: submission.credentials, existing: references, stores: stores)
             prepared[submission.id] = credentials

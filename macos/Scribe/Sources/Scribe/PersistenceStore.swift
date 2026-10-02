@@ -740,6 +740,14 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    func loadSettingsReceipt(_ id: UUID) async throws -> SettingsCommitReceipt? {
+        try await owner.withSessionAsync(.foreground) { session in
+            let key = "settings.receipt." + id.uuidString
+            guard let encoded = try Self.readSetting(key: key, session) else { return nil }
+            return try JSONDecoder().decode(SettingsCommitReceipt.self, from: Data(encoded.utf8))
+        }
+    }
+
     func commitSettingsSession(_ submission: SettingsSubmission) async throws -> SettingsCommitReceipt {
         guard SettingsSessionValidation.isValid(submission.document) else { throw SettingsSaveFailure.validation }
         let receipt = try await owner.withSessionAsync(.foreground) { session in
@@ -763,7 +771,7 @@ final class PersistenceStore: Sendable {
                         throw SettingsSaveFailure.conflict
                     }
                     try Self.writeSetting(
-                        key: retentionSettingKey, value: document.historyRetentionValue, session)
+                        key: Self.retentionSettingKey, value: document.historyRetentionValue, session)
                 } else {
                     document.historyRetentionValue = current.historyRetentionValue
                 }
@@ -774,7 +782,7 @@ final class PersistenceStore: Sendable {
                     record.profileOrder = profiles.map(\.id)
                 }
                 for (key, value) in submission.attachment.values {
-                    guard key != SettingsStoredDocument.key && key != retentionSettingKey else {
+                    guard key != SettingsStoredDocument.key && key != Self.retentionSettingKey else {
                         throw SettingsSaveFailure.validation
                     }
                     try Self.writeSetting(key: key, value: value, session)
@@ -879,7 +887,8 @@ final class PersistenceStore: Sendable {
         guard submission.baseline.dictionary != nil || submission.document.dictionary == nil else {
             throw SettingsSaveFailure.validation
         }
-        guard let before = submission.baseline.dictionary, let after = submission.document.dictionary else { return nil }
+        guard let before = submission.baseline.dictionary else { return nil }
+        guard let after = submission.document.dictionary else { return nil }
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
         let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
         let stored = Dictionary(uniqueKeysWithValues: current.dictionary.map { ($0.id, $0) })
@@ -904,7 +913,8 @@ final class PersistenceStore: Sendable {
         guard submission.baseline.snippets != nil || submission.document.snippets == nil else {
             throw SettingsSaveFailure.validation
         }
-        guard let before = submission.baseline.snippets, let after = submission.document.snippets else { return nil }
+        guard let before = submission.baseline.snippets else { return nil }
+        guard let after = submission.document.snippets else { return nil }
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
         let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
         let stored = Dictionary(uniqueKeysWithValues: current.snippets.map { ($0.id, $0) })
@@ -937,7 +947,8 @@ final class PersistenceStore: Sendable {
         guard submission.baseline.profiles != nil || submission.document.profiles == nil else {
             throw SettingsSaveFailure.validation
         }
-        guard let before = submission.baseline.profiles, let after = submission.document.profiles else { return nil }
+        guard let before = submission.baseline.profiles else { return nil }
+        guard let after = submission.document.profiles else { return nil }
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
         let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
         let stored = Dictionary(uniqueKeysWithValues: current.profiles.map { ($0.id, $0) })
