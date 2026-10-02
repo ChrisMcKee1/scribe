@@ -92,8 +92,11 @@ openssl req -x509 -newkey rsa:2048 \
     -days 3650 -nodes -config "$WORKDIR/codesign.cnf"
 
 P12_PASSWORD="$(openssl rand -base64 24)"
+# Security.framework cannot import OpenSSL 3's default PBES2/AES PKCS12 on every macOS release.
+# These algorithms work with both Apple's LibreSSL and Homebrew OpenSSL; the archive is temporary.
 openssl pkcs12 -export -out "$WORKDIR/scribe-dev.p12" \
-    -inkey "$WORKDIR/key.pem" -in "$WORKDIR/cert.pem" -passout "pass:$P12_PASSWORD"
+    -inkey "$WORKDIR/key.pem" -in "$WORKDIR/cert.pem" -passout "pass:$P12_PASSWORD" \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
 
 # A dedicated keychain (rather than the login keychain) avoids the interactive "codesign wants to
 # use your confidential information" prompt that a login-keychain import can trigger in a
