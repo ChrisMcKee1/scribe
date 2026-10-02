@@ -209,4 +209,17 @@ final class PrivacyClaimsTests: XCTestCase {
             XCTAssertTrue(sends.contains(shown(value)), "The disclosure does not state \(value)")
         }
     }
+
+    /// A setting can stop future sends; it cannot take back what an earlier request already carried. The text may say
+    /// what is withheld from now on, but never that nothing was sent or that sent data is removed.
+    func testNoTextPromisesToUnsendOrSaysNothingWasSent() throws {
+        let pattern = #"(?i)\bnothing (was|has been|had been) sent\b|\b(unsend|take back|retract|recall)\b|"#
+            + #"\bremoves? what (was|has been) sent\b"#
+        let regex = try NSRegularExpression(pattern: pattern)
+        for item in SettingsCopy.allItems {
+            let text = item.render()
+            let hit = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+            XCTAssertFalse(hit, "\(item.id) promises more than a setting can do: \(text)")
+        }
+    }
 }
