@@ -124,7 +124,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                     defaultTimeout: timeout)
             }
 
-            try await transport.complete(
+            return try await transport.complete(
                 request,
                 at: completionsURL,
                 model: model,
@@ -257,7 +257,7 @@ struct ChatCompletionsTransport: Sendable {
         ScribeLog.debug(
             .cleanup,
             "Cleanup request finished",
-            .name("provider", .openAICompatible),
+            .name("provider", CleanupProviderKind.openAICompatible),
             .duration("elapsed", elapsed),
             .count("characters", text.count))
         return Completion(text: text, latency: Self.seconds(elapsed))
@@ -367,36 +367,6 @@ struct ChatCompletionRequest: Encodable, Sendable {
         let content: String
     }
 
-    struct OllamaChatRequest: Encodable, Sendable {
-        struct Options: Encodable, Sendable {
-            let numContext: Int
-            let temperature: Double
-            let numPredict: Int
-
-            enum CodingKeys: String, CodingKey {
-                case numContext = "num_ctx"
-                case temperature
-                case numPredict = "num_predict"
-            }
-        }
-
-        let model: String
-        let messages: [ChatCompletionRequest.Message]
-        let keepAlive: String?
-        let think: Bool
-        let options: Options
-        let stream: Bool
-
-        enum CodingKeys: String, CodingKey {
-            case model
-            case messages
-            case keepAlive = "keep_alive"
-            case think
-            case options
-            case stream
-        }
-    }
-
     let model: String
     let messages: [Message]
     /// Left out of the body when `nil`.
@@ -432,20 +402,6 @@ struct ChatCompletionResponse: Decodable {
         struct Message: Decodable {
             let content: String?
         }
-
-        struct OllamaChatResponse: Decodable {
-            struct Message: Decodable {
-                let content: String?
-            }
-
-            let message: Message
-            let doneReason: String?
-
-            enum CodingKeys: String, CodingKey {
-                case message
-                case doneReason = "done_reason"
-            }
-        }
         let message: Message
         /// Why the model stopped: `stop`, `length` when the output limit ran out, or another value some servers send.
         let finishReason: String?
@@ -456,6 +412,50 @@ struct ChatCompletionResponse: Decodable {
         }
     }
     let choices: [Choice]
+}
+
+struct OllamaChatRequest: Encodable, Sendable {
+    struct Options: Encodable, Sendable {
+        let numContext: Int
+        let temperature: Double
+        let numPredict: Int
+
+        enum CodingKeys: String, CodingKey {
+            case numContext = "num_ctx"
+            case temperature
+            case numPredict = "num_predict"
+        }
+    }
+
+    let model: String
+    let messages: [ChatCompletionRequest.Message]
+    let keepAlive: String?
+    let think: Bool
+    let options: Options
+    let stream: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case keepAlive = "keep_alive"
+        case think
+        case options
+        case stream
+    }
+}
+
+struct OllamaChatResponse: Decodable {
+    struct Message: Decodable {
+        let content: String?
+    }
+
+    let message: Message
+    let doneReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case message
+        case doneReason = "done_reason"
+    }
 }
 
 extension CleanupServiceReply {
