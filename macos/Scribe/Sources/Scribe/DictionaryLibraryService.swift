@@ -369,8 +369,11 @@ final class DictionaryLibraryService {
             state.aiPermissions[library.id.lowercased()] = true
             state.setAcceptedContent(library.contentHash, for: library.id)
         }
-        for library in libraries where library.builtIn && library.contentHash != nil {
-            state.setAcceptedContent(library.contentHash, for: library.id)
+        for library in libraries where library.builtIn {
+            state.aiPermissions[library.id.lowercased()] = true
+            if library.contentHash != nil {
+                state.setAcceptedContent(library.contentHash, for: library.id)
+            }
         }
         state.normalize()
         return state
