@@ -142,12 +142,14 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
 - Quitting hides the pill at once, then waits for a paste in progress to put your clipboard back, and for a
   running recognizer or a Settings or Usage Insights check that started `az` or `foundry` to be stopped,
   before Scribe exits
-- Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
+- Settings window with Overlay, Input, Dictionary, Word packs, Snippets, App Profiles, AI Cleanup,
   Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
   shows in an open window, Open at Login shows what macOS reports, and no tab waits on the database
   on the main thread
-- User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), voice
-  snippets, and per-app profiles (writing style + newline mode by focused app)
+- User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), Word packs
+  (all 11 built-in packs, custom CSV import/export, staged editing with undo, redo, save and discard,
+  per-pack AI vocabulary permission), voice snippets, and per-app profiles (writing style + newline
+  mode by focused app)
 - AI cleanup across Foundry Local (default), Ollama and LM Studio at their own addresses (with a model list
   read from the app), any OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service-principal auth,
   secrets in Keychain, an https resource or pasted Foundry project URL works). Each provider is
@@ -235,11 +237,11 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
 the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
 call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
-recognition; the Settings page structure now matches Windows, but Find a setting and the Word packs editor page are
-not built, so word packs have their model and editing logic but no editor yet; the "Starting local model" state and
-the full memory release of Ollama and LM Studio models are not ported; and there is no auto-update story yet. Dev
+recognition; the Settings page structure now matches Windows, but Find a setting is still not built; the "Starting
+local model" state and the full memory release of Ollama and LM Studio models are not ported; and there is no
+auto-update story yet. Dev
 builds use a local self-signed certificate, and public releases use the Developer ID pipeline documented above. Since
 Windows 0.4.3 the port has gained the space after each dictation, the new recording indicator, Ollama and LM Studio
 under "On this PC", the mentioned-terms glossary disclosed in Settings, context size, the Chat Completions or
-Responses choice for another AI service, and the word pack model; see "Windows 0.4.4 to 0.5.4 parity pass" in
+Responses choice for another AI service, and the full word packs editor; see "Windows 0.4.4 to 0.5.4 parity pass" in
 `PORTING-PLAN.md`.
