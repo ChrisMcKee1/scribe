@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let transcriptionEngine = TranscriptionEngine()
     private lazy var textInjector = TextInjector(logSink: { line in ScribeLog.legacyUnshapedLine(line) })
     private lazy var hotkeyManager = HotkeyManager()
-    let dictionaryLibraryService = DictionaryLibraryService()
+    private lazy var dictionaryLibraryService = DictionaryLibraryService(persistenceStore: persistenceStore)
     private let lastTranscriptStore = LastTranscriptStore()
     let pipelineReportStore = PipelineReportStore()
     private let overlayPanelController = OverlayPanelController()
