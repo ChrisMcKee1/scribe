@@ -19,7 +19,8 @@ final class SwiftStringScannerTests: XCTestCase {
     }
 
     func testItDropsInterpolationsAndReadsEscapes() {
-        XCTAssertEqual(texts(#"let a = "Saved \(count) words, \(name.map { "x" } ?? "y")""#), ["Saved  words, "])
+        let source = #"let a = "Saved \(count) words, \(name.map { "x" } ?? "y")""#
+        XCTAssertEqual(texts(source), ["Saved  words, ", "x", "y"])
         XCTAssertEqual(texts(#"let a = "Say \"hi\" \u{201C}now\u{201D}""#), ["Say \"hi\" \u{201C}now\u{201D}"])
     }
 

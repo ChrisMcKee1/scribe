@@ -18,7 +18,7 @@ final class PrivacyClaimsTests: XCTestCase {
     private static let claimPattern =
         #"(?i)\b(never leaves?|stays? on this Mac|nothing leaves|goes to|is sent|are sent|never sent|"#
         + #"not sent|sends|sent)\b"#
-        + #"|\b(keychain|discarded|doesn't keep|never your dictations|reach the AI)\b"#
+        + #"|\b(keychain|discarded|doesn't keep|never your dictations|reach the AI|seems to mention)\b"#
 
     private static func source(_ name: String) -> String {
         let url = GlossaryTests.sourceRoot.appendingPathComponent(name)

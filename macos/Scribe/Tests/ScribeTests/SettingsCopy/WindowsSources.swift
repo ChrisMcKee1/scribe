@@ -58,17 +58,17 @@ enum WindowsSources {
     }
 
     /// True when `windowsText` is in the Windows sources as one run, in order: its literal parts, with each
-    /// `{placeholder}` standing for any short expression. A sentence that merely shares words with other strings
-    /// does not pass, and neither does one with its parts reordered or its closing punctuation changed.
+    /// `{placeholder}` standing for a `{...}` interpolation or a `" + value + "` join. A sentence that merely shares
+    /// words with other strings does not pass, and neither does one with its parts reordered or its closing
+    /// punctuation changed.
     static func contains(_ windowsText: String) -> Bool {
         let parts = literalParts(windowsText)
-        let normalized = parts.map { part -> String in
-            part.trimmingCharacters(in: .whitespaces).isEmpty ? (part.isEmpty ? "" : " ") : collapse(part)
-        }
+        let normalized = parts.map(squeeze)
         if normalized.count == 1 {
             return corpus.contains(normalized[0])
         }
-        let pattern = normalized.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: ".{0,160}?")
+        let gap = #"(?:\{.{0,80}?\}|"\s?\+\s?.{0,60}?\+\s?")"#
+        let pattern = normalized.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: gap)
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
             return false
         }
@@ -93,6 +93,22 @@ enum WindowsSources {
         }
         parts.append(current)
         return parts
+    }
+
+    /// Runs of white space become one space; an edge space stays, so a placeholder keeps its neighbours.
+    static func squeeze(_ text: String) -> String {
+        var result = ""
+        var lastWasSpace = false
+        for character in text {
+            if character.isWhitespace {
+                if !lastWasSpace { result.append(" ") }
+                lastWasSpace = true
+            } else {
+                result.append(character)
+                lastWasSpace = false
+            }
+        }
+        return result
     }
 
     /// True when `text` is a whole string literal or a whole element text in the Windows sources.
