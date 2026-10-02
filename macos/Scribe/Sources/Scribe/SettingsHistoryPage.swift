@@ -1,31 +1,48 @@
+import AppKit
 import SwiftUI
 
 struct SettingsHistoryPage: View {
     let access: HistorySettingsAccess
     let onCleared: @MainActor () -> Void
+    let listAccess: HistoryListAccess
 
     var body: some View {
-        SettingsPage(title: "History", subtitle: "Find, copy or delete your recent dictations.") {
-            HistorySettingsTab(access: access, onCleared: onCleared)
+        SettingsPage(title: "History", subtitle: "Find, copy or delete your dictations.") {
+            HistorySettingsTab(access: access, onCleared: onCleared, listAccess: listAccess)
         }
     }
 }
 
 struct HistorySettingsTab: View {
     @StateObject private var model: HistorySettingsModel
+    @StateObject private var list: HistoryListModel
+    private let onCleared: @MainActor () -> Void
+    @State private var pendingDelete: StoredDictation?
+    @State private var isVisible = false
 
-    init(access: HistorySettingsAccess, onCleared: @escaping @MainActor () -> Void) {
+    init(
+        access: HistorySettingsAccess, onCleared: @escaping @MainActor () -> Void,
+        listAccess: HistoryListAccess
+    ) {
         _model = StateObject(wrappedValue: HistorySettingsModel(access: access, onCleared: onCleared))
+        _list = StateObject(wrappedValue: HistoryListModel(access: listAccess))
+        self.onCleared = onCleared
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SettingsCard(searchID: "history.keep") { retentionCard }
             SettingsCard(searchID: "history.delete") { historyActionsCard }
-            SettingsCard(searchID: "history.list") { macOSHistoryGapCard }
+            SettingsCard(searchID: "history.list") { historyListCard }
         }
         .onAppear {
+            isVisible = true
             Task { await model.reload() }
+            list.appear()
+        }
+        .onDisappear {
+            isVisible = false
+            list.stop()
         }
         .confirmationDialog(
             "Clear all dictation history?",
@@ -33,13 +50,37 @@ struct HistorySettingsTab: View {
             titleVisibility: .visible
         ) {
             Button("Delete all history", role: .destructive) {
-                Task { await model.confirmClear() }
+                Task {
+                    list.stop()
+                    await model.confirmClear()
+                    if isVisible { list.appear() }
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
                 "This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone."
             )
+        }
+        .confirmationDialog(
+            "Delete this dictation?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let row = pendingDelete {
+                    pendingDelete = nil
+                    Task {
+                        await list.delete(row, onDeleted: onCleared)
+                        await model.reload()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("This deletes the saved dictation text. It cannot be undone.")
         }
     }
 
@@ -107,14 +148,55 @@ struct HistorySettingsTab: View {
         }
     }
 
-    private var macOSHistoryGapCard: some View {
+    private var historyListCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("History list")
-                .cardTitle()
-            Text(
-                "The macOS port can store and clear dictation history, but this page does not yet include the Windows history table with search, copy, per-item delete and feedback buttons."
-            )
-            .cardDescription()
+            Text("Your dictations").cardTitle()
+            HStack {
+                TextField("Search all dictations", text: $list.query)
+                    .textFieldStyle(.roundedBorder)
+                    .onExitCommand {
+                        if !list.query.isEmpty { list.query = "" }
+                    }
+                if !list.query.isEmpty {
+                    Button("Clear search") { list.query = "" }
+                }
+                if list.isLoading { ProgressView().controlSize(.small) }
+            }
+            Text(list.resultLimitText).cardDescription()
+            if let error = list.errorMessage {
+                HStack {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                    Button("Retry") { list.refresh() }
+                }
+            } else if list.rows.isEmpty && !list.isLoading {
+                Text(list.query.isEmpty ? "No dictations yet." : "No dictations match your search.")
+                    .cardDescription()
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(list.rows) { row in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(row.record.startedAt.formatted(date: .abbreviated, time: .shortened))
+                                if let app = row.record.targetApp { Text(app).foregroundStyle(.secondary) }
+                                Spacer()
+                                Button("Copy") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(row.record.transcriptText ?? "", forType: .string)
+                                }
+                                .disabled(row.record.transcriptText?.isEmpty != false)
+                                Button("Delete", role: .destructive) { pendingDelete = row }
+                                    .disabled(list.isDeleting || model.isClearing)
+                            }
+                            .font(.caption)
+                            Text(row.record.transcriptText ?? "No text was stored.")
+                                .textSelection(.enabled)
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .frame(height: 320)
         }
     }
 

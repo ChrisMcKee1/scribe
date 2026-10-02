@@ -49,6 +49,7 @@ struct SnippetsSettingsTab: View {
         .onAppear {
             Task { await model.reload() }
         }
+        .onChange(of: drafts.saveRevision) { _ in Task { await model.reload() } }
         .onChange(of: model.snippets) { snippets in
             if let selectedSnippetID, snippets.contains(where: { $0.id == selectedSnippetID }) {
                 return
@@ -84,8 +85,6 @@ struct SnippetsSettingsTab: View {
             HStack {
                 Button("Add") {
                     selectedSnippetID = nil
-                    drafts.snippetPhrase = ""
-                    drafts.snippetTemplate = ""
                 }
                 Button("Delete...", role: .destructive) {
                     if let selectedSnippet {

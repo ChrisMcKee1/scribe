@@ -233,7 +233,7 @@ struct LibraryWorkspace: Sendable {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     var undoLabel: String? { undoStack.last?.0 }
-    var hasUnsavedChanges: Bool { draft != base || !recentlyDeletedActions.isEmpty }
+    var hasUnsavedChanges: Bool { draft.libraries != base.libraries || !recentlyDeletedActions.isEmpty }
 
     mutating func createLibrary(name: String? = nil) -> String {
         let takenNames = draft.libraries.map(\.name)
