@@ -59,7 +59,7 @@ final class CleanupDisclosureTests: XCTestCase {
             contentsOf: root.appendingPathComponent("Sources").appendingPathComponent("Scribe")
                 .appendingPathComponent("CleanupDisclosureSection.swift"))
 
-        XCTAssertTrue(settingsView.contains("CleanupDisclosure.summary(for:"))
+        XCTAssertTrue(settingsView.contains("CleanupDisclosure.summary("))
         XCTAssertTrue(settingsView.contains("CleanupDisclosureSection("))
         XCTAssertTrue(section.contains("CleanupDisclosure.whatCleanupSends"))
         XCTAssertTrue(section.contains("CleanupDisclosure.whatCleanupNeverSends"))

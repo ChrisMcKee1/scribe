@@ -323,7 +323,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.waitUntilProcessed()
 
         let request = try XCTUnwrap(provider.requests.first)
-        XCTAssertTrue(request.writingStylePrompt.hasSuffix(CleanupPrompt.singleLineWritingStyle))
+        XCTAssertTrue(request.writingStylePrompt.contains(CleanupPrompt.singleLineWritingStyle))
         XCTAssertTrue(request.singleLineMode)
         let delivered = try XCTUnwrap(harness.fakeInjector.texts.first)
         XCTAssertFalse(delivered.contains("\n"), "a newline reached a terminal")

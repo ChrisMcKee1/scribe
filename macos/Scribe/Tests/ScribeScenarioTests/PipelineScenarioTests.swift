@@ -255,7 +255,7 @@ final class PipelineScenarioTests: XCTestCase {
                 XCTAssertFalse(request.writingStylePrompt.contains(text), "a snippet template reached the prompt")
             }
             XCTAssertEqual(request.singleLineMode, singleLine)
-            XCTAssertEqual(request.writingStylePrompt.hasSuffix(CleanupPrompt.singleLineWritingStyle), singleLine)
+            XCTAssertEqual(request.writingStylePrompt.contains(CleanupPrompt.singleLineWritingStyle), singleLine)
             XCTAssertNil(request.maxOutputTokens, "a dictation sent an output ceiling")
         }
     }

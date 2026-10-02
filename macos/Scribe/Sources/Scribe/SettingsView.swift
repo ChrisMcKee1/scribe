@@ -931,9 +931,10 @@ private struct CleanupSettingsTab: View {
                         for: model.values.providerKind,
                         endpoint: model.values.openAIBaseURL,
                         forceLocal: model.providerSelection == .onThisMac
-                    ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                    )
+                )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             CleanupProviderSettingsSection(model: model, drafts: drafts)
