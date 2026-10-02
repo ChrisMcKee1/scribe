@@ -237,8 +237,8 @@ struct CleanupProviderSettingsSection: View {
                 vocabularyRoom: vocabularyRoom(inUse: effectiveContext, asked: askedContext)
             )
         )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
         if let action = status.primary {
             HStack {
                 Button(action.text) {

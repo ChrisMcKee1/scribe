@@ -189,7 +189,7 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse."))
 
         let recorded = await load.value
-        XCTAssertEqual(recorded?.endpoint, LocalAiServer.lmStudioAddress)
+        XCTAssertEqual(recorded?.endpoint, "http://127.0.0.1:1234/v1")
         XCTAssertEqual(recorded?.model, "google/gemma-4-e2b")
         XCTAssertEqual(recorded?.context, 16384)
         XCTAssertEqual(log.all.first?.url?.path, "/v1/chat/completions")

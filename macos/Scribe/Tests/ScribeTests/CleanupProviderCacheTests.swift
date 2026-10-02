@@ -675,7 +675,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     func testAServerThatRefusesTheCeilingFieldPassesOnTheRetryWithout() async throws {
         for status in [400, 422] {
             let rig = try makeRig { request in
-                let allowed: Set<String> = ["model", "messages", "temperature", "stream"]
+                let allowed: Set<String> = ["model", "messages", "stream"]
                 guard Set(RecordedRequest(request).jsonBody.keys).isSubset(of: allowed) else {
                     return StubReply.json(
                         request, status: status,
@@ -686,6 +686,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 return StubReply.completion(request, "Cleaned.")
             }
             configureOpenAICompatible(rig.store)
+            rig.store.openAIBaseURL = "https://ai.example.invalid/v1"
             let recorder = recordScribeLog()
 
             let check = try await boundedCheck(rig.cache)

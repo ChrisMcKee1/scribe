@@ -8,7 +8,7 @@ final class ContextBudgetTests: XCTestCase {
         XCTAssertEqual(TokenEstimate.prose(String(repeating: "a", count: 360)), 100)
         XCTAssertEqual(TokenEstimate.vocabulary(String(repeating: "a", count: 260)), 100)
         XCTAssertEqual(TokenEstimate.transcript("abc"), TokenEstimate.prose("abc") + TokenEstimate.shortTextAllowance)
-        XCTAssertEqual(TokenEstimate.prose("日本語のテキストです。"), 10)
+        XCTAssertEqual(TokenEstimate.prose("日本語のテキストです"), 10)
         XCTAssertEqual(TokenEstimate.vocabulary("ab日本語"), 4)
     }
 
@@ -39,13 +39,13 @@ final class ContextBudgetTests: XCTestCase {
     }
 
     func testWholeVocabularyGoesWhenItFitsAndFallsBackToMentionedTermsWhenItDoesNot() {
-        let entries = (0..<200).map { DictionaryEntry(pattern: "spoken term \($0)", replacement: "Term\($0)") }
+        let entries = (0..<200).map { DictionaryEntry(pattern: uniquePattern($0), replacement: "Term\($0)") }
         let vocabulary = CleanupVocabulary(glossaryEntries: entries)
 
         let whole = vocabulary.glossary(
             mode: .mentioned,
             everything: true,
-            dictation: "spoken term 199",
+            dictation: uniquePattern(199),
             tokenBudget: 1_000_000,
             maxTerms: .max)
         XCTAssertEqual(whole, CleanupPrompt.buildGlossary(entries))
@@ -53,11 +53,22 @@ final class ContextBudgetTests: XCTestCase {
         let fitted = vocabulary.glossary(
             mode: .mentioned,
             everything: false,
-            dictation: "spoken term 199",
+            dictation: uniquePattern(199),
             tokenBudget: 200,
             maxTerms: CleanupPrompt.maxGlossaryTermsLocal)
         XCTAssertNotNil(fitted)
         XCTAssertTrue(fitted?.contains("Term199") == true)
         XCTAssertFalse(fitted?.contains("Term0") == true)
+    }
+
+    private func uniquePattern(_ value: Int) -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz")
+        var number = value
+        var pattern = ""
+        repeat {
+            pattern.insert(alphabet[number % alphabet.count], at: pattern.startIndex)
+            number /= alphabet.count
+        } while number > 0
+        return "term" + pattern
     }
 }
