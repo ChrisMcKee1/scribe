@@ -62,6 +62,7 @@ enum DictionaryLibraryServiceError: Error, LocalizedError {
 /// concurrent use in this app, but the compiler cannot prove that for `UserDefaults`, `FileManager` and the store.
 final class DictionaryLibraryService: @unchecked Sendable {
     static let libraryStateKey = "word_pack_state_v1"
+    static let recentlyDeletedKey = "word_pack_recently_deleted_v1"
 
     let librariesDirectory: URL
     let settings: DictionaryLibrarySettings
@@ -173,42 +174,61 @@ final class DictionaryLibraryService: @unchecked Sendable {
             BuiltInLibraryOverlay.editsFolderName,
             isDirectory: true)
 
+        var deletedMetadata = loadRecentlyDeletedMetadataSync()
         for deletion in changeSet.deletions {
             let url = librariesDirectory.appendingPathComponent("\(deletion.libraryID).csv", isDirectory: false)
             guard fileManager.fileExists(atPath: url.path) else { continue }
             try fileManager.createDirectory(at: deletedDirectory, withIntermediateDirectories: true)
-            let stamp = Self.deletedStamp()
-            var target = deletedDirectory.appendingPathComponent(
-                "\(stamp).\(url.lastPathComponent)", isDirectory: false)
-            var sequence = 2
-            while fileManager.fileExists(atPath: target.path) {
-                target = deletedDirectory.appendingPathComponent(
-                    "\(stamp)-\(sequence).\(url.lastPathComponent)",
-                    isDirectory: false)
-                sequence += 1
-            }
+            let data = try Data(contentsOf: url)
+            let document = DictionaryLibraryCsv.parseManaged(data)
+            let taken = Set(
+                ((try? fileManager.contentsOfDirectory(atPath: deletedDirectory.path)) ?? [])
+                    + Array(deletedMetadata.keys))
+            let entryName = RecentlyDeletedStore.nextEntryName(
+                originalFileName: url.lastPathComponent,
+                stamp: Date(),
+                taken: taken)
+            let target = deletedDirectory.appendingPathComponent(entryName, isDirectory: false)
             try fileManager.moveItem(at: url, to: target)
+            deletedMetadata[entryName] = RecentlyDeletedMetadata(
+                entryName: entryName,
+                originalID: deletion.libraryID,
+                name: document.name ?? BuiltInDictionaryLibraries.humanize(deletion.libraryID),
+                termCount: document.terms.count,
+                deletedAt: RecentlyDeletedStore.parseEntryName(entryName)?.deletedAt ?? Date(),
+                contentHash: LibraryContentHash(data: data).value)
+        }
+
+        for action in changeSet.recentlyDeletedActions {
+            let source = deletedDirectory.appendingPathComponent(action.entryName, isDirectory: false)
+            switch action.kind {
+            case .deletePermanently:
+                if fileManager.fileExists(atPath: source.path) {
+                    try fileManager.removeItem(at: source)
+                }
+                deletedMetadata.removeValue(forKey: action.entryName)
+            case .restore:
+                guard let restoreAsID = action.restoreAsID else { continue }
+                let target = librariesDirectory.appendingPathComponent("\(restoreAsID).csv", isDirectory: false)
+                guard fileManager.fileExists(atPath: source.path), !fileManager.fileExists(atPath: target.path) else {
+                    continue
+                }
+                try fileManager.moveItem(at: source, to: target)
+                deletedMetadata.removeValue(forKey: action.entryName)
+            }
         }
 
         for write in changeSet.writes {
             guard let content = write.content else { continue }
             if write.builtIn {
                 try fileManager.createDirectory(at: editsDirectory, withIntermediateDirectories: true)
-                let edits = BuiltInLibraryEdits(
-                    version: BuiltInLibraryEdits.currentVersion,
-                    library: write.libraryID,
-                    terms: content.entries.map { entry in
-                        let values = TermValues(entry: entry)
-                        return BuiltInTermEdit(
-                            key: LibraryTermKey.from(entry.pattern).value,
-                            intent: .edited,
-                            base: nil,
-                            value: values,
-                            acknowledged: nil)
-                    })
-                let data = try BuiltInLibraryOverlay.write(edits)
-                try data.write(
-                    to: BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: write.libraryID), options: .atomic)
+                let url = BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: write.libraryID)
+                if let edits = write.builtInEdits, !edits.terms.isEmpty {
+                    let data = try BuiltInLibraryOverlay.write(edits)
+                    try data.write(to: url, options: .atomic)
+                } else if fileManager.fileExists(atPath: url.path) {
+                    try fileManager.removeItem(at: url)
+                }
             } else {
                 let managed = try DictionaryLibraryCsv.exportManaged(
                     LibraryCsvContent(
@@ -225,13 +245,44 @@ final class DictionaryLibraryService: @unchecked Sendable {
 
         settings.enabledLibraryIds = Set(changeSet.localState.enabledIds)
         try savePersistedState(changeSet.localState)
+        try saveRecentlyDeletedMetadataSync(deletedMetadata)
     }
 
     func loadCatalog() async throws -> LibraryCatalog {
         let libraries = loadCatalogLibraries()
         let state = try await loadResolvedState(for: libraries)
         let decorated = decorate(libraries: libraries, with: state)
-        return LibraryCatalog(generation: state.generation, libraries: decorated, localState: state)
+        let recentlyDeleted = RecentlyDeletedStore.list(
+            deletedDirectory: librariesDirectory.appendingPathComponent("deleted", isDirectory: true),
+            metadata: try await loadRecentlyDeletedMetadata())
+        return LibraryCatalog(
+            generation: state.generation,
+            libraries: decorated,
+            localState: state,
+            recentlyDeleted: recentlyDeleted)
+    }
+
+    func listRecentlyDeleted() async throws -> [RecentlyDeletedLibrary] {
+        (try await loadCatalog()).recentlyDeleted
+    }
+
+    func pruneRecentlyDeleted(now: Date = Date()) throws -> Int {
+        let deletedDirectory = librariesDirectory.appendingPathComponent("deleted", isDirectory: true)
+        var metadata = loadRecentlyDeletedMetadataSync()
+        let entries = RecentlyDeletedStore.list(deletedDirectory: deletedDirectory, metadata: metadata)
+        var removed = 0
+        for entryName in RecentlyDeletedStore.expiredEntryNames(entries, now: now) {
+            let url = deletedDirectory.appendingPathComponent(entryName, isDirectory: false)
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+                removed += 1
+            }
+            metadata.removeValue(forKey: entryName)
+        }
+        if removed > 0 {
+            try saveRecentlyDeletedMetadataSync(metadata)
+        }
+        return removed
     }
 
     func loadVocabulary() async throws -> LibraryVocabulary {
@@ -640,6 +691,35 @@ final class DictionaryLibraryService: @unchecked Sendable {
         guard let persistenceStore else { return }
         let value = String(data: try JSONEncoder().encode(state), encoding: .utf8)
         try persistenceStore.writeStringSetting(key: Self.libraryStateKey, value: value)
+    }
+
+    private func loadRecentlyDeletedMetadata() async throws -> [String: RecentlyDeletedMetadata] {
+        guard let persistenceStore else { return [:] }
+        return try decodeRecentlyDeletedMetadata(
+            try await persistenceStore.loadStringSetting(key: Self.recentlyDeletedKey))
+    }
+
+    private func loadRecentlyDeletedMetadataSync() -> [String: RecentlyDeletedMetadata] {
+        guard let persistenceStore,
+            let raw = try? persistenceStore.readStringSetting(key: Self.recentlyDeletedKey),
+            let decoded = try? decodeRecentlyDeletedMetadata(raw)
+        else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private func saveRecentlyDeletedMetadataSync(_ metadata: [String: RecentlyDeletedMetadata]) throws {
+        guard let persistenceStore else { return }
+        let value = String(data: try JSONEncoder().encode(metadata), encoding: .utf8)
+        try persistenceStore.writeStringSetting(key: Self.recentlyDeletedKey, value: value)
+    }
+
+    private func decodeRecentlyDeletedMetadata(_ raw: String?) throws -> [String: RecentlyDeletedMetadata] {
+        guard let raw, let data = raw.data(using: .utf8) else {
+            return [:]
+        }
+        return (try? JSONDecoder().decode([String: RecentlyDeletedMetadata].self, from: data)) ?? [:]
     }
 
     private static func deletedStamp(now: Date = Date()) -> String {

@@ -514,6 +514,7 @@ struct DictionaryWordPacksSettingsTab: View {
     @State private var showingImporter = false
     @State private var editor: WordPackTermEditorState?
     @State private var renameText = ""
+    @State private var recentlyDeleted: [RecentlyDeletedLibrary] = []
 
     private var enabledCount: Int {
         visiblePacks.count { $0.enabled && !$0.pendingDelete }
@@ -602,6 +603,8 @@ struct DictionaryWordPacksSettingsTab: View {
                     .disabled(!workspace.hasUnsavedChanges)
                     .keyboardShortcut("s", modifiers: [.command])
             }
+
+            recentlyDeletedSection
         }
         .onAppear(perform: reload)
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
@@ -657,6 +660,11 @@ struct DictionaryWordPacksSettingsTab: View {
                             "\(pack.builtIn ? "Built-in word pack" : "Your word pack") · \(pack.rows.count.formatted()) terms"
                         )
                         .foregroundStyle(.secondary)
+                        if pack.rows.contains(where: { $0.row.review != nil }) {
+                            Text("Review built-in updates before saving.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
                     Spacer()
                     if pack.builtIn {
@@ -742,6 +750,17 @@ struct DictionaryWordPacksSettingsTab: View {
             Text(row.row.values.written).frame(maxWidth: .infinity, alignment: .leading)
             Text(row.row.values.wholeWord ? "Yes" : "No").frame(width: 90, alignment: .leading)
             HStack(spacing: 6) {
+                if row.row.review != nil {
+                    Text("Built-in update")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button("Keep mine") { workspace.resolveReview(packID, rowID: row.rowID, choice: .keepMine) }
+                        .buttonStyle(.link)
+                    Button("Use built-in update") {
+                        workspace.resolveReview(packID, rowID: row.rowID, choice: .useUpdated)
+                    }
+                    .buttonStyle(.link)
+                }
                 Button("Edit") {
                     editor = WordPackTermEditorState(packID: packID, rowID: row.rowID, values: row.row.values)
                 }
@@ -755,6 +774,55 @@ struct DictionaryWordPacksSettingsTab: View {
         .padding(.horizontal, 8)
     }
 
+    private var recentlyDeletedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recently deleted")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Prune expired") {
+                    do {
+                        let removed = try dictionaryLibraryService.pruneRecentlyDeleted()
+                        statusMessage =
+                            removed == 1 ? "Deleted 1 expired word pack." : "Deleted \(removed) expired word packs."
+                        reload()
+                    } catch {
+                        errorMessage = wordPackError(error)
+                    }
+                }
+                .disabled(recentlyDeleted.isEmpty)
+            }
+            if recentlyDeleted.isEmpty {
+                Text("Deleted custom word packs are kept here for 30 days.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(recentlyDeleted) { entry in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(entry.name)
+                            Text(
+                                "\(entry.termCount.formatted()) terms · deleted \(entry.deletedAt.formatted(date: .abbreviated, time: .shortened))"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Restore") { restoreRecentlyDeleted(entry) }
+                            .disabled(entry.state != .available && entry.state != .partlyReadable)
+                        Button("Delete permanently", role: .destructive) {
+                            workspace.deleteRecentlyDeletedPermanently(entry)
+                            recentlyDeleted.removeAll { $0.id == entry.id }
+                            statusMessage = "Will permanently delete \"\(entry.name)\" when you save."
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
+        }
+    }
+
     private func reload() {
         Task {
             do {
@@ -762,6 +830,7 @@ struct DictionaryWordPacksSettingsTab: View {
                 await MainActor.run {
                     workspace = LibraryWorkspace(catalog: catalog)
                     selectedID = selectedID ?? visiblePacks.first?.id
+                    recentlyDeleted = catalog.recentlyDeleted
                     statusMessage = nil
                     errorMessage = nil
                 }
@@ -822,6 +891,15 @@ struct DictionaryWordPacksSettingsTab: View {
         workspace.deleteLibrary(pack.id)
         selectedID = visiblePacks.first { $0.id != pack.id }?.id
         statusMessage = "Deleted \"\(pack.name)\". Save to move it to Recently deleted."
+    }
+
+    private func restoreRecentlyDeleted(_ entry: RecentlyDeletedLibrary) {
+        let restoreID = LibraryNaming.newCustomID(
+            name: entry.originalID,
+            takenIDs: workspace.draft.libraries.map(\.id))
+        workspace.restoreRecentlyDeleted(entry, restoreAsID: restoreID)
+        recentlyDeleted.removeAll { $0.id == entry.id }
+        statusMessage = "Will restore \"\(entry.name)\" when you save."
     }
 
     private func resetBuiltInEdits(_ id: String) {

@@ -22,12 +22,23 @@ struct LibraryRow: Equatable, Sendable {
     let values: TermValues
     let origin: TermOrigin
     let shipped: TermValues?
+    let edit: BuiltInTermEdit?
+    let review: TermReview?
 
-    init(key: LibraryTermKey? = nil, values: TermValues, origin: TermOrigin, shipped: TermValues? = nil) {
+    init(
+        key: LibraryTermKey? = nil,
+        values: TermValues,
+        origin: TermOrigin,
+        shipped: TermValues? = nil,
+        edit: BuiltInTermEdit? = nil,
+        review: TermReview? = nil
+    ) {
         self.key = key ?? LibraryTermKey.from(values.spoken)
         self.values = values
         self.origin = origin
         self.shipped = shipped
+        self.edit = edit
+        self.review = review
     }
 
     static func custom(_ values: TermValues) -> LibraryRow {
@@ -88,8 +99,25 @@ struct LibraryWrite: Equatable, Sendable {
     let libraryID: String
     let builtIn: Bool
     let content: DictionaryLibrary?
+    let builtInEdits: BuiltInLibraryEdits?
     let enabled: Bool
     let aiPermitted: Bool
+
+    init(
+        libraryID: String,
+        builtIn: Bool,
+        content: DictionaryLibrary?,
+        builtInEdits: BuiltInLibraryEdits? = nil,
+        enabled: Bool,
+        aiPermitted: Bool
+    ) {
+        self.libraryID = libraryID
+        self.builtIn = builtIn
+        self.content = content
+        self.builtInEdits = builtInEdits
+        self.enabled = enabled
+        self.aiPermitted = aiPermitted
+    }
 }
 
 struct LibraryDeletion: Equatable, Sendable {
@@ -147,6 +175,7 @@ struct LibraryWorkspace: Sendable {
     private var base: LibraryDraft
     private var undoStack: [(String, LibraryDraft)] = []
     private var redoStack: [(String, LibraryDraft)] = []
+    private var recentlyDeletedActions: [RecentlyDeletedAction] = []
     var draft: LibraryDraft
 
     init(revision: Int64 = 1, libraries: [DraftLibrary]) {
@@ -174,9 +203,17 @@ struct LibraryWorkspace: Sendable {
                         item.builtIn
                         ? (item.library.authoredKeys.contains(key) ? .edited : .shipped)
                         : .custom
+                    let edit = item.edits?.terms.first { $0.termKey == key }
+                    let shipped = item.builtIn ? Self.shippedValues(libraryID: item.id, key: key) : nil
                     return DraftTermRow(
                         rowID: nextRowID,
-                        row: LibraryRow(key: key, values: values, origin: origin, shipped: item.builtIn ? values : nil),
+                        row: LibraryRow(
+                            key: key,
+                            values: values,
+                            origin: origin,
+                            shipped: shipped ?? (item.builtIn ? values : nil),
+                            edit: edit,
+                            review: Self.review(values: values, shipped: shipped, edit: edit)),
                         removalIntent: false,
                         legacyEmpty: entry.replacement.isEmpty)
                 },
@@ -196,7 +233,7 @@ struct LibraryWorkspace: Sendable {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     var undoLabel: String? { undoStack.last?.0 }
-    var hasUnsavedChanges: Bool { draft != base }
+    var hasUnsavedChanges: Bool { draft != base || !recentlyDeletedActions.isEmpty }
 
     mutating func createLibrary(name: String? = nil) -> String {
         let takenNames = draft.libraries.map(\.name)
@@ -271,6 +308,18 @@ struct LibraryWorkspace: Sendable {
         }
     }
 
+    mutating func restoreRecentlyDeleted(_ entry: RecentlyDeletedLibrary, restoreAsID: String) {
+        recentlyDeletedActions.append(
+            RecentlyDeletedAction(kind: .restore, entryName: entry.entryName, restoreAsID: restoreAsID))
+        draft = bumped(draft)
+    }
+
+    mutating func deleteRecentlyDeletedPermanently(_ entry: RecentlyDeletedLibrary) {
+        recentlyDeletedActions.append(
+            RecentlyDeletedAction(kind: .deletePermanently, entryName: entry.entryName, restoreAsID: nil))
+        draft = bumped(draft)
+    }
+
     mutating func addTerm(_ libraryID: String, values: TermValues) -> LibraryEditResult {
         guard let index = libraryIndex(libraryID), !draft.libraries[index].pendingDelete else {
             return LibraryEditResult(applied: false, issue: nil)
@@ -326,7 +375,13 @@ struct LibraryWorkspace: Sendable {
             let old = rows[rowIndex]
             rows[rowIndex] = DraftTermRow(
                 rowID: old.rowID,
-                row: LibraryRow(key: old.row.key, values: committed, origin: old.row.origin, shipped: old.row.shipped),
+                row: LibraryRow(
+                    key: old.row.key,
+                    values: committed,
+                    origin: old.row.origin,
+                    shipped: old.row.shipped,
+                    edit: old.row.edit,
+                    review: old.row.review),
                 removalIntent: committed.written.isEmpty,
                 legacyEmpty: old.legacyEmpty && committed.written.isEmpty)
             $0.libraries[libraryIndex] = copy($0.libraries[libraryIndex], rows: rows)
@@ -359,7 +414,51 @@ struct LibraryWorkspace: Sendable {
                         old.row.values.wholeWord,
                         enabled),
                     origin: old.row.origin,
-                    shipped: old.row.shipped),
+                    shipped: old.row.shipped,
+                    edit: old.row.edit,
+                    review: old.row.review),
+                removalIntent: old.removalIntent,
+                legacyEmpty: old.legacyEmpty)
+            $0.libraries[libraryIndex] = copy($0.libraries[libraryIndex], rows: rows)
+        }
+    }
+
+    mutating func resolveReview(_ libraryID: String, rowID: Int64, choice: TermReviewChoice) {
+        guard let libraryIndex = libraryIndex(libraryID),
+            let rowIndex = draft.libraries[libraryIndex].rows.firstIndex(where: { $0.rowID == rowID })
+        else { return }
+        let old = draft.libraries[libraryIndex].rows[rowIndex]
+        guard let review = old.row.review else { return }
+        let values: TermValues
+        let intent: BuiltInTermIntent
+        let acknowledged: TermValues?
+        switch choice {
+        case .keepMine:
+            values = old.row.values
+            intent = old.row.origin == .pinned ? .pinned : .edited
+            acknowledged = review.updatedBuiltIn
+        case .useUpdated:
+            values = review.updatedBuiltIn
+            intent = .pinned
+            acknowledged = nil
+        }
+        let edit = BuiltInTermEdit(
+            key: old.row.key.value,
+            intent: intent,
+            base: review.updatedBuiltIn,
+            value: values,
+            acknowledged: acknowledged)
+        structural(choice == .keepMine ? "Keep my changes" : "Use built-in update") {
+            var rows = $0.libraries[libraryIndex].rows
+            rows[rowIndex] = DraftTermRow(
+                rowID: old.rowID,
+                row: LibraryRow(
+                    key: old.row.key,
+                    values: values,
+                    origin: values == review.updatedBuiltIn ? .pinned : .edited,
+                    shipped: review.updatedBuiltIn,
+                    edit: edit,
+                    review: nil),
                 removalIntent: old.removalIntent,
                 legacyEmpty: old.legacyEmpty)
             $0.libraries[libraryIndex] = copy($0.libraries[libraryIndex], rows: rows)
@@ -382,12 +481,14 @@ struct LibraryWorkspace: Sendable {
         draft = bumped(base)
         undoStack.removeAll()
         redoStack.removeAll()
+        recentlyDeletedActions.removeAll()
     }
 
     mutating func markSaved() {
         base = draft
         undoStack.removeAll()
         redoStack.removeAll()
+        recentlyDeletedActions.removeAll()
     }
 
     func captureChangeSet() -> LibraryCaptureResult {
@@ -402,6 +503,7 @@ struct LibraryWorkspace: Sendable {
                 libraryID: library.id,
                 builtIn: library.builtIn,
                 content: dictionaryLibrary(from: library),
+                builtInEdits: library.builtIn ? builtInEdits(from: library) : nil,
                 enabled: library.enabled,
                 aiPermitted: library.aiPermitted)
         }
@@ -423,7 +525,7 @@ struct LibraryWorkspace: Sendable {
                 draftRevision: draft.revision,
                 writes: writes,
                 deletions: deletions,
-                recentlyDeletedActions: [],
+                recentlyDeletedActions: recentlyDeletedActions,
                 localState: state,
                 localStateChanged: localStateProjection(draft) != localStateProjection(base)),
             issues: [])
@@ -506,6 +608,78 @@ struct LibraryWorkspace: Sendable {
         (draft.libraries.flatMap(\.rows).map(\.rowID).max() ?? 0) + 1
     }
 
+    private static func shippedValues(libraryID: String, key: LibraryTermKey) -> TermValues? {
+        BuiltInDictionaryLibraries.all.first { $0.id.caseInsensitiveCompare(libraryID) == .orderedSame }?
+            .entries
+            .first { LibraryTermKey.from($0.pattern) == key }
+            .map(TermValues.init(entry:))
+    }
+
+    private static func review(values: TermValues, shipped: TermValues?, edit: BuiltInTermEdit?) -> TermReview? {
+        guard let shipped, let edit else { return nil }
+        let questions: TermFields
+        switch edit.intent {
+        case .edited:
+            guard let base = edit.base, let value = edit.value else { return nil }
+            questions = editedQuestions(base: base, value: value, shipped: shipped, acknowledged: edit.acknowledged)
+        case .pinned:
+            guard let value = edit.value else { return nil }
+            questions = pinnedQuestions(value: value, shipped: shipped, acknowledged: edit.acknowledged)
+        default:
+            return nil
+        }
+        guard !questions.isEmpty else { return nil }
+        return TermReview(yours: values, updatedBuiltIn: shipped, differing: differences(values, shipped))
+    }
+
+    private static func editedQuestions(
+        base: TermValues,
+        value: TermValues,
+        shipped: TermValues,
+        acknowledged: TermValues?
+    ) -> TermFields {
+        var questions: TermFields = []
+        for field in [TermFields.spoken, .written, .wholeWord, .enabled]
+        where !same(field, value, base)
+            && !same(field, shipped, base)
+            && !same(field, value, shipped)
+            && (acknowledged == nil || !same(field, acknowledged!, shipped))
+        {
+            questions.insert(field)
+        }
+        return questions
+    }
+
+    private static func pinnedQuestions(value: TermValues, shipped: TermValues, acknowledged: TermValues?) -> TermFields
+    {
+        var questions: TermFields = []
+        for field in [TermFields.spoken, .written, .wholeWord, .enabled]
+        where !same(field, shipped, value)
+            && (acknowledged == nil || !same(field, shipped, acknowledged!))
+        {
+            questions.insert(field)
+        }
+        return questions
+    }
+
+    private static func differences(_ before: TermValues, _ after: TermValues) -> TermFields {
+        var fields: TermFields = []
+        for field in [TermFields.spoken, .written, .wholeWord, .enabled] where !same(field, before, after) {
+            fields.insert(field)
+        }
+        return fields
+    }
+
+    private static func same(_ field: TermFields, _ lhs: TermValues, _ rhs: TermValues) -> Bool {
+        switch field {
+        case .spoken: return lhs.spoken == rhs.spoken
+        case .written: return lhs.written == rhs.written
+        case .wholeWord: return lhs.wholeWord == rhs.wholeWord
+        case .enabled: return lhs.enabled == rhs.enabled
+        default: return false
+        }
+    }
+
     private func dictionaryLibrary(from library: DraftLibrary) -> DictionaryLibrary {
         DictionaryLibrary(
             id: library.id,
@@ -518,6 +692,29 @@ struct LibraryWorkspace: Sendable {
             basedOn: library.basedOn,
             authoredKeys: Set(library.rows.map { $0.row.key }),
             legacyMarkedKeys: [])
+    }
+
+    private func builtInEdits(from library: DraftLibrary) -> BuiltInLibraryEdits? {
+        let terms = library.rows.compactMap { row -> BuiltInTermEdit? in
+            if let edit = row.row.edit, edit.value == row.row.values, row.row.review == nil {
+                return edit
+            }
+            guard row.row.origin != .shipped else {
+                return nil
+            }
+            let intent: BuiltInTermIntent =
+                row.row.origin == .added || row.row.origin == .noLongerShipped ? .added : .edited
+            return BuiltInTermEdit(
+                key: row.row.key.value,
+                intent: intent,
+                base: row.row.shipped,
+                value: row.row.values,
+                acknowledged: row.row.review?.updatedBuiltIn)
+        }
+        guard !terms.isEmpty else {
+            return nil
+        }
+        return BuiltInLibraryEdits(version: BuiltInLibraryEdits.currentVersion, library: library.id, terms: terms)
     }
 }
 
