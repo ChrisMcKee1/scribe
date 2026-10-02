@@ -77,8 +77,8 @@ final class PrivacyClaimsTests: XCTestCase {
         },
         "wordPacks.aiOnThisMac": {
             var check = Check()
-            let text = text(SettingsCopy.wordPacks.aiOnThisMac)
-            check.expect(text.contains("nothing leaves it"), "text")
+            let said = text(SettingsCopy.wordPacks.aiOnThisMac)
+            check.expect(said.contains("nothing leaves it"), "text")
             let summary = CleanupDisclosure.summary(for: .foundryLocal, endpoint: nil)
             check.expect(summary.contains("stay on this Mac"), "Foundry Local no longer stays on this Mac")
             return check
@@ -115,9 +115,9 @@ final class PrivacyClaimsTests: XCTestCase {
         },
         "about.privacyHint": {
             var check = Check()
-            let text = text(SettingsCopy.about.privacyHint)
-            check.expect(text.contains("your audio never leaves it"), "text")
-            check.expect(text.contains("online services receive text only"), "text")
+            let said = text(SettingsCopy.about.privacyHint)
+            check.expect(said.contains("your audio never leaves it"), "text")
+            check.expect(said.contains("online services receive text only"), "text")
             check.expect(CleanupDisclosure.whatCleanupNeverSends.contains("audio never leaves this Mac"), "code")
             return check
         },
