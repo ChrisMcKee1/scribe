@@ -11,6 +11,15 @@ final class GlossaryTests: XCTestCase {
         "Settings/Copy/SettingsSearchIndex.swift": "Entry keywords keep the old names on purpose, as on Windows.",
     ]
 
+    /// The catalogs hold the Windows text they cite (windows:), which uses the retired words by design. What the
+    /// Mac shows is checked by 	estCatalogTextUsesNoRetiredName, so the catalog files are not scanned here.
+    static func isExcluded(_ relative: String) -> Bool {
+        if excludedFiles[relative] != nil { return true }
+        guard relative.hasPrefix("Settings/Copy/") else { return false }
+        let omitted = ["Settings/Copy/CopyItem.swift", "Settings/Copy/SettingsCopyOmissions.swift"]
+        return relative.hasSuffix("Copy.swift") || omitted.contains(relative)
+    }
+
     func testCatalogTextUsesNoRetiredName() throws {
         for item in SettingsCopy.allItems {
             let text = withoutPlaceholders(item.text)
@@ -72,7 +81,7 @@ final class GlossaryTests: XCTestCase {
     /// retired words are counted in `GlossaryAllowlist`, exactly; the count can only go down.
     func testExistingMacTextOnlyUsesRetiredNamesTheAllowlistCountsExactly() throws {
         var actual: [String: Int] = [:]
-        for (relative, source) in try Self.sourceFiles() where Self.excludedFiles[relative] == nil {
+        for (relative, source) in try Self.sourceFiles() where !Self.isExcluded(relative) {
             for literal in SwiftStringScanner.literals(in: source) where !literal.exempt && literal.looksLikeText {
                 for rule in CopyGlossary.violations(in: literal.text) {
                     actual[relative + "|" + rule.name, default: 0] += 1

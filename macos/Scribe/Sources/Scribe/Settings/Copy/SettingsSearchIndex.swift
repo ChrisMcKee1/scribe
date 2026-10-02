@@ -120,7 +120,7 @@ enum SettingsSearchIndex {
             entry(
                 "dictation.permissions", .dictation, c.permissions,
                 ["microphone", "accessibility", "input monitoring", "privacy", "allow", "system settings"]),
-            entry("try.page", .tryDictation, SettingsCopy.tryDictation.tryIt, ["playground", "test", "sample", "try"]),
+            entry("try.page", .tryDictation, c.tryDictation, ["playground", "test", "sample", "try"]),
         ]
     }
 

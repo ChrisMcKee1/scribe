@@ -21,7 +21,6 @@ enum GlossaryAllowlist {
     private static let logReason = "A reason the log records when AI cleanup output is rejected; not shown in Settings."
     private static let csvTemplate =
         "The comment header of the CSV template a person downloads; reworded with the Dictionary page."
-    private static let deviationNotes = "Developer-facing reasons for a copy deviation, never shown to a person."
     private static let logFailure = "Failure descriptions the log records; not shown in Settings."
     private static let commandAround =
         "Names the command the person types; the sentence around it is reworded with AI cleanup."
@@ -62,7 +61,6 @@ enum GlossaryAllowlist {
         entry("ScribeLog.swift", "hotkey", 1, developer),
         entry("ScribeLog.swift", "overlay", 1, developer),
         entry("ScribeLog.swift", "transcription", 1, developer),
-        entry("Settings/Copy/CopyItem.swift", "Windows", 4, deviationNotes),
         entry("SettingsView.swift", "decode", 3, legacy),
         entry("SettingsView.swift", "glossary", 1, legacy),
         entry("SettingsView.swift", "hotkey", 1, legacy),
