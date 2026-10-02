@@ -5,7 +5,8 @@ import XCTest
 final class LibraryCatalogAndVocabularyTests: XCTestCase {
     func testLoadCatalogMigratesLegacyEnabledIdsAndExistingCustomAIPermission() async throws {
         let context = try makeContext()
-        context.defaults.defaults.set(["github"], forKey: DictionaryLibrarySettings.enabledIdsKey)
+        defer { context.cleanup() }
+        context.defaults.set(["github"], forKey: DictionaryLibrarySettings.enabledIdsKey)
         try writeCustomLibrary(
             in: context.tempDirectory,
             fileName: "team.csv",
@@ -22,6 +23,7 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
 
     func testLoadCatalogAppliesBuiltInEditsDocument() async throws {
         let context = try makeContext()
+        defer { context.cleanup() }
         let edits = BuiltInLibraryEdits(
             version: BuiltInLibraryEdits.currentVersion,
             library: "github",
@@ -51,7 +53,8 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
 
     func testLoadVocabularyUsesAiPermissionToFilterAiEntries() async throws {
         let context = try makeContext()
-        context.defaults.defaults.set(["github", "team"], forKey: DictionaryLibrarySettings.enabledIdsKey)
+        defer { context.cleanup() }
+        context.defaults.set(["github", "team"], forKey: DictionaryLibrarySettings.enabledIdsKey)
         try writeCustomLibrary(
             in: context.tempDirectory,
             fileName: "team.csv",
@@ -74,6 +77,7 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
 
     func testImportStoresAcceptedContentAndStartsAiPermissionOff() throws {
         let context = try makeContext()
+        defer { context.cleanup() }
         _ = try context.service.import(
             csv: "pattern,replacement\nfoo,Foo\n",
             suggestedName: "Imported")
@@ -86,18 +90,20 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
     private func makeContext() throws -> TestContext {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScribeWordPackModelTests-\(UUID().uuidString)", isDirectory: true)
-        let defaults = StorageTestDefaults()
+        let defaultsSuiteName = "com.scribe.macos.tests.storage.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsSuiteName)!
         let store = PersistenceStore(databaseURL: tempDirectory.appendingPathComponent("scribe.db", isDirectory: false))
         try store.initialize()
         let service = DictionaryLibraryService(
             librariesDirectory: tempDirectory,
-            settings: DictionaryLibrarySettings(defaults: defaults.defaults),
+            settings: DictionaryLibrarySettings(defaults: defaults),
             persistenceStore: store)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: tempDirectory)
-            defaults.remove()
-        }
-        return TestContext(tempDirectory: tempDirectory, defaults: defaults, store: store, service: service)
+        return TestContext(
+            tempDirectory: tempDirectory,
+            defaultsSuiteName: defaultsSuiteName,
+            defaults: defaults,
+            store: store,
+            service: service)
     }
 
     private func writeCustomLibrary(in directory: URL, fileName: String, term: TermValues) throws {
@@ -140,7 +146,13 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
 
 private struct TestContext {
     let tempDirectory: URL
-    let defaults: StorageTestDefaults
+    let defaultsSuiteName: String
+    let defaults: UserDefaults
     let store: PersistenceStore
     let service: DictionaryLibraryService
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: tempDirectory)
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+    }
 }
