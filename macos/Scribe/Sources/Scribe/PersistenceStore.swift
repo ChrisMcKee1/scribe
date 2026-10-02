@@ -744,7 +744,9 @@ final class PersistenceStore: Sendable {
         try await owner.withSessionAsync(.foreground) { session in
             let key = "settings.receipt." + id.uuidString
             guard let encoded = try Self.readSetting(key: key, session) else { return nil }
-            return try JSONDecoder().decode(SettingsCommitReceipt.self, from: Data(encoded.utf8))
+            let marker = try JSONDecoder().decode(SettingsDurableReceipt.self, from: Data(encoded.utf8))
+            let current = try Self.readSettingsSession(session)
+            return try Self.restoreSettingsReceipt(marker, current: current, session)
         }
     }
 
@@ -755,7 +757,8 @@ final class PersistenceStore: Sendable {
                 let current = try Self.readSettingsSession(session)
                 let receiptKey = "settings.receipt." + submission.id.uuidString
                 if let encoded = try Self.readSetting(key: receiptKey, session) {
-                    return try JSONDecoder().decode(SettingsCommitReceipt.self, from: Data(encoded.utf8))
+                    let marker = try JSONDecoder().decode(SettingsDurableReceipt.self, from: Data(encoded.utf8))
+                    return try Self.restoreSettingsReceipt(marker, current: current, session)
                 }
                 for (key, expected) in submission.attachment.expectedValues {
                     guard try Self.readSetting(key: key, session) == expected else {
@@ -763,6 +766,7 @@ final class PersistenceStore: Sendable {
                     }
                 }
                 var document = submission.document
+                var rowIDs: [String: Int64] = [:]
                 var record = current.stored ?? SettingsStoredDocument(preferences: submission.baseline.preferences)
                 try Self.mergeSettingsPreferences(submission, record: &record)
                 document.preferences = record.preferences
@@ -775,9 +779,10 @@ final class PersistenceStore: Sendable {
                 } else {
                     document.historyRetentionValue = current.historyRetentionValue
                 }
-                document.dictionary = try Self.saveSessionDictionary(submission, current: current, session)
-                document.snippets = try Self.saveSessionSnippets(submission, current: current, session)
-                document.profiles = try Self.saveSessionProfiles(submission, current: current, session)
+                document.dictionary = try Self.saveSessionDictionary(
+                    submission, current: current, ids: &rowIDs, session)
+                document.snippets = try Self.saveSessionSnippets(submission, current: current, ids: &rowIDs, session)
+                document.profiles = try Self.saveSessionProfiles(submission, current: current, ids: &rowIDs, session)
                 if let profiles = document.profiles {
                     record.profileOrder = profiles.map(\.id)
                 }
@@ -799,7 +804,8 @@ final class PersistenceStore: Sendable {
                 var receipt = SettingsCommitReceipt(
                     id: submission.id, revision: submission.revision, document: document)
                 receipt.attachment = submission.attachment
-                let receiptData = try JSONEncoder().encode(receipt)
+                receipt.rowIDs = rowIDs
+                let receiptData = try JSONEncoder().encode(SettingsDurableReceipt(receipt))
                 try Self.writeSetting(
                     key: receiptKey, value: String(decoding: receiptData, as: UTF8.self), session)
                 return receipt
@@ -842,7 +848,7 @@ final class PersistenceStore: Sendable {
         } else {
             record = nil
         }
-        var profiles = try readAppProfiles(session).map(SettingsProfileRow.init)
+        var profiles = try readSessionProfileRows(session)
         if let order = record?.profileOrder {
             let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
             profiles.sort {
@@ -857,6 +863,42 @@ final class PersistenceStore: Sendable {
             dictionary: try readDictionaryEntries(enabledOnly: false, session).map(SettingsDictionaryRow.init),
             snippets: try readSnippets(enabledOnly: false, session).map(SettingsSnippetRow.init),
             profiles: profiles)
+    }
+
+    private static func restoreSettingsReceipt(
+        _ marker: SettingsDurableReceipt,
+        current: SettingsStorageRead,
+        _ session: SQLiteSession
+    ) throws -> SettingsCommitReceipt {
+        var attachment = SettingsCommitAttachment()
+        for key in marker.attachmentKeys {
+            attachment.values[key] = .some(try readSetting(key: key, session))
+        }
+        return marker.receipt(
+            document: current.document(legacy: SettingsPreferences()), attachment: attachment)
+    }
+
+    private static func readSessionProfileRows(_ session: SQLiteSession) throws -> [SettingsProfileRow] {
+        try session.withStatement(
+            """
+            SELECT id, name, bundle_identifiers, process_names, writing_style_prompt, newline_handling
+            FROM app_profiles ORDER BY id;
+            """,
+            .read
+        ) { statement in
+            var rows: [SettingsProfileRow] = []
+            while try statement.step() {
+                rows.append(
+                    SettingsProfileRow(
+                        id: statement.int64(at: 0) ?? 0,
+                        name: statement.text(at: 1) ?? "",
+                        bundleIdentifiers: splitList(statement.text(at: 2)),
+                        processNames: splitList(statement.text(at: 3)),
+                        writingStyle: statement.text(at: 4),
+                        newlineMode: statement.text(at: 5)))
+            }
+            return rows
+        }
     }
 
     private static func mergeSettingsPreferences(
@@ -882,7 +924,10 @@ final class PersistenceStore: Sendable {
     }
 
     private static func saveSessionDictionary(
-        _ submission: SettingsSubmission, current: SettingsStorageRead, _ session: SQLiteSession
+        _ submission: SettingsSubmission,
+        current: SettingsStorageRead,
+        ids: inout [String: Int64],
+        _ session: SQLiteSession
     ) throws -> [SettingsDictionaryRow]? {
         guard submission.baseline.dictionary != nil || submission.document.dictionary == nil else {
             throw SettingsSaveFailure.validation
@@ -892,9 +937,17 @@ final class PersistenceStore: Sendable {
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
         let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
         let stored = Dictionary(uniqueKeysWithValues: current.dictionary.map { ($0.id, $0) })
+        let outside = current.dictionary.filter { old[$0.id] == nil }
+        let counts = Dictionary(grouping: after + outside) { spokenFormKey($0.pattern) }
+        for row in after where old[row.id]?.pattern != row.pattern {
+            guard counts[spokenFormKey(row.pattern)]?.count == 1 else { throw SettingsSaveFailure.conflict }
+        }
         for row in before where changed[row.id] != row {
             guard stored[row.id] == row else { throw SettingsSaveFailure.conflict }
             if let edited = changed[row.id] {
+                guard !edited.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw SettingsSaveFailure.validation
+                }
                 try updateDictionaryEntry(edited.entry, in: session)
             } else {
                 try deleteDictionaryEntry(id: row.id, in: session)
@@ -902,13 +955,16 @@ final class PersistenceStore: Sendable {
         }
         for row in after where old[row.id] == nil {
             guard row.id <= 0 else { throw SettingsSaveFailure.conflict }
-            _ = try insertDictionaryEntry(row.entry, in: session)
+            ids["dictionary:\(row.id)"] = try insertDictionaryEntry(row.entry, in: session)
         }
         return try readDictionaryEntries(enabledOnly: false, session).map(SettingsDictionaryRow.init)
     }
 
     private static func saveSessionSnippets(
-        _ submission: SettingsSubmission, current: SettingsStorageRead, _ session: SQLiteSession
+        _ submission: SettingsSubmission,
+        current: SettingsStorageRead,
+        ids: inout [String: Int64],
+        _ session: SQLiteSession
     ) throws -> [SettingsSnippetRow]? {
         guard submission.baseline.snippets != nil || submission.document.snippets == nil else {
             throw SettingsSaveFailure.validation
@@ -918,9 +974,19 @@ final class PersistenceStore: Sendable {
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
         let changed = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
         let stored = Dictionary(uniqueKeysWithValues: current.snippets.map { ($0.id, $0) })
+        let outside = current.snippets.filter { old[$0.id] == nil }
+        let counts = Dictionary(grouping: after + outside) { spokenFormKey($0.phrase) }
+        for row in after where old[row.id]?.phrase != row.phrase {
+            guard counts[spokenFormKey(row.phrase)]?.count == 1 else { throw SettingsSaveFailure.conflict }
+        }
         for row in before where changed[row.id] != row {
             guard stored[row.id] == row else { throw SettingsSaveFailure.conflict }
             if let edited = changed[row.id] {
+                guard !edited.phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    !edited.template.isEmpty
+                else {
+                    throw SettingsSaveFailure.validation
+                }
                 try runUpdate(
                     "UPDATE snippets SET phrase = ?1, template = ?2, enabled = ?3 WHERE id = ?4;",
                     in: session
@@ -936,13 +1002,16 @@ final class PersistenceStore: Sendable {
         }
         for row in after where old[row.id] == nil {
             guard row.id <= 0 else { throw SettingsSaveFailure.conflict }
-            _ = try insertSnippet(row.snippet, in: session)
+            ids["snippets:\(row.id)"] = try insertSnippet(row.snippet, in: session)
         }
         return try readSnippets(enabledOnly: false, session).map(SettingsSnippetRow.init)
     }
 
     private static func saveSessionProfiles(
-        _ submission: SettingsSubmission, current: SettingsStorageRead, _ session: SQLiteSession
+        _ submission: SettingsSubmission,
+        current: SettingsStorageRead,
+        ids: inout [String: Int64],
+        _ session: SQLiteSession
     ) throws -> [SettingsProfileRow]? {
         guard submission.baseline.profiles != nil || submission.document.profiles == nil else {
             throw SettingsSaveFailure.validation
@@ -955,6 +1024,11 @@ final class PersistenceStore: Sendable {
         for row in before where changed[row.id] != row {
             guard stored[row.id] == row else { throw SettingsSaveFailure.conflict }
             if let edited = changed[row.id] {
+                guard !edited.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    !edited.bundleIdentifiers.isEmpty || !edited.processNames.isEmpty
+                else {
+                    throw SettingsSaveFailure.validation
+                }
                 try runUpdate(
                     """
                     UPDATE app_profiles SET name = ?1, bundle_identifiers = ?2, process_names = ?3,
@@ -977,13 +1051,15 @@ final class PersistenceStore: Sendable {
         for row in after {
             if old[row.id] == nil {
                 guard row.id <= 0 else { throw SettingsSaveFailure.conflict }
-                order.append(try insertAppProfile(row.profile, in: session))
+                let id = try insertAppProfile(row.profile, in: session)
+                ids["profiles:\(row.id)"] = id
+                order.append(id)
             } else {
                 order.append(row.id)
             }
         }
         let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
-        return try readAppProfiles(session).map(SettingsProfileRow.init).sorted {
+        return try readSessionProfileRows(session).sorted {
             let left = positions[$0.id] ?? Int.max
             let right = positions[$1.id] ?? Int.max
             return left == right ? $0.id < $1.id : left < right

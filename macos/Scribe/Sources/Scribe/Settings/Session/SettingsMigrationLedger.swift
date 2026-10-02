@@ -41,7 +41,7 @@ enum SettingsMigrationLedger {
         .init("ScribeAddSpaceAfterDictation", .dictation, .bool(true)),
         .init("ScribeInputDeviceUID", .dictation),
         .init("ScribeInputDeviceName", .dictation),
-        .init("ScribeOverlayAnchor", .dictation),
+        .init("ScribeOverlayAnchor", .dictation, .string("bottomCenter")),
         .init("ScribeAiCleanupEnabled", .aiCleanup, .bool(false)),
         .init("ScribeCleanupProviderKind", .aiCleanup, .string("foundryLocal")),
         .init("ScribeCleanupFoundryLocalModelAlias", .aiCleanup, .string("qwen2.5-1.5b")),

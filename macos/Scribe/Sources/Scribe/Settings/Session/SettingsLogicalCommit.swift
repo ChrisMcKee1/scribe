@@ -100,7 +100,9 @@ enum SettingsSessionValidation {
     static func isValid(_ document: SettingsDocument) -> Bool {
         if let rows = document.dictionary {
             guard Set(rows.map(\.id)).count == rows.count else { return false }
-            let invalid = rows.contains { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let invalid = rows.contains {
+                $0.id <= 0 && $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
             if invalid {
                 return false
             }
@@ -108,7 +110,7 @@ enum SettingsSessionValidation {
         if let rows = document.snippets {
             guard Set(rows.map(\.id)).count == rows.count else { return false }
             let invalid = rows.contains {
-                $0.phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.template.isEmpty
+                $0.id <= 0 && ($0.phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.template.isEmpty)
             }
             if invalid {
                 return false
@@ -117,8 +119,9 @@ enum SettingsSessionValidation {
         if let rows = document.profiles {
             guard Set(rows.map(\.id)).count == rows.count else { return false }
             let invalid = rows.contains {
-                $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || ($0.bundleIdentifiers.isEmpty && $0.processNames.isEmpty)
+                $0.id <= 0
+                    && ($0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || ($0.bundleIdentifiers.isEmpty && $0.processNames.isEmpty))
             }
             if invalid {
                 return false

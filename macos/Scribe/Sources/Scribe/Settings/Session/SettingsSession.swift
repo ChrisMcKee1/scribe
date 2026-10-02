@@ -33,9 +33,18 @@ final class SettingsSession: ObservableObject {
     }
 
     var dirtyPages: [SettingsSessionPage] {
+        var draft = self.draft.withoutPlaceholders
+        let baseline = self.baseline.withoutPlaceholders
+        for (setting, external) in waiting {
+            for key in Self.keys(for: setting) {
+                draft.preferences[key] = external.values[key]
+            }
+        }
         var pages = Set<SettingsSessionPage>()
         for field in SettingsMigrationLedger.draftDefaults {
-            if draft.preferences[field.key] != baseline.preferences[field.key], let page = field.page {
+            let before = baseline.preferences[field.key] ?? field.missingValue
+            let after = draft.preferences[field.key] ?? field.missingValue
+            if after != before, let page = field.page {
                 pages.insert(page)
             }
         }
@@ -179,7 +188,7 @@ final class SettingsSession: ObservableObject {
                 return .outcomeUnknown(submission.id)
             }
         }
-        if !hasUnsavedChanges {
+        if !hasUnsavedChanges && intents.isEmpty {
             if case .committed(let receipt, .notApplied, _)? = lastSave {
                 let applied = await access.apply(receipt)
                 let result = SettingsSaveResult.committed(
@@ -189,8 +198,8 @@ final class SettingsSession: ObservableObject {
             }
             return .unchanged
         }
-        guard access.validate(draft) else { return .notCommitted(.validation) }
-        var document = draft
+        var document = draft.withoutPlaceholders
+        guard access.validate(document) else { return .notCommitted(.validation) }
         for (setting, external) in waiting {
             for key in Self.keys(for: setting) {
                 document.preferences[key] = external.values[key]
@@ -203,7 +212,14 @@ final class SettingsSession: ObservableObject {
         defer { isSaving = false }
         let receipt: SettingsCommitReceipt
         do {
-            submission = try await access.prepare(submission)
+            let captured = submission
+            let prepared = try await access.prepare(submission)
+            guard prepared.id == captured.id, prepared.revision == captured.revision,
+                prepared.baseline == captured.baseline, prepared.intents == captured.intents
+            else {
+                throw SettingsSaveFailure.validation
+            }
+            submission = prepared
             try Task.checkCancellation()
             receipt = try await access.commit(submission)
         } catch {
@@ -238,12 +254,30 @@ final class SettingsSession: ObservableObject {
             }
             if draft.dictionary == submission.document.dictionary {
                 draft.dictionary = receipt.document.dictionary
+            } else if let rows = draft.dictionary {
+                draft.dictionary = rows.map {
+                    var row = $0
+                    row.id = receipt.rowIDs["dictionary:\(row.id)"] ?? row.id
+                    return row
+                }
             }
             if draft.snippets == submission.document.snippets {
                 draft.snippets = receipt.document.snippets
+            } else if let rows = draft.snippets {
+                draft.snippets = rows.map {
+                    var row = $0
+                    row.id = receipt.rowIDs["snippets:\(row.id)"] ?? row.id
+                    return row
+                }
             }
             if draft.profiles == submission.document.profiles {
                 draft.profiles = receipt.document.profiles
+            } else if let rows = draft.profiles {
+                draft.profiles = rows.map {
+                    var row = $0
+                    row.id = receipt.rowIDs["profiles:\(row.id)"] ?? row.id
+                    return row
+                }
             }
             if draft.historyRetentionValue == submission.document.historyRetentionValue {
                 draft.historyRetentionValue = receipt.document.historyRetentionValue

@@ -33,6 +33,23 @@ final class SettingsSessionTests: XCTestCase {
         XCTAssertTrue(session.credentialEdits.isEmpty)
     }
 
+    func testPlaceholdersAndExplicitMissingDefaultsDoNotDirtyTheFooter() {
+        let state = SessionCommitRecorder()
+        var initial = SettingsDocument()
+        initial.dictionary = []
+        let session = SettingsSession(
+            initial: initial,
+            access: SettingsSessionAccess(
+                commit: { _ in throw SettingsSaveFailure.storage },
+                apply: { _ in .applied }))
+        session.edit {
+            $0.preferences.addSpaceAfterDictation = true
+            $0.dictionary = [SettingsDictionaryRow(DictionaryEntry(id: -1, pattern: "", replacement: ""))]
+        }
+        XCTAssertEqual(session.footerText, "All changes saved")
+        XCTAssertEqual(state.commits, 0)
+    }
+
     func testFailedSaveKeepsDraftBaselineAndNeverApplies() async {
         let state = SessionCommitRecorder()
         state.failure = .storage
@@ -112,6 +129,20 @@ final class SettingsSessionTests: XCTestCase {
         session.adoptExternal(.overlayAnchor, values: ["ScribeOverlayAnchor": .string("topLeft")], revision: earlier)
         XCTAssertEqual(session.draft.preferences.overlayAnchor, "topLeft")
         XCTAssertTrue(session.draft.preferences.aiCleanupEnabled)
+    }
+
+    func testAnOutsideChangeDeferredDuringCaptureIsNotAnUnsavedEdit() {
+        let state = SessionCommitRecorder()
+        let session = makeSession(state: state)
+        session.adoptExternal(
+            .aiCleanup,
+            values: ["ScribeAiCleanupEnabled": .bool(true)],
+            revision: SettingsIntentRevision.next(),
+            canShowNow: false)
+        XCTAssertFalse(session.hasUnsavedChanges)
+        session.releaseExternalChanges()
+        XCTAssertTrue(session.draft.preferences.aiCleanupEnabled)
+        XCTAssertFalse(session.hasUnsavedChanges)
     }
 
     func testStoredOnlyReapplyAfterFailedSaveCannotSendTheEditingProviderLive() async {

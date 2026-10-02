@@ -171,6 +171,22 @@ struct SettingsProfileRow: Codable, Equatable, Sendable {
     var writingStyle: String?
     var newlineMode: String?
 
+    init(
+        id: Int64,
+        name: String,
+        bundleIdentifiers: [String],
+        processNames: [String],
+        writingStyle: String?,
+        newlineMode: String?
+    ) {
+        self.id = id
+        self.name = name
+        self.bundleIdentifiers = bundleIdentifiers
+        self.processNames = processNames
+        self.writingStyle = writingStyle
+        self.newlineMode = newlineMode
+    }
+
     init(_ profile: AppProfile) {
         id = profile.id
         name = profile.name
@@ -196,6 +212,21 @@ struct SettingsDocument: Codable, Equatable, Sendable {
     var snippets: [SettingsSnippetRow]?
     var profiles: [SettingsProfileRow]?
     var wordPackSignature: Data?
+
+    var withoutPlaceholders: SettingsDocument {
+        var document = self
+        document.dictionary = dictionary?.filter {
+            $0.id > 0 || !$0.pattern.isEmpty || !$0.replacement.isEmpty
+        }
+        document.snippets = snippets?.filter {
+            $0.id > 0 || !$0.phrase.isEmpty || !$0.template.isEmpty
+        }
+        document.profiles = profiles?.filter {
+            $0.id > 0 || !$0.name.isEmpty || !$0.bundleIdentifiers.isEmpty || !$0.processNames.isEmpty
+                || $0.writingStyle?.isEmpty == false
+        }
+        return document
+    }
 }
 
 enum SettingsExternalSetting: String, CaseIterable, Codable, Sendable {
@@ -230,6 +261,27 @@ struct SettingsCommitReceipt: Codable, Equatable, Sendable {
     let revision: UInt64
     let document: SettingsDocument
     var attachment = SettingsCommitAttachment()
+    var rowIDs: [String: Int64] = [:]
+
+    init(id: UUID, revision: UInt64, document: SettingsDocument) {
+        self.id = id
+        self.revision = revision
+        self.document = document
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, revision, document, attachment, rowIDs
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        revision = try container.decode(UInt64.self, forKey: .revision)
+        document = try container.decode(SettingsDocument.self, forKey: .document)
+        attachment = try container.decodeIfPresent(SettingsCommitAttachment.self, forKey: .attachment)
+            ?? SettingsCommitAttachment()
+        rowIDs = try container.decodeIfPresent([String: Int64].self, forKey: .rowIDs) ?? [:]
+    }
 }
 
 enum SettingsApplicationOutcome: Equatable, Sendable {
@@ -259,12 +311,12 @@ enum SettingsSaveResult: Equatable, Sendable {
         case .committed(_, .applied, changedWhileSaving: false): return true
         default: return false
         }
-
-        /// An adapter that loses a commit reply must not classify it as a pre-commit failure or discard its credentials.
-        struct SettingsCommitUncertain: Error, Sendable {
-            let id: UUID
-        }
     }
+}
+
+/// An adapter that loses a commit reply must not discard possibly committed credentials.
+struct SettingsCommitUncertain: Error, Sendable {
+    let id: UUID
 }
 
 enum SettingsCommand: String, CaseIterable, Sendable {

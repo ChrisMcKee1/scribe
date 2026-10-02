@@ -189,8 +189,78 @@ final class SettingsLogicalCommitTests: XCTestCase {
         _ = try await fixture.adapter.updateExternal(
             .aiCleanup, values: ["ScribeAiCleanupEnabled": .bool(true)], revision: SettingsIntentRevision.next())
         let repeated = try await fixture.store.commitSettingsSession(submission)
-        XCTAssertEqual(first, repeated)
+        XCTAssertEqual(first.id, repeated.id)
+        XCTAssertEqual(first.rowIDs, repeated.rowIDs)
+        XCTAssertTrue(repeated.document.preferences.aiCleanupEnabled)
         XCTAssertEqual(try fixture.store.fetchAllDictionaryEntries().count, 1)
+    }
+
+    func testDurableReceiptDoesNotKeepAnotherCopyOfPrivateRuleOrSnippetText() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let baseline = try await fixture.adapter.load()
+        var changed = baseline
+        changed.dictionary = [
+            SettingsDictionaryRow(DictionaryEntry(id: -1, pattern: "private-name", replacement: "PRIVATE-WORD"))
+        ]
+        changed.snippets = [
+            SettingsSnippetRow(Snippet(id: -2, phrase: "address", template: "PRIVATE-ADDRESS"))
+        ]
+        let submission = SettingsSubmission(
+            id: UUID(), revision: 1, baseline: baseline, document: changed, intents: [:])
+        _ = try await fixture.store.commitSettingsSession(submission)
+        let marker = try XCTUnwrap(
+            fixture.store.readStringSetting(key: "settings.receipt." + submission.id.uuidString))
+        XCTAssertFalse(marker.contains("PRIVATE-WORD"))
+        XCTAssertFalse(marker.contains("PRIVATE-ADDRESS"))
+        XCTAssertFalse(marker.contains("private-name"))
+    }
+
+    func testAnExternalWordAddedWithTheSameSpokenFormIsNotDuplicatedBySave() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let baseline = try await fixture.adapter.load()
+        _ = try fixture.store.insertDictionaryEntry(DictionaryEntry(pattern: "one", replacement: "Outside"))
+        var changed = baseline
+        changed.dictionary = [SettingsDictionaryRow(DictionaryEntry(id: -1, pattern: "ONE", replacement: "Inside"))]
+        let submission = SettingsSubmission(
+            id: UUID(), revision: 1, baseline: baseline, document: changed, intents: [:])
+        do {
+            _ = try await fixture.store.commitSettingsSession(submission)
+            XCTFail("A concurrent spoken-form collision was duplicated")
+        } catch {
+            XCTAssertEqual(error as? SettingsSaveFailure, .conflict)
+        }
+        XCTAssertEqual(try fixture.store.fetchAllDictionaryEntries().count, 1)
+    }
+
+    func testAWordEditedWhileSavingRetainsItsCommittedIdentityOnTheNextSave() async throws {
+        let fixture = try SessionStorageFixture()
+        defer { fixture.remove() }
+        let gate = SettingsTestGate()
+        let baseline = try await fixture.adapter.load()
+        let session = SettingsSession(
+            initial: baseline,
+            access: fixture.adapter.access(
+                prepare: {
+                    await gate.pass()
+                    return $0
+                },
+                apply: { _ in .applied }))
+        session.edit {
+            $0.dictionary = [SettingsDictionaryRow(DictionaryEntry(id: -1, pattern: "one", replacement: "First"))]
+        }
+        let first = Task { await session.save() }
+        await gate.waitForArrival()
+        session.edit { $0.dictionary?[0].replacement = "Second" }
+        await gate.open()
+        _ = await first.value
+        XCTAssertGreaterThan(try XCTUnwrap(session.draft.dictionary?.first?.id), 0)
+        XCTAssertTrue(session.hasUnsavedChanges)
+        _ = await session.save()
+        let rows = try fixture.store.fetchAllDictionaryEntries()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.replacement, "Second")
     }
 }
 

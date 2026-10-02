@@ -126,6 +126,9 @@ enum SettingsCredentialPreparer {
 }
 
 private final class SettingsCredentialPreparationCompletion: Sendable {
+    private typealias Continuation = CheckedContinuation<SettingsPreparedCredentials, any Error>
+    private typealias FinishDecision = (Bool, Continuation?, Task<Void, Never>?)
+
     private struct State {
         var continuation: CheckedContinuation<SettingsPreparedCredentials, any Error>?
         var result: Result<SettingsPreparedCredentials, any Error>?
@@ -157,9 +160,7 @@ private final class SettingsCredentialPreparationCompletion: Sendable {
 
     @discardableResult
     func finish(_ result: Result<SettingsPreparedCredentials, any Error>) -> Bool {
-        let decision = state.withLock { state -> (
-            Bool, CheckedContinuation<SettingsPreparedCredentials, any Error>?, Task<Void, Never>?
-        ) in
+        let decision = state.withLock { state -> FinishDecision in
             guard !state.finished else { return (false, nil, nil) }
             state.finished = true
             state.result = result
