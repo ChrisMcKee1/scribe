@@ -551,51 +551,50 @@ struct OllamaChatResponse: Decodable {
     struct Message: Decodable {
         let content: String?
     }
-
-    struct ResponsesResponse: Decodable {
-        struct Output: Decodable {
-            struct Content: Decodable {
-                let type: String?
-                let text: String?
-            }
-
-            let type: String?
-            let text: String?
-            let content: [Content]?
-        }
-
-        let outputText: String?
-        let output: [Output]?
-
-        var text: String? {
-            if let outputText, !outputText.isEmpty {
-                return outputText
-            }
-            for item in output ?? [] {
-                if let text = item.text, !text.isEmpty {
-                    return text
-                }
-                for content in item.content ?? [] {
-                    if let text = content.text, !text.isEmpty {
-                        return text
-                    }
-                }
-            }
-            return nil
-        }
-
-        enum CodingKeys: String, CodingKey {
-            case outputText = "output_text"
-            case output
-        }
-    }
-
     let message: Message
     let doneReason: String?
 
     enum CodingKeys: String, CodingKey {
         case message
         case doneReason = "done_reason"
+    }
+}
+
+struct ResponsesResponse: Decodable {
+    struct Output: Decodable {
+        struct Content: Decodable {
+            let type: String?
+            let text: String?
+        }
+
+        let type: String?
+        let text: String?
+        let content: [Content]?
+    }
+
+    let outputText: String?
+    let output: [Output]?
+
+    var text: String? {
+        if let outputText, !outputText.isEmpty {
+            return outputText
+        }
+        for item in output ?? [] {
+            if let text = item.text, !text.isEmpty {
+                return text
+            }
+            for content in item.content ?? [] {
+                if let text = content.text, !text.isEmpty {
+                    return text
+                }
+            }
+        }
+        return nil
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case outputText = "output_text"
+        case output
     }
 }
 

@@ -57,9 +57,13 @@ enum CustomServiceAddress {
     }
 
     private static func normalizedURL(_ address: String?) -> URL? {
-        guard let address?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty else {
+        guard let address else {
             return nil
         }
-        return URL(string: address)
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return URL(string: trimmed)
     }
 }
