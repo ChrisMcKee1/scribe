@@ -645,7 +645,8 @@ enum CleanupPrompt {
                 continue
             }
 
-            if CharacterSet.controlCharacters.contains(scalar) || CharacterSet.whitespacesAndNewlines.contains(scalar)
+            if CharacterSet.controlCharacters.contains(scalar)
+                || CharacterSet.whitespacesAndNewlines.contains(scalar)
             {
                 if !normalized.isEmpty && !lastWasSpace {
                     normalized.append(" ")

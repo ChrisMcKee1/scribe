@@ -13,10 +13,6 @@ struct CleanupVocabulary: Sendable {
 
     let glossaryEntries: [DictionaryEntry]
 
-    init(glossaryEntries: [DictionaryEntry]) {
-        self.glossaryEntries = glossaryEntries
-    }
-
     func glossary(maxTerms: Int, mode: CleanupVocabularyMode, dictation: String?) -> String? {
         switch mode {
         case .none:

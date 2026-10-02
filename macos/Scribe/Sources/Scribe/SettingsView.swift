@@ -930,7 +930,8 @@ private struct CleanupSettingsTab: View {
                     CleanupDisclosure.summary(
                         for: model.values.providerKind,
                         endpoint: model.values.openAIBaseURL,
-                        forceLocal: model.providerSelection == .onThisMac))
+                        forceLocal: model.providerSelection == .onThisMac
+                    ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }

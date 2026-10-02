@@ -126,7 +126,10 @@ final class RuleSetRefresherTests: XCTestCase {
             appProfiles: [profile])
         let library = [DictionaryEntry(pattern: "kube", replacement: "Kube")]
 
-        let snapshot = await DictationRuleSnapshot.compile(next, libraryEntries: library)
+        let snapshot = await DictationRuleSnapshot.compile(
+            next,
+            libraryEntries: library,
+            cleanupVocabularyEntries: library)
         XCTAssertEqual(rules.postProcess("cube flow on azure").text, "CUBE FLOW on azure")
         XCTAssertTrue(rules.appProfiles.isEmpty)
 
