@@ -257,10 +257,8 @@ final class DictionaryLibraryService {
     }
 
     private func loadCustomLibraries() -> [CatalogLibrary] {
-        guard let fileURLs = try? fileManager.contentsOfDirectory(
-            at: librariesDirectory,
-            includingPropertiesForKeys: nil
-        ) else {
+        let fileURLs = libraryFiles()
+        guard !fileURLs.isEmpty else {
             return []
         }
 
@@ -481,7 +479,6 @@ final class DictionaryLibraryService {
             enabledLibraries: activeLibraries.map(\.library))
     }
 
-
     private func library(named id: String, in libraries: [CatalogLibrary]) -> CatalogLibrary? {
         libraries.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
     }
@@ -543,8 +540,8 @@ final class DictionaryLibraryService {
 
     private func updatePersistedStateAfterImport(id: String, contentHash: LibraryContentHash) throws {
         guard let persistenceStore else { return }
-        let libraries = loadCatalogLibraries().filter {
-            $0.id.caseInsensitiveCompare(id) != .orderedSame
+        let libraries = loadCatalogLibraries().filter { library in
+            library.id.caseInsensitiveCompare(id) != .orderedSame
         }
         let rawState = try persistenceStore.readStringSetting(key: Self.libraryStateKey)
         var state = try decodeState(rawState) ?? migratedState(for: libraries)
@@ -570,13 +567,17 @@ final class DictionaryLibraryService {
         }
     }
 
-    private func allKnownIDs() -> [String] {
-        let builtIn = BuiltInDictionaryLibraries.all.map(\.id)
-        let discovered = try? fileManager.contentsOfDirectory(
+
+    private func libraryFiles() -> [URL] {
+        (try? fileManager.contentsOfDirectory(
             at: librariesDirectory,
             includingPropertiesForKeys: nil
-        )
-        let custom = (discovered ?? [])
+        )) ?? []
+    }
+
+    private func allKnownIDs() -> [String] {
+        let builtIn = BuiltInDictionaryLibraries.all.map(\.id)
+        let custom = libraryFiles()
             .filter { $0.pathExtension.lowercased() == "csv" }
             .map { $0.deletingPathExtension().lastPathComponent }
         return builtIn + custom
