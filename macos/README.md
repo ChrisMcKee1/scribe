@@ -143,9 +143,10 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   running recognizer or a Settings or Usage Insights check that started `az` or `foundry` to be stopped,
   before Scribe exits
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
-  Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
-  shows in an open window, Open at Login shows what macOS reports, and no tab waits on the database
-  on the main thread
+  Playground, Diagnostics, Usage Insights, History, and About sections; Find a setting searches the
+  sidebar, opens matching pages and scrolls to matching cards; a change made from the tray shows in
+  an open window, Open at Login shows what macOS reports, and no tab waits on the database on the
+  main thread
 - User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), voice
   snippets, and per-app profiles (writing style + newline mode by focused app)
 - AI cleanup across Foundry Local (default), Ollama and LM Studio at their own addresses (with a model list
@@ -235,7 +236,7 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
 the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
 call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
-recognition; the Settings page structure now matches Windows, but Find a setting and the Word packs editor page are
+recognition; the Settings page structure and Find a setting now match Windows, but the Word packs editor page is
 not built, so word packs have their model and editing logic but no editor yet; the "Starting local model" state and
 the full memory release of Ollama and LM Studio models are not ported; and there is no auto-update story yet. Dev
 builds use a local self-signed certificate, and public releases use the Developer ID pipeline documented above. Since

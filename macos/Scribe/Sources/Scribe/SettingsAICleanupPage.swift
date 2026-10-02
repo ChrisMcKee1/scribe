@@ -70,7 +70,7 @@ struct CleanupSettingsTab: View {
     }
 
     private var enableCard: some View {
-        SettingsCard {
+        SettingsCard(searchID: "ai.enabled") {
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(isOn: $model.values.isEnabled) {
                     Text("Use AI cleanup")
@@ -89,7 +89,7 @@ struct CleanupSettingsTab: View {
     }
 
     private var providerCard: some View {
-        SettingsCard {
+        SettingsCard(searchID: "ai.provider") {
             Form {
                 CleanupProviderSettingsSection(
                     model: model,
@@ -117,7 +117,7 @@ struct CleanupSettingsTab: View {
     }
 
     private var writingStyleCard: some View {
-        SettingsCard {
+        SettingsCard(searchID: "ai.writing-style") {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Writing style")
                     .cardTitle()

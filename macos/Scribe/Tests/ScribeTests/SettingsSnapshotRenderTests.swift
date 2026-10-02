@@ -62,6 +62,14 @@ final class SettingsSnapshotRenderTests: XCTestCase {
             rendered.append(url)
         }
 
+        let searchLight = outputURL.appendingPathComponent("search-results-light.png", isDirectory: false)
+        try render(.dictation, dependencies: dependencies, appearance: .aqua, searchQuery: "model", to: searchLight)
+        rendered.append(searchLight)
+
+        let searchDark = outputURL.appendingPathComponent("search-results-dark.png", isDirectory: false)
+        try render(.dictation, dependencies: dependencies, appearance: .darkAqua, searchQuery: "model", to: searchDark)
+        rendered.append(searchDark)
+
         for url in rendered {
             try assertPNGIsNotBlank(url)
         }
@@ -157,6 +165,7 @@ final class SettingsSnapshotRenderTests: XCTestCase {
         _ section: SettingsSection,
         dependencies: SnapshotDependencies,
         appearance: NSAppearance.Name,
+        searchQuery: String = "",
         to url: URL
     ) throws {
         let colorScheme: ColorScheme = appearance == .darkAqua ? .dark : .light
@@ -168,7 +177,7 @@ final class SettingsSnapshotRenderTests: XCTestCase {
         window.appearance = NSAppearance(named: appearance)
         window.backgroundColor = NSColor.windowBackgroundColor
         window.contentView = NSHostingView(
-            rootView: SnapshotSettingsShell(selection: section, dependencies: dependencies)
+            rootView: SnapshotSettingsShell(selection: section, dependencies: dependencies, searchQuery: searchQuery)
                 .environment(\.colorScheme, colorScheme))
         window.layoutIfNeeded()
 
@@ -230,6 +239,13 @@ private struct SnapshotDependencies {
 private struct SnapshotSettingsShell: View {
     let selection: SettingsSection
     let dependencies: SnapshotDependencies
+    let searchQuery: String
+
+    init(selection: SettingsSection, dependencies: SnapshotDependencies, searchQuery: String = "") {
+        self.selection = selection
+        self.dependencies = dependencies
+        self.searchQuery = searchQuery
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -250,13 +266,17 @@ private struct SnapshotSettingsShell: View {
     }
 
     private var sidebar: some View {
-        List {
-            ForEach(SettingsSection.topLevel) { section in row(section) }
-            Section("Personalize") { ForEach(SettingsSection.personalize) { section in row(section) } }
-            Section("Review") { ForEach(SettingsSection.review) { section in row(section) } }
-            Section("More") { ForEach(SettingsSection.more) { section in row(section) } }
+        VStack(spacing: 0) {
+            SnapshotSearchHeader(query: searchQuery)
+            Divider()
+            List {
+                ForEach(SettingsSection.topLevel) { section in row(section) }
+                Section("Personalize") { ForEach(SettingsSection.personalize) { section in row(section) } }
+                Section("Review") { ForEach(SettingsSection.review) { section in row(section) } }
+                Section("More") { ForEach(SettingsSection.more) { section in row(section) } }
+            }
+            .listStyle(.sidebar)
         }
-        .listStyle(.sidebar)
     }
 
     private func row(_ section: SettingsSection) -> some View {
@@ -318,5 +338,46 @@ private struct SnapshotSettingsShell: View {
         case .about:
             SettingsAboutPage(persistenceStore: dependencies.persistenceStore)
         }
+    }
+}
+
+@MainActor
+private struct SnapshotSearchHeader: View {
+    let query: String
+
+    private var results: [SettingsSearchResult] {
+        SettingsSearchIndex.search(query)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Find a setting")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.45), lineWidth: 1)
+                )
+            if !query.isEmpty {
+                ForEach(results.prefix(4), id: \.entry.id) { result in
+                    Text(result.displayText)
+                        .font(.caption)
+                        .lineLimit(2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.accentColor.opacity(result == results.first ? 0.18 : 0))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+            }
+        }
+        .padding(10)
     }
 }

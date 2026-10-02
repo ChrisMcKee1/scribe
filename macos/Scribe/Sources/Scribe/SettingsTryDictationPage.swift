@@ -7,10 +7,10 @@ struct SettingsTryDictationPage: View {
         SettingsPage(title: "Try dictation", subtitle: "Check that dictation works, and see what Scribe changed.") {
             VStack(alignment: .leading, spacing: 14) {
                 SettingsGroupHeader("Try it")
-                SettingsCard { TryDictationInputCard() }
+                SettingsCard(searchID: "try.input") { TryDictationInputCard() }
 
                 SettingsGroupHeader("Result")
-                SettingsCard { PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore) }
+                SettingsCard(searchID: "try.result") { PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore) }
             }
         }
     }

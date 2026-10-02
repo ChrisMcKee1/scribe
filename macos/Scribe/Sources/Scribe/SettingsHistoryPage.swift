@@ -20,9 +20,9 @@ struct HistorySettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SettingsCard { retentionCard }
-            SettingsCard { historyActionsCard }
-            SettingsCard { macOSHistoryGapCard }
+            SettingsCard(searchID: "history.keep") { retentionCard }
+            SettingsCard(searchID: "history.delete") { historyActionsCard }
+            SettingsCard(searchID: "history.list") { macOSHistoryGapCard }
         }
         .onAppear {
             Task { await model.reload() }

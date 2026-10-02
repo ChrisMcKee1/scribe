@@ -14,6 +14,21 @@ struct SettingsDictionaryPage: View {
     let dictionaryLibraryService: DictionaryLibraryService
     let onChanged: @MainActor () -> Void
     let drafts: SettingsDrafts
+    let requestedTab: DictionaryTab?
+
+    init(
+        persistenceStore: PersistenceStore,
+        dictionaryLibraryService: DictionaryLibraryService,
+        onChanged: @escaping @MainActor () -> Void,
+        drafts: SettingsDrafts,
+        requestedTab: DictionaryTab? = nil
+    ) {
+        self.persistenceStore = persistenceStore
+        self.dictionaryLibraryService = dictionaryLibraryService
+        self.onChanged = onChanged
+        self.drafts = drafts
+        self.requestedTab = requestedTab
+    }
 
     @State private var selectedTab: DictionaryTab = .yourWords
     @State private var wordCount = 0
@@ -28,11 +43,13 @@ struct SettingsDictionaryPage: View {
             DictionaryTabHeader(
                 selectedTab: $selectedTab,
                 wordCaption: wordCount == 1 ? "1 word" : "\(wordCount.formatted()) words",
-                wordPackCaption: "\(enabledWordPackCount.formatted()) of \(wordPackCount.formatted()) on")
+                wordPackCaption: "\(enabledWordPackCount.formatted()) of \(wordPackCount.formatted()) on"
+            )
+            .id(selectedTab == .wordPacks ? "dictionary.word-packs" : "dictionary.words")
 
             switch selectedTab {
             case .yourWords:
-                SettingsCard {
+                SettingsCard(searchID: "dictionary.words") {
                     DictionarySettingsTab(
                         persistenceStore: persistenceStore,
                         dictionaryLibraryService: dictionaryLibraryService,
@@ -41,7 +58,7 @@ struct SettingsDictionaryPage: View {
                         browseWordPacks: { selectedTab = .wordPacks })
                 }
             case .wordPacks:
-                SettingsCard {
+                SettingsCard(searchID: "dictionary.word-packs") {
                     DictionaryWordPacksSettingsTab(
                         dictionaryLibraryService: dictionaryLibraryService,
                         onChanged: childChanged)
@@ -49,6 +66,14 @@ struct SettingsDictionaryPage: View {
             }
         }
         .task { await refreshCounts() }
+        .onAppear { applyRequestedTab() }
+        .onChange(of: requestedTab) { _ in applyRequestedTab() }
+    }
+
+    private func applyRequestedTab() {
+        if let requestedTab {
+            selectedTab = requestedTab
+        }
     }
 
     @MainActor

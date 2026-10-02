@@ -10,7 +10,7 @@ struct SettingsVoiceSnippetsPage: View {
             title: "Voice snippets",
             subtitle: "Say a phrase and Scribe types saved text instead, like your email address or a sign-off."
         ) {
-            SettingsCard {
+            SettingsCard(searchID: "snippets.page") {
                 SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged, drafts: drafts)
             }
         }

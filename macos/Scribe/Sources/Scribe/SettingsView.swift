@@ -105,36 +105,102 @@ struct SettingsView: View {
     var hotkeyStore: HotkeySettingsStore = .live
     var audioDeviceStore: AudioDeviceStore = .live
 
+    @State private var searchText = ""
+    @State private var selectedSearchIndex = 0
+    @State private var isShowingSearchResults = false
+    @State private var searchActivation: SettingsSearchActivation?
+    @State private var highlightedSearchID: String?
+    @State private var dictionarySearchTab: SettingsDictionaryPage.DictionaryTab?
+
+    private var searchResults: [SettingsSearchResult] {
+        SettingsSearchIndex.search(searchText)
+    }
+
     var body: some View {
         NavigationSplitView {
-            List(selection: $drafts.section) {
-                ForEach(SettingsSection.topLevel) { section in
-                    sidebarRow(section)
-                }
-                Section("Personalize") {
-                    ForEach(SettingsSection.personalize) { section in sidebarRow(section) }
-                }
-                Section("Review") {
-                    ForEach(SettingsSection.review) { section in sidebarRow(section) }
-                }
-                Section("More") {
-                    ForEach(SettingsSection.more) { section in sidebarRow(section) }
+            VStack(spacing: 0) {
+                SettingsSearchSidebarHeader(
+                    query: $searchText,
+                    selectedIndex: $selectedSearchIndex,
+                    isShowingResults: isShowingSearchResults,
+                    results: searchResults,
+                    onActivate: activateSearchResult,
+                    onShowResults: { isShowingSearchResults = true },
+                    onClear: clearSearch)
+                Divider()
+                List(selection: $drafts.section) {
+                    ForEach(SettingsSection.topLevel) { section in
+                        sidebarRow(section)
+                    }
+                    Section("Personalize") {
+                        ForEach(SettingsSection.personalize) { section in sidebarRow(section) }
+                    }
+                    Section("Review") {
+                        ForEach(SettingsSection.review) { section in sidebarRow(section) }
+                    }
+                    Section("More") {
+                        ForEach(SettingsSection.more) { section in sidebarRow(section) }
+                    }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 240)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
         } detail: {
-            ScrollView {
-                detailContent
-                    .padding(24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    detailContent
+                        .padding(24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .environment(\.settingsSearchHighlightID, highlightedSearchID)
+                }
+                .onChange(of: searchActivation?.token) { _ in
+                    revealSearchActivation(proxy)
+                }
             }
         }
         .frame(minWidth: 860, minHeight: 600)
+        .onChange(of: searchText) { _ in
+            selectedSearchIndex = 0
+            isShowingSearchResults = true
+        }
     }
 
     private func sidebarRow(_ section: SettingsSection) -> some View {
         Label(section.label, systemImage: section.systemImage)
             .tag(section)
+    }
+
+    private func activateSearchResult(_ result: SettingsSearchResult) {
+        selectedSearchIndex = max(0, searchResults.firstIndex(of: result) ?? selectedSearchIndex)
+        isShowingSearchResults = false
+        drafts.section = result.section
+        if result.entry.id == "dictionary.word-packs" {
+            dictionarySearchTab = .wordPacks
+        } else if result.entry.id == "dictionary.words" {
+            dictionarySearchTab = .yourWords
+        }
+        searchActivation = SettingsSearchActivation(result: result, token: UUID())
+    }
+
+    private func clearSearch() {
+        searchText = ""
+        selectedSearchIndex = 0
+        isShowingSearchResults = false
+    }
+
+    private func revealSearchActivation(_ proxy: ScrollViewProxy) {
+        guard let activation = searchActivation else { return }
+        let targetID = activation.result.targetID
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+            highlightedSearchID = targetID
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                if searchActivation?.token == activation.token {
+                    highlightedSearchID = nil
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -159,7 +225,8 @@ struct SettingsView: View {
                 persistenceStore: persistenceStore,
                 dictionaryLibraryService: dictionaryLibraryService,
                 onChanged: onProfilesOrRulesChanged,
-                drafts: drafts)
+                drafts: drafts,
+                requestedTab: dictionarySearchTab)
         case .voiceSnippets:
             SettingsVoiceSnippetsPage(
                 persistenceStore: persistenceStore,

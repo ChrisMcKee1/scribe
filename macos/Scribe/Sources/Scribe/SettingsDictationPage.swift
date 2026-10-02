@@ -51,21 +51,21 @@ private struct SettingsDictationControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SettingsGroupHeader("Microphone")
-            SettingsCard { microphoneCard }
+            SettingsCard(searchID: "dictation.microphone") { microphoneCard }
 
             SettingsGroupHeader("Shortcuts")
-            SettingsCard { shortcutCard }
-            SettingsCard { autoStopCard }
+            SettingsCard(searchID: "dictation.shortcut") { shortcutCard }
+            SettingsCard(searchID: "dictation.silence-stop") { autoStopCard }
 
             SettingsGroupHeader("Text insertion")
-            SettingsCard { InputTypingSettingsSection() }
+            SettingsCard(searchID: "dictation.space") { InputTypingSettingsSection() }
 
             SettingsGroupHeader("Recording indicator")
-            SettingsCard { recordingIndicatorCard }
-            SettingsCard { recordingPositionCard }
+            SettingsCard(searchID: "dictation.indicator") { recordingIndicatorCard }
+            SettingsCard(searchID: "dictation.indicator.position") { recordingPositionCard }
 
             SettingsGroupHeader("Startup")
-            SettingsCard { startupCard }
+            SettingsCard(searchID: "dictation.startup") { startupCard }
         }
         .onAppear {
             input.reload()

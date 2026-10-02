@@ -39,9 +39,24 @@ struct SettingsGroupHeader: View {
 }
 
 struct SettingsCard<Content: View>: View {
+    let searchID: String?
+    @Environment(\.settingsSearchHighlightID) private var highlightedSearchID
     @ViewBuilder let content: () -> Content
 
+    init(searchID: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.searchID = searchID
+        self.content = content
+    }
+
     var body: some View {
+        if let searchID {
+            card.id(searchID)
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         content()
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -51,8 +66,19 @@ struct SettingsCard<Content: View>: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+                    .stroke(borderColor, lineWidth: borderWidth)
             )
+    }
+
+    private var borderColor: Color {
+        if searchID == highlightedSearchID {
+            return Color.accentColor
+        }
+        return Color(nsColor: .separatorColor).opacity(0.35)
+    }
+
+    private var borderWidth: CGFloat {
+        searchID == highlightedSearchID ? 2 : 1
     }
 }
 

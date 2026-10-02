@@ -55,6 +55,7 @@ struct UsageInsightsSettingsTab: View {
                     Task { await model.reload() }
                 }
             }
+            .id("usage.period")
 
             if let loadError = model.loadError {
                 Text(loadError)
@@ -78,7 +79,7 @@ struct UsageInsightsSettingsTab: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        SettingsCard { totalsSection(snapshot) }
+                        SettingsCard(searchID: "usage.totals") { totalsSection(snapshot) }
                         LazyVGrid(
                             columns: [
                                 GridItem(.flexible(), alignment: .top),
@@ -90,9 +91,9 @@ struct UsageInsightsSettingsTab: View {
                             SettingsCard { topAppsSection(snapshot) }
                             SettingsCard { trendSection(snapshot) }
                             SettingsCard { knownTermsSection(snapshot) }
-                            SettingsCard { termsSection(snapshot) }
+                            SettingsCard(searchID: "usage.terms") { termsSection(snapshot) }
                         }
-                        SettingsCard { aiSummarySection(snapshot) }
+                        SettingsCard(searchID: "usage.summary") { aiSummarySection(snapshot) }
                     }
                 }
             } else {

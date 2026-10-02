@@ -32,20 +32,20 @@ struct DiagnosticsSettingsTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SettingsGroupHeader("Get help")
-            SettingsCard { helpCard }
+            SettingsCard(searchID: "diagnostics.help") { helpCard }
 
             SettingsGroupHeader("Diagnostic data")
-            SettingsCard { diagnosticDataCard }
+            SettingsCard(searchID: "diagnostics.data") { diagnosticDataCard }
 
             SettingsGroupHeader("Speed")
-            SettingsCard { speedCard }
+            SettingsCard(searchID: "diagnostics.speed") { speedCard }
             SettingsCard { speedDetailsCard }
 
             SettingsGroupHeader("This Mac")
-            SettingsCard { thisMacCard }
+            SettingsCard(searchID: "diagnostics.mac") { thisMacCard }
 
             SettingsGroupHeader("Where Scribe keeps your data")
-            SettingsCard { dataFileCard }
+            SettingsCard(searchID: "diagnostics.data-file") { dataFileCard }
         }
         .onAppear {
             Task { await model.reload() }

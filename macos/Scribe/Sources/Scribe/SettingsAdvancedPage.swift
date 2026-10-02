@@ -16,8 +16,8 @@ struct SettingsAdvancedPage: View {
         ) {
             VStack(alignment: .leading, spacing: 14) {
                 SettingsGroupHeader("Speech recognition")
-                SettingsCard { speechModelCard }
-                SettingsCard {
+                SettingsCard(searchID: "advanced.speech-model") { speechModelCard }
+                SettingsCard(searchID: "advanced.threads") {
                     readOnlyCard(
                         title: "Processor threads",
                         value: "Automatic",
@@ -25,7 +25,7 @@ struct SettingsAdvancedPage: View {
                             "Scribe does not pass a processor-thread setting to Foundry Local. The foundry transcribe command chooses how to run on this Mac."
                     )
                 }
-                SettingsCard {
+                SettingsCard(searchID: "advanced.free-memory") {
                     readOnlyCard(
                         title: "Free memory when Scribe is not used",
                         value: "Managed by the recognizer",
@@ -37,7 +37,7 @@ struct SettingsAdvancedPage: View {
                     .cardDescription()
 
                 SettingsGroupHeader("Recording")
-                SettingsCard {
+                SettingsCard(searchID: "advanced.trim-silence") {
                     readOnlyCard(
                         title: "Trim silence",
                         value: "No separate trim step",
@@ -45,7 +45,7 @@ struct SettingsAdvancedPage: View {
                             "macOS sends the captured recording to the recognizer as recorded. Silence auto-stop can end toggle and test dictations, but there is no separate silence trimming stage."
                     )
                 }
-                SettingsCard {
+                SettingsCard(searchID: "advanced.longest-recording") {
                     readOnlyCard(
                         title: "Longest recording",
                         value: "10 minutes",
@@ -55,7 +55,7 @@ struct SettingsAdvancedPage: View {
                 }
 
                 SettingsGroupHeader("Typing into apps")
-                SettingsCard {
+                SettingsCard(searchID: "advanced.typing-method") {
                     readOnlyCard(
                         title: "Typing method",
                         value: "Accessibility insertion, then paste, then typing",
@@ -63,8 +63,8 @@ struct SettingsAdvancedPage: View {
                             "Scribe first writes through the macOS Accessibility API. If the focused element does not accept that, it borrows the pasteboard for a Command-V paste and restores it when it can. If the paste path is not safe, it types Unicode keystrokes."
                     )
                 }
-                SettingsCard { lineBreaksCard }
-                SettingsCard {
+                SettingsCard(searchID: "advanced.line-breaks") { lineBreaksCard }
+                SettingsCard(searchID: "advanced.chat-lines") {
                     readOnlyCard(
                         title: "Do not send chat messages early",
                         value: "On for typed fallback line breaks",
@@ -74,7 +74,7 @@ struct SettingsAdvancedPage: View {
                 }
 
                 SettingsGroupHeader("Text changes")
-                SettingsCard {
+                SettingsCard(searchID: "advanced.text-changes") {
                     readOnlyCard(
                         title: "Apply your dictionary and snippets",
                         value: "On",

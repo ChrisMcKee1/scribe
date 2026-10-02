@@ -10,7 +10,7 @@ struct SettingsAppProfilesPage: View {
             title: "App profiles",
             subtitle: "Use a different writing style or line-break rule in specific apps, like Outlook or Teams."
         ) {
-            SettingsCard {
+            SettingsCard(searchID: "profiles.page") {
                 AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged, drafts: drafts)
             }
         }
