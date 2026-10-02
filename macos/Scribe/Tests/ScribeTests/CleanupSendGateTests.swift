@@ -121,7 +121,7 @@ final class CleanupSendGateTests: XCTestCase {
         gate.publish(vocabulary: scope, recipient: recipient)
         let admitted = gate.receipt(scope: scope, recipient: recipient, kind: .dictation)
         var duringWrite: UInt64 = 0
-        gate.changingVocabulary {
+        try gate.changingVocabulary {
             gate.publishRecipient(recipient)
             gate.publishVocabulary(scope)
             duringWrite = gate.vocabularyRevision
