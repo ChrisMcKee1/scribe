@@ -1,8 +1,6 @@
 import Foundation
 
-/// The word-pack entries AI cleanup may receive as vocabulary. This is a temporary seam until the library snapshot
-/// API lands on macOS; the current implementation uses the enabled word packs as-is, and a later merge can narrow it
-/// without changing dictation wiring.
+/// The word-pack entries AI cleanup may receive as vocabulary. Read from the committed word pack vocabulary's AI-permitted entries.
 @MainActor
 protocol CleanupVocabularyLibrarySource {
     func cleanupVocabularyEntries() async -> [DictionaryEntry]
@@ -10,6 +8,6 @@ protocol CleanupVocabularyLibrarySource {
 
 extension DictionaryLibraryService: CleanupVocabularyLibrarySource {
     func cleanupVocabularyEntries() async -> [DictionaryEntry] {
-        enabledLibraryEntries()
+        (try? await loadVocabulary().aiEntries) ?? []
     }
 }

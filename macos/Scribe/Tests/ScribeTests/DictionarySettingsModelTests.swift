@@ -40,6 +40,38 @@ final class DictionarySettingsModelTests: XCTestCase {
         DictionaryEntry(id: id, pattern: pattern, replacement: pattern.uppercased())
     }
 
+    private func makeWordPackService(_ store: PersistenceStore) -> (DictionaryLibraryService, StorageTestDefaults) {
+        let defaults = StorageTestDefaults()
+        let service = DictionaryLibraryService(
+            librariesDirectory: directory.url,
+            settings: DictionaryLibrarySettings(defaults: defaults.defaults),
+            persistenceStore: store)
+        return (service, defaults)
+    }
+
+    private func seedHistory(_ store: PersistenceStore, transcripts: [String]) throws {
+        for transcript in transcripts {
+            try store.recordDictation(
+                startedAt: Date(),
+                durationSeconds: 1,
+                sampleCount: 16_000,
+                transcriptText: transcript)
+        }
+    }
+
+    private func enoughHistory(matching line: String) -> [String] {
+        var transcripts = [line]
+        func wordCount(_ text: String) -> Int {
+            text.split(whereSeparator: \.isWhitespace).count
+        }
+        while transcripts.count < DictionaryUsageAnalyzer.minimumTranscripts
+            || transcripts.reduce(0, { $0 + wordCount($1) }) < DictionaryUsageAnalyzer.minimumWords
+        {
+            transcripts.append(Array(repeating: line, count: 20).joined(separator: " "))
+        }
+        return transcripts
+    }
+
     /// Storage with no rules whose adds go to `addEntry`; every other write fails the action that makes it.
     private static func access(
         addEntry: @escaping @Sendable (DictionaryEntry) async throws -> Void
@@ -394,5 +426,49 @@ final class DictionarySettingsModelTests: XCTestCase {
 
         XCTAssertFalse(succeeded)
         XCTAssertTrue(model.errorMessage?.contains("already in your dictionary") == true)
+    func testReviewUsageDoesNotOfferEnabledWordPackTermsForCleanup() async throws {
+        let store = try makeStore()
+        let (service, defaults) = makeWordPackService(store)
+        defer { defaults.remove() }
+
+        let library = try service.import(
+            csv: "pattern,replacement\nkube,Kubernetes\n",
+            suggestedName: "Team")
+        service.settings.enabledLibraryIds = [library.id]
+        try seedHistory(store, transcripts: enoughHistory(matching: "kube shipped today"))
+
+        let model = DictionarySettingsModel(access: .live(store), drafts: SettingsDrafts(), onChanged: {})
+        await model.reviewUsage()
+
+        XCTAssertNil(model.cleanupReport)
+        XCTAssertEqual(
+            model.statusMessage,
+            "Every term in your dictionary turned up in your recent dictations. Nothing to clean up.")
+        let vocabulary = try await service.loadVocabulary()
+        XCTAssertTrue(vocabulary.entries.contains { $0.pattern == "kube" })
+    }
+
+    @MainActor
+    func testApplyingCleanupDoesNotCopyOrDisableEnabledWordPackTerms() async throws {
+        let store = try makeStore()
+        let (service, defaults) = makeWordPackService(store)
+        defer { defaults.remove() }
+
+        let library = try service.import(
+            csv: "pattern,replacement\nkube,Kubernetes\n",
+            suggestedName: "Team")
+        service.settings.enabledLibraryIds = [library.id]
+        let before = try await service.loadVocabulary()
+        let drop = try store.insertDictionaryEntry(DictionaryEntry(pattern: "drop one", replacement: "Drop one"))
+
+        let model = DictionarySettingsModel(access: .live(store), drafts: SettingsDrafts(), onChanged: {})
+        await model.applyCleanup(disabling: [drop])
+
+        let after = try await service.loadVocabulary()
+        let stored = try store.fetchAllDictionaryEntries()
+        XCTAssertEqual(before, after)
+        XCTAssertEqual(stored.map(\.pattern), ["drop one"])
+        XCTAssertEqual(stored.map(\.enabled), [false])
+        XCTAssertTrue(after.entries.contains { $0.pattern == "kube" })
     }
 }
