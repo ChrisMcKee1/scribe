@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let overlayAnchorDefaultsKey = "ScribeOverlayAnchor"
 
     private var statusItem: NSStatusItem?
-    private var settingsWindowController: NSWindowController?
+    private var settingsWindowController: SettingsWindowController?
     /// Outlives the Settings window, which is released on close, so unsaved entries survive a close and reopen.
     private let settingsDrafts = SettingsDrafts()
     private var welcomeWindowController: NSWindowController?
@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var recentDictationsMenu = RecentDictationsMenu(store: lastTranscriptStore)
     private lazy var dictationController = makeDictationController()
     private lazy var termination = makeTermination()
+    private let terminationApproval = ApplicationTerminationApproval()
     private var dictationMenuItem: NSMenuItem?
     private var pauseMenuItem: NSMenuItem?
     private var aiCleanupMenuItem: NSMenuItem?
@@ -99,9 +100,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Quitting waits for Scribe to shut down in order (`ApplicationTermination`): a paste in progress puts the user's
     /// pasteboard back, and a recognizer, or an `az` or `foundry` a Settings check started, is stopped and reaped,
     /// before Scribe replies and exits. `applicationWillTerminate` alone would be too late for any of it. A second
-    /// Quit while that runs changes nothing: the first one replies.
+    /// Quit while that runs changes nothing: the first one replies. Pending Settings edits are resolved before
+    /// `ApplicationTermination` closes admission or starts teardown.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        termination.request()
+        if termination.isTerminating {
+            return termination.request()
+        }
+        return terminationApproval.request(
+            prepare: { [weak self] in
+                await self?.settingsWindowController?.prepareForApplicationTermination() ?? true
+            },
+            proceed: { [weak self] in _ = self?.termination.request() },
+            reject: { NSApp.reply(toApplicationShouldTerminate: false) })
     }
 
     private func makeTermination() -> ApplicationTermination {

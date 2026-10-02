@@ -152,3 +152,31 @@ final class ApplicationTermination {
         await running?.value
     }
 }
+
+/// Defers AppKit's quit decision until Settings has approved pending edits. Repeated system quit requests share the
+/// first approval operation, so they cannot open duplicate prompts or start shutdown twice.
+@MainActor
+final class ApplicationTerminationApproval {
+    private var operation: Task<Void, Never>?
+
+    var isPending: Bool {
+        operation != nil
+    }
+
+    func request(
+        prepare: @escaping @MainActor @Sendable () async -> Bool,
+        proceed: @escaping @MainActor @Sendable () -> Void,
+        reject: @escaping @MainActor @Sendable () -> Void
+    ) -> NSApplication.TerminateReply {
+        guard operation == nil else { return .terminateLater }
+        operation = Task { @MainActor [weak self] in
+            defer { self?.operation = nil }
+            guard await prepare() else {
+                reject()
+                return
+            }
+            proceed()
+        }
+        return .terminateLater
+    }
+}

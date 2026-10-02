@@ -10,6 +10,60 @@ import os
 /// Quit cancels that work and waits for it before it replies.
 @MainActor
 final class ApplicationTerminationTests: XCTestCase {
+    func testSettingsApprovalPrecedesShutdownAndCoalescesRepeatedRequests() async {
+        let approval = ApplicationTerminationApproval()
+        let entered = AudioTestSignalLatch()
+        let release = AudioTestSignalLatch()
+        let prepares = SendableCounter()
+        let proceeds = SendableCounter()
+        let rejects = SendableCounter()
+
+        let first = approval.request(
+            prepare: {
+                prepares.increment()
+                entered.signal()
+                return await release.wait()
+            },
+            proceed: { proceeds.increment() },
+            reject: { rejects.increment() })
+        XCTAssertEqual(first, .terminateLater)
+        let prepared = await entered.wait()
+        XCTAssertTrue(prepared)
+
+        let repeated = approval.request(
+            prepare: {
+                prepares.increment()
+                return true
+            },
+            proceed: { proceeds.increment() },
+            reject: { rejects.increment() })
+        XCTAssertEqual(repeated, .terminateLater)
+        XCTAssertEqual(prepares.value, 1, "a repeated quit started a second settings prompt")
+        XCTAssertEqual(proceeds.value, 0, "shutdown began before settings approval")
+
+        release.signal()
+        await waitUntil("approved termination to proceed") { !approval.isPending }
+        XCTAssertEqual(proceeds.value, 1)
+        XCTAssertEqual(rejects.value, 0)
+    }
+
+    func testRejectedSettingsApprovalCancelsQuitWithoutStartingShutdown() async {
+        let approval = ApplicationTerminationApproval()
+        let proceeds = SendableCounter()
+        let rejects = SendableCounter()
+
+        XCTAssertEqual(
+            approval.request(
+                prepare: { false },
+                proceed: { proceeds.increment() },
+                reject: { rejects.increment() }),
+            .terminateLater)
+
+        await waitUntil("rejected termination to reply") { !approval.isPending }
+        XCTAssertEqual(proceeds.value, 0)
+        XCTAssertEqual(rejects.value, 1)
+    }
+
     private func makeScript(_ body: String, in directory: URL) throws -> URL {
         let url = directory.appendingPathComponent("probe")
         try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url)
