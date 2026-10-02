@@ -123,10 +123,12 @@ final class CleanupSendGateTests: XCTestCase {
         var duringWrite: UInt64 = 0
         gate.changingVocabulary {
             gate.publishRecipient(recipient)
+            gate.publishVocabulary(scope)
             duringWrite = gate.vocabularyRevision
             XCTAssertFalse(gate.publishReadVocabulary(scope, after: duringWrite))
             XCTAssertThrowsError(try admitted.check())
         }
+        XCTAssertEqual(gate.currentVocabularyScope, .none)
         XCTAssertFalse(gate.publishReadVocabulary(scope, after: duringWrite))
         XCTAssertThrowsError(try admitted.check())
         XCTAssertTrue(gate.publishReadVocabulary(scope, after: gate.vocabularyRevision))

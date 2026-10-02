@@ -91,6 +91,7 @@ final class CleanupSendGate: Sendable {
         }
         defer {
             state.withLock {
+                $0.scope = .none
                 $0.vocabularyChanges -= 1
                 $0.vocabularyRevision &+= 1
             }
