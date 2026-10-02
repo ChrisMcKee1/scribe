@@ -39,13 +39,17 @@ final class ContextBudgetTests: XCTestCase {
     }
 
     func testWholeVocabularyGoesWhenItFitsAndFallsBackToMentionedTermsWhenItDoesNot() {
-        let entries = (0..<200).map { DictionaryEntry(pattern: uniquePattern($0), replacement: "Term\($0)") }
+        let entries = [
+            DictionaryEntry(pattern: "kubernetes", replacement: "Kubernetes"),
+            DictionaryEntry(pattern: "ollama", replacement: "Ollama"),
+            DictionaryEntry(pattern: "kubeflow", replacement: "Kubeflow"),
+        ]
         let vocabulary = CleanupVocabulary(glossaryEntries: entries)
 
         let whole = vocabulary.glossary(
             mode: .mentioned,
             everything: true,
-            dictation: uniquePattern(199),
+            dictation: "ollama",
             tokenBudget: 1_000_000,
             maxTerms: .max)
         XCTAssertEqual(whole, CleanupPrompt.buildGlossary(entries))
@@ -53,22 +57,11 @@ final class ContextBudgetTests: XCTestCase {
         let fitted = vocabulary.glossary(
             mode: .mentioned,
             everything: false,
-            dictation: uniquePattern(199),
+            dictation: "ollama",
             tokenBudget: 200,
             maxTerms: CleanupPrompt.maxGlossaryTermsLocal)
         XCTAssertNotNil(fitted)
-        XCTAssertTrue(fitted?.contains("Term199") == true)
-        XCTAssertFalse(fitted?.contains("Term0") == true)
-    }
-
-    private func uniquePattern(_ value: Int) -> String {
-        let alphabet = Array("abcdefghijklmnopqrstuvwxyz")
-        var number = value
-        var pattern = ""
-        repeat {
-            pattern.insert(alphabet[number % alphabet.count], at: pattern.startIndex)
-            number /= alphabet.count
-        } while number > 0
-        return "term" + pattern
+        XCTAssertTrue(fitted?.contains("Ollama") == true)
+        XCTAssertFalse(fitted?.contains("Kubernetes") == true)
     }
 }

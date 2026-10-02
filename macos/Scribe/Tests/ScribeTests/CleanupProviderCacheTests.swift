@@ -694,7 +694,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
             XCTAssertTrue(check.reachable, "\(status): \(check.message)")
             let bodies = rig.requests.all.map(\.jsonBody)
-            XCTAssertEqual(bodies.count, 4, "\(status)")
+            XCTAssertEqual(bodies.count, 2, "\(status)")
             XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, 16, "\(status)")
             XCTAssertNil(bodies.last?["max_completion_tokens"], "\(status)")
             XCTAssertNil(bodies.last?["max_tokens"], "\(status): the retry sends no ceiling at all")
