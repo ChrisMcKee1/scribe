@@ -36,6 +36,7 @@ final class CleanupSettingsBackingFake {
         azureClientId: "")
     private(set) var saves: [CleanupSettingsValues] = []
     var apiKey: String?
+    var azureApiKey: String?
     var clientSecrets: [String: String] = [:]
     var configured: Set<CleanupProviderKind> = [.foundryLocal, .ollama]
     var connectionCheck = CleanupConnectionCheck(reachable: true, message: "Foundry Local: ready")
@@ -70,6 +71,11 @@ final class CleanupSettingsBackingFake {
             setAzureClientSecret: { secret, clientId in
                 try self.failIfAsked()
                 self.clientSecrets[clientId] = secret
+            },
+            hasAzureApiKey: { self.azureApiKey != nil },
+            setAzureApiKey: { key in
+                try self.failIfAsked()
+                self.azureApiKey = key?.isEmpty == false ? key : nil
             },
             checkConnection: {
                 if let gate {
@@ -226,6 +232,65 @@ final class CleanupSettingsModelTests: XCTestCase {
 
         backing.drafts.azureClientSecret = "another"
         XCTAssertTrue(model.canSaveAzureClientSecret)
+    }
+
+    @MainActor
+    func testFoundryAPIKeySelectionOverridesEntraAndCanBeChangedBack() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.providerKind = .microsoftFoundry
+        backing.stored.azureAuthMode = .servicePrincipal
+        backing.stored.azureTenantId = "tenant"
+        backing.stored.azureClientId = "client"
+        let model = makeModel(backing)
+
+        XCTAssertEqual(model.azureAuthenticationSelection, .servicePrincipal)
+        model.setAzureAuthenticationSelection(.apiKey)
+        XCTAssertTrue(backing.stored.azureApiKeySelected)
+        XCTAssertEqual(model.azureAuthenticationSelection, .apiKey)
+
+        model.setAzureAuthenticationSelection(.azureCli)
+        XCTAssertFalse(backing.stored.azureApiKeySelected)
+        XCTAssertEqual(backing.stored.azureAuthMode, .azureCli)
+    }
+
+    @MainActor
+    func testSavingAndClearingFoundryAPIKeyChangesSelectionAndSecretState() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.providerKind = .microsoftFoundry
+        let model = makeModel(backing)
+        model.refreshSecretState()
+        backing.drafts.azureApiKey = "foundry-key"
+
+        model.saveAzureApiKey()
+
+        XCTAssertEqual(backing.azureApiKey, "foundry-key")
+        XCTAssertEqual(backing.drafts.azureApiKey, "")
+        XCTAssertTrue(model.hasSavedAzureApiKey)
+        XCTAssertTrue(backing.stored.azureApiKeySelected)
+        XCTAssertEqual(model.azureAuthenticationSelection, .apiKey)
+
+        model.clearAzureApiKey()
+
+        XCTAssertNil(backing.azureApiKey)
+        XCTAssertFalse(model.hasSavedAzureApiKey)
+        XCTAssertFalse(backing.stored.azureApiKeySelected)
+    }
+
+    @MainActor
+    func testFoundryApiKeyModeDoesNotRequireEntraFieldsForTestConnection() {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        backing.stored.providerKind = .microsoftFoundry
+        backing.stored.azureApiKeySelected = true
+        backing.azureApiKey = "saved-key"
+        backing.configured.insert(.microsoftFoundry)
+        let model = makeModel(backing)
+        model.refreshSecretState()
+
+        XCTAssertFalse(model.isDisabled(.connectionTest))
+
+        backing.drafts.azureApiKey = "candidate-key"
+        XCTAssertFalse(model.isDisabled(.connectionTest))
     }
 
     @MainActor
@@ -513,6 +578,7 @@ final class CleanupSettingsModelTests: XCTestCase {
         backing.stored.isEnabled = true
         backing.stored.providerKind = .microsoftFoundry
         backing.stored.azureAuthMode = .servicePrincipal
+        backing.stored.azureTenantId = "tenant-a"
         backing.stored.azureClientId = "app-a"
         backing.configured.insert(.microsoftFoundry)
         return backing

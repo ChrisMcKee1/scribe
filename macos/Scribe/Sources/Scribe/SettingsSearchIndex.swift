@@ -163,6 +163,10 @@ enum SettingsSearchIndex {
             "ai.azure.auth", .aiCleanup, "ai.provider", "Authentication", ["sign in", "azure cli", "az login"],
             "Microsoft Foundry", [requiresAI, requiresFoundry]),
         entry(
+            "ai.azure.api-key", .aiCleanup, "ai.provider", "Microsoft Foundry API key",
+            ["secret", "token", "keychain", "authentication"], "Microsoft Foundry",
+            [requiresAI, requiresFoundry]),
+        entry(
             "ai.azure.sp.tenant", .aiCleanup, "ai.provider", "Tenant ID", ["service principal", "entra"],
             "Microsoft Foundry", [requiresAI, requiresFoundry, requiresServicePrincipal]),
         entry(
@@ -173,6 +177,18 @@ enum SettingsSearchIndex {
             "Microsoft Foundry", [requiresAI, requiresFoundry, requiresServicePrincipal]),
         entry(
             "ai.writing-style", .aiCleanup, "ai.writing-style", "Writing style", ["prompt", "tone"], nil, [requiresAI]),
+        entry(
+            "ai.restore-writing-style", .aiCleanup, "ai.writing-style", "Restore default writing style",
+            ["reset", "restore", "default prompt"], nil, [requiresAI]),
+        entry(
+            "ai.guardrails.detailed", .aiCleanup, "ai.guardrails", "Detailed guardrail prompt",
+            ["system prompt", "instructions", "cloud", "frontier"], nil, [requiresAI]),
+        entry(
+            "ai.guardrails.local", .aiCleanup, "ai.guardrails", "Local guardrail prompt",
+            ["system prompt", "instructions", "on this pc"], nil, [requiresAI]),
+        entry(
+            "ai.guardrails.restore", .aiCleanup, "ai.guardrails", "Restore default guardrail prompts",
+            ["reset", "restore", "default prompt"], nil, [requiresAI]),
 
         entry(
             "dictionary.words", .dictionary, "dictionary.words", "Your words",

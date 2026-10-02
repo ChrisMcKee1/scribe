@@ -21,7 +21,8 @@ enum CleanupDisclosure {
     }()
 
     static let whatCleanupNeverSends =
-        "Test Connection sends a short request holding the word \"ok\" and the same instructions, with none of your "
+        "Test Connection sends a short request holding the word \"ok\" and the current writing style and guardrails, "
+        + "with none of your "
         + "vocabulary. When a recording starts, Ollama or LM Studio on this Mac is asked whether it holds the selected "
         + "model at the needed size; if not, Scribe sends a fixed readying request with only \"ok\" and fixed "
         + "instructions to that local app. Neither request contains dictated text or vocabulary. Cleanup never sends "

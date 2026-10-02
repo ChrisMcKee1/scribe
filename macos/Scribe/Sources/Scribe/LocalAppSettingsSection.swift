@@ -331,12 +331,34 @@ struct CleanupProviderSettingsSection: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
-            Picker("Authentication", selection: $model.values.azureAuthMode) {
-                Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
-                Text("Service principal").tag(AzureAuthMode.servicePrincipal)
+            Picker(
+                "Authentication",
+                selection: Binding(
+                    get: { model.azureAuthenticationSelection },
+                    set: { model.setAzureAuthenticationSelection($0) })
+            ) {
+                ForEach(AzureAuthenticationSelection.allCases) { selection in
+                    Text(selection.label).tag(selection)
+                }
             }
 
-            if model.values.azureAuthMode == .servicePrincipal {
+            if model.azureAuthenticationSelection == .apiKey {
+                SecureField(
+                    model.hasSavedAzureApiKey ? "API key saved (leave blank to keep)" : "API key",
+                    text: $drafts.azureApiKey)
+                HStack {
+                    Button("Save API Key") { model.saveAzureApiKey() }
+                        .disabled(!model.canSaveAzureApiKey)
+                    if model.hasSavedAzureApiKey {
+                        Button("Clear API Key", role: .destructive) { model.clearAzureApiKey() }
+                    }
+                }
+                Text(
+                    "The API key is stored only in Keychain. When selected, it takes precedence over Azure CLI or service principal sign-in. Save it before testing the connection."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if model.azureAuthenticationSelection == .servicePrincipal {
                 TextField("Tenant ID", text: $model.values.azureTenantId)
                 TextField("Client ID", text: $model.values.azureClientId)
                 SecureField(

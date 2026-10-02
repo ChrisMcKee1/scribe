@@ -52,8 +52,12 @@ struct CleanupSettingsSnapshot: Sendable, Equatable {
     var azureDeployment: String
     var azurePromptCaching = true
     var azureAuthMode: AzureAuthMode
+    var azureApiKeySelected = false
     var azureTenantId: String
     var azureClientId: String
+    var writingStyle = ""
+    var frontierPrompt = ""
+    var localPrompt = ""
     var otherServiceApiStyle: CustomAPIStyle
     var secretRevision: String
 }
@@ -105,16 +109,22 @@ struct CleanupSettingsStore: Sendable {
         static let azureDeployment = "ScribeCleanupAzureDeployment"
         static let azurePromptCaching = "ScribeCleanupAzurePromptCaching"
         static let azureAuthMode = "ScribeCleanupAzureAuthMode"
+        static let azureApiKeySelected = "ScribeCleanupAzureApiKeySelected"
         static let azureTenantId = "ScribeCleanupAzureTenantId"
         static let azureClientId = "ScribeCleanupAzureClientId"
+        static let writingStyle = "ScribeCleanupWritingStyle"
+        static let frontierPrompt = "ScribeCleanupFrontierPrompt"
+        static let localPrompt = "ScribeCleanupLocalPrompt"
         static let secretRevision = "ScribeCleanupSecretRevision"
     }
 
     static let openAIApiKeyKeychainService = "com.scribe.macos.openai-compatible-api-key"
     /// The account is the trimmed client id, so switching Entra app registrations never reads a stale secret.
     static let azureClientSecretKeychainService = "com.scribe.macos.azure-client-secret"
+    static let azureApiKeyKeychainService = "com.scribe.macos.microsoft-foundry-api-key"
     /// One OpenAI-compatible key per Mac, under one fixed account.
     static let openAIApiKeyAccount = "default"
+    static let azureApiKeyAccount = "default"
     /// The benchmarked recommendations (see CLEANUP-MODEL-BENCHMARK.md), shared with the providers' own defaults.
     static let defaultFoundryLocalModelAlias = "qwen2.5-1.5b"
     static let defaultOllamaModel = "qwen2.5:3b"
@@ -124,19 +134,26 @@ struct CleanupSettingsStore: Sendable {
         CleanupSettingsStore(
             domain: .standard,
             apiKeys: KeychainSecretStore(service: openAIApiKeyKeychainService),
-            clientSecrets: KeychainSecretStore(service: azureClientSecretKeychainService))
+            clientSecrets: KeychainSecretStore(service: azureClientSecretKeychainService),
+            azureApiKeys: KeychainSecretStore(service: azureApiKeyKeychainService))
     }
 
     let domain: Domain
     /// Holds the OpenAI-compatible API key, under `openAIApiKeyAccount`.
     let apiKeys: any SecretStore
+    /// Holds the Microsoft Foundry API key, separate from the OpenAI-compatible key.
+    let azureApiKeys: any SecretStore
     /// Holds each service principal's client secret, under its trimmed client id.
     let clientSecrets: any SecretStore
 
-    init(domain: Domain, apiKeys: any SecretStore, clientSecrets: any SecretStore) {
+    init(
+        domain: Domain, apiKeys: any SecretStore, clientSecrets: any SecretStore,
+        azureApiKeys: (any SecretStore)? = nil
+    ) {
         self.domain = domain
         self.apiKeys = apiKeys
         self.clientSecrets = clientSecrets
+        self.azureApiKeys = azureApiKeys ?? apiKeys
     }
 
     private var defaults: UserDefaults {
@@ -268,6 +285,11 @@ struct CleanupSettingsStore: Sendable {
         nonmutating set { defaults.set(newValue.rawValue, forKey: Key.azureAuthMode) }
     }
 
+    var azureApiKeySelected: Bool {
+        get { defaults.bool(forKey: Key.azureApiKeySelected) }
+        nonmutating set { defaults.set(newValue, forKey: Key.azureApiKeySelected) }
+    }
+
     var azureTenantId: String {
         get { defaults.string(forKey: Key.azureTenantId) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.azureTenantId) }
@@ -276,6 +298,21 @@ struct CleanupSettingsStore: Sendable {
     var azureClientId: String {
         get { defaults.string(forKey: Key.azureClientId) ?? "" }
         nonmutating set { defaults.set(newValue, forKey: Key.azureClientId) }
+    }
+
+    var writingStyle: String {
+        get { defaults.string(forKey: Key.writingStyle) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.writingStyle) }
+    }
+
+    var frontierPrompt: String {
+        get { defaults.string(forKey: Key.frontierPrompt) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.frontierPrompt) }
+    }
+
+    var localPrompt: String {
+        get { defaults.string(forKey: Key.localPrompt) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.localPrompt) }
     }
 
     /// Changes whenever a secret is saved or removed through this store. A provider built with a secret is keyed by
@@ -309,8 +346,12 @@ struct CleanupSettingsStore: Sendable {
             azureDeployment: defaults.string(forKey: Key.azureDeployment) ?? "",
             azurePromptCaching: (defaults.object(forKey: Key.azurePromptCaching) as? Bool) ?? true,
             azureAuthMode: Self.azureAuthMode(in: defaults),
+            azureApiKeySelected: defaults.bool(forKey: Key.azureApiKeySelected),
             azureTenantId: defaults.string(forKey: Key.azureTenantId) ?? "",
             azureClientId: defaults.string(forKey: Key.azureClientId) ?? "",
+            writingStyle: defaults.string(forKey: Key.writingStyle) ?? "",
+            frontierPrompt: defaults.string(forKey: Key.frontierPrompt) ?? "",
+            localPrompt: defaults.string(forKey: Key.localPrompt) ?? "",
             otherServiceApiStyle: CustomAPIStyle(rawValue: defaults.string(forKey: Key.otherServiceApiStyle) ?? "")
                 ?? .chatCompletions,
             secretRevision: defaults.string(forKey: Key.secretRevision) ?? "")
@@ -342,12 +383,31 @@ struct CleanupSettingsStore: Sendable {
         try? readOpenAIApiKey()
     }
 
+    func readAzureApiKey() throws -> String? {
+        try azureApiKeys.secret(for: Self.azureApiKeyAccount)
+    }
+
+    func azureApiKey() -> String? {
+        try? readAzureApiKey()
+    }
+
     /// Saves the OpenAI-compatible API key, or removes it when given `nil` or an empty string.
     func setOpenAIApiKey(_ key: String?) throws {
         if let key, !key.isEmpty {
             try apiKeys.save(key, for: Self.openAIApiKeyAccount)
         } else {
             try apiKeys.removeSecret(for: Self.openAIApiKeyAccount)
+        }
+        secretsChanged()
+    }
+
+    func setAzureApiKey(_ key: String?) throws {
+        if let key, !key.isEmpty {
+            try azureApiKeys.save(key, for: Self.azureApiKeyAccount)
+            azureApiKeySelected = true
+        } else {
+            try azureApiKeys.removeSecret(for: Self.azureApiKeyAccount)
+            azureApiKeySelected = false
         }
         secretsChanged()
     }

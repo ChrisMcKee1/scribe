@@ -57,6 +57,7 @@ struct CleanupSettingsTab: View {
             providerCard
 
             writingStyleCard
+            guardrailPromptsCard
         }
         .onAppear {
             model.reload()
@@ -122,29 +123,88 @@ struct CleanupSettingsTab: View {
                 Text("Writing style")
                     .cardTitle()
                 Text(
-                    "Scribe uses this default cleanup style unless an app profile overrides it. Edit per-app styles on the App profiles page."
+                    "Scribe uses this default cleanup style unless an app profile overrides it. Edit per-app styles on the App profiles page. The selected instructions, recognized text and applicable vocabulary go to the selected model. Audio is never sent."
                 )
                 .cardDescription()
 
-                ScrollView {
-                    Text(CleanupPrompt.defaultWritingStyle)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                HStack {
+                    Spacer()
+                    Button("Restore default") {
+                        drafts.restoreCleanupWritingStyle()
+                    }
+                    .disabled(drafts.cleanupWritingStyle == CleanupPrompt.defaultWritingStyle)
                 }
-                .frame(minHeight: 130, maxHeight: 180)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1)
-                )
+                promptEditor(
+                    text: $drafts.cleanupWritingStyle,
+                    accessibilityID: "ai.writing-style.editor",
+                    height: 180)
             }
         }
+    }
+
+    private var guardrailPromptsCard: some View {
+        SettingsCard(searchID: "ai.guardrails") {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Guardrail prompts")
+                    .cardTitle()
+                Text(
+                    "These instructions set how Scribe handles cleanup requests. Local models use the local prompt; cloud models use the detailed prompt. Changes are saved with the Settings footer."
+                )
+                .cardDescription()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Detailed prompt")
+                            .font(.headline)
+                        Spacer()
+                        Button("Restore default") {
+                            drafts.cleanupFrontierPrompt = CleanupPrompt.defaultFrontierPrompt
+                        }
+                        .disabled(drafts.cleanupFrontierPrompt == CleanupPrompt.defaultFrontierPrompt)
+                    }
+                    promptEditor(
+                        text: $drafts.cleanupFrontierPrompt,
+                        accessibilityID: "ai.guardrails.detailed",
+                        height: 150)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Local prompt")
+                            .font(.headline)
+                        Spacer()
+                        Button("Restore default") {
+                            drafts.cleanupLocalPrompt = CleanupPrompt.defaultLocalPrompt
+                        }
+                        .disabled(drafts.cleanupLocalPrompt == CleanupPrompt.defaultLocalPrompt)
+                    }
+                    promptEditor(
+                        text: $drafts.cleanupLocalPrompt,
+                        accessibilityID: "ai.guardrails.local",
+                        height: 150)
+                }
+            }
+        }
+    }
+
+    private func promptEditor(
+        text: Binding<String>,
+        accessibilityID: String,
+        height: CGFloat
+    ) -> some View {
+        TextEditor(text: text)
+            .font(.system(.caption, design: .monospaced))
+            .accessibilityIdentifier(accessibilityID)
+            .frame(minHeight: height, maxHeight: height)
+            .padding(4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1)
+            )
     }
 
     @ViewBuilder

@@ -86,6 +86,27 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         XCTAssertEqual(credential.requestedScopes, ["https://ai.azure.com/.default"])
     }
 
+    func testApiKeyAuthenticationUsesTheApiKeyHeaderWithoutAuthorizationOrBodyDisclosure() async throws {
+        let log = RequestLog()
+        let key = "candidate-foundry-key"
+        let provider = MicrosoftFoundryCleanupProvider(
+            inferenceBase: URL(string: "https://my-res.services.ai.azure.com/openai/v1/")!,
+            deployment: "gpt-5-mini",
+            apiKey: key,
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Cleaned text.")
+            })
+
+        _ = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
+
+        let sent = try XCTUnwrap(log.all.first)
+        XCTAssertEqual(sent.header("api-key"), key)
+        XCTAssertNil(sent.header("Authorization"))
+        XCTAssertFalse(String(describing: sent.jsonBody).contains(key))
+        XCTAssertFalse(String(describing: provider).contains(key))
+    }
+
     func testAReasoningRejectionRetriesWithLowThenRemembersIt() async throws {
         let log = RequestLog()
         let provider = makeProvider { request in

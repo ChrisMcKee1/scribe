@@ -325,7 +325,7 @@ struct ChatCompletionsTransport: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let bearerToken, !bearerToken.isEmpty {
-            request.setValue("******", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONEncoder().encode(
             ResponsesRequest(
@@ -379,6 +379,7 @@ struct ChatCompletionsTransport: Sendable {
         at url: URL,
         model: String,
         bearerToken: String?,
+        apiKey: String? = nil,
         temperature: Double?,
         reasoningEffort: String? = nil,
         promptCacheMode: String? = nil,
@@ -395,6 +396,9 @@ struct ChatCompletionsTransport: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let bearerToken, !bearerToken.isEmpty {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let apiKey, !apiKey.isEmpty {
+            request.setValue(apiKey, forHTTPHeaderField: "api-key")
         }
         request.httpBody = try JSONEncoder().encode(
             ChatCompletionRequest(

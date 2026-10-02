@@ -82,7 +82,7 @@ extension CleanupPrompt {
     /// single-line contract added when the target needs it. Windows' `ResolveWritingStyleOverride`.
     static func writingStyle(profileStyle: String?, requireSingleLine: Bool) -> String {
         let trimmed = profileStyle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let style = trimmed.isEmpty ? defaultWritingStyle : trimmed
+        let style = trimmed.isEmpty ? CleanupPrompt.effectiveWritingStyle : trimmed
         return requireSingleLine ? style + " " + singleLineWritingStyle : style
     }
 }

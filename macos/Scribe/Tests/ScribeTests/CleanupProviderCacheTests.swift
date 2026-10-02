@@ -372,6 +372,46 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertEqual(rig.fixture.apiKeys.reads, 1, "the dictation reused the provider Test Connection built")
     }
 
+    @MainActor
+    func testTestConnectionUsesUnsavedFoundryCredentialsAndPromptDrafts() async throws {
+        let rig = try makeRig()
+        var settings = CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load()
+        settings.isEnabled = true
+        settings.providerKind = .microsoftFoundry
+        settings.azureEndpoint = "https://my-res.services.ai.azure.com/api/projects/my-project"
+        settings.azureDeployment = "gpt-5-mini"
+        settings.azureAuthMode = .servicePrincipal
+        settings.azureApiKeySelected = true
+        settings.azureTenantId = ""
+        settings.azureClientId = ""
+        let key = "unsaved-foundry-key"
+        let writingStyle = "Use the candidate style."
+        let detailedPrompt = "Candidate detailed guardrails."
+        let localPrompt = "Candidate local guardrails."
+        let candidate = CleanupConnectionCandidate(
+            settings: settings,
+            openAIApiKey: nil,
+            azureClientSecret: nil,
+            azureApiKey: key,
+            writingStyle: writingStyle,
+            frontierPrompt: detailedPrompt,
+            localPrompt: localPrompt)
+
+        let check = await rig.cache.checkConnection(candidate: candidate)
+
+        XCTAssertTrue(check.reachable, check.message)
+        let request = try XCTUnwrap(rig.requests.all.first)
+        XCTAssertEqual(request.header("api-key"), key)
+        XCTAssertNil(request.header("Authorization"))
+        XCTAssertEqual(
+            request.messageContents,
+            [detailedPrompt + "\n\nWriting style:\n" + writingStyle, "<transcript>\nok\n</transcript>"])
+        XCTAssertEqual(rig.azureCli.launches, 0)
+        XCTAssertEqual(rig.fixture.azureApiKeys.writes, 0)
+        XCTAssertFalse(
+            rig.fixture.defaults.dictionaryRepresentation().values.contains { ($0 as? String) == key })
+    }
+
     func testTestConnectionReportsADeploymentThatCannotClean() async throws {
         let rig = try makeRig { request in
             StubReply.json(

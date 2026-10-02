@@ -171,9 +171,8 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
     private static func microsoftFoundryRejection(_ status: Int) -> String {
         switch status {
         case 401:
-            return "Microsoft Foundry rejected the credentials (401). The Azure identity Scribe signed in with is not "
-                + "valid for this resource: check the tenant, then sign in again. A regional endpoint, one without the "
-                + "resource's own custom subdomain, rejects every Entra token whatever the roles."
+            return "Microsoft Foundry rejected the credentials (401). Check that the selected sign-in or API key is "
+                + "valid for this resource. Entra sign-in also requires the resource's own custom subdomain."
         case 403:
             return "Microsoft Foundry accepted the sign-in but denied access (403). If you just assigned a role, wait "
                 + "about ten minutes: role assignments take longer to take effect than Azure documents. Otherwise "
@@ -265,6 +264,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
     case azureTenantInvalid
     case azureClientIdMissing
     case azureClientSecretMissing
+    case azureApiKeyMissing
 
     func message(for source: CleanupConfigurationSource) -> String {
         let fix: String
@@ -302,6 +302,8 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
                 source == .environment
                 ? "Save the client secret with 'Scribe --set-azure-client-secret <client-id>'"
                 : "Save the client secret for this client ID"
+        case .azureApiKeyMissing:
+            fix = "Save a Microsoft Foundry API key"
         }
         switch source {
         case .settings:
@@ -577,8 +579,35 @@ enum CleanupPrompt {
     /// Combines a guardrail preamble with the (possibly user-customized) writing style into the
     /// full system prompt sent to the model. `useLocalPrompt` selects the terser guardrail meant
     /// for small on-device models; see `FoundryLocalCleanupProvider`.
-    static func systemPrompt(writingStyle: String, useLocalPrompt: Bool, glossary: String? = nil) -> String {
-        let guardrail = useLocalPrompt ? defaultLocalPrompt : defaultFrontierPrompt
+    static var effectiveWritingStyle: String {
+        effectiveOverride(CleanupSettingsStore.live.writingStyle, defaultValue: defaultWritingStyle)
+    }
+
+    static func effectiveOverride(_ value: String, defaultValue: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultValue : trimmed
+    }
+
+    static func storedOverride(_ value: String, defaultValue: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != defaultValue.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return ""
+        }
+        return trimmed
+    }
+
+    static func systemPrompt(
+        writingStyle: String,
+        useLocalPrompt: Bool,
+        glossary: String? = nil,
+        frontierPrompt: String? = nil,
+        localPrompt: String? = nil
+    ) -> String {
+        let settings = CleanupSettingsStore.live.snapshot()
+        let savedPrompt = useLocalPrompt ? settings.localPrompt : settings.frontierPrompt
+        let override = useLocalPrompt ? localPrompt : frontierPrompt
+        let fallback = useLocalPrompt ? defaultLocalPrompt : defaultFrontierPrompt
+        let guardrail = effectiveOverride(override ?? savedPrompt, defaultValue: fallback)
         var prompt = guardrail + "\n\nWriting style:\n" + writingStyle
         if let glossary, !glossary.isEmpty {
             prompt += "\n\n" + glossary

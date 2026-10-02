@@ -25,6 +25,7 @@ final class CleanupDisclosureTests: XCTestCase {
         let text = CleanupDisclosure.whatCleanupNeverSends
 
         XCTAssertTrue(text.contains("Test Connection sends a short request"))
+        XCTAssertTrue(text.contains("the current writing style and guardrails"))
         XCTAssertTrue(text.contains("none of your vocabulary"))
         XCTAssertTrue(text.contains("Ollama or LM Studio on this Mac"))
         XCTAssertTrue(text.contains("fixed readying request"))

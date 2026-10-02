@@ -15,6 +15,34 @@ final class CleanupPromptTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Writing style:\nBe terse."))
     }
 
+    func testSystemPromptComposesSavedGuardrailOverridesWithTheWritingStyle() {
+        let detailed = CleanupPrompt.systemPrompt(
+            writingStyle: "Use compact sentences.", useLocalPrompt: false,
+            frontierPrompt: "Custom detailed guardrail.", localPrompt: "Custom local guardrail.")
+        let local = CleanupPrompt.systemPrompt(
+            writingStyle: "Use compact sentences.", useLocalPrompt: true,
+            frontierPrompt: "Custom detailed guardrail.", localPrompt: "Custom local guardrail.")
+
+        XCTAssertTrue(detailed.hasPrefix("Custom detailed guardrail."))
+        XCTAssertTrue(detailed.contains("Writing style:\nUse compact sentences."))
+        XCTAssertFalse(detailed.contains("Custom local guardrail."))
+        XCTAssertTrue(local.hasPrefix("Custom local guardrail."))
+        XCTAssertTrue(local.contains("Writing style:\nUse compact sentences."))
+        XCTAssertFalse(local.contains("Custom detailed guardrail."))
+    }
+
+    func testBlankPromptOverridesPreserveTheBuiltInDefaults() {
+        XCTAssertEqual(
+            CleanupPrompt.effectiveOverride(" \n ", defaultValue: CleanupPrompt.defaultWritingStyle),
+            CleanupPrompt.defaultWritingStyle)
+        XCTAssertEqual(
+            CleanupPrompt.storedOverride(
+                CleanupPrompt.defaultWritingStyle, defaultValue: CleanupPrompt.defaultWritingStyle), "")
+        XCTAssertEqual(
+            CleanupPrompt.storedOverride("  Custom style.  ", defaultValue: CleanupPrompt.defaultWritingStyle),
+            "Custom style.")
+    }
+
     func testWrapTranscriptAddsTags() {
         XCTAssertEqual(CleanupPrompt.wrapTranscript("hello world"), "<transcript>\nhello world\n</transcript>")
     }

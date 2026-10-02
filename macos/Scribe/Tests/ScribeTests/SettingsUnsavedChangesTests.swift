@@ -92,6 +92,65 @@ final class SettingsUnsavedChangesTests: XCTestCase {
         XCTAssertEqual(drafts.footerMessage, "Discarded unsaved changes.")
     }
 
+    func testDiscardRestoresTheSavedCleanupPrompts() {
+        let drafts = SettingsDrafts()
+        drafts.loadCleanupPrompts(
+            writingStyle: "Saved style.", frontierPrompt: "Saved detailed guardrails.",
+            localPrompt: "Saved local guardrails.")
+        drafts.cleanupWritingStyle = "Unsaved style."
+        drafts.cleanupFrontierPrompt = "Unsaved detailed guardrails."
+        drafts.cleanupLocalPrompt = "Unsaved local guardrails."
+
+        XCTAssertEqual(drafts.unsavedSections, ["AI cleanup"])
+        drafts.discard()
+
+        XCTAssertEqual(drafts.cleanupWritingStyle, "Saved style.")
+        XCTAssertEqual(drafts.cleanupFrontierPrompt, "Saved detailed guardrails.")
+        XCTAssertEqual(drafts.cleanupLocalPrompt, "Saved local guardrails.")
+        XCTAssertFalse(drafts.hasUnsavedChanges)
+    }
+
+    func testRestoreDefaultsAreStagedAndSavedAsDefaultPreservingOverrides() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let cleanup = makeCleanupStore().store
+        cleanup.writingStyle = "Saved style."
+        cleanup.frontierPrompt = "Saved detailed guardrails."
+        cleanup.localPrompt = "Saved local guardrails."
+        let drafts = SettingsDrafts()
+        drafts.loadCleanupPrompts(
+            writingStyle: cleanup.writingStyle, frontierPrompt: cleanup.frontierPrompt,
+            localPrompt: cleanup.localPrompt)
+        drafts.configureSave(
+            store: fixture.store, libraries: fixture.libraries, cleanupSettings: cleanup, onChanged: {})
+
+        drafts.restoreCleanupWritingStyle()
+        drafts.restoreCleanupGuardrails()
+
+        XCTAssertTrue(drafts.hasUnsavedCleanupPromptChanges)
+        XCTAssertEqual(drafts.cleanupWritingStyle, CleanupPrompt.defaultWritingStyle)
+        XCTAssertEqual(drafts.cleanupFrontierPrompt, CleanupPrompt.defaultFrontierPrompt)
+        XCTAssertEqual(drafts.cleanupLocalPrompt, CleanupPrompt.defaultLocalPrompt)
+
+        let saved = await drafts.save()
+        XCTAssertTrue(saved, drafts.footerMessage ?? "")
+
+        XCTAssertEqual(cleanup.writingStyle, "")
+        XCTAssertEqual(cleanup.frontierPrompt, "")
+        XCTAssertEqual(cleanup.localPrompt, "")
+        XCTAssertFalse(drafts.hasUnsavedChanges)
+        XCTAssertEqual(
+            CleanupPrompt.effectiveOverride(cleanup.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle),
+            CleanupPrompt.defaultWritingStyle)
+        let reloaded = SettingsDrafts()
+        reloaded.loadCleanupPrompts(
+            writingStyle: cleanup.writingStyle, frontierPrompt: cleanup.frontierPrompt,
+            localPrompt: cleanup.localPrompt)
+        XCTAssertEqual(reloaded.cleanupWritingStyle, CleanupPrompt.defaultWritingStyle)
+        XCTAssertEqual(reloaded.cleanupFrontierPrompt, CleanupPrompt.defaultFrontierPrompt)
+        XCTAssertEqual(reloaded.cleanupLocalPrompt, CleanupPrompt.defaultLocalPrompt)
+    }
+
     func testSaveFailureKeepsEditsAndPreventsClose() async {
         let drafts = SettingsDrafts()
         drafts.snippetPhrase = "email"
@@ -121,6 +180,33 @@ final class SettingsUnsavedChangesTests: XCTestCase {
         let accepted = await drafts.acceptClose(.save)
         XCTAssertFalse(accepted)
         XCTAssertEqual(drafts.snippetPhrase, "later edit")
+        XCTAssertTrue(drafts.footerMessage?.contains("changed while saving") == true)
+    }
+
+    func testCleanupPromptEditsMadeDuringSaveRemainDirtyAgainstTheSavedSnapshot() async {
+        let drafts = SettingsDrafts()
+        drafts.cleanupWritingStyle = "Style submitted for saving."
+        let savedWritingStyle = drafts.cleanupWritingStyle
+        let savedFrontierPrompt = drafts.cleanupFrontierPrompt
+        let savedLocalPrompt = drafts.cleanupLocalPrompt
+        let gate = SettingsTestGate()
+        drafts.saveOperation = { drafts in
+            await gate.pass()
+            drafts.markCleanupPromptsSaved(
+                writingStyle: savedWritingStyle,
+                frontierPrompt: savedFrontierPrompt,
+                localPrompt: savedLocalPrompt)
+        }
+
+        let saving = Task { await drafts.save() }
+        await gate.waitForArrival()
+        drafts.cleanupWritingStyle = "Style typed while saving."
+        await gate.open()
+
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertEqual(drafts.cleanupWritingStyle, "Style typed while saving.")
+        XCTAssertTrue(drafts.hasUnsavedCleanupPromptChanges)
         XCTAssertTrue(drafts.footerMessage?.contains("changed while saving") == true)
     }
 

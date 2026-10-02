@@ -158,12 +158,30 @@ final class CleanupProviderCache: Sendable {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
         }
+        return await checkConnection(for: connection)
+    }
 
+    /// Tests the unsaved AI Cleanup draft with its candidate credentials. This deliberately bypasses the provider
+    /// cache so neither the cached provider nor stored settings can replace what the user asked to test.
+    func checkConnection(candidate: CleanupConnectionCandidate) async -> CleanupConnectionCheck {
+        let connection: CleanupConnection
+        do {
+            connection = try CleanupProviderResolver.connection(candidate: candidate, store: store)
+        } catch {
+            return CleanupConnectionCheck(
+                reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
+        }
+        return await checkConnection(for: connection, candidate: candidate)
+    }
+
+    private func checkConnection(
+        for connection: CleanupConnection, candidate: CleanupConnectionCandidate? = nil
+    ) async -> CleanupConnectionCheck {
         let kind = connection.kind
         let deadline = deadlineForCheck(kind)
         do {
             return try await OperationDeadline.run(within: deadline, sleep: checkTimer) {
-                try await self.check(connection)
+                try await self.check(connection, candidate: candidate)
             }
         } catch let error as OperationDeadlineError {
             ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))
@@ -211,11 +229,16 @@ final class CleanupProviderCache: Sendable {
     ///   passes, and anything else, a `length` stop included, fails without a third request.
     ///
     /// Every request first checks for cancellation, so a check stopped between two requests sends no second one.
-    static func probe(_ provider: any CleanupProvider, kind: CleanupProviderKind) async throws -> ProbeAnswer {
+    static func probe(
+        _ provider: any CleanupProvider,
+        kind: CleanupProviderKind,
+        systemPrompt: String? = nil
+    ) async throws -> ProbeAnswer {
         let capped = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),
-            writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
+            writingStylePrompt: systemPrompt
+                ?? CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.effectiveWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
             timeout: ChatCompletionsTransport.seconds(checkDeadline(for: kind)),
             maxOutputTokens: checkOutputCeiling(for: kind))
         let uncapped = capped.withoutOutputLimit()
@@ -272,14 +295,31 @@ final class CleanupProviderCache: Sendable {
 
     /// Everything the deadline covers: building the provider, its Keychain read included, and the probe. Returns the
     /// result, failures included, and throws only a cancellation, so the deadline or the caller says what it meant.
-    private func check(_ connection: CleanupConnection) async throws -> CleanupConnectionCheck {
+    private func check(
+        _ connection: CleanupConnection,
+        candidate: CleanupConnectionCandidate? = nil
+    ) async throws -> CleanupConnectionCheck {
         let kind = connection.kind
         // A check cancelled before it began (Cancel pressed at once, Settings closed) builds nothing and reads no
         // Keychain item: the task group still starts its child when the group is already cancelled.
         try Task.checkCancellation()
         let provider: any CleanupProvider
         do {
-            provider = try entry(for: connection).provider
+            if let candidate {
+                provider = try CleanupProviderResolver.makeProvider(
+                    for: connection,
+                    store: store,
+                    environment: [:],
+                    factory: factory,
+                    openAIApiKeyOverride: candidate.openAIApiKey,
+                    azureClientSecretOverride: candidate.azureClientSecret,
+                    azureApiKeyOverride: candidate.azureApiKey
+                ) { _, make in
+                    try make()
+                }
+            } else {
+                provider = try entry(for: connection).provider
+            }
         } catch {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
@@ -289,7 +329,18 @@ final class CleanupProviderCache: Sendable {
 
         let started = ContinuousClock.now
         do {
-            let answer = try await Self.probe(provider, kind: kind)
+            let prompt: String?
+            if let candidate {
+                prompt = CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.effectiveOverride(
+                        candidate.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle),
+                    useLocalPrompt: provider.usesLocalCleanupPrompt,
+                    frontierPrompt: candidate.frontierPrompt,
+                    localPrompt: candidate.localPrompt)
+            } else {
+                prompt = nil
+            }
+            let answer = try await Self.probe(provider, kind: kind, systemPrompt: prompt)
             let seconds = ChatCompletionsTransport.seconds(started.duration(to: .now))
             ScribeLog.info(.cleanup, "Test Connection succeeded", .name("provider", kind), .name("answer", answer))
             return CleanupConnectionCheck(

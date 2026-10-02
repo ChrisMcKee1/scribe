@@ -2,8 +2,8 @@ import Foundation
 import os
 
 /// Cloud AI cleanup via Microsoft Foundry (Azure), reached directly over REST rather than through an SDK (Azure's .NET
-/// Agent Framework and Azure.Identity have no macOS-relevant Swift equivalent). Authenticates with the user's own
-/// Azure CLI session or a pinned Entra service principal (see AzureCredential.swift).
+/// Agent Framework and Azure.Identity have no macOS-relevant Swift equivalent). Authenticates with an API key, the
+/// user's Azure CLI session or a pinned Entra service principal (see AzureCredential.swift).
 ///
 /// Requests go to the account's unified inference endpoint, `{account}/openai/v1/chat/completions`, with `model` set to
 /// the deployment name, whichever endpoint shape was saved. Windows 0.4.3 routes the same way after a Foundry project's
@@ -14,6 +14,11 @@ import os
 /// directly, mirroring how Windows' service-principal mode hides ARM discovery (a data-plane-only permission
 /// footprint), applied to both auth modes here.
 final class MicrosoftFoundryCleanupProvider: CleanupProvider {
+    private enum Authentication: Sendable {
+        case entra(any AzureCredentialProvider)
+        case apiKey(String)
+    }
+
     private enum AzureReasoningEffort: String, Equatable {
         case none
         case low
@@ -55,13 +60,13 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     /// `{account}/openai/v1/chat/completions`.
     let completionsURL: URL
     private let promptCachingEnabled: @Sendable () -> Bool
-    private let credential: any AzureCredentialProvider
+    private let authentication: Authentication
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let reasoningMode = OSAllocatedUnfairLock(initialState: AzureReasoningMode.none)
 
     /// - Parameter inferenceBase: The account's `/openai/v1/` base, from `inferenceBase(for:)`.
-    init(
+    convenience init(
         inferenceBase: URL,
         deployment: String,
         promptCachingEnabled: @escaping @Sendable () -> Bool = { CleanupSettingsStore.live.azurePromptCaching },
@@ -69,10 +74,44 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
+        self.init(
+            inferenceBase: inferenceBase,
+            deployment: deployment,
+            promptCachingEnabled: promptCachingEnabled,
+            authentication: .entra(credential),
+            timeout: timeout,
+            session: session)
+    }
+
+    convenience init(
+        inferenceBase: URL,
+        deployment: String,
+        promptCachingEnabled: @escaping @Sendable () -> Bool = { CleanupSettingsStore.live.azurePromptCaching },
+        apiKey: String,
+        timeout: TimeInterval = 30,
+        session: URLSession = CleanupProviderFactory.cleanupSession
+    ) {
+        self.init(
+            inferenceBase: inferenceBase,
+            deployment: deployment,
+            promptCachingEnabled: promptCachingEnabled,
+            authentication: .apiKey(apiKey),
+            timeout: timeout,
+            session: session)
+    }
+
+    private init(
+        inferenceBase: URL,
+        deployment: String,
+        promptCachingEnabled: @escaping @Sendable () -> Bool,
+        authentication: Authentication,
+        timeout: TimeInterval,
+        session: URLSession
+    ) {
         self.deployment = deployment
         self.completionsURL = inferenceBase.appendingPathComponent("chat").appendingPathComponent("completions")
         self.promptCachingEnabled = promptCachingEnabled
-        self.credential = credential
+        self.authentication = authentication
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
@@ -99,11 +138,19 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
-        let token: AzureAccessToken
-        do {
-            token = try await credential.accessToken(scope: Self.inferenceScope)
-        } catch let error as AzureCredentialError {
-            throw CleanupProviderError.credentialUnavailable(error)
+        let bearerToken: String?
+        let apiKey: String?
+        switch authentication {
+        case .entra(let credential):
+            do {
+                bearerToken = try await credential.accessToken(scope: Self.inferenceScope).token
+                apiKey = nil
+            } catch let error as AzureCredentialError {
+                throw CleanupProviderError.credentialUnavailable(error)
+            }
+        case .apiKey(let key):
+            bearerToken = nil
+            apiKey = key
         }
         var mode = reasoningMode.withLock { $0 }
         while true {
@@ -112,7 +159,8 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
                     request,
                     at: completionsURL,
                     model: deployment,
-                    bearerToken: token.token,
+                    bearerToken: bearerToken,
+                    apiKey: apiKey,
                     temperature: nil,
                     reasoningEffort: mode.field,
                     promptCacheMode: promptCachingEnabled() ? nil : Self.promptCacheExplicitMode,

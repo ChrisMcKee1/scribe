@@ -148,6 +148,23 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         XCTAssertEqual(try makeProvider(fixture.store).id, "microsoft-foundry")
     }
 
+    func testFoundryApiKeyWinsOverAnIncompleteServicePrincipalConfiguration() throws {
+        let fixture = makeCleanupStore()
+        fixture.store.providerKind = .microsoftFoundry
+        fixture.store.azureEndpoint = "https://my-res.openai.azure.com"
+        fixture.store.azureDeployment = "gpt-5-mini"
+        fixture.store.azureAuthMode = .servicePrincipal
+        fixture.store.azureApiKeySelected = true
+        try fixture.store.setAzureApiKey("foundry-key")
+
+        guard case .microsoftFoundry(_, _, let identity) = try connection(fixture.store).target else {
+            return XCTFail("Expected a Microsoft Foundry connection")
+        }
+        XCTAssertEqual(identity, .apiKey)
+        XCTAssertEqual(try makeProvider(fixture.store).id, "microsoft-foundry")
+        XCTAssertTrue(fixture.store.azureApiKeySelected)
+    }
+
     /// The tenant goes into a URL path or an `az` argument, so one that could change either is refused.
     func testAnInvalidTenantIsNotConfigured() {
         let fixture = makeCleanupStore()

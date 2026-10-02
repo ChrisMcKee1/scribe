@@ -1,8 +1,24 @@
 import Foundation
 
+enum AzureAuthenticationSelection: String, CaseIterable, Identifiable, Sendable {
+    case azureCli
+    case servicePrincipal
+    case apiKey
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .azureCli: return "Azure CLI (az login)"
+        case .servicePrincipal: return "Service principal"
+        case .apiKey: return "API key"
+        }
+    }
+}
+
 /// The AI cleanup settings the AI Cleanup tab shows, as one value. Secrets are not part of it: they live in
 /// Keychain and are only written by an explicit Save.
-struct CleanupSettingsValues: Equatable {
+struct CleanupSettingsValues: Equatable, Sendable {
     var isEnabled: Bool
     var providerKind: CleanupProviderKind
     var foundryLocalModelAlias: String
@@ -26,6 +42,25 @@ struct CleanupSettingsValues: Equatable {
     var azureAuthMode: AzureAuthMode
     var azureTenantId: String
     var azureClientId: String
+    var azureApiKeySelected = false
+    var writingStyle = ""
+    var frontierPrompt = ""
+    var localPrompt = ""
+}
+
+/// The full unsaved configuration tested by the button. Secret values stay in memory only and are redacted if the
+/// candidate is inspected for debugging.
+struct CleanupConnectionCandidate: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
+    let settings: CleanupSettingsValues
+    let openAIApiKey: String?
+    let azureClientSecret: String?
+    let azureApiKey: String?
+    let writingStyle: String
+    let frontierPrompt: String
+    let localPrompt: String
+
+    var description: String { "CleanupConnectionCandidate" }
+    var customMirror: Mirror { Mirror(self, children: ["provider": settings.providerKind]) }
 }
 
 /// What "Test Connection" found, in words for the tab.
@@ -46,8 +81,12 @@ struct CleanupSettingsAccess {
     var setOpenAIApiKey: @MainActor (String?) throws -> Void
     var hasAzureClientSecret: @MainActor (_ clientId: String) -> Bool
     var setAzureClientSecret: @MainActor (_ secret: String?, _ clientId: String) throws -> Void
+    var hasAzureApiKey: @MainActor () -> Bool = { false }
+    var setAzureApiKey: (@MainActor (String?) throws -> Void)? = nil
     /// Runs Test Connection through the provider the pipeline would use. Runs off the main actor.
     var checkConnection: @Sendable () async -> CleanupConnectionCheck
+    /// Uses the unsaved settings and credentials captured by Test Connection, without persisting them.
+    var checkCandidateConnection: (@Sendable (CleanupConnectionCandidate) async -> CleanupConnectionCheck)? = nil
 }
 
 extension CleanupSettingsAccess {
@@ -82,7 +121,11 @@ extension CleanupSettingsAccess {
                     azurePromptCaching: store.azurePromptCaching,
                     azureAuthMode: store.azureAuthMode,
                     azureTenantId: store.azureTenantId,
-                    azureClientId: store.azureClientId)
+                    azureClientId: store.azureClientId,
+                    azureApiKeySelected: store.azureApiKeySelected,
+                    writingStyle: store.writingStyle,
+                    frontierPrompt: store.frontierPrompt,
+                    localPrompt: store.localPrompt)
             },
             save: { new, old in
                 if new.isEnabled != old.isEnabled { store.isEnabled = new.isEnabled }
@@ -128,13 +171,19 @@ extension CleanupSettingsAccess {
                 if new.azureAuthMode != old.azureAuthMode { store.azureAuthMode = new.azureAuthMode }
                 if new.azureTenantId != old.azureTenantId { store.azureTenantId = new.azureTenantId }
                 if new.azureClientId != old.azureClientId { store.azureClientId = new.azureClientId }
+                if new.azureApiKeySelected != old.azureApiKeySelected {
+                    store.azureApiKeySelected = new.azureApiKeySelected
+                }
             },
             isConfigured: { store.isConfigured(for: $0) },
             hasOpenAIApiKey: { store.openAIApiKey() != nil },
             setOpenAIApiKey: { try store.setOpenAIApiKey($0) },
             hasAzureClientSecret: { store.azureClientSecret(clientId: $0) != nil },
             setAzureClientSecret: { try store.setAzureClientSecret($0, clientId: $1) },
-            checkConnection: { await providers.checkConnection() })
+            hasAzureApiKey: { store.azureApiKey() != nil },
+            setAzureApiKey: { try store.setAzureApiKey($0) },
+            checkConnection: { await providers.checkConnection() },
+            checkCandidateConnection: { await providers.checkConnection(candidate: $0) })
     }
 }
 
@@ -157,6 +206,7 @@ final class CleanupSettingsModel: ObservableObject {
     }
     @Published private(set) var hasSavedOpenAIApiKey = false
     @Published private(set) var hasSavedAzureClientSecret = false
+    @Published private(set) var hasSavedAzureApiKey = false
     @Published private(set) var isTesting = false
     @Published private(set) var statusMessage: String?
     @Published private(set) var errorMessage: String?
@@ -186,6 +236,8 @@ final class CleanupSettingsModel: ObservableObject {
         self.drafts = drafts
         self.operations = operations
         values = access.load()
+        drafts.loadCleanupPrompts(
+            writingStyle: values.writingStyle, frontierPrompt: values.frontierPrompt, localPrompt: values.localPrompt)
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
             [weak self] in
             self?.reload()
@@ -205,7 +257,20 @@ final class CleanupSettingsModel: ObservableObject {
         case .provider, .providerDetails:
             return !values.isEnabled
         case .connectionTest:
-            return !values.isEnabled || isTesting || !access.isConfigured(values.providerKind)
+            guard values.isEnabled, !isTesting, access.isConfigured(values.providerKind) else { return true }
+            if values.providerKind == .microsoftFoundry {
+                switch azureAuthenticationSelection {
+                case .apiKey:
+                    return !hasSavedAzureApiKey && drafts.azureApiKey.isEmpty
+                case .servicePrincipal:
+                    return values.azureTenantId.trimmingCharacters(in: .whitespaces).isEmpty
+                        || values.azureClientId.trimmingCharacters(in: .whitespaces).isEmpty
+                        || (!hasSavedAzureClientSecret && drafts.azureClientSecret.isEmpty)
+                case .azureCli:
+                    return false
+                }
+            }
+            return false
         }
     }
 
@@ -215,6 +280,14 @@ final class CleanupSettingsModel: ObservableObject {
 
     var canSaveAzureClientSecret: Bool {
         !drafts.azureClientSecret.isEmpty && !values.azureClientId.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var canSaveAzureApiKey: Bool {
+        !drafts.azureApiKey.isEmpty
+    }
+
+    var azureAuthenticationSelection: AzureAuthenticationSelection {
+        values.azureApiKeySelected ? .apiKey : values.azureAuthMode == .servicePrincipal ? .servicePrincipal : .azureCli
     }
 
     var providerSelection: CleanupProviderSelection {
@@ -462,6 +535,21 @@ final class CleanupSettingsModel: ObservableObject {
         values = updated
     }
 
+    func setAzureAuthenticationSelection(_ selection: AzureAuthenticationSelection) {
+        var updated = values
+        switch selection {
+        case .apiKey:
+            updated.azureApiKeySelected = true
+        case .azureCli:
+            updated.azureApiKeySelected = false
+            updated.azureAuthMode = .azureCli
+        case .servicePrincipal:
+            updated.azureApiKeySelected = false
+            updated.azureAuthMode = .servicePrincipal
+        }
+        values = updated
+    }
+
     /// Re-reads stored settings. What is typed into a secret field is kept: it is not stored until Save.
     func reload() {
         // A write of the tab's own reaches here from inside `save`; storage already holds what the tab shows.
@@ -471,6 +559,8 @@ final class CleanupSettingsModel: ObservableObject {
         isReloading = true
         values = stored
         isReloading = false
+        drafts.loadCleanupPrompts(
+            writingStyle: stored.writingStyle, frontierPrompt: stored.frontierPrompt, localPrompt: stored.localPrompt)
     }
 
     /// Re-reads which secrets Keychain holds. Done when the tab appears and after a change that affects it, never
@@ -478,6 +568,7 @@ final class CleanupSettingsModel: ObservableObject {
     func refreshSecretState() {
         hasSavedOpenAIApiKey = access.hasOpenAIApiKey()
         hasSavedAzureClientSecret = access.hasAzureClientSecret(values.azureClientId)
+        hasSavedAzureApiKey = access.hasAzureApiKey()
     }
 
     func saveOpenAIApiKey() {
@@ -532,22 +623,72 @@ final class CleanupSettingsModel: ObservableObject {
         }
     }
 
+    func saveAzureApiKey() {
+        do {
+            guard let setAzureApiKey = access.setAzureApiKey else {
+                throw KeychainStore.KeychainError.unhandled(errSecInternalComponent)
+            }
+            try setAzureApiKey(drafts.azureApiKey)
+            drafts.azureApiKey = ""
+            hasSavedAzureApiKey = true
+            var updated = values
+            updated.azureApiKeySelected = true
+            values = updated
+            credentialsChanged()
+            show(status: "API key saved to Keychain.")
+        } catch {
+            show(error: "Failed to save API key: \(error.localizedDescription)")
+        }
+    }
+
+    func clearAzureApiKey() {
+        do {
+            guard let setAzureApiKey = access.setAzureApiKey else {
+                throw KeychainStore.KeychainError.unhandled(errSecInternalComponent)
+            }
+            try setAzureApiKey(nil)
+            drafts.azureApiKey = ""
+            hasSavedAzureApiKey = false
+            var updated = values
+            updated.azureApiKeySelected = false
+            values = updated
+            credentialsChanged()
+            show(status: "API key removed.")
+        } catch {
+            show(error: "Failed to remove API key: \(error.localizedDescription)")
+        }
+    }
+
     /// Runs Test Connection through the provider the pipeline would use, environment overrides included. A result that
     /// arrives after the settings or a stored credential changed is dropped rather than shown against them.
     /// `cancelConnectionTest()` stops it while it runs, and so does Quit (`AuxiliaryOperations`).
     func testConnection() async {
         guard !isDisabled(.connectionTest) else { return }
         let started = revision
+        let candidate = CleanupConnectionCandidate(
+            settings: values,
+            openAIApiKey: drafts.openAIApiKey.isEmpty ? nil : drafts.openAIApiKey,
+            azureClientSecret: drafts.azureClientSecret.isEmpty ? nil : drafts.azureClientSecret,
+            azureApiKey: drafts.azureApiKey.isEmpty ? nil : drafts.azureApiKey,
+            writingStyle: drafts.cleanupWritingStyle,
+            frontierPrompt: drafts.cleanupFrontierPrompt,
+            localPrompt: drafts.cleanupLocalPrompt)
         isTesting = true
         statusMessage = nil
         errorMessage = nil
         checkCancelledByUser = false
         let checkConnection = access.checkConnection
+        let checkCandidateConnection = access.checkCandidateConnection
         let operations = operations
         // Nil when the check was cancelled before it was admitted, so nothing ran; a refusal at Quit says so.
         let check = Task { () -> CleanupConnectionCheck? in
             do {
-                return try await operations.run { await checkConnection() }
+                return try await operations.run {
+                    if let checkCandidateConnection {
+                        return await checkCandidateConnection(candidate)
+                    }
+                    return await checkConnection()
+                }
             } catch AuxiliaryOperations.Refusal.closed {
                 return CleanupConnectionCheck(
                     reachable: false, message: "Test Connection did not run, because Scribe is quitting.")
@@ -563,7 +704,18 @@ final class CleanupSettingsModel: ObservableObject {
         }
         runningCheck = nil
         isTesting = false
-        guard started == revision else { return }
+        let stillCurrent =
+            started == revision
+            && candidate
+                == CleanupConnectionCandidate(
+                    settings: values,
+                    openAIApiKey: drafts.openAIApiKey.isEmpty ? nil : drafts.openAIApiKey,
+                    azureClientSecret: drafts.azureClientSecret.isEmpty ? nil : drafts.azureClientSecret,
+                    azureApiKey: drafts.azureApiKey.isEmpty ? nil : drafts.azureApiKey,
+                    writingStyle: drafts.cleanupWritingStyle,
+                    frontierPrompt: drafts.cleanupFrontierPrompt,
+                    localPrompt: drafts.cleanupLocalPrompt)
+        guard stillCurrent else { return }
         guard let result = outcome, !checkCancelledByUser else {
             statusMessage = "Test Connection was cancelled."
             return
