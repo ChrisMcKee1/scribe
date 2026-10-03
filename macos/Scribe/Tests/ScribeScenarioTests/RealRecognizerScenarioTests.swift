@@ -290,4 +290,28 @@ final class RealRecognizerScenarioTests: XCTestCase {
         }
         report.write()
     }
+
+    func testLongDigitalSilenceBetweenPassagesDoesNotDiscardEitherPassage() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1 with cached Foundry speech for long digital pauses.")
+        }
+        let library = try ScenarioLibrary.shared()
+        let first = try library.clip("longer")
+        let last = try library.clip("pangram")
+        let samples = first.samples + [Float](repeating: 0, count: 65 * 16000) + last.samples
+        let spans = TranscriptionChunker.plan(samples: samples, sampleRate: 16000)
+        XCTAssertTrue(spans.contains { samples[$0].allSatisfy { $0 == 0 } })
+        let scratch = try makeScenarioDirectory("asr-digital-pause")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        XCTAssertEqual(try engine.resolveBackend().kind, .foundryLocal)
+        let result = try await engine.transcribe(samples: samples, sampleRate: 16000)
+        let report = ScenarioReport("real-asr-digital-pause")
+        for clip in [first, last] {
+            let retained = ScenarioText.retainedWordShare(expected: clip.text, actual: result.text)
+            report.note("\(clip.name).retained", value: retained, digits: 3)
+            XCTAssertGreaterThanOrEqual(retained, 0.8)
+        }
+        report.write()
+    }
 }

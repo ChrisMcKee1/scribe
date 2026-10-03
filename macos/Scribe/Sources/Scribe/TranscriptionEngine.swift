@@ -376,10 +376,16 @@ final class TranscriptionEngine: Sendable {
         var standardErrorBytes = 0
         var usedColdBudget = false
         var outputHeldAfterExit = false
+        var silentChunks = 0
 
         do {
-            for (index, span) in spans.enumerated() {
+            for span in spans {
                 guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+                // A zero-only chunk cannot carry speech. Its empty answer must not discard surrounding speech.
+                if samples[span].allSatisfy({ $0 == 0 }) {
+                    silentChunks += 1
+                    continue
+                }
 
                 let file: ScratchAudioFile
                 do {
@@ -395,7 +401,7 @@ final class TranscriptionEngine: Sendable {
 
                 let result = try await run(
                     backend, audioURL: file.url, audioSeconds: Double(span.count) / sampleRate)
-                if index == 0 {
+                if parts.isEmpty {
                     usedColdBudget = result.diagnostics.usedColdBudget
                 }
                 parts.append(result.text)
@@ -410,6 +416,11 @@ final class TranscriptionEngine: Sendable {
             throw error
         }
 
+        guard !parts.isEmpty else {
+            ScribeLog.warning(
+                .transcription, "Long capture contains only digital silence", .count("chunks", silentChunks))
+            throw TranscriptionError.emptyOutput
+        }
         let text = parts.joined(separator: " ")
         let diagnostics = TranscriptionDiagnostics(
             duration: duration,
@@ -421,6 +432,7 @@ final class TranscriptionEngine: Sendable {
         ScribeLog.info(
             .transcription, "Transcribed long capture",
             .name("backend", backend.kind), .count("chunks", spans.count),
+            .count("silentChunks", silentChunks),
             .count("characters", text.count), .count("stdoutBytes", standardOutputBytes),
             .count("stderrBytes", standardErrorBytes))
         return TranscriptionResult(text: text, backend: backend.kind, diagnostics: diagnostics)
