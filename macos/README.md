@@ -437,6 +437,10 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   context or atomic ownership. Older CLIs without usable metadata cannot serve cleanup until upgraded.
   `SCRIBE_REAL_FOUNDRY_CLEANUP=1 swift test --package-path macos/Scribe --filter FoundryLocalCleanupProviderTests`
   checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached.
+- A nonempty capture at a valid sample rate whose samples are all exactly zero is refused before recording
+  scratch storage, model-cache discovery or decoding, at short lengths too. Signed zero counts as zero;
+  even the smallest normal nonzero sample still reaches decoding. This prevents recognizer hallucinations
+  on digital silence, not quiet-room or model-backed speech detection.
 - The shared operation deadline refuses an already cancelled caller before starting either work or its timer,
   and refuses success after caller cancellation. It still waits for all work to settle: synchronous Keychain
   consent and deliberately noncooperative work are not hard-stopped.

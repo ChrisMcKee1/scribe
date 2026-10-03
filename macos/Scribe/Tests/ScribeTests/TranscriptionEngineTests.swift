@@ -349,6 +349,41 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertTrue(scratchFiles(scratch).isEmpty)
     }
 
+    func testShortExactZeroCaptureNeverAcceptsRecognizerHallucination() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-short-zero")
+        let called = directory.appendingPathComponent("called")
+        let script = try makeScript(
+            "touch '\(called.path(percentEncoded: false))'; printf '{\"text\":\"hallucination\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        for seconds in [1, 5, 30] {
+            let failure = await transcriptionError {
+                try await engine.transcribe(
+                    samples: [Float](repeating: -0.0, count: seconds * 16_000), sampleRate: 16_000)
+            }
+            XCTAssertEqual(failure, .emptyOutput)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testShortNonzeroCaptureStillReachesTheRecognizerWithoutASilenceThreshold() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-short-nonzero")
+        let evidence = directory.appendingPathComponent("recording.wav")
+        let script = try makeScript(
+            "cp \"$5\" '\(evidence.path(percentEncoded: false))'; printf '{\"text\":\"decoded\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        var samples = [Float](repeating: 0, count: 16_000)
+        samples[8000] = Float.leastNormalMagnitude
+        let result = try await engine.transcribe(samples: samples, sampleRate: 16_000)
+        XCTAssertEqual(result.text, "decoded")
+        XCTAssertEqual(try Self.samplesInWav(at: evidence), samples)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
     func testFailureAfterTheFirstFoundryChunkDoesNotReturnPartialText() async throws {
         let directory = try makeTemporaryDirectory(label: "asr-chunk-failure")
         let callCount = directory.appendingPathComponent("call-count").path(percentEncoded: false)

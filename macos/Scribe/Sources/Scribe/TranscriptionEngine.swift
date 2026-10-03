@@ -323,6 +323,11 @@ final class TranscriptionEngine: Sendable {
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+        if sampleRate.isFinite, sampleRate > 0, !samples.isEmpty, samples.allSatisfy({ $0 == 0 }) {
+            ScribeLog.warning(
+                .transcription, "Capture contains only digital silence", .count("samples", samples.count))
+            throw TranscriptionError.emptyOutput
+        }
         try await requireFoundryModelIsCached(backend)
 
         if backend.kind == .foundryLocal,
