@@ -608,7 +608,7 @@ final class LocalModelLifecycle: Sendable {
     func forgetUnlisted(endpoint: String, model: String, listed: Set<String>, ifUnchangedSince revision: UInt64? = nil)
     {
         state.withLock { state in
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !state.releasesClosing else { return }
             if let revision, state.revision != revision { return }
             state.copies.removeAll { copy in
                 Self.sameServer(copy.endpoint, endpoint) && !listed.contains(copy.instanceID)
@@ -637,6 +637,7 @@ final class LocalModelLifecycle: Sendable {
         }
         let observed = await read(target.endpoint, target.apiKey)
         guard !Task.isCancelled else { return .busy }
+        guard !state.withLock({ $0.releasesClosing }) else { return .busy }
         guard observed.reach == .reached || observed.reach == .notRunning else { return .unavailable }
         if observed.reach == .reached {
             let listed = Set(observed.loaded.compactMap { $0.instanceID })

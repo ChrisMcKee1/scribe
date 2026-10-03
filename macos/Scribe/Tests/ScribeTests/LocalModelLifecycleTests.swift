@@ -130,6 +130,45 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testResidencyReadSpanningShutdownCannotEraseOwedOwnership() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        try await owned(lifecycle, "owed")
+        let reading = LifecycleGate()
+        let resume = LifecycleGate()
+        let lease = try await lifecycle.beginUse(lmTarget())
+        let reconcile = Task {
+            await lifecycle.reconcileLMStudio(
+                target: lmTarget(), contextTokens: 8192, lease: lease,
+                read: { _, _ in
+                    reading.open()
+                    try? await resume.wait()
+                    return LocalServerState(reach: .reached, models: [], loaded: [])
+                },
+                load: { _, _, _ in
+                    XCTFail("A read spanning shutdown cannot load")
+                    return "never"
+                })
+        }
+        try await reading.wait()
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(2)
+        clock.fire()
+        _ = await shutdown.value
+        resume.open()
+        let result = await reconcile.value
+        lease.end()
+        XCTAssertEqual(result, .busy)
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["owed"])
+        lifecycle.forgetUnlisted(endpoint: lmTarget().endpoint, model: "m", listed: [])
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["owed"])
+        let later = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(later, .released)
+        XCTAssertEqual(fake.instances.map(\.id), ["owed"])
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
     func testConfigurationRetirementRetriesBehindActiveUseWithoutUnloadingNewModel() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()
@@ -1584,8 +1623,8 @@ final class LocalModelLifecycleTests: XCTestCase {
         try await owned(lifecycle, "i1")
         fake.set { $0.barrier = barrier }
         let release = Task { await lifecycle.release(.shutdown, target: nil) }
-        for _ in 0..<200 where fake.instances.isEmpty { await Task.yield() }
-        await clock.waitForSleepers(1)
+        try await fake.instanceStarted.wait()
+        await clock.waitForSleepers(1, duration: .seconds(2))
         clock.fire()
         let outcome = await release.value
         XCTAssertEqual(outcome, .failed)
