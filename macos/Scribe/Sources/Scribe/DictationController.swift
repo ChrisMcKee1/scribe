@@ -988,28 +988,72 @@ final class DictationController {
             useLocalPrompt: provider.usesLocalCleanupPrompt,
             frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt)
         let outputCeiling = cleanupOutputCeiling(for: settings, transcript: sent)
+        let segments: [LocalCleanupPlan.Segment]
+        do {
+            if outputCeiling != nil {
+                let configured = ContextBudget.sanitize(tuning.contextTokens)
+                let ceiling = configured > 0 ? configured : ContextBudget.assumedContextTokens
+                segments = try LocalCleanupPlan.make(
+                    text: sent, instructions: promptWithoutGlossary,
+                    contextTokens: min(ceiling, context ?? ceiling)
+                ).segments
+            } else {
+                segments = [LocalCleanupPlan.Segment(text: sent, separator: "")]
+            }
+        } catch {
+            ScribeLog.warning(
+                .cleanup, "The local cleanup request could not fit, so the raw transcript is used",
+                .integer("dictation", id.rawValue), .failure(error))
+            return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+        }
         let glossary = cleanupGlossary(
             vocabulary: vocabulary,
             rawDictation: raw,
-            correctedText: sent,
+            segments: segments,
             promptWithoutGlossary: promptWithoutGlossary,
             tuning: tuning,
             observedContext: context,
             useLocalPrompt: provider.usesLocalCleanupPrompt,
             outputCeiling: outputCeiling)
-        let request = CleanupRequest(
-            transcript: CleanupPrompt.wrapTranscript(sent),
-            writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: style,
-                useLocalPrompt: provider.usesLocalCleanupPrompt,
-                glossary: glossary,
-                frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt),
-            singleLineMode: singleLine,
-            maxOutputTokens: outputCeiling)
+        let prompt = CleanupPrompt.systemPrompt(
+            writingStyle: style,
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            glossary: glossary,
+            frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt)
         let started = clock.now
-        let response: CleanupResponse
+        var answer = ""
         do {
-            response = try await provider.clean(request)
+            for segment in segments {
+                try Task.checkCancellation()
+                guard mayContinue else { throw CancellationError() }
+                let remaining = LocalCleanupPlan.answerTimeLimit - started.duration(to: clock.now).seconds
+                if segments.count > 1, remaining <= 0 { throw CleanupProviderError.timedOut }
+                let response = try await provider.clean(
+                    CleanupRequest(
+                        transcript: CleanupPrompt.wrapTranscript(segment.text), writingStylePrompt: prompt,
+                        singleLineMode: singleLine,
+                        timeout: segments.count > 1 ? remaining : nil,
+                        maxOutputTokens: outputCeiling == nil ? nil : ContextBudget.cleanupOutputCeiling(segment.text)))
+                try Task.checkCancellation()
+                guard mayContinue else { throw CancellationError() }
+                if segments.count > 1, started.duration(to: clock.now).seconds >= LocalCleanupPlan.answerTimeLimit {
+                    throw CleanupProviderError.timedOut
+                }
+                if segments.count == 1 {
+                    answer = response.cleanedText
+                    continue
+                }
+                switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: segment.text) {
+                case .accepted(let cleaned):
+                    answer += cleaned + segment.separator
+                case .rejected(let reason):
+                    ScribeLog.warning(
+                        .cleanup, "An AI cleanup segment was rejected, so the whole raw transcript is used",
+                        .integer("dictation", id.rawValue), .name("reason", reason))
+                    return CleanupStage(
+                        outcome: .fellBack, text: nil, requestDuration: started.duration(to: clock.now))
+                }
+            }
         } catch {
             let elapsed = started.duration(to: clock.now)
             if mayContinue {
@@ -1022,7 +1066,7 @@ final class DictationController {
         let elapsed = started.duration(to: clock.now)
 
         // Against the text the model was sent; the guard also normalizes the reply's dashes.
-        switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: sent) {
+        switch CleanupResponseGuard.sanitize(candidate: answer, original: sent) {
         case .accepted(let cleaned):
             let outcome: DictationCleanupOutcome = cleaned == sent ? .unchanged : .cleaned
             _ = cleanupNoticeEpisode.apply(.recovered)
@@ -1041,7 +1085,7 @@ final class DictationController {
     private func cleanupGlossary(
         vocabulary: CleanupVocabulary,
         rawDictation: String,
-        correctedText: String,
+        segments: [LocalCleanupPlan.Segment],
         promptWithoutGlossary: String,
         tuning: LocalModelTuning,
         observedContext: Int?,
@@ -1059,15 +1103,17 @@ final class DictationController {
             ? selectedContext
             : (outputCeiling != nil ? ContextBudget.assumedContextTokens : 0)
         let context = observedContext.map { min(configuredContext, $0) } ?? configuredContext
-        guard context > 0, let outputCeiling else {
+        guard context > 0, outputCeiling != nil else {
             return defaultGlossary
         }
 
-        let budget = ContextBudget.vocabularyTokens(
-            context,
-            instructions: promptWithoutGlossary,
-            transcript: CleanupPrompt.wrapTranscript(correctedText),
-            outputCeiling: outputCeiling)
+        let budget =
+            segments.map {
+                ContextBudget.vocabularyTokens(
+                    context, instructions: promptWithoutGlossary,
+                    transcript: CleanupPrompt.wrapTranscript($0.text),
+                    outputCeiling: ContextBudget.cleanupOutputCeiling($0.text))
+            }.min() ?? 0
         let maxTerms =
             tuning.sendWholeVocabulary
             ? .max

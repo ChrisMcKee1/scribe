@@ -234,7 +234,7 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   whose request did not fit the reported loaded size, or whose size cannot be confirmed, is refused and dictation
   keeps the recognized text. The first request can still meet an unknown runtime cap, and another app can change
   the shared model between requests; a residency reading cannot close that race.
-  These are estimates, not tokenizer counts; splitting oversize dictations remains open work.
+  These are estimates, not tokenizer counts; oversized local requests split at whitespace as described below.
   Ollama's own-size requests keep Chat Completions but are fitted before sending to the smaller of 4,096 tokens
   and the copy's reported size. A larger copy may belong to another app and cannot vouch for Ollama's default
   after Scribe's request. A cold model receives only the fixed one-token readying request before its size is
@@ -259,7 +259,7 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   The answer budget accounts for non-spaced text as well as words. Usage summaries on recognized local apps ask
   for at most 1,024 output tokens instead of an unspecified ceiling; a payload that still cannot fit is refused.
   Remote summary requests are unchanged. Smaller actual contexts remain protected by the transport guard, but
-  discovering a cold model's limit before planning and splitting oversize cleanup remain open.
+  discovering a cold model's limit before planning remains open.
   Local-app providers now give dictation a fresh conservative planning limit from the matching loaded copy,
   never larger than the selected or assumed context. Its glossary is reduced before the transport's final fit
   check; mentioned terms keep priority. An unreadable state or a held copy without a size refuses cleanup.
@@ -272,6 +272,16 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   full instructions, sample and safety margin; otherwise nothing is sent and the existing error/fallback applies.
   Unknown or remote services keep their existing requests. Final transport checks still refuse a context that
   became smaller after planning; this does not make shared-model changes atomic.
+  Oversized local dictations now split sequentially at whitespace only when the full request cannot fit. Each
+  segment reserves its own bounded answer, and all receive the same glossary, fitted to the smallest remaining
+  room. Vocabulary and template decisions still happen once on the original dictation. Each reply and then the
+  joined reply must pass the response guard; any failure uses the entire recognized dictation, never a cleaned
+  prefix. Shutdown inserts nothing. Boundary whitespace is preserved; an oversized token with no safe whitespace
+  boundary or instructions leaving no room is refused rather than split inside a word. Remote requests remain
+  whole. A shared model can still change after planning and cause the final transport check to refuse.
+  Segments share one 30-second answer budget instead of multiplying the normal answer wait; each later request
+  gets only the remaining time, and an answer arriving after the budget is refused. Separate local-management
+  checks retain their own bounds, so this is not an absolute wall-clock guarantee.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

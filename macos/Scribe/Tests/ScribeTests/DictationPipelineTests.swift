@@ -264,6 +264,168 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
     }
 
+    func testOversizedLocalCleanupUsesOneGlossaryAndAppliesHeldTemplatesOnlyAfterJoining() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(dictionary: [
+            DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+            DictionaryEntry(pattern: "signature", replacement: "Pat Doe\nSupport lead"),
+        ])
+        let store = makeCleanupStore().store
+        store.providerKind = .ollama
+        store.writingStyle = "Keep the words."
+        store.frontierPrompt = "Edit."
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        let raw = Array(repeating: "cube flow needs a release.", count: 350).joined(separator: " ") + " signature"
+        harness.transcriber.defaultText = raw
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.planningContext = 2048
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        XCTAssertGreaterThan(provider.requests.count, 1)
+        XCTAssertEqual(Set(provider.requests.map(\.writingStylePrompt)).count, 1)
+        for request in provider.requests {
+            XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: 2048))
+            XCTAssertFalse(request.transcript.contains("Pat Doe"))
+            XCTAssertFalse(request.writingStylePrompt.contains("Pat Doe"))
+            XCTAssertTrue(request.writingStylePrompt.contains("Kubeflow"))
+        }
+        let expected =
+            Array(repeating: "Kubeflow needs a release.", count: 350).joined(separator: " ")
+            + " Pat Doe\nSupport lead "
+        XCTAssertEqual(harness.fakeInjector.texts, [expected])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .unchanged)
+    }
+
+    func testALaterFailedOrRejectedSegmentFallsBackToTheWholeDictation() async throws {
+        for rejects in [false, true] {
+            let harness = makeHarness(rulesLoaded: false)
+            harness.load(dictionary: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")])
+            let store = makeCleanupStore().store
+            store.providerKind = .ollama
+            store.frontierPrompt = "Edit."
+            harness.cleanup.settings = store.snapshot()
+            harness.cleanup.isEnabled = true
+            let raw = Array(repeating: "cube flow needs a release.", count: 350).joined(separator: " ")
+            harness.transcriber.defaultText = raw
+            let provider = try XCTUnwrap(harness.cleanup.gated)
+            provider.planningContext = 2048
+            var calls = 0
+            provider.reply = { request in
+                calls += 1
+                if calls == 2 {
+                    if rejects { return "I cannot help with that request." }
+                    throw CleanupProviderError.timedOut
+                }
+                return RecordingCleanupProvider.transcript(in: request).replacingOccurrences(
+                    of: "release", with: "change")
+            }
+            await harness.dictate()
+            await harness.waitUntilProcessed()
+            XCTAssertEqual(provider.requests.count, 2)
+            XCTAssertEqual(
+                harness.fakeInjector.texts,
+                [Array(repeating: "Kubeflow needs a release.", count: 350).joined(separator: " ") + " "])
+            XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+        }
+    }
+
+    func testShutdownDuringALaterCleanupSegmentInsertsNoPartialResult() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(dictionary: [])
+        let store = makeCleanupStore().store
+        store.providerKind = .ollama
+        store.frontierPrompt = "Edit."
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        harness.transcriber.defaultText = Array(repeating: "Keep all these words.", count: 450).joined(separator: " ")
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.planningContext = 2048
+        let gate = DictationGate<String>()
+        var calls = 0
+        provider.reply = { request in
+            calls += 1
+            if calls == 2 { return try await gate.wait() }
+            return RecordingCleanupProvider.transcript(in: request)
+        }
+        await harness.dictate()
+        await waitUntil("the second segment is waiting") { gate.waitingCount == 1 }
+        let shutdown = Task { @MainActor in await harness.controller.shutDown() }
+        _ = await bounded("shutdown cancels segmented cleanup") { await shutdown.value }
+        XCTAssertEqual(provider.requests.count, 2)
+        XCTAssertTrue(harness.fakeInjector.texts.isEmpty)
+    }
+
+    func testAnOversizedRemoteDictationStillUsesOneUnboundedRequest() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(dictionary: [])
+        let store = makeCleanupStore().store
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "https://remote.example/v1"
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        let text = Array(repeating: "Keep all these words.", count: 450).joined(separator: " ")
+        harness.transcriber.defaultText = text
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(provider.requests.count, 1)
+        XCTAssertNil(provider.requests.first?.maxOutputTokens)
+        XCTAssertEqual(harness.fakeInjector.texts, [text + " "])
+    }
+
+    func testJoinedCleanupStillMustPassTheWholeDictationRambleGuard() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(dictionary: [])
+        let store = makeCleanupStore().store
+        store.providerKind = .ollama
+        store.frontierPrompt = "Edit."
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        let text = Array(repeating: "Keep all these words.", count: 450).joined(separator: " ")
+        harness.transcriber.defaultText = text
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.planningContext = 2048
+        provider.reply = { request in
+            let original = RecordingCleanupProvider.transcript(in: request)
+            var reply = original
+            let target = Int(Double(original.count) * 2.5) + 50
+            while reply.count < target { reply += " extra invented descriptive material here now" }
+            // Keep every segment individually acceptable, while their combined per-segment allowance is too much.
+            reply = String(reply.prefix(target))
+            XCTAssertEqual(CleanupResponseGuard.sanitize(candidate: reply, original: original), .accepted(reply))
+            return reply
+        }
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        XCTAssertGreaterThan(provider.requests.count, 2)
+        XCTAssertEqual(harness.fakeInjector.texts, [text + " "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+    }
+
+    func testSegmentedCleanupSharesOneAnswerDeadlineInsteadOfMultiplyingTheWait() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(dictionary: [])
+        let store = makeCleanupStore().store
+        store.providerKind = .ollama
+        store.frontierPrompt = "Edit."
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        let text = Array(repeating: "Keep all these words.", count: 450).joined(separator: " ")
+        harness.transcriber.defaultText = text
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.planningContext = 2048
+        provider.reply = { request in
+            harness.clock.advance(by: .seconds(15))
+            return RecordingCleanupProvider.transcript(in: request)
+        }
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(provider.requests.map(\.timeout), [30, 15])
+        XCTAssertEqual(harness.fakeInjector.texts, [text + " "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+    }
+
     func testRemoteAddressWithAStaleAppSelectionDoesNotSendWholeVocabulary() async throws {
         let harness = makeHarness(rulesLoaded: false)
         harness.load(dictionary: [

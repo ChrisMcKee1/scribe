@@ -342,7 +342,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertEqual(clock.pending, 1)
         XCTAssertEqual(lifecycle.useCount, 2)
         resize.cancel()
-        await resize.value
+        _ = await resize.value
         first.end()
         XCTAssertEqual(lifecycle.useCount, 1, "the resize owns its barrier after the caller leaves")
         finish.open()
@@ -725,7 +725,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         }
         for _ in 0..<200 { await Task.yield() }
         caller.cancel()
-        await caller.value
+        _ = await caller.value
         lease.end()
         XCTAssertEqual(lifecycle.useCount, 1, "the abandoned load still counts as a use")
         let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }

@@ -126,7 +126,7 @@ real Mac.
   did not fit that size, or an unconfirmed size, refuses the answer and keeps recognized text. Both routes have
   tests for a smaller runtime cap, later no-send refusal and readiness without a restart. The first request can
   meet an unknown cap, and an external app can change the shared model between the requests; the reading is not
-  an atomic guarantee. Oversized-dictation splitting remains an explicit gap.
+  an atomic guarantee. Oversized local dictations use the bounded whitespace planner described below.
   For LM Studio with a chosen size, the provider reads the matching loaded copy after reconciliation and fits
   the full prompt, transcript and output to that reported size before completion. Manual or busy copies at a
   smaller size no longer inherit the requested budget. An absent size or unreadable residency refuses text.
@@ -147,14 +147,13 @@ real Mac.
   copies, larger-copy no-budget expansion, fixed-only readiness and changed context after completion.
   A default below 4,096 can still overtake a pre-send reading, as can another app's replacement. This is a
   conservative estimate and post-answer safeguard, not an atomic runtime guarantee. Oversized cleanup
-  splitting and using larger learned default contexts safely remain open.
+  using larger learned default contexts safely remains open.
   Default local dictation planning now fits mentioned glossary terms beside instructions, wrapped text and
   bounded output even with whole-vocabulary off. Its instruction estimate matches the transport's vocabulary
   rate and reserves the separator. Non-spaced transcripts receive a character-aware output ceiling rather
   than a one-word allowance. Local-app usage summaries send an explicit 1,024-token limit; remote summaries
   keep their existing wire. Pipeline and actual admitted-summary tests pin the planning and requests.
-  A smaller context learned only after planning can still refuse the request; cold-limit discovery and
-  splitting oversized cleanup are not claimed complete.
+  A smaller context learned only after planning can still refuse the request; cold-limit discovery remains open.
   Local-app providers now expose a fresh conservative planning limit from the matching held copy, capped by
   the configured/assumed budget. Dictation fits its captured vocabulary to that smaller limit before sending;
   missing residency or an unknown held size fails explicitly. No held copy uses only the configured estimate,
@@ -170,6 +169,17 @@ real Mac.
   room refuses the request before user content is sent. Production summary and dictionary-suggestion service
   tests pin lowered wire ceilings and changed-back planning refusal. Remote/generic requests are unchanged;
   cold models still start from an estimate, and the transport independently guards the actual send.
+  Oversized local cleanup now uses `LocalCleanupPlan`: the whole text first, then sequential whitespace segments
+  of at most 2,400 characters, reduced down to 300 until every full request fits with its output ceiling.
+  One glossary is budgeted against the worst segment, with vocabulary/template decisions made once on the raw
+  dictation. Each answer and the complete joined answer must pass the guard before the held-back replacements
+  run. A failed/rejected segment returns the whole original fallback, and cancellation/shutdown inserts no
+  partial result. Tests pin exact whitespace reconstruction, non-ASCII estimates, template privacy, shared
+  glossary, late failure/rejection, whole-result ramble rejection and shutdown. Remote requests stay whole;
+  oversized unbroken tokens and instructions that leave no room are refused, not cut into fabricated words.
+  Segments share a 30-second answer budget: remaining time is passed on each request and checked after delivery.
+  A manual-clock regression expires it at the second segment and keeps the entire original fallback. Existing
+  separately bounded management reads/loads can add time, so no absolute 30-second end-to-end guarantee is claimed.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app
