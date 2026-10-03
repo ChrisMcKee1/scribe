@@ -62,6 +62,7 @@ About and Diagnostics link to the maintainer's `ChrisMcKee1/scribe` repository f
 The manual update check examines its latest 100 releases and offers only the highest stable version with a
 matching `Scribe-macOS-<version>.dmg`, never a Windows-only release. If none is listed it says so, rather than
 claiming the app is up to date. This neither checks the DMG's signature/architecture nor downloads or installs it.
+Leaving About or closing Settings cancels an in-flight manual check; its late result cannot replace a newer check.
 
 ## Build
 

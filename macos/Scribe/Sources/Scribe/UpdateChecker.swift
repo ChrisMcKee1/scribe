@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 enum ScribeRepository {
@@ -82,6 +83,61 @@ enum UpdateCheckResult: Equatable {
     case failed(message: String)
 }
 
+@MainActor
+final class UpdateCheckModel: ObservableObject {
+    @Published private(set) var result: UpdateCheckResult?
+    @Published private(set) var isChecking = false
+    private let check: @Sendable (String) async -> UpdateCheckResult
+    private var owner: UUID?
+    private var task: Task<Void, Never>?
+
+    init(
+        check: @escaping @Sendable (String) async -> UpdateCheckResult = {
+            await UpdateChecker().checkForUpdate(currentVersion: $0)
+        }
+    ) {
+        self.check = check
+    }
+
+    deinit {
+        task?.cancel()
+    }
+
+    @discardableResult
+    func start(currentVersion: String) -> Task<Void, Never> {
+        cancel()
+        let ticket = UUID()
+        owner = ticket
+        result = nil
+        isChecking = true
+        let work = Task { @MainActor [weak self, check] in
+            defer {
+                if let self, self.owner == ticket {
+                    self.owner = nil
+                    self.task = nil
+                    self.isChecking = false
+                }
+            }
+            guard !Task.isCancelled else { return }
+            let result = await check(currentVersion)
+            guard let self, self.owner == ticket else { return }
+            self.result =
+                Task.isCancelled ? .failed(message: "The update check was cancelled.") : result
+        }
+        task = work
+        return work
+    }
+
+    func cancel() {
+        guard owner != nil else { return }
+        owner = nil
+        task?.cancel()
+        task = nil
+        isChecking = false
+        result = nil
+    }
+}
+
 /// Finds a stable macOS release in the latest 100 GitHub releases and compares it against the
 /// running app's `CFBundleShortVersionString`. This is deliberately a manual, user-initiated
 /// check (an "About > Check for Updates" button), not a background auto-updater. Nothing is
@@ -94,6 +150,9 @@ struct UpdateChecker {
     }
 
     func checkForUpdate(currentVersion: String) async -> UpdateCheckResult {
+        guard !Task.isCancelled else {
+            return .failed(message: "The update check was cancelled.")
+        }
         guard let url = URL(string: "https://api.github.com/repos/\(ScribeRepository.slug)/releases?per_page=100")
         else {
             return .failed(message: "Could not build the release check URL.")
@@ -104,11 +163,15 @@ struct UpdateChecker {
         let releases: [GitHubRelease]
         do {
             let (data, response) = try await session.data(for: request)
+            try Task.checkCancellation()
             guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
                 return .failed(message: "Could not reach GitHub (unexpected response).")
             }
             releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
         } catch {
+            if Task.isCancelled {
+                return .failed(message: "The update check was cancelled.")
+            }
             return .failed(message: "Could not reach GitHub. Check your connection and try again.")
         }
 

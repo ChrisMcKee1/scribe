@@ -44,6 +44,22 @@ final class SemanticVersionTests: XCTestCase {
 }
 
 final class UpdateCheckerTests: XCTestCase {
+    func testCancelledAdmissionStartsNoNetworkRequest() async {
+        let session = makeStubSession { request in
+            XCTFail("A cancelled update check must not start a request")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data("[]".utf8)
+            )
+        }
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await UpdateChecker(session: session).checkForUpdate(currentVersion: "1.0.0")
+        }
+        let result = await task.value
+        XCTAssertEqual(result, .failed(message: "The update check was cancelled."))
+    }
+
     func testCompareReportsUpdateAvailableWhenReleaseIsNewer() {
         let release = GitHubRelease(
             tagName: "v0.2.0",

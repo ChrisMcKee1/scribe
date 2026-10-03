@@ -18,9 +18,7 @@ struct SettingsAboutPage: View {
 struct AboutView: View {
     let persistenceStore: PersistenceStore
 
-    @State private var updateChecker = UpdateChecker()
-    @State private var updateCheckResult: UpdateCheckResult?
-    @State private var isCheckingForUpdate = false
+    @StateObject private var updates = UpdateCheckModel()
     init(persistenceStore: PersistenceStore) {
         self.persistenceStore = persistenceStore
     }
@@ -40,6 +38,10 @@ struct AboutView: View {
                 dataLocationsCard
             }
             .padding(.vertical, 4)
+        }
+        .onDisappear { updates.cancel() }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.willCloseNotification)) { _ in
+            updates.cancel()
         }
     }
 
@@ -80,11 +82,11 @@ struct AboutView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 8) {
-                    Button(isCheckingForUpdate ? "Checking..." : "Check for Updates") {
-                        checkForUpdate()
+                    Button(updates.isChecking ? "Checking..." : "Check for Updates") {
+                        updates.start(currentVersion: appVersion)
                     }
-                    .disabled(isCheckingForUpdate)
-                    if case .updateAvailable(_, _, let url) = updateCheckResult {
+                    .disabled(updates.isChecking)
+                    if case .updateAvailable(_, _, let url) = updates.result {
                         Button("Download latest") {
                             NSWorkspace.shared.open(url)
                         }
@@ -96,7 +98,7 @@ struct AboutView: View {
     }
 
     private var updateStatusText: String {
-        switch updateCheckResult {
+        switch updates.result {
         case .none:
             return "Scribe has no auto-updater yet; check GitHub Releases manually for a newer version."
         case .upToDate(let current):
@@ -107,18 +109,6 @@ struct AboutView: View {
             return "No stable macOS download was found in the latest 100 GitHub releases."
         case .failed(let message):
             return message
-        }
-    }
-
-    private func checkForUpdate() {
-        isCheckingForUpdate = true
-        let version = appVersion
-        Task {
-            let result = await updateChecker.checkForUpdate(currentVersion: version)
-            await MainActor.run {
-                updateCheckResult = result
-                isCheckingForUpdate = false
-            }
         }
     }
 
