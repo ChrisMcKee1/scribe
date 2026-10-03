@@ -293,6 +293,16 @@ refuses the actual completion. An omitted output ceiling becomes an enforced
 4,096-token limit so the reserved output is bounded on the wire too. This
 cannot exclude another app changing the shared copy between the read and send.
 
+On macOS, Ollama at its own size keeps Chat Completions. Scribe checks that the
+full request fits the smaller of the reported loaded size and a conservative
+4,096-token default before sending user content. If nothing is held, only the
+fixed one-token readying request loads it before a fresh size reading. A larger
+copy another app loaded does not enlarge this budget. Actual requests carry an
+output ceiling and their answers are checked against a fresh loaded-size read;
+unknown or insufficient context refuses the answer and keeps recognized text.
+Ollama's own default can be below the assumed size, and another app can replace
+the copy between reads. The after-answer check cannot retract already sent text.
+
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.
 

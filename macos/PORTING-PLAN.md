@@ -126,7 +126,7 @@ real Mac.
   did not fit that size, or an unconfirmed size, refuses the answer and keeps recognized text. Both routes have
   tests for a smaller runtime cap, later no-send refusal and readiness without a restart. The first request can
   meet an unknown cap, and an external app can change the shared model between the requests; the reading is not
-  an atomic guarantee. The app's own size and oversized-dictation splitting remain explicit gaps.
+  an atomic guarantee. Oversized-dictation splitting remains an explicit gap.
   For LM Studio with a chosen size, the provider reads the matching loaded copy after reconciliation and fits
   the full prompt, transcript and output to that reported size before completion. Manual or busy copies at a
   smaller size no longer inherit the requested budget. An absent size or unreadable residency refuses text.
@@ -137,7 +137,17 @@ real Mac.
   Requests without an explicit output ceiling send an enforced 4,096-token ceiling. Context-bound local probes
   do not retry without a limit, since unbounded output has no safe context budget; this deliberately refuses
   models that need an uncapped retry. Wire tests pin own-size no-send refusal, fixed-only readying, confirmation
-  and output ceilings. Ollama's own-size fitting and oversized-dictation splitting remain open.
+  and output ceilings.
+  Ollama's own-size mode now guards both managed and custom Chat Completions routes: before user content,
+  the smaller of the held size and the assumed 4,096-token default must fit the full request. A larger copy
+  another app loaded cannot enlarge this budget. A cold model gets only fixed one-token readying, then a
+  confirmed size. An enforced output ceiling and a post-answer residency check pin the reservation to the wire;
+  unknown or insufficient size refuses text or the answer, respectively. Missing ceilings reserve 4,096 and
+  cannot fit this conservative budget, so those callers are refused. Tests cover both routes, small/unknown
+  copies, larger-copy no-budget expansion, fixed-only readiness and changed context after completion.
+  A default below 4,096 can still overtake a pre-send reading, as can another app's replacement. This is a
+  conservative estimate and post-answer safeguard, not an atomic runtime guarantee. Oversized cleanup
+  splitting and using larger learned default contexts safely remain open.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

@@ -189,7 +189,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     func testChangingIdleTimeRebuildsTheRetentionSentByTheProvider() async throws {
         let rig = try makeRig()
         rig.store.providerKind = .ollama
-        let request = CleanupRequest(transcript: "sample")
+        let request = CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32)
         _ = try await rig.cache.provider().clean(request)
         XCTAssertEqual(rig.requests.all.last?.jsonBody["keep_alive"] as? String, "10m")
         rig.store.localModelIdleMinutes = 30
@@ -295,7 +295,10 @@ final class CleanupProviderCacheTests: XCTestCase {
             readLocalServer: readLocalServer ?? { _, _ in
                 LocalServerState(
                     reach: .reached, models: [],
-                    loaded: [LocalServerLoadedModel("local-model", 1, contextTokens: 8192)])
+                    loaded: [
+                        LocalServerLoadedModel("local-model", 1, contextTokens: 8192),
+                        LocalServerLoadedModel(CleanupSettingsStore.defaultOllamaModel, 1, contextTokens: 4096),
+                    ])
             })
         let realTimer: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
         let timer: @Sendable (Duration) async throws -> Void = checkTimer ?? realTimer
@@ -335,7 +338,11 @@ final class CleanupProviderCacheTests: XCTestCase {
     }
 
     private func clean(_ rig: Rig) async throws {
-        _ = try await rig.cache.provider().clean(CleanupRequest(transcript: "raw text"))
+        let provider = try rig.cache.provider()
+        _ = try await provider.clean(
+            CleanupRequest(
+                transcript: "raw text", writingStylePrompt: "Edit.",
+                maxOutputTokens: provider.requiresOutputLimit ? 32 : nil))
     }
 
     private func same(_ first: any CleanupProvider, _ second: any CleanupProvider) -> Bool {
@@ -833,7 +840,11 @@ final class CleanupProviderCacheTests: XCTestCase {
             let bodies = rig.requests.all.filter { $0.host != Self.entraHost }.map(\.jsonBody)
             XCTAssertEqual(bodies.count, 2, "\(kind)")
             XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, ceiling, "\(kind)")
-            XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")
+            if kind == .ollama {
+                XCTAssertEqual(bodies.last?["max_completion_tokens"] as? Int, 32)
+            } else {
+                XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")
+            }
             let copiedLimit = bodies.first?["max_tokens"] as? Int
             if kind == .ollama || kind == .openAICompatible {
                 XCTAssertEqual(copiedLimit, ceiling, "\(kind)")

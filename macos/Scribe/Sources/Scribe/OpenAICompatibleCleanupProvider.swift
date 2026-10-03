@@ -24,7 +24,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     private let lifecycle: LocalModelLifecycle
     private let plainRequests = OSAllocatedUnfairLock(initialState: false)
     var requiresOutputLimit: Bool {
-        localServerApp == .lmStudio || localServerApp == .ollama && localTuning().contextTokens > 0
+        localServerApp != .none
     }
 
     init(
@@ -241,6 +241,12 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                     contextTokens: contextTokens,
                     defaultTimeout: timeout)
             }
+            if localServerApp == .ollama {
+                return try await transport.completeOllamaAtOwnSize(
+                    request, at: serviceURL, model: model, bearerToken: apiKey,
+                    keepAlive: keepAlive, defaultTimeout: timeout, plain: plain,
+                    readying: readying, read: readLocalServer)
+            }
 
             if apiStyle == .responses {
                 return try await transport.completeResponses(
@@ -337,6 +343,60 @@ struct ChatCompletionsTransport: Sendable {
 
     func ollamaContextLimit(requested: Int) -> Int {
         learnedOllamaContext.withLock { $0.requested == requested ? $0.limit : requested }
+    }
+
+    func completeOllamaAtOwnSize(
+        _ request: CleanupRequest,
+        at url: URL, model: String, bearerToken: String?, keepAlive: String?,
+        defaultTimeout: TimeInterval, plain: Bool, readying: Bool,
+        read: @escaping @Sendable (String, String?) async -> LocalServerState
+    ) async throws -> Completion {
+        guard LocalAiServer.appAt(url.absoluteString) == .ollama else {
+            throw CleanupProviderError.transport(URLError(.badURL))
+        }
+        let completionURL = url.appendingPathComponent("chat/completions")
+        var state = await read(url.absoluteString, bearerToken)
+        try Task.checkCancellation()
+        guard state.reach == .reached else { throw CleanupProviderError.localContextUnknown }
+        var warmed: Completion?
+        if readying || state.loaded(for: model) == nil {
+            warmed = try await complete(
+                LocalModelReadiness.request, at: completionURL, model: model, bearerToken: bearerToken,
+                temperature: CleanupSampling.onDeviceTemperature,
+                reasoningEffort: plain ? nil : CleanupReasoningEffort.none,
+                includeLegacyMaxTokens: true, keepAlive: keepAlive,
+                defaultTimeout: defaultTimeout, provider: .ollama)
+            state = await read(url.absoluteString, bearerToken)
+            try Task.checkCancellation()
+        }
+        guard state.reach == .reached, let held = state.loaded(for: model), held.contextTokens > 0 else {
+            throw CleanupProviderError.localContextUnknown
+        }
+        // A larger copy may belong to another app. A default-size request can replace it.
+        let context = min(ContextBudget.assumedContextTokens, held.contextTokens)
+        let bounded = CleanupRequest(
+            transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
+            singleLineMode: request.singleLineMode, timeout: request.timeout,
+            maxOutputTokens: request.maxOutputTokens ?? 4096)
+        guard ContextBudget.requestFits(bounded, contextTokens: context) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
+        if readying, let warmed { return warmed }
+        let answer = try await complete(
+            bounded, at: completionURL, model: model, bearerToken: bearerToken,
+            temperature: CleanupSampling.onDeviceTemperature,
+            reasoningEffort: plain ? nil : CleanupReasoningEffort.none,
+            includeLegacyMaxTokens: true, keepAlive: keepAlive,
+            defaultTimeout: defaultTimeout, provider: .ollama)
+        state = await read(url.absoluteString, bearerToken)
+        try Task.checkCancellation()
+        guard state.reach == .reached, let answered = state.loaded(for: model), answered.contextTokens > 0 else {
+            throw CleanupProviderError.localContextUnknown
+        }
+        guard ContextBudget.requestFits(bounded, contextTokens: min(context, answered.contextTokens)) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
+        return answer
     }
 
     func completeOllama(

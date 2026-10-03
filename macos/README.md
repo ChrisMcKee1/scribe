@@ -219,7 +219,7 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
 - A chosen Ollama context size uses its native `/api/chat` route, for managed Ollama as well as Ollama selected under
   another AI service. Dictation, Test connection and the fixed readying request carry the same captured `num_ctx`,
   `num_predict`, `think: false` and retention, plus any key saved for that address. With the app's own size selected,
-  the existing Chat Completions path stays unchanged. Readiness checks the configured `/v1` app address and a held copy's context, not an unrelated
+  the existing Chat Completions route stays. Readiness checks the configured `/v1` app address and a held copy's context, not an unrelated
   default address or a different-size copy. Test connection uses its candidate size without saving it.
   Before a chosen-size Ollama request is sent, Scribe conservatively estimates the full prompt, the actual wrapped
   transcript, the output limit, chat-template room and margin. A request that does not fit fails without being sent;
@@ -235,7 +235,15 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   keeps the recognized text. The first request can still meet an unknown runtime cap, and another app can change
   the shared model between requests; a residency reading cannot close that race.
   These are estimates, not tokenizer counts; splitting oversize dictations remains open work.
-  The app's own size still keeps its previous Chat Completions behavior.
+  Ollama's own-size requests keep Chat Completions but are fitted before sending to the smaller of 4,096 tokens
+  and the copy's reported size. A larger copy may belong to another app and cannot vouch for Ollama's default
+  after Scribe's request. A cold model receives only the fixed one-token readying request before its size is
+  read again; missing or insufficient size refuses user content. Every actual completion has an enforced output
+  ceiling and a fresh loaded-size reading after its answer; an unconfirmed or insufficient size refuses the answer.
+  A missing output ceiling reserves 4,096 tokens, which cannot fit beside the instructions in this conservative
+  default budget, so it is refused. Dictation and auxiliary callers must supply a fitting ceiling.
+  Ollama may have a default below the assumed 4,096, and other apps can change the shared copy between readings:
+  the post-answer refusal cannot undo text already sent. Choosing a context size gives Scribe a firmer budget.
   A chosen LM Studio size is checked against the matching copy's reported loaded context after reconciliation,
   before a completion sends text. A smaller manual or busy copy is used only when the full request fits it; a
   missing size or unreadable residency refuses the text request with a reason. A requested size alone never

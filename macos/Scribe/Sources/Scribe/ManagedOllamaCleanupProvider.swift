@@ -27,7 +27,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let readLocalServer: @Sendable (String) async -> LocalServerState
-    var requiresOutputLimit: Bool { contextTokens > 0 }
+    var requiresOutputLimit: Bool { true }
 
     init(
         model: String = CleanupSettingsStore.defaultOllamaModel,
@@ -77,27 +77,26 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
             cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
     }
 
-    private func complete(_ request: CleanupRequest) async throws -> ChatCompletionsTransport.Completion {
+    private func complete(
+        _ request: CleanupRequest, readying: Bool = false
+    ) async throws -> ChatCompletionsTransport.Completion {
+        guard let url = URL(string: lifecycleEndpoint) else {
+            throw CleanupProviderError.transport(URLError(.badURL))
+        }
         if contextTokens > 0 {
-            guard let url = URL(string: lifecycleEndpoint) else {
-                throw CleanupProviderError.transport(URLError(.badURL))
-            }
             return try await transport.completeOllama(
                 request, at: url, model: model,
                 keepAlive: keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil,
                 contextTokens: contextTokens, defaultTimeout: timeout)
         }
-        return try await transport.complete(
+        return try await transport.completeOllamaAtOwnSize(
             request,
-            at: completionsURL,
+            at: url,
             model: model,
             bearerToken: nil,
-            temperature: CleanupSampling.onDeviceTemperature,
-            reasoningEffort: CleanupReasoningEffort.none,
-            includeLegacyMaxTokens: true,
             keepAlive: keepAliveMinutes > 0 ? "\(keepAliveMinutes)m" : nil,
-            defaultTimeout: timeout,
-            provider: .ollama)
+            defaultTimeout: timeout, plain: false, readying: readying,
+            read: { endpoint, _ in await self.readLocalServer(endpoint) })
     }
 
     func prepareLocalModel(
@@ -118,7 +117,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
                 isCurrent: isCurrent,
                 onStarting: onStarting,
                 start: {
-                    _ = try await self.complete(LocalModelReadiness.request)
+                    _ = try await self.complete(LocalModelReadiness.request, readying: true)
                 })
         }
     }

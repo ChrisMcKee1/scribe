@@ -39,6 +39,177 @@ final class OpenAICompatibleEndpointTests: XCTestCase {
 }
 
 final class OpenAICompatibleCleanupProviderTests: XCTestCase {
+    func testPlainOllamaOwnSizeRetryStillEnforcesTheFieldOllamaReads() async throws {
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "model", serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+            localServerApp: .ollama,
+            readLocalServer: { _, _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("model", 1, contextTokens: 4096)])
+            },
+            session: makeStubSession { request in
+                log.record(request)
+                if RecordedRequest(request).jsonBody["reasoning_effort"] != nil {
+                    return StubReply.json(request, status: 400, #"{"error":{"message":"unsupported effort"}}"#)
+                }
+                return StubReply.completion(request, "Cleaned.")
+            })
+        _ = try await provider.clean(
+            CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
+        XCTAssertEqual(log.count, 2)
+        XCTAssertTrue(log.all.allSatisfy { $0.jsonBody["max_tokens"] as? Int == 32 })
+        XCTAssertNil(log.all.last?.jsonBody["reasoning_effort"])
+    }
+
+    func testBothOllamaOwnSizePathsRefuseUnknownSmallAndOversizedRequests() async throws {
+        for managed in [true, false] {
+            for size in [0, 64, 2048, 32768] {
+                let log = RequestLog()
+                let session = makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "Cleaned.")
+                }
+                let read: @Sendable (String, String?) async -> LocalServerState = { _, _ in
+                    LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: [LocalServerLoadedModel("model", 0, contextTokens: size)])
+                }
+                let provider: any CleanupProvider =
+                    managed
+                    ? ManagedOllamaCleanupProvider(
+                        model: "model", readLocalServer: { await read($0, nil) }, session: session)
+                    : OpenAICompatibleCleanupProvider(
+                        model: "model", apiKey: "saved-key",
+                        serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+                        localServerApp: .ollama, readLocalServer: read, session: session)
+                for large in [false, true] {
+                    let request = CleanupRequest(
+                        transcript: large ? String(repeating: "語", count: 4200) : "private sample",
+                        writingStylePrompt: "Edit.", maxOutputTokens: 32)
+                    let fits = size >= 2048 && !large
+                    let before = log.count
+                    do {
+                        _ = try await provider.clean(request)
+                        XCTAssertTrue(fits)
+                    } catch {
+                        XCTAssertFalse(fits)
+                        XCTAssertEqual(
+                            error as? CleanupProviderError,
+                            size == 0 ? .localContextUnknown : .localRequestTooLarge)
+                    }
+                    XCTAssertEqual(log.count - before, fits ? 1 : 0)
+                }
+                if let sent = log.all.first {
+                    XCTAssertEqual(sent.url?.path, "/v1/chat/completions")
+                    XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 32)
+                    XCTAssertNil(sent.jsonBody["options"])
+                    XCTAssertNil(sent.jsonBody["num_ctx"])
+                }
+            }
+        }
+    }
+
+    func testOllamaOwnSizeConfirmsColdAndChangedCopiesWithoutTrustingLargerDefaults() async throws {
+        for managed in [true, false] {
+            for after in [0, 64, 2048] {
+                let log = RequestLog()
+                let reads = LockedValue<Int>()
+                let read: @Sendable (String, String?) async -> LocalServerState = { _, _ in
+                    let count = (reads.value ?? 0) + 1
+                    reads.set(count)
+                    return LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: count == 1
+                            ? []
+                            : [
+                                LocalServerLoadedModel("model", 0, contextTokens: count == 2 ? 2048 : after)
+                            ])
+                }
+                let session = makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "Cleaned.")
+                }
+                let provider: any CleanupProvider =
+                    managed
+                    ? ManagedOllamaCleanupProvider(
+                        model: "model", readLocalServer: { await read($0, nil) }, session: session)
+                    : OpenAICompatibleCleanupProvider(
+                        model: "model", serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+                        localServerApp: .ollama, readLocalServer: read, session: session)
+                do {
+                    _ = try await provider.clean(
+                        CleanupRequest(transcript: "private sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
+                    XCTAssertEqual(after, 2048)
+                } catch {
+                    XCTAssertEqual(
+                        error as? CleanupProviderError, after == 0 ? .localContextUnknown : .localRequestTooLarge)
+                }
+                XCTAssertEqual(log.count, 2)
+                let first = try XCTUnwrap(log.all.first)
+                XCTAssertEqual(first.jsonBody["max_completion_tokens"] as? Int, 1)
+                XCTAssertFalse(first.bodyText.contains("private sample"))
+                XCTAssertTrue(first.bodyText.contains("Return only OK."))
+                XCTAssertEqual(reads.value, 3)
+            }
+        }
+    }
+
+    @MainActor
+    func testBothOllamaOwnSizePathsReadyExactlyOnceAndRefuseUnconfirmedPrivateSends() async throws {
+        for managed in [true, false] {
+            for confirms in [true, false] {
+                let log = RequestLog()
+                let reads = LockedValue<Int>()
+                let read: @Sendable (String, String?) async -> LocalServerState = { _, key in
+                    if !managed { XCTAssertEqual(key, "saved-key") }
+                    let count = (reads.value ?? 0) + 1
+                    reads.set(count)
+                    return LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: confirms && count > 2
+                            ? [LocalServerLoadedModel("model", 0, contextTokens: 2048)] : [])
+                }
+                let session = makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "OK")
+                }
+                let provider: any CleanupProvider =
+                    managed
+                    ? ManagedOllamaCleanupProvider(
+                        model: "model", readLocalServer: { await read($0, nil) }, session: session)
+                    : OpenAICompatibleCleanupProvider(
+                        model: "model", apiKey: "saved-key",
+                        serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+                        localServerApp: .ollama, readLocalServer: read, session: session)
+                do {
+                    let result = try await provider.prepareLocalModel(isCurrent: { true }, onStarting: {})
+                    XCTAssertTrue(confirms)
+                    XCTAssertEqual(result, .started)
+                } catch {
+                    XCTAssertFalse(confirms)
+                    XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+                }
+                XCTAssertEqual(log.count, 1)
+                XCTAssertEqual(log.all.first?.jsonBody["max_completion_tokens"] as? Int, 1)
+                XCTAssertEqual(reads.value, 3)
+                let count = log.count
+                do {
+                    _ = try await provider.clean(
+                        CleanupRequest(transcript: "private sample", writingStylePrompt: "Edit."))
+                    XCTFail("An unspecified 4096-token output cannot fit the conservative default")
+                } catch {
+                    XCTAssertEqual(
+                        error as? CleanupProviderError,
+                        confirms ? .localRequestTooLarge : .localContextUnknown)
+                }
+                XCTAssertTrue(log.all.allSatisfy { !$0.bodyText.contains("private sample") })
+                XCTAssertEqual(log.count, count + (confirms ? 0 : 1))
+            }
+        }
+    }
+
     private let completionsURL = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
 
     private func makeProvider(
@@ -868,9 +1039,16 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
             log.record(request)
             return StubReply.completion(request, "Cleaned.")
         }
-        let provider = ManagedOllamaCleanupProvider(model: "qwen2.5:3b", session: session)
+        let provider = ManagedOllamaCleanupProvider(
+            model: "qwen2.5:3b",
+            readLocalServer: { _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("qwen2.5:3b", 1, contextTokens: 4096)])
+            }, session: session)
 
-        let response = try await provider.clean(CleanupRequest(transcript: "raw text"))
+        let response = try await provider.clean(
+            CleanupRequest(transcript: "raw text", writingStylePrompt: "Edit.", maxOutputTokens: 32))
 
         XCTAssertEqual(response.providerID, "managed-ollama")
         let sent = try XCTUnwrap(log.all.first)
@@ -878,7 +1056,12 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
         XCTAssertNil(sent.header("Authorization"))
         XCTAssertEqual(
             Set(sent.jsonBody.keys),
-            ["model", "messages", "temperature", "reasoning_effort", "keep_alive", "stream"])
+            [
+                "model", "messages", "temperature", "reasoning_effort", "keep_alive", "stream",
+                "max_completion_tokens", "max_tokens",
+            ])
+        XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 32)
+        XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, 32)
         XCTAssertEqual(sent.jsonBody["model"] as? String, "qwen2.5:3b")
         XCTAssertEqual(sent.jsonBody["temperature"] as? Double, CleanupSampling.onDeviceTemperature)
         XCTAssertEqual(sent.jsonBody["reasoning_effort"] as? String, CleanupReasoningEffort.none)
