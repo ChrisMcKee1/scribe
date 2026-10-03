@@ -387,6 +387,11 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   now retain every expected word. Any nonzero sample still reaches recognition, even the smallest normal
   float. A wholly zero long recording reports no text, not success. Speech-model VAD and noisy-silence
   detection remain open; this fix does not guess that quiet audio contains no speech.
+- A refused automatic release after shortening local-model retention now retries after 30 seconds, doubling
+  to a five-minute ceiling, like idle and pause releases. The original use revision and retention generation
+  still govern every attempt: a new use, Never or a longer retention withdraws it. Each retry goes through
+  the existing drain/commit barrier and destination-scoped saved-key lookup. Free memory stays a one-shot
+  action that reports failure; this does not add automatic retirement of Foundry's shared models.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

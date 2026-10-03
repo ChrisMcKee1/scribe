@@ -283,8 +283,8 @@ final class LocalModelLifecycle: Sendable {
                 let generation = state.idleGeneration
                 state.idleTask = Task { [weak self] in
                     guard let self, !Task.isCancelled else { return }
-                    _ = await self.release(
-                        .retentionShortened, target: target, decidedAt: revision, generation: generation)
+                    await self.retryAutomaticRelease(
+                        .retentionShortened, target: target, revision: revision, generation: generation)
                 }
                 return false
             }
@@ -312,16 +312,23 @@ final class LocalModelLifecycle: Sendable {
                     do { try await sleeper(remaining) } catch { return }
                 }
                 guard let self, !Task.isCancelled else { return }
-                var retryDelay = Duration.seconds(30)
-                while !Task.isCancelled {
-                    let outcome = await self.release(
-                        paused ? .pause : .idle, target: paused ? target : nil,
-                        decidedAt: revision, generation: generation)
-                    guard outcome == .failed || outcome == .drainTimedOut else { return }
-                    do { try await sleeper(retryDelay) } catch { return }
-                    retryDelay = min(.seconds(300), retryDelay * 2)
-                }
+                await self.retryAutomaticRelease(
+                    paused ? .pause : .idle, target: paused ? target : nil,
+                    revision: revision, generation: generation)
             }
+        }
+    }
+
+    private func retryAutomaticRelease(
+        _ reason: LocalModelReleaseReason, target: LocalModelTarget?, revision: UInt64, generation: UInt64
+    ) async {
+        var retryDelay = Duration.seconds(30)
+        while !Task.isCancelled {
+            let outcome = await release(
+                reason, target: target, decidedAt: revision, generation: generation)
+            guard outcome == .failed || outcome == .drainTimedOut else { return }
+            do { try await sleeper(retryDelay) } catch { return }
+            retryDelay = min(.seconds(300), retryDelay * 2)
         }
     }
 

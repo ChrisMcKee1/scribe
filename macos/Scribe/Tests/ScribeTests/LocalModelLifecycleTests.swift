@@ -397,6 +397,58 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
     }
 
+    func testRefusedShorterRetentionRetriesWithTheSameBoundedBackoff() async throws {
+        let fake = FakeUnloads()
+        fake.modelResult = false
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        let lease = try await lifecycle.beginUse(target())
+        lease.end()
+        lifecycle.setIdle(.seconds(60))
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(fake.models, ["m"])
+        XCTAssertEqual(clock.durations.last, .seconds(30))
+        for expected in [60, 120, 240, 300, 300] {
+            clock.fire()
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.durations.last, .seconds(expected))
+        }
+        let attempts = fake.models.count
+        fake.modelResult = true
+        clock.fire()
+        for _ in 0..<2000 where fake.models.count == attempts { await Task.yield() }
+        // Joining the release lane waits for the retry's commit without starting an ordinary-model release.
+        _ = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(fake.models.count, attempts + 1)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        lifecycle.setIdle(.zero)
+    }
+
+    func testNewUseOrChangedRetentionWithdrawsRefusedShorterRetentionRetry() async throws {
+        for change in ["use", "never", "longer"] {
+            let fake = FakeUnloads()
+            fake.modelResult = false
+            let clock = ManualClock()
+            let lifecycle = make(fake, clock: clock)
+            let first = try await lifecycle.beginUse(target())
+            first.end()
+            lifecycle.setIdle(.seconds(60))
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.durations.last, .seconds(30))
+            XCTAssertEqual(fake.models.count, 1)
+            var newer: LocalModelLifecycle.Lease?
+            if change == "use" { newer = try await lifecycle.beginUse(target()) }
+            if change == "never" { lifecycle.setIdle(.zero) }
+            if change == "longer" { lifecycle.setIdle(.seconds(120)) }
+            fake.modelResult = true
+            clock.fire()
+            newer?.end()
+            _ = await lifecycle.release(.shutdown, target: nil)
+            XCTAssertEqual(fake.models.count, 1, change)
+            lifecycle.setIdle(.zero)
+        }
+    }
+
     func testANewerUseWithdrawsShorterRetentionRetirement() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()
